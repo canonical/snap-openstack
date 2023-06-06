@@ -16,7 +16,6 @@ import logging
 import subprocess
 from typing import Optional
 
-import requests
 from rich.status import Status
 
 from sunbeam.jobs.common import BaseStep, Result, ResultType
@@ -24,34 +23,30 @@ from sunbeam.jobs.common import BaseStep, Result, ResultType
 
 LOG = logging.getLogger(__name__)
 
-CHARMHUB = "https://api.charmhub.io/v2/charms"
-CHARM_URL = CHARMHUB + "/info/{name}?fields=default-release.resources&channel={channel}"
 GHCR = "ghcr.io/openstack-snaps/{name}:{tag}"
 
-CHARM_GROUPS = [
+ROCK_GROUPS = [
     {
-        "charms": [
-            "keystone-k8s",
-            "glance-k8s",
-            "nova-k8s",
-            "horizon-k8s",
-            "cinder-k8s",
-            "cinder-ceph-k8s",
-            "neutron-k8s",
-            "placement-k8s",
+        "rocks": [
+            "keystone",
+            "glance-api",
+            "nova-api",
+            "nova-scheduler",
+            "nova-conductor",
+            "horizon",
+            "cinder-api",
+            "cinder-scheduler",
+            "cinder-volume",
+            "neutron-server",
+            "placement-api",
         ],
-        "channel": "2023.1/edge",
         "tag": "2023.1",
     },
     {
-        "charms": [
-            "ovn-central-k8s",
-            "ovn-relay-k8s",
-        ],
-        "channel": "23.03/edge",
+        "rocks": ["ovn-sb-db-server", "ovn-nb-db-server", "ovn-northd"],
         "tag": "23.03",
     },
-    {"charms": ["rabbitmq-k8s"], "channel": "3.9/beta", "tag": "3.9.13"},
+    {"rocks": ["rabbitmq"], "tag": "3.9.13"},
 ]
 SSH = [
     "juju",
@@ -89,20 +84,6 @@ def run_shell(cmd, check=True):
     )  # nosec
     LOG.debug(f"Command finished. stdout={process.stdout}, stderr={process.stderr}")
     return process
-
-
-def fetch_image_names(name, channel):
-    url = CHARM_URL.format(name=name, channel=channel)
-    response = requests.get(url, timeout=30)
-    response.raise_for_status()
-    data = response.json()
-    resources = data["default-release"].get("resources", [])
-    images = []
-    for resource in resources:
-        if resource["type"] != "oci-image":
-            continue
-        images.append(resource["name"])
-    return images
 
 
 def pull_image(name, tag):
@@ -169,10 +150,14 @@ class PreseedRocksStep(BaseStep):
         :param status: Rich Status object to update with progress
         :return: ResultType.COMPLETED or ResultType.FAILED
         """
-        for group in CHARM_GROUPS:
-            for charm in group["charms"]:
-                images = fetch_image_names(charm, group["channel"])
-                for image in images:
-                    pull_image(image[:-6], group["tag"])
+        for group in ROCK_GROUPS:
+            for image in group["rocks"]:
+                try:
+                    pull_image(image, group["tag"])
+                except Exception:
+                    LOG.debug(
+                        f"Failed to pull image '{image}:{group['tag']}', skipping it",
+                        exc_info=True,
+                    )
 
         return Result(ResultType.COMPLETED)
