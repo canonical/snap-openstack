@@ -51,6 +51,7 @@ from sunbeam.commands.microk8s import (
     DeployMicrok8sApplicationStep,
 )
 from sunbeam.commands.openstack import DeployControlPlaneStep
+from sunbeam.commands.rocks import ConfigureKubeletOptionsStep, PreseedRocksStep
 from sunbeam.commands.terraform import TerraformHelper, TerraformInitStep
 from sunbeam.jobs.checks import (
     DaemonGroupCheck,
@@ -229,6 +230,8 @@ def bootstrap(
         )
 
     if is_control_node:
+        plan4.append(ConfigureKubeletOptionsStep(fqdn))
+        plan4.append(PreseedRocksStep(fqdn))
         plan4.append(TerraformInitStep(tfhelper_openstack_deploy))
         plan4.append(
             DeployControlPlaneStep(

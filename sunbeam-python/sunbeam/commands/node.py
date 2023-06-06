@@ -53,6 +53,7 @@ from sunbeam.commands.microceph import (
 )
 from sunbeam.commands.microk8s import AddMicrok8sUnitStep, RemoveMicrok8sUnitStep
 from sunbeam.commands.openstack import OPENSTACK_MODEL
+from sunbeam.commands.rocks import ConfigureKubeletOptionsStep, PreseedRocksStep
 from sunbeam.commands.terraform import TerraformHelper, TerraformInitStep
 from sunbeam.jobs.checks import (
     DaemonGroupCheck,
@@ -233,6 +234,8 @@ def join(
 
     if is_control_node:
         plan2.append(AddMicrok8sUnitStep(name, jhelper))
+        plan2.append(ConfigureKubeletOptionsStep(name))
+        plan2.append(PreseedRocksStep(name))
 
     if is_storage_node:
         plan2.append(AddMicrocephUnitStep(name, jhelper))
