@@ -18,7 +18,10 @@ from typing import Optional
 
 from rich.status import Status
 
+from sunbeam.clusterd.client import Client
+from sunbeam.clusterd.service import NodeNotExistInClusterException
 from sunbeam.jobs.common import BaseStep, Result, ResultType
+from sunbeam.jobs.juju import CONTROLLER_MODEL
 
 
 LOG = logging.getLogger(__name__)
@@ -48,12 +51,8 @@ ROCK_GROUPS = [
     },
     {"rocks": ["rabbitmq"], "tag": "3.9.13"},
 ]
-SSH = [
-    "juju",
-    "ssh",
-    "0",
-]
-MICROK8S = SSH + ["sudo", "microk8s"]
+SSH = ["juju", "ssh", "-m", CONTROLLER_MODEL]
+MICROK8S = ["sudo", "microk8s"]
 
 
 def run(cmd, check=True):
@@ -86,18 +85,20 @@ def run_shell(cmd, check=True):
     return process
 
 
-def pull_image(name, tag):
+def pull_image(machine_id, name, tag):
     image = GHCR.format(name=name, tag=tag)
 
-    cmd = MICROK8S + ["ctr", "images", "pull", image]
+    cmd = SSH + [machine_id] + MICROK8S + ["ctr", "images", "pull", image]
     run(cmd)
 
 
-class ConfigureKubeletOptions(BaseStep):
+class ConfigureKubeletOptionsStep(BaseStep):
     """Configure kubelet options"""
 
-    def __init__(self):
+    def __init__(self, name: str):
         super().__init__("Configure kubelet options", "Configure kubelet options")
+        self.name = name
+        self.machine_id = ""
 
     def is_skip(self, status: Optional[Status] = None) -> Result:
         """Determines if the step should be skipped or not.
@@ -105,7 +106,14 @@ class ConfigureKubeletOptions(BaseStep):
         :return: ResultType.SKIPPED if the Step should be skipped,
                 ResultType.COMPLETED or ResultType.FAILED otherwise
         """
+        client = Client()
+        try:
+            node = client.cluster.get_node_info(self.name)
+            self.machine_id = str(node.get("machineid"))
+        except NodeNotExistInClusterException as e:
+            return Result(ResultType.FAILED, str(e))
         cmd = SSH + [
+            self.machine_id,
             "grep",
             "serialize-image-pulls",
             "/var/snap/microk8s/current/args/kubelet",
@@ -126,6 +134,7 @@ class ConfigureKubeletOptions(BaseStep):
         :return: ResultType.COMPLETED or ResultType.FAILED
         """
         cmd = SSH + [
+            self.machine_id,
             (
                 "'echo --serialize-image-pulls=false "
                 ">> /var/snap/microk8s/current/args/kubelet'"
@@ -133,16 +142,17 @@ class ConfigureKubeletOptions(BaseStep):
         ]
         # Need as a single string for file redirection
         run_shell(" ".join(cmd))
-        run(MICROK8S + ["stop"])
-        run(MICROK8S + ["start"])
+        run(SSH + [self.machine_id] + MICROK8S + ["stop"])
+        run(SSH + [self.machine_id] + MICROK8S + ["start"])
         return Result(ResultType.COMPLETED)
 
 
 class PreseedRocksStep(BaseStep):
     """Preseed ROCKS into Microk8s"""
 
-    def __init__(self):
+    def __init__(self, name: str):
         super().__init__("Preseed ROCKs", "Preseed ROCKs into Microk8s")
+        self.name = name
 
     def run(self, status: Optional[Status] = None) -> Result:
         """Runs the step.
@@ -150,10 +160,17 @@ class PreseedRocksStep(BaseStep):
         :param status: Rich Status object to update with progress
         :return: ResultType.COMPLETED or ResultType.FAILED
         """
+        client = Client()
+        try:
+            node = client.cluster.get_node_info(self.name)
+            machine_id = str(node.get("machineid"))
+        except NodeNotExistInClusterException as e:
+            return Result(ResultType.FAILED, str(e))
+
         for group in ROCK_GROUPS:
             for image in group["rocks"]:
                 try:
-                    pull_image(image, group["tag"])
+                    pull_image(machine_id, image, group["tag"])
                 except Exception:
                     LOG.debug(
                         f"Failed to pull image '{image}:{group['tag']}', skipping it",
