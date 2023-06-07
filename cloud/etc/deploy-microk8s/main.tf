@@ -46,5 +46,6 @@ resource "juju_application" "microk8s" {
     channel              = var.microk8s_channel
     addons               = join(" ", [for key, value in var.addons : "${key}:${value}"])
     disable_cert_reissue = true
+    containerd_env       = var.containerd_env
   }
 }

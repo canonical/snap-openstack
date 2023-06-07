@@ -12,8 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import logging
 import json
+import logging
 from pathlib import Path
 
 from snaphelpers import Snap
@@ -26,6 +26,9 @@ DEFAULT_CONFIG = {
     "juju.cloud.name": "sunbeam",
     "daemon.group": "snap_daemon",
     "daemon.debug": False,
+    "proxy.http_proxy": "",
+    "proxy.https_proxy": "",
+    "proxy.no_proxy": "",
 }
 
 OPTION_KEYS = set(k.split(".")[0] for k in DEFAULT_CONFIG.keys())

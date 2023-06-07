@@ -39,3 +39,19 @@ variable "addons" {
   }
 }
 
+variable "containerd_env" {
+  description = "Containerd env file content"
+  type        = string
+  default     = <<EOT
+# This file is managed by Juju. Manual changes may be lost at any time.
+
+# Configure limits for locked memory and maximum number of open files
+ulimit -n 65536 || true
+ulimit -l 16384 || true
+
+# Uncomment to configure a proxy for containerd
+# HTTP_PROXY=http://squid.internal:3128
+# HTTPS_PROXY=http://squid.internal:3128
+# NO_PROXY=10.0.0.0/8,127.0.0.0/16,192.168.0.0/16
+EOT
+}

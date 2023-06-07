@@ -58,14 +58,17 @@ class TestDeployMicrok8sApplicationStep(unittest.TestCase):
     def __init__(self, methodName: str = "runTest") -> None:
         super().__init__(methodName)
         self.client = patch("sunbeam.commands.microk8s.Client")
+        self.snap = patch("sunbeam.commands.microk8s.Snap")
 
     def setUp(self):
         self.client.start()
+        self.snap.start()
         self.jhelper = AsyncMock()
         self.tfhelper = Mock(path=Path())
 
     def tearDown(self):
         self.client.stop()
+        self.snap.stop()
 
     def test_is_skip(self):
         step = DeployMicrok8sApplicationStep(self.tfhelper, self.jhelper)

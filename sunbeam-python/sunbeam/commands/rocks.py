@@ -23,7 +23,6 @@ from sunbeam.clusterd.service import NodeNotExistInClusterException
 from sunbeam.jobs.common import BaseStep, Result, ResultType
 from sunbeam.jobs.juju import CONTROLLER_MODEL
 
-
 LOG = logging.getLogger(__name__)
 
 GHCR = "ghcr.io/openstack-snaps/{name}:{tag}"
