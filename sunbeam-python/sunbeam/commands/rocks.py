@@ -17,6 +17,7 @@ import subprocess
 from typing import Optional
 
 from rich.status import Status
+from snaphelpers import Snap
 
 from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import NodeNotExistInClusterException
@@ -24,6 +25,7 @@ from sunbeam.jobs.common import BaseStep, Result, ResultType
 from sunbeam.jobs.juju import CONTROLLER_MODEL
 
 LOG = logging.getLogger(__name__)
+snap = Snap()
 
 GHCR = "ghcr.io/openstack-snaps/{name}:{tag}"
 
@@ -87,7 +89,12 @@ def run_shell(cmd, check=True):
 def pull_image(machine_id, name, tag):
     image = GHCR.format(name=name, tag=tag)
 
-    cmd = SSH + [machine_id] + MICROK8S + ["ctr", "images", "pull", image]
+    https_proxy = snap.config.get("proxy.https")
+    cmd = SSH + [machine_id]
+    if https_proxy:
+        cmd.extend([f"https_proxy={https_proxy}"])
+    cmd.extend(MICROK8S)
+    cmd.extend(["ctr", "images", "pull", image])
     run(cmd)
 
 
