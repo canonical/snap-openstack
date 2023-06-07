@@ -13,7 +13,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import logging
+import os
 import subprocess
+import tempfile
 from typing import Optional
 
 from rich.status import Status
@@ -54,6 +56,13 @@ ROCK_GROUPS = [
 ]
 SSH = ["juju", "ssh", "-m", CONTROLLER_MODEL]
 MICROK8S = ["sudo", "microk8s"]
+HOSTS_TEMPLATE = """
+server = "https://ghcr.io"
+
+[host."http://{registry}"]
+    capabilities = ["pull", "resolve"]
+"""
+HOSTS_PATH = "/var/snap/microk8s/current/args/certs.d/ghcr.io/hosts.toml"
 
 
 def run(cmd, check=True):
@@ -92,10 +101,108 @@ def pull_image(machine_id, name, tag):
     https_proxy = snap.config.get("proxy.https")
     cmd = SSH + [machine_id]
     if https_proxy:
-        cmd.extend([f"https_proxy={https_proxy}"])
+        cmd.append(f"https_proxy={https_proxy}")
     cmd.extend(MICROK8S)
-    cmd.extend(["ctr", "images", "pull", image])
+    cmd.extend(
+        [
+            "ctr",
+            "images",
+            "pull",
+            "--hosts-dir",
+            os.path.dirname(os.path.dirname(HOSTS_PATH)),
+            image,
+        ]
+    )
     run(cmd)
+
+
+class ConfigurePullThroughCacheStep(BaseStep):
+    """Configure pull through cache"""
+
+    def __init__(self, name: str):
+        super().__init__("Configure pull through cache", "Configure pull through cache")
+        self.name = name
+        self.snap = Snap()
+        self.machine_id = ""
+        self.cache_address = ""
+
+    def is_skip(self, status: Optional[Status] = None) -> Result:
+        """Determines if the step should be skipped or not.
+
+        :return: ResultType.SKIPPED if the Step should be skipped,
+                ResultType.COMPLETED or ResultType.FAILED otherwise
+        """
+        self.cache_address = self.snap.config.get("cache.address")
+        if not self.cache_address:
+            return Result(ResultType.SKIPPED)
+
+        client = Client()
+        try:
+            node = client.cluster.get_node_info(self.name)
+            self.machine_id = str(node.get("machineid"))
+        except NodeNotExistInClusterException as e:
+            return Result(ResultType.FAILED, str(e))
+        cmd = SSH + [
+            self.machine_id,
+            "test",
+            "-f",
+            HOSTS_PATH,
+        ]
+        process = run(cmd, check=False)
+        if process.returncode > 0:
+            return Result(ResultType.COMPLETED)
+
+        cmd = SSH + [
+            self.machine_id,
+            "grep",
+            f'[host."http://{self.cache_address}"]',
+            HOSTS_PATH,
+        ]
+        process = run(cmd, check=False)
+        if process.returncode > 0:
+            return Result(ResultType.COMPLETED)
+        return Result(ResultType.SKIPPED)
+
+    def run(self, status: Optional[Status] = None) -> Result:
+        """Runs the step.
+
+        :param status: Rich Status object to update with progress
+        :return: ResultType.COMPLETED or ResultType.FAILED
+        """
+        cmd = SSH + [
+            self.machine_id,
+            "mkdir",
+            "-p",
+            os.path.dirname(HOSTS_PATH),
+        ]
+        run(cmd)
+        cmd = SSH + [
+            self.machine_id,
+            "sudo",
+            "chown",
+            "root:snap_microk8s",
+            os.path.dirname(HOSTS_PATH),
+        ]
+        run(cmd)
+        tmp_dir = f"{self.snap.paths.real_home}/.config/openstack/"
+        with tempfile.NamedTemporaryFile("w", prefix="ghcr", dir=tmp_dir) as fd:
+            fd.write(HOSTS_TEMPLATE.format(registry=self.cache_address))
+            fd.flush()
+            cmd = SSH + [self.machine_id, "cp", fd.name, HOSTS_PATH]
+            run(cmd)
+        cmd = SSH + [
+            self.machine_id,
+            "sudo",
+            "chown",
+            "root:snap_microk8s",
+            HOSTS_PATH,
+        ]
+        run(cmd)
+        cmd = SSH + [self.machine_id, "sudo", "chmod", "0660", HOSTS_PATH]
+        run(cmd)
+        run(SSH + [self.machine_id] + MICROK8S + ["stop"])
+        run(SSH + [self.machine_id] + MICROK8S + ["start"])
+        return Result(ResultType.COMPLETED)
 
 
 class ConfigureKubeletOptionsStep(BaseStep):

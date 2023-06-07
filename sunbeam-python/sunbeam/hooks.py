@@ -29,6 +29,7 @@ DEFAULT_CONFIG = {
     "proxy.http": "",
     "proxy.https": "",
     "proxy.no": "",
+    "cache.address": "",
 }
 
 OPTION_KEYS = set(k.split(".")[0] for k in DEFAULT_CONFIG.keys())
