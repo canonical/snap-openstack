@@ -26,9 +26,9 @@ DEFAULT_CONFIG = {
     "juju.cloud.name": "sunbeam",
     "daemon.group": "snap_daemon",
     "daemon.debug": False,
-    "proxy.http_proxy": "",
-    "proxy.https_proxy": "",
-    "proxy.no_proxy": "",
+    "proxy.http": "",
+    "proxy.https": "",
+    "proxy.no": "",
 }
 
 OPTION_KEYS = set(k.split(".")[0] for k in DEFAULT_CONFIG.keys())

@@ -119,9 +119,9 @@ class DeployMicrok8sApplicationStep(BaseStep, JujuStepHelper):
         questions.write_answers(self.client, self._CONFIG, self.variables)
 
         # Check if there are any proxies set and add containerd_env to the variables
-        http_proxy = self.snap.config.get("proxy.http_proxy")
-        https_proxy = self.snap.config.get("proxy.https_proxy")
-        no_proxy = self.snap.config.get("proxy.no_proxy")
+        http_proxy = self.snap.config.get("proxy.http")
+        https_proxy = self.snap.config.get("proxy.https")
+        no_proxy = self.snap.config.get("proxy.no")
         if http_proxy or https_proxy:
             self.variables["containerd_env"] = CONTAINERD_ENV_TEMPLATE.format(
                 http_proxy=http_proxy, https_proxy=https_proxy, no_proxy=no_proxy

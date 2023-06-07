@@ -89,7 +89,7 @@ def run_shell(cmd, check=True):
 def pull_image(machine_id, name, tag):
     image = GHCR.format(name=name, tag=tag)
 
-    https_proxy = snap.config.get("proxy.https_proxy")
+    https_proxy = snap.config.get("proxy.https")
     cmd = SSH + [machine_id]
     if https_proxy:
         cmd.extend([f"https_proxy={https_proxy}"])
