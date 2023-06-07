@@ -20,6 +20,7 @@ from typing import Optional
 import yaml
 from rich.console import Console
 from rich.status import Status
+from snaphelpers import Snap
 
 from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import NodeNotExistInClusterException
@@ -44,6 +45,17 @@ MICROK8S_APP_TIMEOUT = 180  # 3 minutes, managing the application should be fast
 MICROK8S_UNIT_TIMEOUT = 1200  # 15 minutes, adding / removing units can take a long time
 CREDENTIAL_SUFFIX = "-creds"
 MICROK8S_DEFAULT_STORAGECLASS = "microk8s-hostpath"
+CONTAINERD_ENV_TEMPLATE = """
+# This file is managed by Juju. Manual changes may be lost at any time.
+
+# Configure limits for locked memory and maximum number of open files
+ulimit -n 65536 || true
+ulimit -l 16384 || true
+
+HTTP_RPOXY={http_proxy}
+HTTPS_PROXY={https_proxy}
+NO_PROXY={no_proxy}
+"""
 
 
 def microk8s_addons_questions():
@@ -67,6 +79,7 @@ class DeployMicrok8sApplicationStep(BaseStep, JujuStepHelper):
         accept_defaults: bool = False,
     ):
         super().__init__("Deploy MicroK8S", "Deploying MicroK8S")
+        self.snap = Snap()
         self.tfhelper = tfhelper
         self.jhelper = jhelper
         self.preseed_file = preseed_file
@@ -104,6 +117,16 @@ class DeployMicrok8sApplicationStep(BaseStep, JujuStepHelper):
 
         LOG.debug(self.variables)
         questions.write_answers(self.client, self._CONFIG, self.variables)
+
+        # Check if there are any proxies set and add containerd_env to the variables
+        http_proxy = self.snap.config.get("proxy.http_proxy")
+        https_proxy = self.snap.config.get("proxy.https_proxy")
+        no_proxy = self.snap.config.get("proxy.no_proxy")
+        if http_proxy or https_proxy:
+            self.variables["containerd_env"] = CONTAINERD_ENV_TEMPLATE.format(
+                http_proxy=http_proxy, https_proxy=https_proxy, no_proxy=no_proxy
+            )
+
         # Write answers to terraform location as a separate variables file
         self.tfhelper.write_tfvars(self.variables, self.answer_file)
 

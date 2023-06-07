@@ -124,12 +124,21 @@ class TerraformHelper:
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
         tf_log = str(self.path / f"terraform-init-{timestamp}.log")
         os_env.update({"TF_LOG": "INFO", "TF_LOG_PATH": tf_log})
+        http_proxy = self.snap.config.get("proxy.http_proxy")
+        https_proxy = self.snap.config.get("proxy.https_proxy")
+        no_proxy = self.snap.config.get("proxy.no_proxy")
         if self.env:
             os_env.update(self.env)
         if self.backend:
             self.write_backend_tf()
         if self.data_location:
             os_env.update(self.update_juju_provider_credentials())
+        if http_proxy or https_proxy:
+            os_env.update(
+                HTTP_PROXY=http_proxy,
+                HTTPS_PROXY=https_proxy,
+                NO_PROXY=no_proxy,
+            )
 
         try:
             cmd = [self.terraform, "init", "-upgrade", "-no-color"]
