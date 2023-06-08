@@ -29,7 +29,10 @@ DEFAULT_CONFIG = {
     "proxy.http": "",
     "proxy.https": "",
     "proxy.no": "",
-    "cache.address": "",
+    "cache.ghcr-io": "",
+    "cache.docker-io": "",
+    "cache.quay-io": "",
+    "cache.k8s-gcr-io": "",
 }
 
 OPTION_KEYS = set(k.split(".")[0] for k in DEFAULT_CONFIG.keys())

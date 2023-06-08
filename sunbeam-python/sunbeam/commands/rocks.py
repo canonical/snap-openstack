@@ -16,6 +16,7 @@ import logging
 import os
 import subprocess
 import tempfile
+from pathlib import Path
 from typing import Optional
 
 from rich.status import Status
@@ -56,13 +57,14 @@ ROCK_GROUPS = [
 ]
 SSH = ["juju", "ssh", "-m", CONTROLLER_MODEL]
 MICROK8S = ["sudo", "microk8s"]
+REGISTRIES = ("docker.io", "quay.io", "ghcr.io", "k8s.gcr.io")
 HOSTS_TEMPLATE = """
-server = "https://ghcr.io"
+server = "https://{registry}"
 
-[host."http://{registry}"]
+[host."http://{cache_address}"]
     capabilities = ["pull", "resolve"]
 """
-HOSTS_PATH = "/var/snap/microk8s/current/args/certs.d/ghcr.io/hosts.toml"
+HOSTS_PATH = "/var/snap/microk8s/current/args/certs.d/{registry}/hosts.toml"
 
 
 def run(cmd, check=True):
@@ -116,6 +118,62 @@ def pull_image(machine_id, name, tag):
     run(cmd)
 
 
+def is_host_templated(machine_id: str, registry: str, cache_address: str):
+    """Check if the hosts.toml file is templated."""
+    hosts_path = HOSTS_PATH.format(registry=registry)
+    cmd = SSH + [machine_id, "test", "-f", hosts_path]
+    process = run(cmd, check=False)
+    if process.returncode > 0:
+        return False
+
+    cmd = SSH + [
+        machine_id,
+        "grep",
+        f'[host."http://{cache_address}"]',
+        hosts_path,
+    ]
+    process = run(cmd, check=False)
+    if process.returncode > 0:
+        return False
+    return True
+
+
+def template_hosts(machine_id: str, registry: str, cache_address: str, home_dir: Path):
+    """Template the hosts.toml file for the pull through cache."""
+    hosts_path = HOSTS_PATH.format(registry=registry)
+    cmd = SSH + [
+        machine_id,
+        "mkdir",
+        "-p",
+        os.path.dirname(hosts_path),
+    ]
+    run(cmd)
+    cmd = SSH + [
+        machine_id,
+        "sudo",
+        "chown",
+        "root:snap_microk8s",
+        os.path.dirname(hosts_path),
+    ]
+    run(cmd)
+    tmp_dir = home_dir / ".config/openstack/"
+    with tempfile.NamedTemporaryFile("w", prefix=registry, dir=tmp_dir) as fd:
+        fd.write(HOSTS_TEMPLATE.format(registry=registry, cache_address=cache_address))
+        fd.flush()
+        cmd = SSH + [machine_id, "cp", fd.name, hosts_path]
+        run(cmd)
+    cmd = SSH + [
+        machine_id,
+        "sudo",
+        "chown",
+        "root:snap_microk8s",
+        hosts_path,
+    ]
+    run(cmd)
+    cmd = SSH + [machine_id, "sudo", "chmod", "0660", hosts_path]
+    run(cmd)
+
+
 class ConfigurePullThroughCacheStep(BaseStep):
     """Configure pull through cache"""
 
@@ -124,7 +182,6 @@ class ConfigurePullThroughCacheStep(BaseStep):
         self.name = name
         self.snap = Snap()
         self.machine_id = ""
-        self.cache_address = ""
 
     def is_skip(self, status: Optional[Status] = None) -> Result:
         """Determines if the step should be skipped or not.
@@ -132,35 +189,19 @@ class ConfigurePullThroughCacheStep(BaseStep):
         :return: ResultType.SKIPPED if the Step should be skipped,
                 ResultType.COMPLETED or ResultType.FAILED otherwise
         """
-        self.cache_address = self.snap.config.get("cache.address")
-        if not self.cache_address:
-            return Result(ResultType.SKIPPED)
-
         client = Client()
         try:
             node = client.cluster.get_node_info(self.name)
             self.machine_id = str(node.get("machineid"))
         except NodeNotExistInClusterException as e:
             return Result(ResultType.FAILED, str(e))
-        cmd = SSH + [
-            self.machine_id,
-            "test",
-            "-f",
-            HOSTS_PATH,
-        ]
-        process = run(cmd, check=False)
-        if process.returncode > 0:
-            return Result(ResultType.COMPLETED)
 
-        cmd = SSH + [
-            self.machine_id,
-            "grep",
-            f'[host."http://{self.cache_address}"]',
-            HOSTS_PATH,
-        ]
-        process = run(cmd, check=False)
-        if process.returncode > 0:
-            return Result(ResultType.COMPLETED)
+        for registry in REGISTRIES:
+            cache_address = self.snap.config.get("cache." + registry.replace(".", "-"))
+            if cache_address and not is_host_templated(
+                self.machine_id, registry, cache_address
+            ):
+                return Result(ResultType.COMPLETED)
         return Result(ResultType.SKIPPED)
 
     def run(self, status: Optional[Status] = None) -> Result:
@@ -169,37 +210,15 @@ class ConfigurePullThroughCacheStep(BaseStep):
         :param status: Rich Status object to update with progress
         :return: ResultType.COMPLETED or ResultType.FAILED
         """
-        cmd = SSH + [
-            self.machine_id,
-            "mkdir",
-            "-p",
-            os.path.dirname(HOSTS_PATH),
-        ]
-        run(cmd)
-        cmd = SSH + [
-            self.machine_id,
-            "sudo",
-            "chown",
-            "root:snap_microk8s",
-            os.path.dirname(HOSTS_PATH),
-        ]
-        run(cmd)
-        tmp_dir = f"{self.snap.paths.real_home}/.config/openstack/"
-        with tempfile.NamedTemporaryFile("w", prefix="ghcr", dir=tmp_dir) as fd:
-            fd.write(HOSTS_TEMPLATE.format(registry=self.cache_address))
-            fd.flush()
-            cmd = SSH + [self.machine_id, "cp", fd.name, HOSTS_PATH]
-            run(cmd)
-        cmd = SSH + [
-            self.machine_id,
-            "sudo",
-            "chown",
-            "root:snap_microk8s",
-            HOSTS_PATH,
-        ]
-        run(cmd)
-        cmd = SSH + [self.machine_id, "sudo", "chmod", "0660", HOSTS_PATH]
-        run(cmd)
+
+        for registry in REGISTRIES:
+            cache_address = self.snap.config.get("cache." + registry.replace(".", "-"))
+            if not cache_address:
+                continue
+            template_hosts(
+                self.machine_id, registry, cache_address, self.snap.paths.real_home
+            )
+
         run(SSH + [self.machine_id] + MICROK8S + ["stop"])
         run(SSH + [self.machine_id] + MICROK8S + ["start"])
         return Result(ResultType.COMPLETED)
