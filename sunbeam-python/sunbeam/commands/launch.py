@@ -30,8 +30,47 @@ from sunbeam.commands.openstack import OPENSTACK_MODEL
 from sunbeam.jobs.juju import JujuHelper, ModelNotFoundException, run_sync
 
 LOG = logging.getLogger(__name__)
+MERCH_TOKEN_SERVER_URL = "https://merch-game.sunbeam.rocks/token"
 console = Console()
 snap = Snap()
+
+
+def get_merch_token() -> str:
+    """Returns token.
+
+    Checks local token file and return token if exists.
+    Request MERCH_TOKEN_SERVER for a token and update
+    local token file and return token.
+    """
+    try:
+        token_file = snap.paths.user_data / ".token"
+        if token_file.exists():
+            with token_file.open("r") as file:
+                token = file.read()
+                if token:
+                    return token
+        else:
+            token_file.touch()
+            token_file.chmod(0o660)
+
+        proxies = {}
+        https_proxy = snap.config.get("proxy.https")
+        if https_proxy:
+            proxies["https"] = https_proxy
+
+        response = requests.post(MERCH_TOKEN_SERVER_URL, timeout=30, proxies=proxies)
+        if response.status_code == 200:
+            token = response.json()
+            token = token.get("value")
+            with token_file.open("w") as file:
+                file.write(token)
+
+            return token
+
+        return None
+    except Exception as e:
+        LOG.debug("Error in retrieving merchandise access code: " + str(e))
+        return None
 
 
 @click.command()
@@ -144,6 +183,12 @@ def launch(image_name: str, key: str, name: Optional[str] = None) -> None:
                 "Access instance with",
                 f"`ssh -i {key_path} ubuntu@{ip_.floating_ip_address}`",
             )
+            token = get_merch_token()
+            if token:
+                console.print(
+                    f"Thanks for trying MicroStack! Please use the code {token} to "
+                    "collect your gift from the Ubuntu stand."
+                )
         except openstack.exceptions.SDKException as e:
             LOG.error(f"Error allocating IP address: {e}")
             raise click.ClickException(
