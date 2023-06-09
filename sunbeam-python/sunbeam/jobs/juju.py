@@ -117,6 +117,12 @@ class ActionFailedException(JujuException):
     pass
 
 
+class CmdFailedException(JujuException):
+    """Raised when Juju run cmd failed."""
+
+    pass
+
+
 class JujuWaitException(JujuException):
     """Raised for any errors during wait."""
 
@@ -361,6 +367,39 @@ class JujuHelper:
         raise LeaderNotFoundException(
             f"Leader for application {name!r} is missing from model {model!r}"
         )
+
+    @controller
+    async def run_cmd_on_unit_payload(
+        self,
+        name: str,
+        model: str,
+        cmd: str,
+        container: str,
+        timeout=None,
+    ) -> str:
+        """Run a shell command on an unit's payload container.
+
+        :name: unit name
+        :model: Name of the model where the application is located
+        :cmd: Command to run
+        :container_name: Name of the payload container to run on
+        :timeout: Timeout in seconds
+        :returns: Command results
+        """
+
+        unit = await self.get_unit(name, model)
+        pebble = " ".join(
+            [
+                f"PEBBLE_SOCKET=/charm/containers/{container}/pebble.socket",
+                "/charm/bin/pebble",
+                "exec",
+                "--",
+            ]
+        )
+        action = await unit.run(pebble + " " + cmd, timeout=timeout, block=True)
+        if action.results["return-code"] != 0:
+            raise CmdFailedException(action.results["stderr"])
+        return action.results
 
     @controller
     async def run_action(

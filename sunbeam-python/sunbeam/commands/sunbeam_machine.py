@@ -21,11 +21,9 @@ from rich.status import Status
 from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import NodeNotExistInClusterException
 from sunbeam.commands.juju import JujuStepHelper
-from sunbeam.commands.openstack import OPENSTACK_MODEL
 from sunbeam.commands.terraform import TerraformException, TerraformHelper
 from sunbeam.jobs.common import BaseStep, Result, ResultType
 from sunbeam.jobs.juju import (
-    CONTROLLER_MODEL,
     MODEL,
     ApplicationNotFoundException,
     JujuHelper,
@@ -34,32 +32,28 @@ from sunbeam.jobs.juju import (
 )
 
 LOG = logging.getLogger(__name__)
-APPLICATION = "openstack-hypervisor"
-HYPERVISOR_APP_TIMEOUT = 180  # 3 minutes, managing the application should be fast
-HYPERVISOR_UNIT_TIMEOUT = (
-    1200  # 15 minutes, adding / removing units can take a long time
+APPLICATION = "sunbeam-machine"
+SUNBEAM_MACHINE_APP_TIMEOUT = 180  # 3 minutes, managing the application should be fast
+SUNBEAM_MACHINE_UNIT_TIMEOUT = (
+    1200  # 20 minutes, adding / removing units can take a long time
 )
 
 
-class DeployHypervisorApplicationStep(BaseStep, JujuStepHelper):
+class DeploySunbeamMachineApplicationStep(BaseStep, JujuStepHelper):
     """Deploy openstack-hyervisor application using Terraform cloud"""
 
     def __init__(
         self,
         tfhelper: TerraformHelper,
-        tfhelper_openstack: TerraformHelper,
         jhelper: JujuHelper,
     ):
         super().__init__(
-            "Deploy openstack-hypervisor",
-            "Deploy openstack-hypervisor application onto cloud",
+            "Deploy sunbeam-machine",
+            "Deploy sunbeam-machine application onto cloud",
         )
         self.tfhelper = tfhelper
-        self.tfhelper_openstack = tfhelper_openstack
         self.jhelper = jhelper
         self.client = Client()
-        self.hypervisor_model = CONTROLLER_MODEL.split("/")[-1]
-        self.openstack_model = OPENSTACK_MODEL
 
     def is_skip(self, status: Optional[Status] = None) -> Result:
         """Determines if the step should be skipped or not.
@@ -75,7 +69,7 @@ class DeployHypervisorApplicationStep(BaseStep, JujuStepHelper):
         return Result(ResultType.SKIPPED)
 
     def run(self, status: Optional[Status] = None) -> Result:
-        """Apply terraform configuration to deploy hypervisor"""
+        """Apply terraform configuration to deploy sunbeam machine"""
         machine_ids = []
         try:
             application = run_sync(self.jhelper.get_application(APPLICATION, MODEL))
@@ -83,14 +77,10 @@ class DeployHypervisorApplicationStep(BaseStep, JujuStepHelper):
         except ApplicationNotFoundException as e:
             LOG.debug(str(e))
 
-        openstack_backend_config = self.tfhelper_openstack.backend_config()
         self.tfhelper.write_tfvars(
             {
-                "hypervisor_model": self.hypervisor_model,
-                "openstack_model": self.openstack_model,
+                "machine_model": MODEL,
                 "machine_ids": machine_ids,
-                "openstack-state-backend": self.tfhelper_openstack.backend,
-                "openstack-state-config": openstack_backend_config,
             }
         )
         try:
@@ -106,7 +96,7 @@ class DeployHypervisorApplicationStep(BaseStep, JujuStepHelper):
                     APPLICATION,
                     MODEL,
                     accepted_status=["active", "unknown"],
-                    timeout=HYPERVISOR_APP_TIMEOUT,
+                    timeout=SUNBEAM_MACHINE_APP_TIMEOUT,
                 )
             )
         except TimeoutException as e:
@@ -116,9 +106,11 @@ class DeployHypervisorApplicationStep(BaseStep, JujuStepHelper):
         return Result(ResultType.COMPLETED)
 
 
-class AddHypervisorUnitStep(BaseStep, JujuStepHelper):
+class AddSunbeamMachineUnitStep(BaseStep, JujuStepHelper):
     def __init__(self, name: str, jhelper: JujuHelper):
-        super().__init__("Add Hypervisor unit", "Add Hypervisor unit on machine")
+        super().__init__(
+            "Add Sunbeam-machine unit", "Add Sunbeam-machine unit on machine"
+        )
 
         self.name = name
         self.jhelper = jhelper
@@ -142,7 +134,7 @@ class AddHypervisorUnitStep(BaseStep, JujuStepHelper):
         except ApplicationNotFoundException:
             return Result(
                 ResultType.FAILED,
-                "openstack-hypervisor application has not been deployed yet",
+                "sunbeam-machine application has not been deployed yet",
             )
 
         for unit in application.units:
@@ -158,14 +150,14 @@ class AddHypervisorUnitStep(BaseStep, JujuStepHelper):
         return Result(ResultType.COMPLETED)
 
     def run(self, status: Optional[Status] = None) -> Result:
-        """Add unit to openstack-hypervisor application on Juju model."""
+        """Add unit to sunbeam-machine application on Juju model."""
         try:
             unit = run_sync(
                 self.jhelper.add_unit(APPLICATION, MODEL, str(self.machine_id))
             )
             run_sync(
                 self.jhelper.wait_unit_ready(
-                    unit.name, MODEL, timeout=HYPERVISOR_UNIT_TIMEOUT
+                    unit.name, MODEL, timeout=SUNBEAM_MACHINE_UNIT_TIMEOUT
                 )
             )
         except (ApplicationNotFoundException, TimeoutException) as e:
@@ -175,11 +167,11 @@ class AddHypervisorUnitStep(BaseStep, JujuStepHelper):
         return Result(ResultType.COMPLETED)
 
 
-class RemoveHypervisorUnitStep(BaseStep, JujuStepHelper):
+class RemoveSunbeamMachineStep(BaseStep, JujuStepHelper):
     def __init__(self, name: str, jhelper: JujuHelper):
         super().__init__(
-            "Remove openstack-hypervisor unit",
-            "Remove openstack-hypervisor unit from machine",
+            "Remove sunbeam-machine unit",
+            "Remove sunbeam-machine unit from machine",
         )
 
         self.name = name
@@ -217,7 +209,7 @@ class RemoveHypervisorUnitStep(BaseStep, JujuStepHelper):
         return Result(ResultType.SKIPPED)
 
     def run(self, status: Optional[Status] = None) -> Result:
-        """Remove unit from openstack-hypervisor application on Juju model."""
+        """Remove unit from sunbeam-machine application on Juju model."""
         try:
             run_sync(self.jhelper.remove_unit(APPLICATION, str(self.unit), MODEL))
             run_sync(
@@ -225,7 +217,7 @@ class RemoveHypervisorUnitStep(BaseStep, JujuStepHelper):
                     APPLICATION,
                     MODEL,
                     accepted_status=["active", "unknown"],
-                    timeout=HYPERVISOR_UNIT_TIMEOUT,
+                    timeout=SUNBEAM_MACHINE_UNIT_TIMEOUT,
                 )
             )
         except (ApplicationNotFoundException, TimeoutException) as e:

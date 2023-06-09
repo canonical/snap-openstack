@@ -29,6 +29,7 @@ from sunbeam.commands import node as node_cmds
 from sunbeam.commands import openrc as openrc_cmds
 from sunbeam.commands import prepare_node as prepare_node_cmds
 from sunbeam.commands import resize as resize_cmds
+from sunbeam.commands.plugins import pro
 from sunbeam.utils import CatchGroup
 
 LOG = logging.getLogger()
@@ -57,10 +58,21 @@ def cluster(ctx):
     """Manage the Sunbeam Cluster"""
 
 
+@click.group("enable", context_settings=CONTEXT_SETTINGS, cls=CatchGroup)
+@click.pass_context
+def enable(ctx):
+    """Enable plugins"""
+
+
+@click.group("disable", context_settings=CONTEXT_SETTINGS, cls=CatchGroup)
+@click.pass_context
+def disable(ctx):
+    """Disable plugins"""
+
+
 def main():
     log.setup_root_logging()
     cli.add_command(prepare_node_cmds.prepare_node_script)
-    cli.add_command(cluster)
     cli.add_command(configure_cmds.configure)
     cli.add_command(generate_cloud_config_cmds.cloud_config)
     cli.add_command(generate_preseed_cmds.generate_preseed)
@@ -68,12 +80,22 @@ def main():
     cli.add_command(launch_cmds.launch)
     cli.add_command(openrc_cmds.openrc)
     cli.add_command(dasboard_url_cmds.dashboard_url)
+
+    # Cluster management
+    cli.add_command(cluster)
     cluster.add_command(bootstrap_cmds.bootstrap)
     cluster.add_command(node_cmds.add)
     cluster.add_command(node_cmds.join)
     cluster.add_command(node_cmds.list)
     cluster.add_command(node_cmds.remove)
     cluster.add_command(resize_cmds.resize)
+
+    # Plugins
+    for plugin in (pro,):
+        plugin.register(enable, disable)
+    cli.add_command(enable)
+    cli.add_command(disable)
+
     cli()
 
 

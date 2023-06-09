@@ -191,8 +191,8 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
         tfvars = {
             "model": self.model,
             # Make these channel options configurable by the user
-            "openstack-channel": "2023.1/edge",
-            "ovn-channel": "23.03/edge",
+            "openstack-channel": "2023.1/stable",
+            "ovn-channel": "23.03/stable",
             "cloud": self.cloud,
             "credential": f"{self.cloud}{CREDENTIAL_SUFFIX}",
             "config": {"workload-storage": MICROK8S_DEFAULT_STORAGECLASS},

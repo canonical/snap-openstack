@@ -26,31 +26,9 @@ terraform {
 
 provider "juju" {}
 
-# Offers should be in the openstack control plane deployment plan but
-# need to be here for the moment due to
-# https://github.com/juju/terraform-provider-juju/issues/190
-resource "juju_offer" "rabbit_offer" {
-  model            = var.openstack_model
-  application_name = "rabbitmq"
-  endpoint         = "amqp"
-}
-
-resource "juju_offer" "keystone_offer" {
-  model            = var.openstack_model
-  application_name = "keystone"
-  endpoint         = "identity-credentials"
-}
-
-resource "juju_offer" "ca_offer" {
-  model            = var.openstack_model
-  application_name = "certificate-authority"
-  endpoint         = "certificates"
-}
-
-resource "juju_offer" "ovn_offer" {
-  model            = var.openstack_model
-  application_name = "ovn-relay"
-  endpoint         = "ovsdb-cms-relay"
+data "terraform_remote_state" "openstack" {
+  backend = var.openstack-state-backend
+  config  = var.openstack-state-config
 }
 
 resource "juju_application" "openstack-hypervisor" {
@@ -71,7 +49,7 @@ resource "juju_application" "openstack-hypervisor" {
 
 }
 
-resource "juju_integration" "hypervisor_amqp" {
+resource "juju_integration" "hypervisor-amqp" {
   model = var.hypervisor_model
 
   application {
@@ -80,11 +58,11 @@ resource "juju_integration" "hypervisor_amqp" {
   }
 
   application {
-    offer_url = juju_offer.rabbit_offer.url
+    offer_url = data.terraform_remote_state.openstack.outputs.rabbitmq-offer-url
   }
 }
 
-resource "juju_integration" "hypervisor_identity" {
+resource "juju_integration" "hypervisor-identity" {
   model = var.hypervisor_model
 
   application {
@@ -93,11 +71,11 @@ resource "juju_integration" "hypervisor_identity" {
   }
 
   application {
-    offer_url = juju_offer.keystone_offer.url
+    offer_url = data.terraform_remote_state.openstack.outputs.keystone-offer-url
   }
 }
 
-resource "juju_integration" "hypervisor_certs" {
+resource "juju_integration" "hypervisor-certs" {
   model = var.hypervisor_model
 
   application {
@@ -106,11 +84,11 @@ resource "juju_integration" "hypervisor_certs" {
   }
 
   application {
-    offer_url = juju_offer.ca_offer.url
+    offer_url = data.terraform_remote_state.openstack.outputs.ca-offer-url
   }
 }
 
-resource "juju_integration" "hypervisor_ovn" {
+resource "juju_integration" "hypervisor-ovn" {
   model = var.hypervisor_model
 
   application {
@@ -119,6 +97,6 @@ resource "juju_integration" "hypervisor_ovn" {
   }
 
   application {
-    offer_url = juju_offer.ovn_offer.url
+    offer_url = data.terraform_remote_state.openstack.outputs.ovn-relay-offer-url
   }
 }
