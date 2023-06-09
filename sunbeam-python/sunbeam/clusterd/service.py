@@ -119,7 +119,13 @@ class BaseService(ABC):
             response = self.__session.request(method=method, url=url, **kwargs)
             LOG.debug("Response(%s) = %s", response, response.text)
         except ConnectionError as e:
-            raise ClusterServiceUnavailableException(str(e))
+            msg = str(e)
+            if "FileNotFoundError" in msg:
+                raise ClusterServiceUnavailableException(
+                    "Sunbeam Cluster socket not found, is clusterd running ?"
+                    " Check with 'snap services openstack.clusterd'",
+                ) from e
+            raise ClusterServiceUnavailableException(msg)
 
         try:
             response.raise_for_status()

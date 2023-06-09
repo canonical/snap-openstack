@@ -58,6 +58,9 @@ from sunbeam.commands.rocks import (
     ConfigurePullThroughCacheStep,
     PreseedRocksStep,
 )
+from sunbeam.commands.sunbeam_machine import (
+    AddSunbeamMachineUnitStep,
+)
 from sunbeam.commands.terraform import TerraformHelper, TerraformInitStep
 from sunbeam.jobs.checks import (
     DaemonGroupCheck,
@@ -199,7 +202,7 @@ def join(
     data_location = snap.paths.user_data
 
     # NOTE: install to user writable location
-    tfplan_dirs = []
+    tfplan_dirs = ["deploy-sunbeam-machine"]
     if is_control_node:
         tfplan_dirs.extend(["deploy-microk8s", "deploy-microceph", "deploy-openstack"])
     if is_compute_node:
@@ -210,6 +213,13 @@ def join(
         LOG.debug(f"Updating {dst} from {src}...")
         shutil.copytree(src, dst, dirs_exist_ok=True)
 
+    tfhelper_openstack_deploy = TerraformHelper(
+        path=snap.paths.user_common / "etc" / "deploy-openstack",
+        plan="openstack-plan",
+        parallelism=1,
+        backend="http",
+        data_location=data_location,
+    )
     tfhelper_hypervisor_deploy = TerraformHelper(
         path=snap.paths.user_common / "etc" / "deploy-openstack-hypervisor",
         plan="hypervisor-plan",
@@ -235,6 +245,9 @@ def join(
     jhelper = JujuHelper(data_location)
     plan2 = []
     plan2.append(ClusterUpdateNodeStep(name, machine_id=machine_id))
+    plan2.append(
+        AddSunbeamMachineUnitStep(name, jhelper),
+    )
 
     if is_control_node:
         plan2.append(AddMicrok8sUnitStep(name, jhelper))
@@ -254,7 +267,9 @@ def join(
         plan2.extend(
             [
                 TerraformInitStep(tfhelper_hypervisor_deploy),
-                DeployHypervisorApplicationStep(tfhelper_hypervisor_deploy, jhelper),
+                DeployHypervisorApplicationStep(
+                    tfhelper_hypervisor_deploy, tfhelper_openstack_deploy, jhelper
+                ),
                 AddHypervisorUnitStep(name, jhelper),
                 SetLocalHypervisorOptions(
                     name, jhelper, join_mode=True, preseed_file=preseed

@@ -35,13 +35,13 @@ LOG = logging.getLogger(__name__)
 http_backend_template = """
 terraform {
   backend "http" {
-    address = "$http_address"
-    update_method = "PUT"
-    lock_address = "$lock_address"
-    lock_method = "PUT"
-    unlock_address = "$unlock_address"
-    unlock_method = "PUT"
-    skip_cert_verification = true
+    address                = $address
+    update_method          = $update_method
+    lock_address           = $lock_address
+    lock_method            = $lock_method
+    unlock_address         = $unlock_address
+    unlock_method          = $unlock_method
+    skip_cert_verification = $skip_cert_verification
   }
 }
 """
@@ -75,22 +75,31 @@ class TerraformHelper:
         self.plan = plan
         self.env = env
         self.parallelism = parallelism
-        self.backend = backend
+        self.backend = backend or "local"
         self.data_location = data_location
         self.terraform = str(self.snap.paths.snap / "bin" / "terraform")
 
-    def write_backend_tf(self) -> None:
+    def backend_config(self) -> dict:
         if self.backend == "http":
             local_ip = utils.get_local_ip_by_default_route()
-            http_address = f"https://{local_ip}:7000/1.0/terraformstate/{self.plan}"
-            lock_address = f"https://{local_ip}:7000/1.0/terraformlock/{self.plan}"
-            unlock_address = f"https://{local_ip}:7000/1.0/terraformunlock/{self.plan}"
+            local_address = f"https://{local_ip}:7000"
+            return {
+                "address": f"{local_address}/1.0/terraformstate/{self.plan}",
+                "update_method": "PUT",
+                "lock_address": f"{local_address}/1.0/terraformlock/{self.plan}",
+                "lock_method": "PUT",
+                "unlock_address": f"{local_address}/1.0/terraformunlock/{self.plan}",
+                "unlock_method": "PUT",
+                "skip_cert_verification": True,
+            }
+        return {}
 
+    def write_backend_tf(self) -> None:
+        backend = self.backend_config()
+        if self.backend == "http":
             backend_obj = Template(http_backend_template)
             backend = backend_obj.safe_substitute(
-                http_address=http_address,
-                lock_address=lock_address,
-                unlock_address=unlock_address,
+                {key: json.dumps(value) for key, value in backend.items()}
             )
 
             with Path(self.path / "backend.tf").open(mode="w") as file:

@@ -140,5 +140,10 @@ class CatchGroup(click.Group):
             return self.main(*args, **kwargs)
         except Exception as e:
             LOG.debug(e, exc_info=True)
+            message = (
+                "An unexpected error has occurred."
+                " Please run 'sunbeam inspect' to generate an inspection report."
+            )
+            LOG.warn(message)
             LOG.error("Error: %s", e)
             sys.exit(1)

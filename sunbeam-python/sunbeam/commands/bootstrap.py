@@ -50,11 +50,16 @@ from sunbeam.commands.microk8s import (
     AddMicrok8sUnitStep,
     DeployMicrok8sApplicationStep,
 )
+from sunbeam.commands.mysql import ConfigureMySQLStep
 from sunbeam.commands.openstack import DeployControlPlaneStep
 from sunbeam.commands.rocks import (
     ConfigureKubeletOptionsStep,
     ConfigurePullThroughCacheStep,
     PreseedRocksStep,
+)
+from sunbeam.commands.sunbeam_machine import (
+    AddSunbeamMachineUnitStep,
+    DeploySunbeamMachineApplicationStep,
 )
 from sunbeam.commands.terraform import TerraformHelper, TerraformInitStep
 from sunbeam.jobs.checks import (
@@ -144,7 +149,7 @@ def bootstrap(
     data_location = snap.paths.user_data
 
     # NOTE: install to user writable location
-    tfplan_dirs = []
+    tfplan_dirs = ["deploy-sunbeam-machine"]
     if is_control_node:
         tfplan_dirs.extend(["deploy-microk8s", "deploy-microceph", "deploy-openstack"])
     if is_compute_node:
@@ -209,10 +214,22 @@ def bootstrap(
         backend="http",
         data_location=data_location,
     )
+    tfhelper_sunbeam_machine = TerraformHelper(
+        path=snap.paths.user_common / "etc" / "deploy-sunbeam-machine",
+        plan="sunbeam-machine-plan",
+        parallelism=1,
+        backend="http",
+        data_location=data_location,
+    )
     jhelper = JujuHelper(data_location)
 
     plan4 = []
     plan4.append(RegisterJujuUserStep(fqdn, CONTROLLER, data_location, replace=True))
+    # Deploy sunbeam machine charm
+    plan4.append(TerraformInitStep(tfhelper_sunbeam_machine))
+    plan4.append(DeploySunbeamMachineApplicationStep(tfhelper_sunbeam_machine, jhelper))
+    plan4.append(AddSunbeamMachineUnitStep(fqdn, jhelper))
+    # Deploy Microk8s application during bootstrap irrespective of node role.
     plan4.append(TerraformInitStep(tfhelper))
     plan4.append(
         DeployMicrok8sApplicationStep(
@@ -247,10 +264,16 @@ def bootstrap(
     run_plan(plan4, console)
 
     plan5 = []
+
+    if is_control_node:
+        plan5.append(ConfigureMySQLStep(jhelper))
+
     if is_compute_node:
         plan5.append(TerraformInitStep(tfhelper_hypervisor_deploy))
         plan5.append(
-            DeployHypervisorApplicationStep(tfhelper_hypervisor_deploy, jhelper)
+            DeployHypervisorApplicationStep(
+                tfhelper_hypervisor_deploy, tfhelper_openstack_deploy, jhelper
+            )
         )
         plan5.append(AddHypervisorUnitStep(fqdn, jhelper))
 
