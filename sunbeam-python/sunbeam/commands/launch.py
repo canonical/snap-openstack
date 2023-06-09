@@ -22,6 +22,7 @@ from typing import Optional
 import click
 import openstack
 import petname
+import requests
 from rich.console import Console
 from snaphelpers import Snap
 
