@@ -1,5 +1,13 @@
 package database
 
+import (
+	"context"
+	"database/sql"
+	"fmt"
+
+	"github.com/canonical/lxd/lxd/db/query"
+)
+
 //go:generate -command mapper lxd-generate db mapper -t config.mapper.go
 //go:generate mapper reset
 //
@@ -29,4 +37,37 @@ type ConfigItem struct {
 // ConfigItemFilter is a required struct for use with lxd-generate. It is used for filtering fields on database fetches.
 type ConfigItemFilter struct {
 	Key *string
+}
+
+// GetConfigItemKeys returns the list of ConfigItem keys from the database, filtered by prefix if provided.
+func GetConfigItemKeys(ctx context.Context, tx *sql.Tx, prefix *string) ([]string, error) {
+	stmt := `SELECT config.key FROM config`
+
+	args := make([]any, 0)
+
+	if prefix != nil {
+		stmt += ` WHERE config.key LIKE ?`
+		args = append(args, *prefix+"%")
+	}
+
+	configs := make([]string, 0)
+
+	dest := func(scan func(dest ...any) error) error {
+		var key string
+		err := scan(&key)
+		if err != nil {
+			return err
+		}
+
+		configs = append(configs, key)
+
+		return nil
+	}
+
+	err := query.Scan(ctx, tx, stmt, dest, args...)
+	if err != nil {
+		return nil, fmt.Errorf("Failed to fetch from \"config\" table: %w", err)
+	}
+
+	return configs, nil
 }

@@ -15,12 +15,14 @@
 
 import json
 import logging
+import sys
 from pathlib import Path
 from typing import Any, Callable, Optional
 
 import yaml
 from rich.console import Console
-from rich.prompt import Confirm, DefaultType, Prompt, Text
+from rich.prompt import Confirm, DefaultType, Prompt
+from rich.text import Text
 
 from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import ConfigItemNotFoundException
@@ -44,6 +46,28 @@ class PasswordPrompt(Prompt):
         return Text(f"({default[:2]}{PASSWORD_MASK})", "prompt.default")
 
 
+# workaround until https://github.com/Textualize/rich/issues/2994 is fixed
+class StreamWrapper:
+    def __init__(self, read_stream, write_stream):
+        self.read_stream = read_stream
+        self.write_stream = write_stream
+
+    def readline(self):
+        value = self.read_stream.readline()
+        if value == "\n":
+            return ""
+        return value
+
+    def flush(self):
+        self.read_stream.flush()
+
+    def write(self, s: str):
+        self.write_stream.write(s)
+
+
+STREAM = StreamWrapper(sys.stdin, sys.stdout)
+
+
 class Question:
     """A Question to be resolved."""
 
@@ -54,6 +78,7 @@ class Question:
         default_value: Any = None,
         choices: Optional[list] = None,
         password: bool = False,
+        validation_function: Optional[Callable] = None,
     ):
         """Setup question.
 
@@ -64,6 +89,8 @@ class Question:
         :param choices: A list of choices for the user to choose from
         :param console: the console to prompt on
         :param password: whether answer to question is a password
+        :param validation_function: A function to use to validate the answer,
+                                    must raise ValueError when value is invalid.
         """
         self.preseed = None
         self.console = None
@@ -75,6 +102,7 @@ class Question:
         self.choices = choices
         self.accept_defaults = False
         self.password = password
+        self.validation_function = validation_function
 
     @property
     def question_function(self):
@@ -128,7 +156,19 @@ class Question:
                     console=self.console,
                     choices=self.choices,
                     password=self.password,
+                    stream=STREAM,
                 )
+        if self.validation_function is not None:
+            try:
+                self.validation_function(self.answer)
+            except ValueError as e:
+                message = f"Invalid value for {self.question!r}: {e}"
+                if self.preseed is not None:
+                    LOG.error(message)
+                    raise
+                LOG.warn(message)
+                self.ask(new_default=new_default)
+
         return self.answer
 
 

@@ -10,7 +10,9 @@ import (
 var Endpoints = []rest.Endpoint{
 	nodesCmd,
 	nodeCmd,
+	terraformStateListCmd,
 	terraformStateCmd,
+	terraformLockListCmd,
 	terraformLockCmd,
 	terraformUnlockCmd,
 	jujuusersCmd,

@@ -26,3 +26,7 @@ juju>=3.2,<3.3
 
 # Used in the launch command to launch an instance
 petname
+
+# Lightkube is used to interact with the Kubernetes API
+lightkube
+lightkube-models

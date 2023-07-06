@@ -6,15 +6,22 @@ import (
 	"net/http"
 	"net/url"
 
+	"github.com/canonical/lxd/lxd/response"
+	"github.com/canonical/lxd/lxd/util"
+	"github.com/canonical/lxd/shared/api"
 	"github.com/canonical/microcluster/rest"
 	"github.com/canonical/microcluster/state"
 	"github.com/gorilla/mux"
-	"github.com/lxc/lxd/lxd/response"
-	"github.com/lxc/lxd/lxd/util"
-	"github.com/lxc/lxd/shared/api"
 
 	"github.com/openstack-snaps/snap-openstack/sunbeam-microcluster/sunbeam"
 )
+
+// /1.0/terraformstate endpoint.
+var terraformStateListCmd = rest.Endpoint{
+	Path: "terraformstate",
+
+	Get: rest.EndpointAction{Handler: cmdStateList, AllowUntrusted: true},
+}
 
 // /1.0/terraformstate/{name} endpoint.
 // The endpoints are basically to provide REST URLs to Terraform http
@@ -34,6 +41,13 @@ var terraformStateCmd = rest.Endpoint{
 	Delete: rest.EndpointAction{Handler: cmdStateDelete, AllowUntrusted: true},
 }
 
+// /1.0/terraformlock endpoint.
+var terraformLockListCmd = rest.Endpoint{
+	Path: "terraformlock",
+
+	Get: rest.EndpointAction{Handler: cmdLockList, AllowUntrusted: true},
+}
+
 // /1.0/terraformlock/{name} endpoint.
 var terraformLockCmd = rest.Endpoint{
 	Path: "terraformlock/{name}",
@@ -47,6 +61,16 @@ var terraformUnlockCmd = rest.Endpoint{
 	Path: "terraformunlock/{name}",
 
 	Put: rest.EndpointAction{Handler: cmdUnlockPut, AllowUntrusted: true},
+}
+
+func cmdStateList(s *state.State, _ *http.Request) response.Response {
+	plans, err := sunbeam.GetTerraformStates(s)
+
+	if err != nil {
+		return response.InternalError(err)
+	}
+
+	return response.SyncResponse(true, plans)
 }
 
 func cmdStateGet(s *state.State, r *http.Request) response.Response {
@@ -136,6 +160,16 @@ func cmdStateDelete(s *state.State, r *http.Request) response.Response {
 	}
 
 	return response.EmptySyncResponse
+}
+
+func cmdLockList(s *state.State, _ *http.Request) response.Response {
+	plans, err := sunbeam.GetTerraformLocks(s)
+
+	if err != nil {
+		return response.InternalError(err)
+	}
+
+	return response.SyncResponse(true, plans)
 }
 
 func cmdLockGet(s *state.State, r *http.Request) response.Response {

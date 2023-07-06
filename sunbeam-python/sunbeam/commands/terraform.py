@@ -46,6 +46,14 @@ terraform {
 }
 """
 
+terraform_rc_template = """
+provider_installation {
+  filesystem_mirror {
+    path    = "$snap_path/usr/share/terraform-providers"
+  }
+}
+"""
+
 
 class TerraformException(Exception):
     """Terraform related exceptions"""
@@ -111,6 +119,16 @@ class TerraformHelper:
         with filepath.open("w") as tfvars:
             tfvars.write(json.dumps(vars))
 
+    def write_terraformrc(self) -> None:
+        """Write .terraformrc file"""
+        terraform_rc = self.snap.paths.user_data / ".terraformrc"
+        with terraform_rc.open(mode="w") as file:
+            file.write(
+                Template(terraform_rc_template).safe_substitute(
+                    {"snap_path": self.snap.paths.snap}
+                )
+            )
+
     def update_juju_provider_credentials(self) -> dict:
         os_env = {}
         if self.data_location:
@@ -148,6 +166,7 @@ class TerraformHelper:
                 HTTPS_PROXY=https_proxy,
                 NO_PROXY=no_proxy,
             )
+        self.write_terraformrc()
 
         try:
             cmd = [self.terraform, "init", "-upgrade", "-no-color"]

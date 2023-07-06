@@ -30,13 +30,22 @@ from snaphelpers import Snap
 import sunbeam.jobs.questions
 from sunbeam import utils
 from sunbeam.clusterd.client import Client
+from sunbeam.commands.juju import JujuLoginStep
 from sunbeam.commands.openstack import OPENSTACK_MODEL
 from sunbeam.commands.terraform import (
     TerraformException,
     TerraformHelper,
     TerraformInitStep,
 )
-from sunbeam.jobs.common import BaseStep, Result, ResultType, Status, run_plan
+from sunbeam.jobs.checks import DaemonGroupCheck
+from sunbeam.jobs.common import (
+    BaseStep,
+    Result,
+    ResultType,
+    Status,
+    run_plan,
+    run_preflight_checks,
+)
 from sunbeam.jobs.juju import (
     CONTROLLER_MODEL,
     JujuHelper,
@@ -134,7 +143,13 @@ def user_questions():
             password=True,
         ),
         "cidr": sunbeam.jobs.questions.PromptQuestion(
-            "Network range to use for project network", default_value="192.168.122.0/24"
+            "Network range to use for project network",
+            default_value="192.168.122.0/24",
+            validation_function=ipaddress.ip_network,
+        ),
+        "nameservers": sunbeam.jobs.questions.PromptQuestion(
+            "List of nameservers guests should use for DNS resolution",
+            default_function=lambda: " ".join(utils.get_nameservers()),
         ),
         "security_group_rules": sunbeam.jobs.questions.ConfirmQuestion(
             "Enable ping and SSH access to instances?", default_value=True
@@ -152,15 +167,22 @@ def ext_net_questions():
         "cidr": sunbeam.jobs.questions.PromptQuestion(
             "CIDR of network to use for external networking",
             default_value="10.20.20.0/24",
+            validation_function=ipaddress.ip_network,
         ),
         "gateway": sunbeam.jobs.questions.PromptQuestion(
-            "IP address of default gateway for external network", default_value=None
+            "IP address of default gateway for external network",
+            default_value=None,
+            validation_function=ipaddress.ip_address,
         ),
         "start": sunbeam.jobs.questions.PromptQuestion(
-            "Start of IP allocation range for external network", default_value=None
+            "Start of IP allocation range for external network",
+            default_value=None,
+            validation_function=ipaddress.ip_address,
         ),
         "end": sunbeam.jobs.questions.PromptQuestion(
-            "End of IP allocation range for external network", default_value=None
+            "End of IP allocation range for external network",
+            default_value=None,
+            validation_function=ipaddress.ip_address,
         ),
         "network_type": sunbeam.jobs.questions.PromptQuestion(
             "Network type for access to external network",
@@ -184,12 +206,17 @@ def ext_net_questions_local_only():
                 "be in use"
             ),
             default_value="10.20.20.0/24",
+            validation_function=ipaddress.ip_network,
         ),
         "start": sunbeam.jobs.questions.PromptQuestion(
-            "Start of IP allocation range for external network", default_value=None
+            "Start of IP allocation range for external network",
+            default_value=None,
+            validation_function=ipaddress.ip_address,
         ),
         "end": sunbeam.jobs.questions.PromptQuestion(
-            "End of IP allocation range for external network", default_value=None
+            "End of IP allocation range for external network",
+            default_value=None,
+            validation_function=ipaddress.ip_address,
         ),
         "network_type": sunbeam.jobs.questions.PromptQuestion(
             "Network type for access to external network",
@@ -482,6 +509,9 @@ class UserQuestions(BaseStep):
             self.variables["user"]["password"] = user_bank.password.ask()
             self.variables["user"]["cidr"] = user_bank.cidr.ask()
             self.variables["user"][
+                "dns_nameservers"
+            ] = user_bank.nameservers.ask().split()
+            self.variables["user"][
                 "security_group_rules"
             ] = user_bank.security_group_rules.ask()
             default_allocation_range_start = self.variables["external_network"].get(
@@ -699,6 +729,10 @@ def configure(
     accept_defaults: bool = False,
 ) -> None:
     """Configure cloud with some sensible defaults."""
+    preflight_checks = []
+    preflight_checks.append(DaemonGroupCheck())
+    run_preflight_checks(preflight_checks, console)
+
     name = utils.get_fqdn()
     snap = Snap()
     src = snap.paths.snap / "etc" / "demo-setup/"
@@ -723,12 +757,12 @@ def configure(
         path=snap.paths.user_common / "etc" / "demo-setup",
         env=admin_credentials,
         plan="demo-setup",
-        parallelism=1,
         backend="http",
         data_location=data_location,
     )
     answer_file = tfhelper.path / "config.auto.tfvars.json"
     plan = [
+        JujuLoginStep(data_location),
         UserQuestions(
             answer_file=answer_file,
             preseed_file=preseed,

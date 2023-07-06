@@ -38,10 +38,11 @@ from sunbeam.commands.hypervisor import (
     AddHypervisorUnitStep,
     DeployHypervisorApplicationStep,
 )
-from sunbeam.commands.juju import AddJujuMachineStep  # RemoveJujuUserStep,
 from sunbeam.commands.juju import (
+    AddJujuMachineStep,
     CreateJujuUserStep,
     JujuGrantModelAccessStep,
+    JujuLoginStep,
     RegisterJujuUserStep,
     RemoveJujuMachineStep,
     SaveJujuUserLocallyStep,
@@ -68,6 +69,7 @@ from sunbeam.jobs.checks import (
     LocalShareCheck,
     SshKeysConnectedCheck,
     VerifyFQDNCheck,
+    VerifyHypervisorHostnameCheck,
 )
 from sunbeam.jobs.common import (
     ResultType,
@@ -195,6 +197,11 @@ def join(
     preflight_checks.append(SshKeysConnectedCheck())
     preflight_checks.append(DaemonGroupCheck())
     preflight_checks.append(LocalShareCheck())
+    if is_compute_node:
+        hypervisor_hostname = utils.get_hypervisor_hostname()
+        preflight_checks.append(
+            VerifyHypervisorHostnameCheck(name, hypervisor_hostname)
+        )
 
     run_preflight_checks(preflight_checks, console)
 
@@ -216,20 +223,19 @@ def join(
     tfhelper_openstack_deploy = TerraformHelper(
         path=snap.paths.user_common / "etc" / "deploy-openstack",
         plan="openstack-plan",
-        parallelism=1,
         backend="http",
         data_location=data_location,
     )
     tfhelper_hypervisor_deploy = TerraformHelper(
         path=snap.paths.user_common / "etc" / "deploy-openstack-hypervisor",
         plan="hypervisor-plan",
-        parallelism=1,
         backend="http",
         data_location=data_location,
     )
     jhelper = JujuHelper(data_location)
 
     plan1 = [
+        JujuLoginStep(data_location),
         ClusterJoinNodeStep(token, roles_str),
         SaveJujuUserLocallyStep(name, data_location),
         RegisterJujuUserStep(name, controller, data_location),

@@ -47,7 +47,6 @@ def resize(topology: str, force: bool = False) -> None:
     tfhelper = TerraformHelper(
         path=snap.paths.user_common / "etc" / tfplan,
         plan="openstack-plan",
-        parallelism=1,
         backend="http",
         data_location=data_location,
     )

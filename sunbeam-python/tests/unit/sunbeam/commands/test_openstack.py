@@ -19,7 +19,13 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-from sunbeam.commands.openstack import DeployControlPlaneStep, ResizeControlPlaneStep
+from sunbeam.clusterd.service import ConfigItemNotFoundException
+from sunbeam.commands.openstack import (
+    METALLB_ANNOTATION,
+    DeployControlPlaneStep,
+    PatchLoadBalancerServicesStep,
+    ResizeControlPlaneStep,
+)
 from sunbeam.commands.terraform import TerraformException
 from sunbeam.jobs.common import ResultType
 from sunbeam.jobs.juju import (
@@ -50,17 +56,13 @@ def mock_run_sync(mocker):
 class TestDeployControlPlaneStep(unittest.TestCase):
     def __init__(self, methodName: str = "runTest") -> None:
         super().__init__(methodName)
-        self.client = patch("sunbeam.commands.openstack.Client")
 
     def setUp(self):
-        self.client.start()
         self.jhelper = AsyncMock()
         self.tfhelper = Mock(path=Path())
 
-    def tearDown(self):
-        self.client.stop()
-
-    def test_run_pristine_installation(self):
+    @patch("sunbeam.commands.openstack.Client")
+    def test_run_pristine_installation(self, client):
         self.jhelper.get_application.side_effect = ApplicationNotFoundException(
             "not found"
         )
@@ -72,7 +74,8 @@ class TestDeployControlPlaneStep(unittest.TestCase):
         self.tfhelper.apply.assert_called_once()
         assert result.result_type == ResultType.COMPLETED
 
-    def test_run_tf_apply_failed(self):
+    @patch("sunbeam.commands.openstack.Client")
+    def test_run_tf_apply_failed(self, client):
         self.tfhelper.apply.side_effect = TerraformException("apply failed...")
 
         step = DeployControlPlaneStep(self.tfhelper, self.jhelper, TOPOLOGY, DATABASE)
@@ -82,7 +85,8 @@ class TestDeployControlPlaneStep(unittest.TestCase):
         assert result.result_type == ResultType.FAILED
         assert result.message == "apply failed..."
 
-    def test_run_waiting_timed_out(self):
+    @patch("sunbeam.commands.openstack.Client")
+    def test_run_waiting_timed_out(self, client):
         self.jhelper.wait_until_active.side_effect = TimeoutException("timed out")
 
         step = DeployControlPlaneStep(self.tfhelper, self.jhelper, TOPOLOGY, DATABASE)
@@ -92,7 +96,8 @@ class TestDeployControlPlaneStep(unittest.TestCase):
         assert result.result_type == ResultType.FAILED
         assert result.message == "timed out"
 
-    def test_run_unit_in_error_state(self):
+    @patch("sunbeam.commands.openstack.Client")
+    def test_run_unit_in_error_state(self, client):
         self.jhelper.wait_until_active.side_effect = JujuWaitException(
             "Unit in error: placement/0"
         )
@@ -103,6 +108,39 @@ class TestDeployControlPlaneStep(unittest.TestCase):
         self.jhelper.wait_until_active.assert_called_once()
         assert result.result_type == ResultType.FAILED
         assert result.message == "Unit in error: placement/0"
+
+    @patch("sunbeam.commands.openstack.Client")
+    def test_is_skip_pristine(self, client):
+        step = DeployControlPlaneStep(self.tfhelper, self.jhelper, TOPOLOGY, DATABASE)
+        with patch(
+            "sunbeam.commands.openstack.read_config",
+            Mock(side_effect=ConfigItemNotFoundException("not found")),
+        ):
+            result = step.is_skip()
+
+        assert result.result_type == ResultType.COMPLETED
+
+    @patch("sunbeam.commands.openstack.Client")
+    def test_is_skip_subsequent_run(self, client):
+        step = DeployControlPlaneStep(self.tfhelper, self.jhelper, TOPOLOGY, DATABASE)
+        with patch(
+            "sunbeam.commands.openstack.read_config",
+            Mock(return_value={"topology": "single", "database": "single"}),
+        ):
+            result = step.is_skip()
+
+        assert result.result_type == ResultType.COMPLETED
+
+    @patch("sunbeam.commands.openstack.Client")
+    def test_is_skip_database_changed(self, client):
+        step = DeployControlPlaneStep(self.tfhelper, self.jhelper, TOPOLOGY, DATABASE)
+        with patch(
+            "sunbeam.commands.openstack.read_config",
+            Mock(return_value={"topology": "single", "database": "multi"}),
+        ):
+            result = step.is_skip()
+
+        assert result.result_type == ResultType.FAILED
 
 
 class TestResizeControlPlaneStep(unittest.TestCase):
@@ -181,3 +219,109 @@ class TestResizeControlPlaneStep(unittest.TestCase):
 
         self.jhelper.wait_until_active.assert_called_once()
         assert result.result_type == ResultType.COMPLETED
+
+
+class PatchLoadBalancerServicesStepTest(unittest.TestCase):
+    """"""
+
+    def __init__(self, methodName: str = "runTest") -> None:
+        super().__init__(methodName)
+        self.client = patch("sunbeam.commands.openstack.Client")
+        self.read_config = patch(
+            "sunbeam.commands.openstack.read_config",
+            Mock(
+                return_value={
+                    "apiVersion": "v1",
+                    "clusters": [
+                        {
+                            "cluster": {
+                                "server": "http://localhost:8888",
+                            },
+                            "name": "mock-cluster",
+                        }
+                    ],
+                    "contexts": [
+                        {
+                            "context": {"cluster": "mock-cluster", "user": "admin"},
+                            "name": "mock",
+                        }
+                    ],
+                    "current-context": "mock",
+                    "kind": "Config",
+                    "preferences": {},
+                    "users": [{"name": "admin", "user": {"token": "mock-token"}}],
+                }
+            ),
+        )
+
+    def setUp(self):
+        self.client.start()
+        self.read_config.start()
+
+    def tearDown(self):
+        self.client.stop()
+        self.read_config.stop()
+
+    def test_is_skip(self):
+        with patch(
+            "sunbeam.commands.openstack.KubeClient",
+            new=Mock(
+                return_value=Mock(
+                    get=Mock(
+                        return_value=Mock(
+                            metadata=Mock(annotations={METALLB_ANNOTATION: "fake-ip"})
+                        )
+                    )
+                )
+            ),
+        ):
+            step = PatchLoadBalancerServicesStep()
+            result = step.is_skip()
+        assert result.result_type == ResultType.SKIPPED
+
+    def test_is_skip_missing_annotation(self):
+        with patch(
+            "sunbeam.commands.openstack.KubeClient",
+            new=Mock(
+                return_value=Mock(
+                    get=Mock(return_value=Mock(metadata=Mock(annotations={})))
+                )
+            ),
+        ):
+            step = PatchLoadBalancerServicesStep()
+            result = step.is_skip()
+        assert result.result_type == ResultType.COMPLETED
+
+    def test_is_skip_missing_config(self):
+        with patch(
+            "sunbeam.commands.openstack.read_config",
+            new=Mock(side_effect=ConfigItemNotFoundException),
+        ):
+            step = PatchLoadBalancerServicesStep()
+            result = step.is_skip()
+        assert result.result_type == ResultType.FAILED
+
+    def test_run(self):
+        with patch(
+            "sunbeam.commands.openstack.KubeClient",
+            new=Mock(
+                return_value=Mock(
+                    get=Mock(
+                        return_value=Mock(
+                            metadata=Mock(annotations={}),
+                            status=Mock(
+                                loadBalancer=Mock(ingress=[Mock(ip="fake-ip")])
+                            ),
+                        )
+                    )
+                )
+            ),
+        ):
+            step = PatchLoadBalancerServicesStep()
+            step.is_skip()
+            result = step.run()
+        assert result.result_type == ResultType.COMPLETED
+        annotation = step.kube.patch.mock_calls[0][2]["obj"].metadata.annotations[
+            METALLB_ANNOTATION
+        ]
+        assert annotation == "fake-ip"

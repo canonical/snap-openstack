@@ -49,7 +49,7 @@ resource "openstack_images_image_v2" "ubuntu" {
   container_format = "bare"
   disk_format      = "qcow2"
   visibility       = "public"
-  
+
   properties = {
     architecture    = "x86_64"
     hypervisor_type = "qemu"
@@ -119,10 +119,11 @@ resource "openstack_networking_network_v2" "user_network" {
 }
 
 resource "openstack_networking_subnet_v2" "user_subnet" {
-  name       = format("%s-subnet", var.user.username)
-  network_id = openstack_networking_network_v2.user_network.id
-  tenant_id  = openstack_identity_project_v3.user_project.id
-  cidr       = var.user.cidr
+  name            = format("%s-subnet", var.user.username)
+  network_id      = openstack_networking_network_v2.user_network.id
+  tenant_id       = openstack_identity_project_v3.user_project.id
+  cidr            = var.user.cidr
+  dns_nameservers = var.user.dns_nameservers
 }
 
 resource "openstack_networking_router_v2" "user_router" {

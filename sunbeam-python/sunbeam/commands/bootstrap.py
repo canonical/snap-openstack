@@ -37,6 +37,7 @@ from sunbeam.commands.juju import (
     BackupBootstrapUserStep,
     BootstrapJujuStep,
     CreateJujuUserStep,
+    JujuLoginStep,
     RegisterJujuUserStep,
     SaveJujuUserLocallyStep,
 )
@@ -49,13 +50,17 @@ from sunbeam.commands.microk8s import (
     AddMicrok8sCloudStep,
     AddMicrok8sUnitStep,
     DeployMicrok8sApplicationStep,
+    StoreMicrok8sConfigStep,
 )
 from sunbeam.commands.mysql import ConfigureMySQLStep
-from sunbeam.commands.openstack import DeployControlPlaneStep
 from sunbeam.commands.rocks import (
     ConfigureKubeletOptionsStep,
     ConfigurePullThroughCacheStep,
     PreseedRocksStep,
+)
+from sunbeam.commands.openstack import (
+    DeployControlPlaneStep,
+    PatchLoadBalancerServicesStep,
 )
 from sunbeam.commands.sunbeam_machine import (
     AddSunbeamMachineUnitStep,
@@ -67,6 +72,7 @@ from sunbeam.jobs.checks import (
     JujuSnapCheck,
     LocalShareCheck,
     SshKeysConnectedCheck,
+    VerifyHypervisorHostnameCheck,
 )
 from sunbeam.jobs.common import (
     Role,
@@ -165,12 +171,26 @@ def bootstrap(
     preflight_checks.append(SshKeysConnectedCheck())
     preflight_checks.append(DaemonGroupCheck())
     preflight_checks.append(LocalShareCheck())
+    if is_compute_node:
+        hypervisor_hostname = utils.get_hypervisor_hostname()
+        preflight_checks.append(
+            VerifyHypervisorHostnameCheck(fqdn, hypervisor_hostname)
+        )
 
     run_preflight_checks(preflight_checks, console)
 
     plan = []
+    plan.append(JujuLoginStep(data_location))
     plan.append(ClusterInitStep(roles_to_str_list(roles)))
-    plan.append(BootstrapJujuStep(cloud_name, cloud_type, CONTROLLER))
+    plan.append(
+        BootstrapJujuStep(
+            cloud_name,
+            cloud_type,
+            CONTROLLER,
+            accept_defaults=accept_defaults,
+            preseed_file=preseed,
+        )
+    )
     run_plan(plan, console)
 
     plan2 = []
@@ -189,35 +209,30 @@ def bootstrap(
     tfhelper = TerraformHelper(
         path=snap.paths.user_common / "etc" / "deploy-microk8s",
         plan="microk8s-plan",
-        parallelism=1,
         backend="http",
         data_location=data_location,
     )
     tfhelper_openstack_deploy = TerraformHelper(
         path=snap.paths.user_common / "etc" / "deploy-openstack",
         plan="openstack-plan",
-        parallelism=1,
         backend="http",
         data_location=data_location,
     )
     tfhelper_hypervisor_deploy = TerraformHelper(
         path=snap.paths.user_common / "etc" / "deploy-openstack-hypervisor",
         plan="hypervisor-plan",
-        parallelism=1,
         backend="http",
         data_location=data_location,
     )
     tfhelper_microceph_deploy = TerraformHelper(
         path=snap.paths.user_common / "etc" / "deploy-microceph",
         plan="microceph-plan",
-        parallelism=1,
         backend="http",
         data_location=data_location,
     )
     tfhelper_sunbeam_machine = TerraformHelper(
         path=snap.paths.user_common / "etc" / "deploy-sunbeam-machine",
         plan="sunbeam-machine-plan",
-        parallelism=1,
         backend="http",
         data_location=data_location,
     )
@@ -237,6 +252,7 @@ def bootstrap(
         )
     )
     plan4.append(AddMicrok8sUnitStep(fqdn, jhelper))
+    plan4.append(StoreMicrok8sConfigStep(jhelper))
     plan4.append(AddMicrok8sCloudStep(jhelper))
     # Deploy Microceph application during bootstrap irrespective of node role.
     plan4.append(TerraformInitStep(tfhelper_microceph_deploy))
@@ -267,6 +283,7 @@ def bootstrap(
 
     if is_control_node:
         plan5.append(ConfigureMySQLStep(jhelper))
+        plan5.append(PatchLoadBalancerServicesStep())
 
     if is_compute_node:
         plan5.append(TerraformInitStep(tfhelper_hypervisor_deploy))

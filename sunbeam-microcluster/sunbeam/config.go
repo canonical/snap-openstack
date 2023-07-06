@@ -32,6 +32,26 @@ func GetConfig(s *state.State, key string) (string, error) {
 	return value, nil
 }
 
+// GetConfigItemKeys returns the list of ConfigItem keys from the database
+func GetConfigItemKeys(s *state.State, prefix *string) ([]string, error) {
+	var keys []string
+
+	err := s.Database.Transaction(s.Context, func(ctx context.Context, tx *sql.Tx) error {
+		var err error
+		keys, err = database.GetConfigItemKeys(ctx, tx, prefix)
+		if err != nil {
+			return err
+		}
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return keys, nil
+}
+
 // CreateConfig adds a new ConfigItem to the database
 func CreateConfig(s *state.State, key string, value string) error {
 

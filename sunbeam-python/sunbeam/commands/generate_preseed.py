@@ -28,8 +28,12 @@ from sunbeam.commands.configure import (
     ext_net_questions_local_only,
     user_questions,
 )
+from sunbeam.commands.juju import BOOTSTRAP_CONFIG_KEY, bootstrap_questions
 from sunbeam.commands.microceph import microceph_questions
-from sunbeam.commands.microk8s import microk8s_addons_questions
+from sunbeam.commands.microk8s import (
+    MICROK8S_ADDONS_CONFIG_KEY,
+    microk8s_addons_questions,
+)
 
 LOG = logging.getLogger(__name__)
 console = Console()
@@ -67,7 +71,19 @@ def generate_preseed() -> None:
     name = utils.get_fqdn()
     client = Client()
     try:
-        variables = sunbeam.jobs.questions.load_answers(client, CLOUD_CONFIG_SECTION)
+        variables = sunbeam.jobs.questions.load_answers(client, BOOTSTRAP_CONFIG_KEY)
+    except ClusterServiceUnavailableException:
+        variables = {}
+    bootstrap_bank = sunbeam.jobs.questions.QuestionBank(
+        questions=bootstrap_questions(),
+        console=console,
+        previous_answers=variables.get("bootstrap", {}),
+    )
+    show_questions(bootstrap_bank, section="bootstrap")
+    try:
+        variables = sunbeam.jobs.questions.load_answers(
+            client, MICROK8S_ADDONS_CONFIG_KEY
+        )
     except ClusterServiceUnavailableException:
         variables = {}
     microk8s_addons_bank = sunbeam.jobs.questions.QuestionBank(
@@ -81,6 +97,10 @@ def generate_preseed() -> None:
         console=console,
         previous_answers=variables.get("user"),
     )
+    try:
+        variables = sunbeam.jobs.questions.load_answers(client, CLOUD_CONFIG_SECTION)
+    except ClusterServiceUnavailableException:
+        variables = {}
     show_questions(user_bank, section="user")
     ext_net_bank_local = sunbeam.jobs.questions.QuestionBank(
         questions=ext_net_questions_local_only(),

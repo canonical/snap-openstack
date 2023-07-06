@@ -5,11 +5,11 @@ import (
 	"net/http"
 	"net/url"
 
+	"github.com/canonical/lxd/lxd/response"
+	"github.com/canonical/lxd/shared/api"
 	"github.com/canonical/microcluster/rest"
 	"github.com/canonical/microcluster/state"
 	"github.com/gorilla/mux"
-	"github.com/lxc/lxd/lxd/response"
-	"github.com/lxc/lxd/shared/api"
 
 	"github.com/openstack-snaps/snap-openstack/sunbeam-microcluster/sunbeam"
 )

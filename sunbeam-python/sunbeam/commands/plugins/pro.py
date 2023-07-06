@@ -167,7 +167,6 @@ def enable_pro(token: str) -> None:
     tfhelper = TerraformHelper(
         path=snap.paths.user_common / "etc" / tfplan,
         plan="ubuntu-pro-plan",
-        parallelism=1,
         backend="http",
         data_location=data_location,
     )
@@ -201,7 +200,6 @@ def disable_pro() -> None:
     tfhelper = TerraformHelper(
         path=snap.paths.user_common / "etc" / tfplan,
         plan="ubuntu-pro-plan",
-        parallelism=1,
         backend="http",
         data_location=data_location,
     )

@@ -27,11 +27,13 @@ from typing import Optional
 import pexpect
 import pwgen
 import yaml
+from pyroute2 import Console
 from snaphelpers import Snap
 
 from sunbeam import utils
 from sunbeam.clusterd.client import Client as clusterClient
 from sunbeam.clusterd.service import NodeNotExistInClusterException
+from sunbeam.jobs import questions
 from sunbeam.jobs.common import BaseStep, Result, ResultType
 from sunbeam.jobs.juju import (
     CONTROLLER_MODEL,
@@ -45,6 +47,7 @@ from sunbeam.jobs.juju import (
 
 LOG = logging.getLogger(__name__)
 PEXPECT_TIMEOUT = 60
+BOOTSTRAP_CONFIG_KEY = "BootstrapAnswers"
 
 
 class JujuStepHelper:
@@ -169,19 +172,77 @@ class JujuStepHelper:
         return True
 
 
+def bootstrap_questions():
+    return {
+        "management_cidr": questions.PromptQuestion(
+            "Management networks shared by hosts (CIDRs, separated by comma)",
+            default_value=utils.get_local_cidr_by_default_routes(),
+        ),
+    }
+
+
 class BootstrapJujuStep(BaseStep, JujuStepHelper):
     """Bootstraps the Juju controller."""
 
-    def __init__(self, cloud_name: str, cloud_type: str, controller: str):
+    _CONFIG = BOOTSTRAP_CONFIG_KEY
+
+    def __init__(
+        self,
+        cloud_name: str,
+        cloud_type: str,
+        controller: str,
+        preseed_file: Optional[Path] = None,
+        accept_defaults: bool = False,
+    ):
         super().__init__("Bootstrap Juju", "Bootstrapping Juju onto machine")
 
         self.cloud = cloud_name
         self.cloud_type = cloud_type
         self.controller = controller
+        self.preseed_file = preseed_file
+        self.accept_defaults = accept_defaults
         self.juju_clouds = []
+        self.client = clusterClient()
 
         home = os.environ.get("SNAP_REAL_HOME")
         os.environ["JUJU_DATA"] = f"{home}/.local/share/juju"
+
+    def prompt(self, console: Optional[Console] = None) -> None:
+        """Determines if the step can take input from the user.
+
+        Prompts are used by Steps to gather the necessary input prior to
+        running the step. Steps should not expect that the prompt will be
+        available and should provide a reasonable default where possible.
+        """
+        self.variables = questions.load_answers(self.client, self._CONFIG)
+        self.variables.setdefault("bootstrap", {})
+
+        if self.preseed_file:
+            preseed = questions.read_preseed(self.preseed_file)
+        else:
+            preseed = {}
+        bootstrap_bank = questions.QuestionBank(
+            questions=bootstrap_questions(),
+            console=console,  # type: ignore
+            preseed=preseed.get("bootstrap"),
+            previous_answers=self.variables.get("bootstrap", {}),
+            accept_defaults=self.accept_defaults,
+        )
+
+        self.variables["bootstrap"][
+            "management_cidr"
+        ] = bootstrap_bank.management_cidr.ask()
+
+        LOG.debug(self.variables)
+        questions.write_answers(self.client, self._CONFIG, self.variables)
+
+    def has_prompts(self) -> bool:
+        """Returns true if the step has prompts that it can ask the user.
+
+        :return: True if the step can ask the user for prompts,
+                 False otherwise
+        """
+        return True
 
     def is_skip(self, status: Optional["Status"] = None) -> Result:
         """Determines if the step should be skipped or not.
@@ -323,7 +384,8 @@ class JujuGrantModelAccessStep(BaseStep, JujuStepHelper):
 
     def __init__(self, jhelper: JujuHelper, name: str, model: str):
         super().__init__(
-            "Grant access on model", f"Grant user {name} admin access to model {model}"
+            "Grant access on model",
+            f"Granting user {name} admin access to model {model}",
         )
 
         self.jhelper = jhelper
@@ -379,7 +441,7 @@ class RemoveJujuUserStep(BaseStep, JujuStepHelper):
     """Remove user in juju."""
 
     def __init__(self, name: str):
-        super().__init__("Remove User", "Removing machine user from Juju")
+        super().__init__("Remove User", f"Removing machine user {name} from Juju")
         self.username = name
 
         home = os.environ.get("SNAP_REAL_HOME")
@@ -431,7 +493,9 @@ class RegisterJujuUserStep(BaseStep, JujuStepHelper):
     def __init__(
         self, name: str, controller: str, data_location: Path, replace: bool = False
     ):
-        super().__init__("Register Juju User", "Registering Juju user using token")
+        super().__init__(
+            "Register Juju User", f"Registering machine user {name} using token"
+        )
         self.username = name
         self.controller = controller
         self.data_location = data_location
@@ -765,7 +829,7 @@ class SaveJujuUserLocallyStep(BaseStep):
     """Save user locally."""
 
     def __init__(self, name: str, data_location: Path):
-        super().__init__("Save User", "Save Juju user for local usage")
+        super().__init__("Save User", f"Saving machine user {name} for local usage")
         self.username = name
         self.data_location = data_location
 
@@ -814,7 +878,7 @@ class WriteJujuStatusStep(BaseStep, JujuStepHelper):
         model: str,
         file_path: Path,
     ):
-        super().__init__("Write Model status", f"Record status of model {model}")
+        super().__init__("Write Model status", f"Recording status of model {model}")
 
         self.jhelper = jhelper
         self.model = model
@@ -869,7 +933,7 @@ class WriteCharmLogStep(BaseStep, JujuStepHelper):
         file_path: Path,
     ):
         super().__init__(
-            "Get charm logs model", f"Getting charm logs for {model} model"
+            "Get charm logs model", f"Retrieving charm logs for {model} model"
         )
         self.jhelper = jhelper
         self.model = model
@@ -920,3 +984,79 @@ class WriteCharmLogStep(BaseStep, JujuStepHelper):
             return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.COMPLETED, "Inspecting Charm Log")
+
+
+class JujuLoginStep(BaseStep, JujuStepHelper):
+    """Login to Juju Controller"""
+
+    def __init__(self, data_location: Path):
+        super().__init__(
+            "Login to Juju controller", "Authenticating with Juju controller"
+        )
+        self.data_location = data_location
+
+    def is_skip(self, status: Optional["Status"] = None) -> Result:
+        """Determines if the step should be skipped or not.
+
+        :return: ResultType.SKIPPED if the Step should be skipped,
+                 ResultType.COMPLETED or ResultType.FAILED otherwise
+        """
+        try:
+            self.juju_account = JujuAccount.load(self.data_location)
+            LOG.debug(f"Local account found: {self.juju_account.user}")
+        except JujuAccountNotFound:
+            LOG.debug("Local account not found, most likely not bootstrapped / joined")
+            return Result(ResultType.SKIPPED)
+
+        cmd = " ".join(
+            [
+                self._get_juju_binary(),
+                "show-user",
+            ]
+        )
+        LOG.debug(f"Running command {cmd}")
+        expect_list = ["^please enter password", "{}", pexpect.EOF]
+        with pexpect.spawn(cmd) as process:
+            try:
+                index = process.expect(expect_list, timeout=PEXPECT_TIMEOUT)
+            except pexpect.TIMEOUT as e:
+                LOG.debug("Process timeout")
+                return Result(ResultType.FAILED, str(e))
+            LOG.debug(f"Command stdout={process.before}")
+        if index in (0, 1):
+            return Result(ResultType.COMPLETED)
+        elif index == 2:
+            return Result(ResultType.SKIPPED)
+
+        return Result(ResultType.COMPLETED)
+
+    def run(self, status: Optional["Status"] = None) -> Result:
+        """Run the step to completion.
+
+        Invoked when the step is run and returns a ResultType to indicate
+
+        :return:
+        """
+
+        cmd = " ".join(
+            [
+                self._get_juju_binary(),
+                "login",
+                "--user",
+                self.juju_account.user,
+            ]
+        )
+        LOG.debug(f"Running command {cmd}")
+        process = pexpect.spawn(cmd)
+        try:
+            process.expect("^please enter password", timeout=PEXPECT_TIMEOUT)
+            process.sendline(self.juju_account.password)
+            process.expect(pexpect.EOF, timeout=PEXPECT_TIMEOUT)
+            process.close()
+        except pexpect.TIMEOUT as e:
+            LOG.debug("Process timeout")
+            return Result(ResultType.FAILED, str(e))
+        LOG.debug(f"Command stdout={process.before}")
+        if process.exitstatus != 0:
+            return Result(ResultType.FAILED, "Failed to login to Juju Controller")
+        return Result(ResultType.COMPLETED)

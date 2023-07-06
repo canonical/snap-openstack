@@ -49,7 +49,7 @@ class DeploySunbeamMachineApplicationStep(BaseStep, JujuStepHelper):
     ):
         super().__init__(
             "Deploy sunbeam-machine",
-            "Deploy sunbeam-machine application onto cloud",
+            "Deploying Sunbeam Machine",
         )
         self.tfhelper = tfhelper
         self.jhelper = jhelper
@@ -109,7 +109,7 @@ class DeploySunbeamMachineApplicationStep(BaseStep, JujuStepHelper):
 class AddSunbeamMachineUnitStep(BaseStep, JujuStepHelper):
     def __init__(self, name: str, jhelper: JujuHelper):
         super().__init__(
-            "Add Sunbeam-machine unit", "Add Sunbeam-machine unit on machine"
+            "Add Sunbeam-machine unit", f"Adding Sunbeam Machine unit to machine {name}"
         )
 
         self.name = name
@@ -171,7 +171,7 @@ class RemoveSunbeamMachineStep(BaseStep, JujuStepHelper):
     def __init__(self, name: str, jhelper: JujuHelper):
         super().__init__(
             "Remove sunbeam-machine unit",
-            "Remove sunbeam-machine unit from machine",
+            f"Removing sunbeam-machine unit from machine {name}",
         )
 
         self.name = name

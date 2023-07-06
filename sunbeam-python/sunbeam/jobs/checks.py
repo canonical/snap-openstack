@@ -215,3 +215,25 @@ class VerifyFQDNCheck(Check):
                 return False
 
         return True
+
+
+class VerifyHypervisorHostnameCheck(Check):
+    """Check if Hypervisor Hostname is same as FQDN."""
+
+    def __init__(self, fqdn, hypervisor_hostname):
+        super().__init__(
+            "Check for Hypervisor Hostname",
+            "Checking if Hypervisor Hostname is same as FQDN",
+        )
+        self.fqdn = fqdn
+        self.hypervisor_hostname = hypervisor_hostname
+
+    def run(self) -> bool:
+        if self.fqdn == self.hypervisor_hostname:
+            return True
+
+        self.message = (
+            "Host FQDN and Hypervisor hostname perceived by libvirt are different, "
+            "check `hostname -f` and `/etc/hosts` file"
+        )
+        return False

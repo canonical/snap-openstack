@@ -22,13 +22,13 @@ variable "machine_ids" {
 variable "snap_channel" {
   description = "Snap channel to deploy openstack-hypervisor snap from"
   type        = string
-  default     = "2023.1/stable"
+  default     = "2023.1/edge"
 }
 
 variable "charm_channel" {
   description = "Charm channel to deploy openstack-hypervisor charm from"
   type        = string
-  default     = "2023.1/stable"
+  default     = "2023.1/edge"
 }
 
 variable "openstack_model" {

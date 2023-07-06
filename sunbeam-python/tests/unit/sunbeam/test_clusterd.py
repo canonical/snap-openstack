@@ -27,6 +27,7 @@ from sunbeam.commands.clusterd import (
     ClusterJoinNodeStep,
     ClusterListNodeStep,
     ClusterRemoveNodeStep,
+    ClusterUpdateJujuControllerStep,
     ClusterUpdateNodeStep,
 )
 from sunbeam.jobs.common import ResultType
@@ -591,3 +592,21 @@ class TestClusterService:
 
         cs = ClusterService(mock_session)
         cs.update_node_info("node-2", "control", "2")
+
+
+class TestClusterUpdateJujuControllerStep:
+    """Unit tests for sunbeam clusterd steps."""
+
+    def test_init_step(self, mocker, snap):
+        mocker.patch.object(service, "Snap", return_value=snap)
+        step = ClusterUpdateJujuControllerStep("10.0.0.10:10")
+        step.client = MagicMock()
+        assert step.filter_ips(["10.0.0.6:17070"], "10.0.0.0/24") == ["10.0.0.6:17070"]
+        assert step.filter_ips(["10.10.0.6:17070"], "10.0.0.0/24") == []
+        assert step.filter_ips(["10.10.0.6:17070"], "10.0.0.0/24,10.10.0.0/24") == [
+            "10.10.0.6:17070"
+        ]
+        assert step.filter_ips(
+            ["10.0.0.6:17070", "[fd42:5eda:f578:7bba:216:3eff:fe3d:7ef6]:17070"],
+            "10.0.0.0/24",
+        ) == ["10.0.0.6:17070"]

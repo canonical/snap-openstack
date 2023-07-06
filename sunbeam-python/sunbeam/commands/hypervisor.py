@@ -51,8 +51,8 @@ class DeployHypervisorApplicationStep(BaseStep, JujuStepHelper):
         jhelper: JujuHelper,
     ):
         super().__init__(
-            "Deploy openstack-hypervisor",
-            "Deploy openstack-hypervisor application onto cloud",
+            "Deploy OpenStack Hypervisor",
+            "Deploying OpenStack Hypervisor",
         )
         self.tfhelper = tfhelper
         self.tfhelper_openstack = tfhelper_openstack
@@ -118,7 +118,10 @@ class DeployHypervisorApplicationStep(BaseStep, JujuStepHelper):
 
 class AddHypervisorUnitStep(BaseStep, JujuStepHelper):
     def __init__(self, name: str, jhelper: JujuHelper):
-        super().__init__("Add Hypervisor unit", "Add Hypervisor unit on machine")
+        super().__init__(
+            "Add OpenStack Hypervisor unit",
+            "Adding OpenStack Hypervisor unit to machine",
+        )
 
         self.name = name
         self.jhelper = jhelper

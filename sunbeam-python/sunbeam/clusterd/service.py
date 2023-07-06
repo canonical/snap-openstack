@@ -106,7 +106,6 @@ class BaseService(ABC):
         """
         self.__session = session
         self._socket_path = Snap().paths.common / "state" / "control.socket"
-        LOG.debug(self._socket_path)
 
     def _request(self, method, path, **kwargs):
         if path.startswith("/"):

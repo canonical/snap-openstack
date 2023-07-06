@@ -19,6 +19,7 @@ variable "user" {
     password             = string
     cidr                 = string
     security_group_rules = bool
+    dns_nameservers      = list(string)
   })
   sensitive = true
 }

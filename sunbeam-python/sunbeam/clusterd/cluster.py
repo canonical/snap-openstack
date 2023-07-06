@@ -175,6 +175,25 @@ class ExtendedAPIService(service.BaseService):
         nodes = self._get(f"/1.0/nodes?role={role}")
         return nodes.get("metadata")
 
+    def list_terraform_plans(self) -> List[str]:
+        """List all plans."""
+        plans = self._get("/1.0/terraformstate")
+        return plans.get("metadata")
+
+    def list_terraform_locks(self) -> List[str]:
+        """List all locks."""
+        locks = self._get("/1.0/terraformlock")
+        return locks.get("metadata")
+
+    def get_terraform_lock(self, plan: str) -> dict:
+        """Get lock information for plan."""
+        lock = self._get(f"/1.0/terraformlock/{plan}")
+        return json.loads(lock)
+
+    def unlock_terraform_plan(self, plan: str, lock: dict) -> None:
+        """Unlock plan."""
+        self._put(f"/1.0/terraformunlock/{plan}", data=json.dumps(lock))
+
 
 class ClusterService(MicroClusterService, ExtendedAPIService):
     """Lists and manages cluster."""

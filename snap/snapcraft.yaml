@@ -150,8 +150,13 @@ parts:
     source: cloud/
     override-build: |
       craftctl default
-      cd $SNAPCRAFT_PART_INSTALL/etc/deploy-microk8s
-      $SNAPCRAFT_STAGE/bin/terraform providers mirror $SNAPCRAFT_STAGE/terraform-providers
+      for plan in $(ls $SNAPCRAFT_PART_INSTALL/etc/);
+      do
+        cd $SNAPCRAFT_PART_INSTALL/etc/$plan
+        $SNAPCRAFT_STAGE/bin/terraform init
+        $SNAPCRAFT_STAGE/bin/terraform providers mirror $SNAPCRAFT_PRIME/usr/share/terraform-providers
+        rm -rf ./.terraform
+      done
 
   terraform-openstack-plan:
     after: [terraform]
@@ -165,7 +170,7 @@ parts:
       craftctl default
       cd $SNAPCRAFT_PART_INSTALL
       $SNAPCRAFT_STAGE/bin/terraform init
-      $SNAPCRAFT_STAGE/bin/terraform providers mirror $SNAPCRAFT_STAGE/terraform-providers
+      $SNAPCRAFT_STAGE/bin/terraform providers mirror $SNAPCRAFT_PRIME/usr/share/terraform-providers
       rm -rf $SNAPCRAFT_PART_INSTALL/.terraform
 
   wrappers:

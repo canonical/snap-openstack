@@ -13,8 +13,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import ipaddress
 import logging
-from typing import List, Optional
+import re
+from typing import List, Optional, Union
 
 from sunbeam import utils
 from sunbeam.clusterd.client import Client as clusterClient
@@ -30,7 +32,8 @@ from sunbeam.clusterd.service import (
     TokenAlreadyGeneratedException,
     TokenNotFoundException,
 )
-from sunbeam.commands.juju import JujuStepHelper
+from sunbeam.commands.juju import BOOTSTRAP_CONFIG_KEY, JujuStepHelper
+from sunbeam.jobs import questions
 from sunbeam.jobs.common import BaseStep, Result, ResultType, Status
 from sunbeam.jobs.juju import JujuController
 
@@ -63,7 +66,9 @@ class ClusterInitStep(BaseStep):
             if self.fqdn in member_names:
                 return Result(ResultType.SKIPPED)
         except ClusterServiceUnavailableException as e:
-            LOG.warning(e)
+            LOG.debug(e)
+            if "Sunbeam Cluster not initialized" in str(e):
+                return Result(ResultType.COMPLETED)
             return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.COMPLETED)
@@ -114,7 +119,7 @@ class ClusterAddNodeStep(BaseStep):
             if self.node_name in token_d:
                 return Result(ResultType.SKIPPED, token_d.get(self.node_name))
         except ClusterServiceUnavailableException as e:
-            LOG.warning(e)
+            LOG.debug(e)
             return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.COMPLETED)
@@ -156,7 +161,9 @@ class ClusterJoinNodeStep(BaseStep):
             if self.fqdn in member_names:
                 return Result(ResultType.SKIPPED)
         except ClusterServiceUnavailableException as e:
-            LOG.warning(e)
+            LOG.debug(e)
+            if "Sunbeam Cluster not initialized" in str(e):
+                return Result(ResultType.COMPLETED)
             return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.COMPLETED)
@@ -201,7 +208,7 @@ class ClusterListNodeStep(BaseStep):
 
             return Result(result_type=ResultType.COMPLETED, message=nodes_dict)
         except ClusterServiceUnavailableException as e:
-            LOG.warning(e)
+            LOG.debug(e)
             return Result(ResultType.FAILED, str(e))
 
 
@@ -223,7 +230,7 @@ class ClusterUpdateNodeStep(BaseStep):
             self.client.cluster.update_node_info(self.name, self.role, self.machine_id)
             return Result(result_type=ResultType.COMPLETED)
         except ClusterServiceUnavailableException as e:
-            LOG.warning(e)
+            LOG.debug(e)
             return Result(ResultType.FAILED, str(e))
 
 
@@ -277,7 +284,7 @@ class ClusterAddJujuUserStep(BaseStep):
             user = self.client.cluster.get_juju_user(self.username)
             LOG.debug(f"JujuUser {user} found in database.")
         except ClusterServiceUnavailableException as e:
-            LOG.warning(e)
+            LOG.debug(e)
             return Result(ResultType.FAILED, str(e))
         except JujuUserNotFoundException:
             return Result(ResultType.COMPLETED)
@@ -290,7 +297,7 @@ class ClusterAddJujuUserStep(BaseStep):
             self.client.cluster.add_juju_user(self.username, self.token)
             return Result(result_type=ResultType.COMPLETED)
         except ClusterServiceUnavailableException as e:
-            LOG.warning(e)
+            LOG.debug(e)
             return Result(ResultType.FAILED, str(e))
 
 
@@ -306,6 +313,34 @@ class ClusterUpdateJujuControllerStep(BaseStep, JujuStepHelper):
         self.client = clusterClient()
         self.controller = controller
 
+    def _extract_ip(self, ip) -> Union[ipaddress.IPv4Address, ipaddress.IPv6Address]:
+        """Extract ip from ipv4 or ipv6 ip:port"""
+        # Check for ipv6 addr
+        ipv6_addr = re.match(r"\[(.*?)\]", ip)
+        if ipv6_addr:
+            ip_str = ipv6_addr.group(1)
+        else:
+            ip_str = ip.split(":")[0]
+        return ipaddress.ip_address(ip_str)
+
+    def filter_ips(self, ips: List[str], network_str: Optional[str]) -> List[str]:
+        """Filter ips missing from specified networks
+
+        :param ips: list of ips to filter
+        :param network_str: network to filter ips from, separated by comma
+        """
+        if network_str is None:
+            return ips
+        networks = [ipaddress.ip_network(network) for network in network_str.split(",")]
+        return list(
+            filter(
+                lambda ip: any(
+                    True for network in networks if self._extract_ip(ip) in network
+                ),
+                ips,
+            )
+        )
+
     def is_skip(self, status: Optional[Status] = None) -> Result:
         """Determines if the step should be skipped or not.
 
@@ -313,12 +348,17 @@ class ClusterUpdateJujuControllerStep(BaseStep, JujuStepHelper):
                  ResultType.COMPLETED or ResultType.FAILED otherwise
         """
         try:
+            variables = questions.load_answers(self.client, BOOTSTRAP_CONFIG_KEY)
+            self.networks = variables.get("bootstrap", {}).get("management_cidr")
             juju_controller = JujuController.load(self.client)
             LOG.debug(f"Controller(s) present at: {juju_controller.api_endpoints}")
-            # Controller found, and parsed successfully
-            return Result(ResultType.SKIPPED)
+            if juju_controller.api_endpoints == self.filter_ips(
+                juju_controller.api_endpoints, self.networks
+            ):
+                # Controller found, and parsed successfully
+                return Result(ResultType.SKIPPED)
         except ClusterServiceUnavailableException as e:
-            LOG.warning(e)
+            LOG.debug(e)
             return Result(ResultType.FAILED, str(e))
         except ConfigItemNotFoundException:
             pass  # Credentials missing, schedule for record
@@ -333,12 +373,13 @@ class ClusterUpdateJujuControllerStep(BaseStep, JujuStepHelper):
         controller = self.get_controller(self.controller)["details"]
 
         juju_controller = JujuController(
-            api_endpoints=controller["api-endpoints"], ca_cert=controller["ca-cert"]
+            api_endpoints=self.filter_ips(controller["api-endpoints"], self.networks),
+            ca_cert=controller["ca-cert"],
         )
         try:
             juju_controller.write(self.client)
         except ClusterServiceUnavailableException as e:
-            LOG.warning(e)
+            LOG.debug(e)
             return Result(ResultType.FAILED, str(e))
 
         return Result(result_type=ResultType.COMPLETED)

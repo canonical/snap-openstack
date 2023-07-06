@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import ipaddress
 import logging
 from pathlib import Path
 from typing import Optional
@@ -23,11 +24,14 @@ from rich.status import Status
 from snaphelpers import Snap
 
 from sunbeam.clusterd.client import Client
-from sunbeam.clusterd.service import NodeNotExistInClusterException
+from sunbeam.clusterd.service import (
+    ConfigItemNotFoundException,
+    NodeNotExistInClusterException,
+)
 from sunbeam.commands.juju import JujuStepHelper
 from sunbeam.commands.terraform import TerraformException, TerraformHelper
 from sunbeam.jobs import questions
-from sunbeam.jobs.common import BaseStep, Result, ResultType
+from sunbeam.jobs.common import BaseStep, Result, ResultType, read_config, update_config
 from sunbeam.jobs.juju import (
     MODEL,
     ActionFailedException,
@@ -42,7 +46,7 @@ LOG = logging.getLogger(__name__)
 MICROK8S_CLOUD = "sunbeam-microk8s"
 APPLICATION = "microk8s"
 MICROK8S_APP_TIMEOUT = 180  # 3 minutes, managing the application should be fast
-MICROK8S_UNIT_TIMEOUT = 1200  # 15 minutes, adding / removing units can take a long time
+MICROK8S_UNIT_TIMEOUT = 1200  # 20 minutes, adding / removing units can take a long time
 CREDENTIAL_SUFFIX = "-creds"
 MICROK8S_DEFAULT_STORAGECLASS = "microk8s-hostpath"
 CONTAINERD_ENV_TEMPLATE = """
@@ -56,12 +60,35 @@ HTTP_RPOXY={http_proxy}
 HTTPS_PROXY={https_proxy}
 NO_PROXY={no_proxy}
 """
+CONFIG_KEY = "Microk8sConfig"
+MICROK8S_ADDONS_CONFIG_KEY = "TerraformVarsMicrok8sAddons"
+
+
+def validate_metallb_range(ip_ranges: str):
+    for ip_range in ip_ranges.split(","):
+        ips = ip_range.split("-")
+        if len(ips) == 1:
+            if "/" not in ips[0]:
+                raise ValueError(
+                    "Invalid CIDR definition, must be in the form 'ip/mask'"
+                )
+            ipaddress.ip_network(ips[0])
+        elif len(ips) == 2:
+            ipaddress.ip_address(ips[0])
+            ipaddress.ip_address(ips[1])
+        else:
+            raise ValueError(
+                "Invalid IP range, must be in the form of 'ip-ip' or 'cidr'"
+            )
 
 
 def microk8s_addons_questions():
     return {
         "metallb": questions.PromptQuestion(
-            "MetalLB address allocation range", default_value="10.20.21.10-10.20.21.20"
+            "MetalLB address allocation range "
+            "(supports multiple ranges, comma separated)",
+            default_value="10.20.21.10-10.20.21.20",
+            validation_function=validate_metallb_range,
         ),
     }
 
@@ -69,7 +96,7 @@ def microk8s_addons_questions():
 class DeployMicrok8sApplicationStep(BaseStep, JujuStepHelper):
     """Deploy Microk8s application using Terraform"""
 
-    _CONFIG = "TerraformVarsMicrok8sAddons"
+    _CONFIG = MICROK8S_ADDONS_CONFIG_KEY
 
     def __init__(
         self,
@@ -291,6 +318,8 @@ class RemoveMicrok8sUnitStep(BaseStep, JujuStepHelper):
 
 
 class AddMicrok8sCloudStep(BaseStep, JujuStepHelper):
+    _CONFIG = CONFIG_KEY
+
     def __init__(self, jhelper: JujuHelper):
         super().__init__(
             "Add MicroK8S cloud", "Adding MicroK8S cloud to Juju controller"
@@ -317,25 +346,58 @@ class AddMicrok8sCloudStep(BaseStep, JujuStepHelper):
     def run(self, status: Optional[Status] = None) -> Result:
         """Add microk8s clouds to Juju controller."""
         try:
+            kubeconfig = read_config(Client(), self._CONFIG)
+            run_sync(
+                self.jhelper.add_k8s_cloud(self.name, self.credential_name, kubeconfig)
+            )
+        except ConfigItemNotFoundException as e:
+            LOG.debug("Failed to add k8s cloud to Juju controller", exc_info=True)
+            return Result(ResultType.FAILED, str(e))
+
+        return Result(ResultType.COMPLETED)
+
+
+class StoreMicrok8sConfigStep(BaseStep, JujuStepHelper):
+    _CONFIG = CONFIG_KEY
+
+    def __init__(self, jhelper: JujuHelper):
+        super().__init__(
+            "Store MicroK8S config",
+            "Storing MicroK8S configuration in sunbeam database",
+        )
+        self.jhelper = jhelper
+
+    def is_skip(self, status: Optional[Status] = None) -> Result:
+        """Determines if the step should be skipped or not.
+
+        :return: ResultType.SKIPPED if the Step should be skipped,
+                ResultType.COMPLETED or ResultType.FAILED otherwise
+        """
+        try:
+            read_config(Client(), self._CONFIG)
+        except ConfigItemNotFoundException:
+            return Result(ResultType.COMPLETED)
+
+        return Result(ResultType.SKIPPED)
+
+    def run(self, status: Optional[Status] = None) -> Result:
+        """Store MicroK8S config in clusterd."""
+        try:
             unit = run_sync(self.jhelper.get_leader_unit(APPLICATION, MODEL))
             result = run_sync(self.jhelper.run_action(unit, MODEL, "kubeconfig"))
             if not result.get("content"):
                 return Result(
                     ResultType.FAILED,
-                    "ERROR: Failed to add k8s cloud, not able to retrieve kubeconfig",
+                    "ERROR: Failed to retrieve kubeconfig",
                 )
-
-            kubeconfig = yaml.safe_load(result.get("content"))
-            run_sync(
-                self.jhelper.add_k8s_cloud(self.name, self.credential_name, kubeconfig)
-            )
+            kubeconfig = yaml.safe_load(result["content"])
+            update_config(Client(), self._CONFIG, kubeconfig)
         except (
-            FileNotFoundError,
             ApplicationNotFoundException,
             LeaderNotFoundException,
             ActionFailedException,
         ) as e:
-            LOG.warning(str(e))
+            LOG.debug("Failed to store microk8s config", exc_info=True)
             return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.COMPLETED)

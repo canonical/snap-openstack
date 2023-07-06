@@ -17,6 +17,7 @@ import tempfile
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 
+import pexpect
 import pytest
 
 import sunbeam.commands.juju as juju
@@ -125,4 +126,82 @@ class TestJujuGrantModelAccessStep:
 
         jhelper.get_model_name_with_owner.assert_called_once()
         run.assert_not_called()
+        assert result.result_type == ResultType.FAILED
+
+
+class TestJujuLoginStep:
+    def test_is_skip_when_juju_account_not_present(self, snap):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            step = juju.JujuLoginStep(Path(tmpdir))
+            assert step.is_skip().result_type == ResultType.SKIPPED
+
+    def test_run(self, snap):
+        with patch(
+            "sunbeam.commands.juju.JujuAccount.load",
+            Mock(return_value=Mock(user="test", password="test")),
+        ), patch(
+            "sunbeam.commands.juju.pexpect.spawn",
+            Mock(
+                return_value=Mock(
+                    __enter__=Mock(return_value=Mock(exitstatus=0)), __exit__=Mock()
+                )
+            ),
+        ):
+            step = juju.JujuLoginStep(Mock())
+            step._get_juju_binary = Mock(return_value="juju")
+            assert step.is_skip().result_type == ResultType.COMPLETED
+
+        with patch(
+            "sunbeam.commands.juju.pexpect.spawn", Mock(return_value=Mock(exitstatus=0))
+        ):
+            result = step.run()
+        assert result.result_type == ResultType.COMPLETED
+
+    def test_run_pexpect_timeout(self, snap):
+        with patch(
+            "sunbeam.commands.juju.JujuAccount.load",
+            Mock(return_value=Mock(user="test", password="test")),
+        ), patch(
+            "sunbeam.commands.juju.pexpect.spawn",
+            Mock(
+                return_value=Mock(
+                    __enter__=Mock(return_value=Mock(exitstatus=0)), __exit__=Mock()
+                )
+            ),
+        ):
+            step = juju.JujuLoginStep(Mock())
+            step._get_juju_binary = Mock(return_value="juju")
+            assert step.is_skip().result_type == ResultType.COMPLETED
+
+        with patch(
+            "sunbeam.commands.juju.pexpect.spawn",
+            Mock(
+                return_value=Mock(
+                    exitstatus=0, expect=Mock(side_effect=pexpect.TIMEOUT("timeout"))
+                )
+            ),
+        ):
+            result = step.run()
+        assert result.result_type == ResultType.FAILED
+
+    def test_run_pexpect_failed_exitcode(self, snap):
+        with patch(
+            "sunbeam.commands.juju.JujuAccount.load",
+            Mock(return_value=Mock(user="test", password="test")),
+        ), patch(
+            "sunbeam.commands.juju.pexpect.spawn",
+            Mock(
+                return_value=Mock(
+                    __enter__=Mock(return_value=Mock(exitstatus=0)), __exit__=Mock()
+                )
+            ),
+        ):
+            step = juju.JujuLoginStep(Mock())
+            step._get_juju_binary = Mock(return_value="juju")
+            assert step.is_skip().result_type == ResultType.COMPLETED
+
+        with patch(
+            "sunbeam.commands.juju.pexpect.spawn", Mock(return_value=Mock(exitstatus=1))
+        ):
+            result = step.run()
         assert result.result_type == ResultType.FAILED

@@ -144,7 +144,9 @@ class JujuAccount:
             with data_file.open() as file:
                 return JujuAccount(**yaml.safe_load(file))
         except FileNotFoundError as e:
-            raise JujuAccountNotFound() from e
+            raise JujuAccountNotFound(
+                "Juju user account not found, is node part of sunbeam cluster yet?"
+            ) from e
 
     def write(self, data_location: Path):
         data_file = data_location / ACCOUNT_FILE

@@ -13,22 +13,36 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import json
+import asyncio
 import logging
-from typing import Optional
+from typing import List, Optional
 
+from juju.client.client import FullStatus
+from lightkube.core import exceptions
+from lightkube.core.client import Client as KubeClient
+from lightkube.core.client import KubeConfig
+from lightkube.resources.core_v1 import Service
 from rich.status import Status
 
 from sunbeam.clusterd.client import Client
+from sunbeam.clusterd.service import ConfigItemNotFoundException
 from sunbeam.commands.juju import JujuStepHelper
 from sunbeam.commands.microceph import APPLICATION as MICROCEPH_APPLICATION
+from sunbeam.commands.microk8s import CONFIG_KEY as MICROK8S_CONFIG_KEY
 from sunbeam.commands.microk8s import (
     CREDENTIAL_SUFFIX,
     MICROK8S_CLOUD,
     MICROK8S_DEFAULT_STORAGECLASS,
 )
 from sunbeam.commands.terraform import TerraformException, TerraformHelper
-from sunbeam.jobs.common import BaseStep, Result, ResultType, get_host_total_ram
+from sunbeam.jobs.common import (
+    BaseStep,
+    Result,
+    ResultType,
+    get_host_total_ram,
+    read_config,
+    update_config,
+)
 from sunbeam.jobs.juju import (
     CONTROLLER_MODEL,
     JujuHelper,
@@ -41,20 +55,12 @@ from sunbeam.jobs.juju import (
 LOG = logging.getLogger(__name__)
 OPENSTACK_MODEL = "openstack"
 OPENSTACK_DEPLOY_TIMEOUT = 3600  # 60 minutes
+METALLB_ANNOTATION = "metallb.universe.tf/loadBalancerIPs"
 
 CONFIG_KEY = "TerraformVarsOpenstack"
 TOPOLOGY_KEY = "Topology"
 
 RAM_32_GB_IN_KB = 32 * 1024 * 1024
-
-
-def update_config(client: Client, key: str, config: dict):
-    client.cluster.update_config(key, json.dumps(config))
-
-
-def read_config(client: Client, key: str) -> dict:
-    config = client.cluster.get_config(key)
-    return json.loads(config)
 
 
 def determine_target_topology_at_bootstrap() -> str:
@@ -132,7 +138,7 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
     ):
         super().__init__(
             "Deploying OpenStack Control Plane",
-            "Deploying OpenStack Control Plane to Kubernetes",
+            "Deploying OpenStack Control Plane to Kubernetes (this may take a while)",
         )
         self.tfhelper = tfhelper
         self.jhelper = jhelper
@@ -160,12 +166,32 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
         :return: ResultType.SKIPPED if the Step should be skipped,
                 ResultType.COMPLETED or ResultType.FAILED otherwise
         """
-        try:
-            run_sync(self.jhelper.get_model(OPENSTACK_MODEL))
-        except ModelNotFoundException:
-            return Result(ResultType.COMPLETED)
+        if status is not None:
+            status.update(self.status + "determining appropriate configuration")
 
-        return Result(ResultType.SKIPPED)
+        try:
+            previous_config = read_config(self.client, TOPOLOGY_KEY)
+        except ConfigItemNotFoundException:
+            # Config was never registered in database
+            previous_config = {}
+
+        determined_topology = determine_target_topology_at_bootstrap()
+
+        if self.topology == "auto":
+            self.topology = previous_config.get("topology", determined_topology)
+        LOG.debug(f"Bootstrap: topology {self.topology}")
+
+        if self.database == "auto":
+            self.database = previous_config.get("database", determined_topology)
+        LOG.debug(f"Bootstrap: database topology {self.database}")
+
+        if (database := previous_config.get("database")) and database != self.database:
+            return Result(
+                ResultType.FAILED,
+                "Database topology cannot be changed, please destroy and re-bootstrap",
+            )
+
+        return Result(ResultType.COMPLETED)
 
     def run(self, status: Optional[Status] = None) -> Result:
         """Execute configuration using terraform."""
@@ -174,15 +200,6 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
         # - Enabling HA
         # - Enabling/disabling specific services
         # - Switch channels for the charmed operators
-        determined_topology = determine_target_topology_at_bootstrap()
-
-        if self.topology == "auto":
-            self.topology = determined_topology
-        LOG.debug(f"Bootstrap: topology {self.topology}")
-
-        if self.database == "auto":
-            self.database = determined_topology
-        LOG.debug(f"Bootstrap: database topology {self.database}")
         update_config(
             self.client,
             TOPOLOGY_KEY,
@@ -191,8 +208,8 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
         tfvars = {
             "model": self.model,
             # Make these channel options configurable by the user
-            "openstack-channel": "2023.1/stable",
-            "ovn-channel": "23.03/stable",
+            "openstack-channel": "2023.1/edge",
+            "ovn-channel": "23.03/edge",
             "cloud": self.cloud,
             "credential": f"{self.cloud}{CREDENTIAL_SUFFIX}",
             "config": {"workload-storage": MICROK8S_DEFAULT_STORAGECLASS},
@@ -201,18 +218,21 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
         tfvars.update(self.get_storage_tfvars())
         update_config(self.client, self._CONFIG, tfvars)
         self.tfhelper.write_tfvars(tfvars)
+        if status is not None:
+            status.update(self.status + "deploying services")
         try:
             self.tfhelper.apply()
         except TerraformException as e:
             LOG.exception("Error configuring cloud")
             return Result(ResultType.FAILED, str(e))
 
+        # Remove cinder-ceph from apps to wait on if ceph is not enabled
+        apps = run_sync(self.jhelper.get_application_names(self.model))
+        if not tfvars.get("enable-ceph") and "cinder-ceph" in apps:
+            apps.remove("cinder-ceph")
+        LOG.debug(f"Application monitored for readiness: {apps}")
+        task = run_sync(self.update_status_background(apps, status))
         try:
-            # Remove cinder-ceph from apps to wait on if ceph is not enabled
-            apps = run_sync(self.jhelper.get_application_names(self.model))
-            if not tfvars.get("enable-ceph") and "cinder-ceph" in apps:
-                apps.remove("cinder-ceph")
-
             run_sync(
                 self.jhelper.wait_until_active(
                     self.model,
@@ -223,8 +243,37 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
         except (JujuWaitException, TimeoutException) as e:
             LOG.warning(str(e))
             return Result(ResultType.FAILED, str(e))
+        finally:
+            if not task.done():
+                task.cancel()
 
         return Result(ResultType.COMPLETED)
+
+    async def update_status_background(
+        self, applications: List[str], status: Optional[Status]
+    ):
+        async def _update_status_background():
+            if status is not None:
+                nb_apps = len(applications)
+                model = await self.jhelper.get_model(self.model)
+                while True:
+                    active_apps = 0
+                    full_status: FullStatus = await model.get_status(applications)
+                    for app in full_status.applications.values():
+                        if app is None or app.status is None:
+                            continue
+                        if app.status.status == "active":
+                            active_apps += 1
+
+                    status.update(
+                        self.status + "waiting for services to come online "
+                        f"({active_apps}/{nb_apps})"
+                    )
+                    if active_apps == nb_apps:
+                        return
+                    await asyncio.sleep(30)
+
+        return asyncio.create_task(_update_status_background())
 
 
 class ResizeControlPlaneStep(BaseStep, JujuStepHelper):
@@ -327,5 +376,58 @@ class ResizeControlPlaneStep(BaseStep, JujuStepHelper):
         except (JujuWaitException, TimeoutException) as e:
             LOG.warning(str(e))
             return Result(ResultType.FAILED, str(e))
+
+        return Result(ResultType.COMPLETED)
+
+
+class PatchLoadBalancerServicesStep(BaseStep):
+    SERVICES = ["traefik", "rabbitmq", "ovn-relay"]
+
+    def __init__(
+        self,
+    ):
+        super().__init__(
+            "Patch LoadBalancer services",
+            "Patch LoadBalancer service annotations",
+        )
+
+    def is_skip(self, status: Optional[Status] = None) -> Result:
+        """Determines if the step should be skipped or not.
+
+        :return: ResultType.SKIPPED if the Step should be skipped,
+                ResultType.COMPLETED or ResultType.FAILED otherwise
+        """
+        client = Client()
+        try:
+            self.kubeconfig = read_config(client, MICROK8S_CONFIG_KEY)
+        except ConfigItemNotFoundException:
+            LOG.debug("MicroK8S config not found", exc_info=True)
+            return Result(ResultType.FAILED, "MicroK8S config not found")
+
+        kubeconfig = KubeConfig.from_dict(self.kubeconfig)
+        try:
+            self.kube = KubeClient(kubeconfig, "openstack")
+        except exceptions.ConfigError as e:
+            LOG.debug("Error creating k8s client", exc_info=True)
+            return Result(ResultType.FAILED, str(e))
+
+        for service_name in self.SERVICES:
+            service = self.kube.get(Service, service_name)
+            service_annotations = service.metadata.annotations
+            if METALLB_ANNOTATION not in service_annotations:
+                return Result(ResultType.COMPLETED)
+
+        return Result(ResultType.SKIPPED)
+
+    def run(self, status: Optional[Status] = None) -> Result:
+        """Patch LoadBalancer services annotations with MetalLB IP."""
+        for service_name in self.SERVICES:
+            service = self.kube.get(Service, service_name)
+            service_annotations = service.metadata.annotations
+            if METALLB_ANNOTATION not in service_annotations:
+                loadbalancer_ip = service.status.loadBalancer.ingress[0].ip
+                service_annotations[METALLB_ANNOTATION] = loadbalancer_ip
+                LOG.debug(f"Patching {service_name!r} to use IP {loadbalancer_ip!r}")
+                self.kube.patch(Service, service_name, obj=service)
 
         return Result(ResultType.COMPLETED)

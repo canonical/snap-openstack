@@ -18,9 +18,11 @@ from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
-import yaml
 
-from sunbeam.clusterd.service import NodeNotExistInClusterException
+from sunbeam.clusterd.service import (
+    ConfigItemNotFoundException,
+    NodeNotExistInClusterException,
+)
 from sunbeam.commands.microk8s import (
     CREDENTIAL_SUFFIX,
     MICROK8S_CLOUD,
@@ -28,6 +30,7 @@ from sunbeam.commands.microk8s import (
     AddMicrok8sUnitStep,
     DeployMicrok8sApplicationStep,
     RemoveMicrok8sUnitStep,
+    StoreMicrok8sConfigStep,
 )
 from sunbeam.commands.terraform import TerraformException
 from sunbeam.jobs.common import ResultType
@@ -309,9 +312,17 @@ class TestRemoveMicrok8sUnitStep(unittest.TestCase):
 class TestAddMicrok8sCloudStep(unittest.TestCase):
     def __init__(self, methodName: str = "runTest") -> None:
         super().__init__(methodName)
+        self.client = patch(
+            "sunbeam.commands.microk8s.Client",
+            Mock(return_value=Mock(cluster=Mock(get_config=Mock(return_value="{}")))),
+        )
 
     def setUp(self):
+        self.client.start()
         self.jhelper = AsyncMock()
+
+    def tearDown(self):
+        self.client.stop()
 
     def test_is_skip(self):
         clouds = {}
@@ -330,6 +341,50 @@ class TestAddMicrok8sCloudStep(unittest.TestCase):
         result = step.is_skip()
 
         assert result.result_type == ResultType.SKIPPED
+
+    def test_run(self):
+        with patch("sunbeam.commands.microk8s.read_config", Mock(return_value={})):
+            step = AddMicrok8sCloudStep(self.jhelper)
+            result = step.run()
+
+        self.jhelper.add_k8s_cloud.assert_called_with(
+            MICROK8S_CLOUD,
+            f"{MICROK8S_CLOUD}{CREDENTIAL_SUFFIX}",
+            {},
+        )
+        assert result.result_type == ResultType.COMPLETED
+
+
+class TestStoreMicrok8sConfigStep(unittest.TestCase):
+    def __init__(self, methodName: str = "runTest") -> None:
+        super().__init__(methodName)
+        self.client = patch(
+            "sunbeam.commands.microk8s.Client",
+            Mock(return_value=Mock(cluster=Mock(get_config=Mock(return_value="{}")))),
+        )
+
+    def setUp(self):
+        self.client.start()
+        self.jhelper = AsyncMock()
+
+    def tearDown(self):
+        self.client.stop()
+
+    def test_is_skip(self):
+        step = StoreMicrok8sConfigStep(self.jhelper)
+        result = step.is_skip()
+
+        assert result.result_type == ResultType.SKIPPED
+
+    def test_is_skip_config_missing(self):
+        with patch(
+            "sunbeam.commands.microk8s.read_config",
+            Mock(side_effect=ConfigItemNotFoundException),
+        ):
+            step = StoreMicrok8sConfigStep(self.jhelper)
+            result = step.is_skip()
+
+        assert result.result_type == ResultType.COMPLETED
 
     def test_run(self):
         kubeconfig_content = """apiVersion: v1
@@ -357,16 +412,11 @@ users:
         }
         self.jhelper.run_action.return_value = action_result
 
-        step = AddMicrok8sCloudStep(self.jhelper)
+        step = StoreMicrok8sConfigStep(self.jhelper)
         result = step.run()
 
         self.jhelper.get_leader_unit.assert_called_once()
         self.jhelper.run_action.assert_called_once()
-        self.jhelper.add_k8s_cloud.assert_called_with(
-            MICROK8S_CLOUD,
-            f"{MICROK8S_CLOUD}{CREDENTIAL_SUFFIX}",
-            yaml.safe_load(kubeconfig_content),
-        )
         assert result.result_type == ResultType.COMPLETED
 
     def test_run_application_not_found(self):
@@ -374,7 +424,7 @@ users:
             "Application missing..."
         )
 
-        step = AddMicrok8sCloudStep(self.jhelper)
+        step = StoreMicrok8sConfigStep(self.jhelper)
         result = step.run()
 
         self.jhelper.get_leader_unit.assert_called_once()
@@ -386,7 +436,7 @@ users:
             "Leader missing..."
         )
 
-        step = AddMicrok8sCloudStep(self.jhelper)
+        step = StoreMicrok8sConfigStep(self.jhelper)
         result = step.run()
 
         self.jhelper.get_leader_unit.assert_called_once()
@@ -396,7 +446,7 @@ users:
     def test_run_action_failed(self):
         self.jhelper.run_action.side_effect = ActionFailedException("Action failed...")
 
-        step = AddMicrok8sCloudStep(self.jhelper)
+        step = StoreMicrok8sConfigStep(self.jhelper)
         result = step.run()
 
         self.jhelper.get_leader_unit.assert_called_once()
