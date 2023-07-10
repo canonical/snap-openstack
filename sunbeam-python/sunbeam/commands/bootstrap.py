@@ -53,14 +53,14 @@ from sunbeam.commands.microk8s import (
     StoreMicrok8sConfigStep,
 )
 from sunbeam.commands.mysql import ConfigureMySQLStep
+from sunbeam.commands.openstack import (
+    DeployControlPlaneStep,
+    PatchLoadBalancerServicesStep,
+)
 from sunbeam.commands.rocks import (
     ConfigureKubeletOptionsStep,
     ConfigurePullThroughCacheStep,
     PreseedRocksStep,
-)
-from sunbeam.commands.openstack import (
-    DeployControlPlaneStep,
-    PatchLoadBalancerServicesStep,
 )
 from sunbeam.commands.sunbeam_machine import (
     AddSunbeamMachineUnitStep,

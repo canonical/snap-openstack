@@ -59,9 +59,7 @@ from sunbeam.commands.rocks import (
     ConfigurePullThroughCacheStep,
     PreseedRocksStep,
 )
-from sunbeam.commands.sunbeam_machine import (
-    AddSunbeamMachineUnitStep,
-)
+from sunbeam.commands.sunbeam_machine import AddSunbeamMachineUnitStep
 from sunbeam.commands.terraform import TerraformHelper, TerraformInitStep
 from sunbeam.jobs.checks import (
     DaemonGroupCheck,

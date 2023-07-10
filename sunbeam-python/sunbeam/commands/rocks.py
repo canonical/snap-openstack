@@ -30,7 +30,8 @@ from sunbeam.jobs.juju import CONTROLLER_MODEL
 LOG = logging.getLogger(__name__)
 snap = Snap()
 
-GHCR = "ghcr.io/openstack-snaps/{name}:{tag}"
+GHCR_OPENSTACK_SNAPS = "ghcr.io/openstack-snaps/{name}:{tag}"
+GHCR_CANONICAL = "ghcr.io/canonical/{name}@{digest}"
 
 ROCK_GROUPS = [
     {
@@ -48,12 +49,24 @@ ROCK_GROUPS = [
             "placement-api",
         ],
         "tag": "2023.1",
+        "template": GHCR_OPENSTACK_SNAPS,
     },
     {
         "rocks": ["ovn-sb-db-server", "ovn-nb-db-server", "ovn-northd"],
         "tag": "23.03",
+        "template": GHCR_OPENSTACK_SNAPS,
     },
-    {"rocks": ["rabbitmq"], "tag": "3.9.13"},
+    {"rocks": ["rabbitmq"], "tag": "3.9.13", "template": GHCR_OPENSTACK_SNAPS},
+    {
+        "rocks": ["charmed-mysql"],
+        "digest": "sha256:c2dd359ddcf2cbf598da09769ac54faecc9b5f4b6ca804d0b8aa0055c25a9c48",  # noqa
+        "template": GHCR_CANONICAL,
+    },
+    {
+        "rocks": ["charmed-mysql"],
+        "digest": "sha256:017605f168fcc569d10372bb74b29ef9041256bd066013dec39e9ceee8c88539",  # noqa
+        "template": GHCR_CANONICAL,
+    },
 ]
 SSH = ["juju", "ssh", "-m", CONTROLLER_MODEL]
 MICROK8S = ["sudo", "microk8s"]
@@ -97,9 +110,17 @@ def run_shell(cmd, check=True):
     return process
 
 
-def pull_image(machine_id, name, tag):
-    image = GHCR.format(name=name, tag=tag)
+def pull_image_by_digest(machine_id, name, digest, template):
+    image = template.format(name=name, digest=digest)
+    _pull_image(machine_id, image)
 
+
+def pull_image_by_tag(machine_id, name, tag, template):
+    image = template.format(name=name, tag=tag)
+    _pull_image(machine_id, image)
+
+
+def _pull_image(machine_id, image):
     https_proxy = snap.config.get("proxy.https")
     cmd = SSH + [machine_id]
     if https_proxy:
@@ -302,10 +323,17 @@ class PreseedRocksStep(BaseStep):
         for group in ROCK_GROUPS:
             for image in group["rocks"]:
                 try:
-                    pull_image(machine_id, image, group["tag"])
+                    if "digest" in group:
+                        pull_image_by_digest(
+                            machine_id, image, group["digest"], group["template"]
+                        )
+                    if "tag" in group:
+                        pull_image_by_tag(
+                            machine_id, image, group["tag"], group["template"]
+                        )
                 except Exception:
                     LOG.debug(
-                        f"Failed to pull image '{image}:{group['tag']}', skipping it",
+                        f"Failed to pull image '{image}', skipping it",
                         exc_info=True,
                     )
 
