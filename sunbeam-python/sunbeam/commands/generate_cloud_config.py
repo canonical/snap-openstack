@@ -32,7 +32,15 @@ import sunbeam.jobs.questions
 from sunbeam.clusterd.client import Client
 from sunbeam.commands.configure import CLOUD_CONFIG_SECTION, retrieve_admin_credentials
 from sunbeam.commands.openstack import OPENSTACK_MODEL
-from sunbeam.jobs.common import BaseStep, Result, ResultType, Status, run_plan
+from sunbeam.jobs.checks import VerifyBootstrappedCheck
+from sunbeam.jobs.common import (
+    BaseStep,
+    Result,
+    ResultType,
+    Status,
+    run_plan,
+    run_preflight_checks,
+)
 from sunbeam.jobs.juju import JujuHelper, ModelNotFoundException, run_sync
 
 LOG = logging.getLogger(__name__)
@@ -244,6 +252,9 @@ def cloud_config(
     cloud: str, admin: bool, update: bool, cloud_file: Optional[Path] = None
 ) -> None:
     """Generate or Update clouds.yaml."""
+    preflight_checks = []
+    preflight_checks.append(VerifyBootstrappedCheck())
+    run_preflight_checks(preflight_checks, console)
     snap = Snap()
     data_location = snap.paths.user_data
     jhelper = JujuHelper(data_location)

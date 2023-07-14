@@ -21,6 +21,8 @@ from snaphelpers import Snap
 
 from sunbeam.commands.openstack import OPENSTACK_MODEL
 from sunbeam.jobs import juju
+from sunbeam.jobs.checks import VerifyBootstrappedCheck
+from sunbeam.jobs.common import run_preflight_checks
 
 LOG = logging.getLogger(__name__)
 console = Console()
@@ -30,6 +32,9 @@ snap = Snap()
 @click.command()
 def dashboard_url() -> None:
     """Retrieve OpenStack Dashboard URL."""
+    preflight_checks = []
+    preflight_checks.append(VerifyBootstrappedCheck())
+    run_preflight_checks(preflight_checks, console)
     data_location = snap.paths.user_data
     jhelper = juju.JujuHelper(data_location)
 

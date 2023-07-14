@@ -15,6 +15,7 @@
 
 import datetime
 import logging
+import shutil
 import tarfile
 import tempfile
 from pathlib import Path
@@ -76,7 +77,14 @@ def inspect(ctx: click.Context) -> None:
 
         run_plan(plan, console)
 
-        with tarfile.open(dump_file, "w:gz") as tar:
+        with console.status("[bold green]Copying logs..."):
+            log_dir = snap.paths.user_common / "logs"
+            if log_dir.exists():
+                shutil.copytree(log_dir, Path(tmpdirname) / "logs")
+
+        with console.status("[bold green]Creating tarball..."), tarfile.open(
+            dump_file, "w:gz"
+        ) as tar:
             tar.add(tmpdirname, arcname="./")
 
     console.print(f"[green]Output file written to {dump_file}[/green]")

@@ -37,7 +37,7 @@ from sunbeam.commands.terraform import (
     TerraformHelper,
     TerraformInitStep,
 )
-from sunbeam.jobs.checks import DaemonGroupCheck
+from sunbeam.jobs.checks import DaemonGroupCheck, VerifyBootstrappedCheck
 from sunbeam.jobs.common import (
     BaseStep,
     Result,
@@ -731,6 +731,7 @@ def configure(
     """Configure cloud with some sensible defaults."""
     preflight_checks = []
     preflight_checks.append(DaemonGroupCheck())
+    preflight_checks.append(VerifyBootstrappedCheck())
     run_preflight_checks(preflight_checks, console)
 
     name = utils.get_fqdn()

@@ -16,6 +16,7 @@
 import enum
 import json
 import logging
+import os
 from typing import List, Optional, Type
 
 import click
@@ -26,6 +27,8 @@ from rich.status import Status
 from sunbeam.clusterd.client import Client
 
 LOG = logging.getLogger(__name__)
+RAM_16_GB_IN_KB = 16 * 1024 * 1024
+RAM_32_GB_IN_KB = 32 * 1024 * 1024
 
 
 class Role(enum.Enum):
@@ -277,6 +280,11 @@ def get_host_total_ram() -> int:
             if line.startswith("MemTotal"):
                 return int(line.split()[1])
     raise Exception("Could not determine total RAM")
+
+
+def get_host_total_cores() -> int:
+    """Return total cpu count."""
+    return os.cpu_count()
 
 
 def click_option_topology(func: decorators.FC) -> decorators.FC:

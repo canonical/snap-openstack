@@ -36,6 +36,7 @@ from sunbeam.commands.microk8s import (
 )
 from sunbeam.commands.terraform import TerraformException, TerraformHelper
 from sunbeam.jobs.common import (
+    RAM_32_GB_IN_KB,
     BaseStep,
     Result,
     ResultType,
@@ -59,8 +60,6 @@ METALLB_ANNOTATION = "metallb.universe.tf/loadBalancerIPs"
 
 CONFIG_KEY = "TerraformVarsOpenstack"
 TOPOLOGY_KEY = "Topology"
-
-RAM_32_GB_IN_KB = 32 * 1024 * 1024
 
 
 def determine_target_topology_at_bootstrap() -> str:

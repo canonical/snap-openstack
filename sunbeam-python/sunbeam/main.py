@@ -16,6 +16,7 @@
 import logging
 
 import click
+from snaphelpers import Snap
 
 from sunbeam import log
 from sunbeam.commands import bootstrap as bootstrap_cmds
@@ -71,7 +72,9 @@ def disable(ctx):
 
 
 def main():
-    log.setup_root_logging()
+    snap = Snap()
+    logfile = log.prepare_logfile(snap.paths.user_common / "logs", "sunbeam")
+    log.setup_root_logging(logfile)
     cli.add_command(prepare_node_cmds.prepare_node_script)
     cli.add_command(configure_cmds.configure)
     cli.add_command(generate_cloud_config_cmds.cloud_config)

@@ -21,7 +21,7 @@ from snaphelpers import Snap
 
 from sunbeam.commands.openstack import OPENSTACK_MODEL
 from sunbeam.jobs import juju
-from sunbeam.jobs.checks import DaemonGroupCheck
+from sunbeam.jobs.checks import DaemonGroupCheck, VerifyBootstrappedCheck
 from sunbeam.jobs.common import run_preflight_checks
 
 LOG = logging.getLogger(__name__)
@@ -34,6 +34,7 @@ def openrc() -> None:
     """Retrieve openrc for cloud admin account."""
     preflight_checks = []
     preflight_checks.append(DaemonGroupCheck())
+    preflight_checks.append(VerifyBootstrappedCheck())
     run_preflight_checks(preflight_checks, console)
 
     data_location = snap.paths.user_data

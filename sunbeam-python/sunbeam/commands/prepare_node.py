@@ -45,6 +45,10 @@ dpkg -s openssh-server &> /dev/null || {{
     sudo apt install -y openssh-server
 }}
 
+# Increase the number of inotify watchers per user
+echo "fs.inotify.max_user_instances = 1024" | sudo tee /etc/sysctl.d/80-sunbeam.conf
+sudo sysctl -q -p /etc/sysctl.d/80-sunbeam.conf
+
 # Connect snap to the ssh-keys interface to allow
 # read access to private keys - this supports bootstrap
 # of the Juju controller to the local machine via SSH.

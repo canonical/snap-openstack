@@ -149,3 +149,66 @@ class TestVerifyFQDNCheck:
         result = check.run()
 
         assert result is False
+
+
+class TestSystemRequirementsCheck:
+    error_message = (
+        "WARNING: Minimum system requirements (4 core CPU, 16 GB RAM) not met."
+    )
+
+    def test_run(self, mocker):
+        mocker.patch(
+            "sunbeam.jobs.checks.get_host_total_ram", return_value=16 * 1024 * 1024
+        )
+        mocker.patch("sunbeam.jobs.checks.get_host_total_cores", return_value=4)
+        check = checks.SystemRequirementsCheck()
+
+        result = check.run()
+
+        assert result is True
+
+    def test_run_less_than_16GB_RAM(self, mocker):
+        mocker.patch(
+            "sunbeam.jobs.checks.get_host_total_ram", return_value=8 * 1024 * 1024
+        )
+        mocker.patch("sunbeam.jobs.checks.get_host_total_cores", return_value=4)
+        check = checks.SystemRequirementsCheck()
+
+        result = check.run()
+
+        assert check.message == self.error_message
+        assert result is True
+
+    def test_run_less_than_4_cores(self, mocker):
+        mocker.patch(
+            "sunbeam.jobs.checks.get_host_total_ram", return_value=16 * 1024 * 1024
+        )
+        mocker.patch("sunbeam.jobs.checks.get_host_total_cores", return_value=2)
+        check = checks.SystemRequirementsCheck()
+
+        result = check.run()
+
+        assert check.message == self.error_message
+        assert result is True
+
+    def test_run_more_than_16GB_RAM(self, mocker):
+        mocker.patch(
+            "sunbeam.jobs.checks.get_host_total_ram", return_value=32 * 1024 * 1024
+        )
+        mocker.patch("sunbeam.jobs.checks.get_host_total_cores", return_value=4)
+        check = checks.SystemRequirementsCheck()
+
+        result = check.run()
+
+        assert result is True
+
+    def test_run_more_than_4_cores(self, mocker):
+        mocker.patch(
+            "sunbeam.jobs.checks.get_host_total_ram", return_value=16 * 1024 * 1024
+        )
+        mocker.patch("sunbeam.jobs.checks.get_host_total_cores", return_value=8)
+        check = checks.SystemRequirementsCheck()
+
+        result = check.run()
+
+        assert result is True

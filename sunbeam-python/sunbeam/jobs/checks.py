@@ -20,6 +20,13 @@ from pathlib import Path
 
 from snaphelpers import Snap, SnapCtl
 
+from sunbeam.clusterd.client import Client
+from sunbeam.jobs.common import (
+    RAM_16_GB_IN_KB,
+    get_host_total_cores,
+    get_host_total_ram,
+)
+
 LOG = logging.getLogger(__name__)
 
 
@@ -237,3 +244,46 @@ class VerifyHypervisorHostnameCheck(Check):
             "check `hostname -f` and `/etc/hosts` file"
         )
         return False
+
+
+class SystemRequirementsCheck(Check):
+    """Check if machine has minimum 4 cores and 16GB RAM."""
+
+    def __init__(self):
+        super().__init__(
+            "Check for system requirements",
+            "Checking for host configuration of minimum 4 core and 16G RAM",
+        )
+
+    def run(self) -> bool:
+        host_total_ram = get_host_total_ram()
+        host_total_cores = get_host_total_cores()
+        if host_total_ram < RAM_16_GB_IN_KB or host_total_cores < 4:
+            self.message = (
+                "WARNING: Minimum system requirements (4 core CPU, 16 GB RAM) not met."
+            )
+            LOG.warning(self.message)
+
+        return True
+
+
+class VerifyBootstrappedCheck(Check):
+    """Check deployment has been bootstrapped."""
+
+    def __init__(self):
+        super().__init__(
+            "Check bootstrapped",
+            "Checking the deployment has been bootstrapped",
+        )
+        self.client = Client()
+
+    def run(self) -> bool:
+        bootstrapped = self.client.cluster.check_sunbeam_bootstrapped()
+        if bootstrapped:
+            return True
+        else:
+            self.message = (
+                "Deployment not bootstrapped or bootstrap process has not "
+                "completed succesfully. Please run `sunbeam cluster bootstrap`"
+            )
+            return False

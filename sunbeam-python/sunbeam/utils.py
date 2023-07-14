@@ -110,7 +110,7 @@ def _get_default_gw_iface_fallback() -> Optional[str]:
     iface = None
     with open("/proc/net/route", "r") as f:
         contents = [line.strip() for line in f.readlines() if line.strip()]
-        print(contents)
+        logging.debug(contents)
 
         entries = []
         # First line is a header line of the table contents. Note, we skip blank entries

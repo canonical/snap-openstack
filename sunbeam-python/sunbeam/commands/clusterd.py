@@ -352,6 +352,13 @@ class ClusterUpdateJujuControllerStep(BaseStep, JujuStepHelper):
             self.networks = variables.get("bootstrap", {}).get("management_cidr")
             juju_controller = JujuController.load(self.client)
             LOG.debug(f"Controller(s) present at: {juju_controller.api_endpoints}")
+            if not juju_controller.api_endpoints:
+                LOG.debug(
+                    "Controller endpoints are empty in database, so update the "
+                    "database by getting controller endpoints again"
+                )
+                return Result(ResultType.COMPLETED)
+
             if juju_controller.api_endpoints == self.filter_ips(
                 juju_controller.api_endpoints, self.networks
             ):
