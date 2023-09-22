@@ -14,22 +14,25 @@
 
 import asyncio
 import unittest
+from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
+from snaphelpers import Snap
 
 from sunbeam.clusterd.service import ConfigItemNotFoundException
 from sunbeam.commands.microk8s import (
-    CREDENTIAL_SUFFIX,
-    MICROK8S_CLOUD,
     AddMicrok8sCloudStep,
+    DeployMicrok8sAddonsStep,
     StoreMicrok8sConfigStep,
 )
+from sunbeam.commands.terraform import TerraformException
 from sunbeam.jobs.common import ResultType
 from sunbeam.jobs.juju import (
     ActionFailedException,
     ApplicationNotFoundException,
     LeaderNotFoundException,
+    TimeoutException,
 )
 
 
@@ -53,15 +56,41 @@ class TestAddMicrok8sCloudStep(unittest.TestCase):
         super().__init__(methodName)
         self.client = patch(
             "sunbeam.commands.microk8s.Client",
-            Mock(return_value=Mock(cluster=Mock(get_config=Mock(return_value="{}")))),
+            Mock(return_value=Mock(cluster=Mock(get_config=Mock(return_value={})))),
         )
+        self.read_config = patch(
+            "sunbeam.commands.microk8s.read_config",
+            Mock(return_value={}),
+        )
+        snap_env = {
+            "SNAP": "/snap/mysnap/2",
+            "SNAP_COMMON": "/var/snap/mysnap/common",
+            "SNAP_DATA": "/var/snap/mysnap/2",
+            "SNAP_INSTANCE_NAME": "",
+            "SNAP_NAME": "mysnap",
+            "SNAP_REVISION": "2",
+            "SNAP_USER_COMMON": "",
+            "SNAP_USER_DATA": "",
+            "SNAP_VERSION": "1.2.3",
+            "SNAP_REAL_HOME": "/home/ubuntu",
+        }
+        self.snap = patch(
+            "sunbeam.commands.juju.Snap", Mock(return_value=Snap(environ=snap_env))
+        )
+        self.subprocess = patch("sunbeam.commands.juju.subprocess.run")
 
     def setUp(self):
         self.client.start()
         self.jhelper = AsyncMock()
+        self.read_config.start()
+        self.snap.start()
+        self.subprocess.start()
 
     def tearDown(self):
         self.client.stop()
+        self.read_config.stop()
+        self.snap.stop()
+        self.subprocess.stop()
 
     def test_is_skip(self):
         clouds = {}
@@ -82,15 +111,9 @@ class TestAddMicrok8sCloudStep(unittest.TestCase):
         assert result.result_type == ResultType.SKIPPED
 
     def test_run(self):
-        with patch("sunbeam.commands.microk8s.read_config", Mock(return_value={})):
-            step = AddMicrok8sCloudStep(self.jhelper)
-            result = step.run()
+        step = AddMicrok8sCloudStep(self.jhelper)
+        result = step.run()
 
-        self.jhelper.add_k8s_cloud.assert_called_with(
-            MICROK8S_CLOUD,
-            f"{MICROK8S_CLOUD}{CREDENTIAL_SUFFIX}",
-            {},
-        )
         assert result.result_type == ResultType.COMPLETED
 
 
@@ -146,16 +169,15 @@ users:
     token: faketoken"""
 
         action_result = {
-            "kubeconfig": "/home/ubuntu/config",
-            "content": kubeconfig_content,
+            "stdout": kubeconfig_content,
         }
-        self.jhelper.run_action.return_value = action_result
+        self.jhelper.run_command.return_value = action_result
 
         step = StoreMicrok8sConfigStep(self.jhelper)
         result = step.run()
 
         self.jhelper.get_leader_unit.assert_called_once()
-        self.jhelper.run_action.assert_called_once()
+        self.jhelper.run_command.assert_called_once()
         assert result.result_type == ResultType.COMPLETED
 
     def test_run_application_not_found(self):
@@ -182,13 +204,60 @@ users:
         assert result.result_type == ResultType.FAILED
         assert result.message == "Leader missing..."
 
-    def test_run_action_failed(self):
-        self.jhelper.run_action.side_effect = ActionFailedException("Action failed...")
+    def test_run_command_failed(self):
+        self.jhelper.run_command.side_effect = ActionFailedException("Action failed...")
 
         step = StoreMicrok8sConfigStep(self.jhelper)
         result = step.run()
 
         self.jhelper.get_leader_unit.assert_called_once()
-        self.jhelper.run_action.assert_called_once()
+        self.jhelper.run_command.assert_called_once()
         assert result.result_type == ResultType.FAILED
         assert result.message == "Action failed..."
+
+
+class TestDeployMicrok8sAddonsStep(unittest.TestCase):
+    def __init__(self, methodName: str = "runTest") -> None:
+        super().__init__(methodName)
+        self.client = patch("sunbeam.commands.microk8s.Client")
+        self.read_config = patch(
+            "sunbeam.commands.microk8s.read_config",
+            Mock(return_value={}),
+        )
+
+    def setUp(self):
+        self.client.start()
+        self.read_config.start()
+        self.jhelper = AsyncMock()
+        self.tfhelper = Mock(path=Path())
+
+    def tearDown(self):
+        self.client.stop()
+        self.read_config.stop()
+
+    def test_run(self):
+        step = DeployMicrok8sAddonsStep(self.tfhelper, self.jhelper)
+        result = step.run()
+
+        assert result.result_type == ResultType.COMPLETED
+
+    def test_run_tf_apply_failed(self):
+        self.tfhelper.apply.side_effect = TerraformException("apply failed...")
+
+        step = DeployMicrok8sAddonsStep(self.tfhelper, self.jhelper)
+        result = step.run()
+
+        self.tfhelper.apply.assert_called_once()
+        assert result.result_type == ResultType.FAILED
+        assert result.message == "apply failed..."
+
+    def test_run_timeout(self):
+        self.jhelper.wait_until_active.side_effect = TimeoutException("timed out")
+
+        step = DeployMicrok8sAddonsStep(self.tfhelper, self.jhelper)
+        result = step.run()
+
+        self.tfhelper.apply.assert_called_once()
+        self.jhelper.wait_until_active.assert_called_once()
+        assert result.result_type == ResultType.FAILED
+        assert result.message == "timed out"

@@ -50,6 +50,7 @@ from sunbeam.commands.microceph import (
 from sunbeam.commands.microk8s import (
     AddMicrok8sCloudStep,
     AddMicrok8sUnitStep,
+    DeployMicrok8sAddonsStep,
     DeployMicrok8sApplicationStep,
     StoreMicrok8sConfigStep,
 )
@@ -250,16 +251,21 @@ def bootstrap(
     plan4.append(TerraformInitStep(tfhelper_sunbeam_machine))
     plan4.append(DeploySunbeamMachineApplicationStep(tfhelper_sunbeam_machine, jhelper))
     plan4.append(AddSunbeamMachineUnitStep(fqdn, jhelper))
+
     # Deploy Microk8s application during bootstrap irrespective of node role.
     plan4.append(TerraformInitStep(tfhelper))
-    plan4.append(
-        DeployMicrok8sApplicationStep(
-            tfhelper, jhelper, accept_defaults=accept_defaults, preseed_file=preseed
-        )
-    )
+    plan4.append(DeployMicrok8sApplicationStep(tfhelper, jhelper))
     plan4.append(AddMicrok8sUnitStep(fqdn, jhelper))
     plan4.append(StoreMicrok8sConfigStep(jhelper))
     plan4.append(AddMicrok8sCloudStep(jhelper))
+    plan4.append(
+        DeployMicrok8sAddonsStep(
+            tfhelper,
+            jhelper,
+            accept_defaults=accept_defaults,
+            preseed_file=preseed,
+        )
+    )
     # Deploy Microceph application during bootstrap irrespective of node role.
     plan4.append(TerraformInitStep(tfhelper_microceph_deploy))
     plan4.append(DeployMicrocephApplicationStep(tfhelper_microceph_deploy, jhelper))

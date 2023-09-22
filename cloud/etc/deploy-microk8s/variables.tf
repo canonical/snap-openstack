@@ -14,13 +14,8 @@
 # limitations under the License.
 
 variable "charm_microk8s_channel" {
-  description = "Operator channel for microk8s deployment"
-  default     = "legacy/stable"
-}
-
-variable "microk8s_channel" {
-  description = "K8S channel to deploy, not the operator channel"
-  default     = "1.28-strict/stable"
+  description = "Operator channel for charm microk8s deployment"
+  default     = "1.28/stable"
 }
 
 variable "machine_ids" {
@@ -29,13 +24,48 @@ variable "machine_ids" {
   default     = []
 }
 
-variable "addons" {
-  description = "Addon configuration to enable on the deployment"
-  type        = map(string)
-  default = {
-    dns              = ""
-    hostpath-storage = ""
-    metallb          = "10.20.21.1-10.20.21.10"
-  }
+variable "enable-addons" {
+  description = "Enable microk8s addons"
+  default     = false
 }
 
+variable "addons-model" {
+  description = "Name of Juju model to use for deployment of addons"
+  default     = "microk8s-addons"
+}
+
+variable "cloud" {
+  description = "Name of K8S cloud to use for deployment"
+  default     = "microk8s"
+}
+
+# https://github.com/juju/terraform-provider-juju/issues/147
+variable "credential" {
+  description = "Name of credential to use for deployment"
+  default     = ""
+}
+
+variable "config" {
+  description = "Set configuration on model"
+  default     = {}
+}
+
+variable "charm-metallb-channel" {
+  description = "Operator channel for metallb deployment"
+  default     = "1.28/stable"
+}
+
+variable "charm-coredns-channel" {
+  description = "Operator channel for coredns deployment"
+  default     = "1.28/stable"
+}
+
+variable "coredns-ha-scale" {
+  description = "Scale of coredns deployment"
+  default     = 1
+}
+
+variable "metallb-iprange" {
+  description = "IP address range to assign for services"
+  default     = "10.20.21.1-10.20.21.10"
+}

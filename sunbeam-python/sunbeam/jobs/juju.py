@@ -436,6 +436,20 @@ class JujuHelper:
         return action_obj.results
 
     @controller
+    async def run_command(self, name: str, model: str, command: str) -> Dict:
+        """Run command and return the response"""
+        model_impl = await self.get_model(model)
+
+        unit = await self.get_unit(name, model)
+        action_obj = await unit.run(command)
+        await action_obj.wait()
+        if action_obj._status != "completed":
+            output = await model_impl.get_action_output(action_obj.id)
+            raise ActionFailedException(output)
+
+        return action_obj.results
+
+    @controller
     async def scp_from(self, name: str, model: str, source: str, destination: str):
         """scp files from unit to local
 

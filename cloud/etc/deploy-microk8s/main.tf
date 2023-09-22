@@ -43,9 +43,76 @@ resource "juju_application" "microk8s" {
   }
 
   config = {
-    channel                       = var.microk8s_channel
-    addons                        = join(" ", [for key, value in var.addons : "${key}:${value}"])
-    disable_cert_reissue          = true
-    kubelet_serialize_image_pulls = false
+    automatic_certificate_reissue = false
+    hostpath_storage              = true
+  }
+}
+
+resource "juju_model" "addons" {
+  count = var.enable-addons ? 1 : 0
+  name  = var.addons-model
+
+  cloud {
+    name   = var.cloud
+    region = "localhost"
+  }
+
+  credential = var.credential
+  config     = var.config
+}
+
+resource "juju_application" "coredns" {
+  count = var.enable-addons ? 1 : 0
+  name  = "coredns"
+  trust = true
+  model = juju_model.addons[count.index].name
+  units = var.coredns-ha-scale
+
+  charm {
+    name    = "coredns"
+    channel = var.charm-coredns-channel
+    series  = "jammy"
+  }
+}
+
+# juju_offer.coredns_offer will be created
+resource "juju_offer" "coredns_offer" {
+  count            = var.enable-addons ? 1 : 0
+  application_name = juju_application.coredns[count.index].name
+  endpoint         = "dns-provider"
+  model            = juju_model.addons[count.index].name
+}
+
+# juju integrate coredns microk8s
+resource "juju_integration" "microk8s-to-coredns" {
+  count = var.enable-addons ? 1 : 0
+  model = data.juju_model.controller.name
+
+  application {
+    name     = juju_application.microk8s.name
+    endpoint = "dns"
+  }
+
+  application {
+    offer_url = juju_offer.coredns_offer[count.index].url
+  }
+}
+
+resource "juju_application" "metallb" {
+  count = var.enable-addons ? 1 : 0
+  name  = "metallb"
+  trust = true
+  model = juju_model.addons[count.index].name
+  # Not possible to scale, so hardcoded to 1
+  units = 1
+
+  charm {
+    name    = "metallb"
+    channel = var.charm-metallb-channel
+    series  = "jammy"
+  }
+
+  config = {
+    iprange = var.metallb-iprange
   }
 }
