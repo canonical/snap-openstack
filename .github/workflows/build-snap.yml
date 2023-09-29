@@ -39,7 +39,7 @@ jobs:
         uses: actions/download-artifact@v3
         with:
           name: local-${{ needs.build.outputs.snap }}
-      - name: test
+      - name: Test single node
         run: |
           export COLUMNS=256
           sudo snap install  ${{ needs.build.outputs.snap }} --dangerous
@@ -47,15 +47,38 @@ jobs:
           sudo snap connect openstack:juju-bin juju:juju-bin
           sudo snap connect openstack:dot-local-share-juju
           sudo snap connect openstack:dot-config-openstack
-          sg snap_daemon "openstack.sunbeam -v cluster bootstrap --accept-defaults"
-          sg snap_daemon "openstack.sunbeam enable orchestration"
+          sg snap_daemon "openstack.sunbeam cluster bootstrap --accept-defaults"
           sg snap_daemon "openstack.sunbeam cluster list"
+          sg snap_daemon "openstack.sunbeam enable orchestration"
           sg snap_daemon "openstack.sunbeam enable loadbalancer"
-          sg snap_daemon "openstack.sunbeam -v configure -a"
-          sg snap_daemon "openstack.sunbeam -v launch"
-      - name: Collect juju status
+          sg snap_daemon "openstack.sunbeam enable dns --nameservers=testing.github."
+          sg snap_daemon "openstack.sunbeam enable telemetry"
+          sg snap_daemon "openstack.sunbeam enable observability"
+          sg snap_daemon "openstack.sunbeam enable vault"
+          sg snap_daemon "openstack.sunbeam enable secrets"
+          sg snap_daemon "openstack.sunbeam enable caas"
+          sg snap_daemon "openstack.sunbeam configure -a"
+          sg snap_daemon "openstack.sunbeam launch"
+          sg snap_daemon "openstack.sunbeam disable caas"
+          sg snap_daemon "openstack.sunbeam disable secrets"
+          sg snap_daemon "openstack.sunbeam disable vault"
+          # Commented disableing observability due to LP#1998282
+          # sg snap_daemon "openstack.sunbeam disable observability"
+          # sg snap_daemon "openstack.sunbeam disable telemetry"
+          sg snap_daemon "openstack.sunbeam disable dns"
+          sg snap_daemon "openstack.sunbeam disable loadbalancer"
+          sg snap_daemon "openstack.sunbeam disable orchestration"
+      - name: Collect logs
         if: always()
         run: |
-          juju status
-          juju status -m openstack
-          juju debug-log -m openstack --replay
+          mkdir -p logs
+          models=$(juju models --format json | jq -r .models[].name)
+          for model in $models; do name=$(echo $model | cut -d/ -f2); juju status -m $model -o logs/$name.yaml; done
+          for model in $models; do name=$(echo $model | cut -d/ -f2); juju debug-log -m $model --replay > logs/$name-debug-log.txt; done
+          cp -rf $HOME/snap/openstack/common/logs/*.log logs/
+      - name: Upload logs
+        uses: actions/upload-artifact@v3
+        with:
+          name: Sunbeam logs
+          path: logs
+          retention-days: 30
