@@ -49,3 +49,9 @@ sunbeam-plugins:
       path: sunbeam.plugins.dns.plugin.DnsPlugin
       supported_architectures:
         - amd64
+    - name: "migrate"
+      version: "0.0.1"
+      description: "Plugin for migrations"
+      path: plugins.migrate.plugin.MigratePlugin
+      supported_architectures:
+        - amd64
