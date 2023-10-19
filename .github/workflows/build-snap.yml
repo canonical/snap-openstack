@@ -42,6 +42,7 @@ jobs:
       - name: test
         run: |
           export COLUMNS=256
+          sudo sysctl -w net.ipv6.conf.all.disable_ipv6=1
           sudo snap install  ${{ needs.build.outputs.snap }} --dangerous
           openstack.sunbeam prepare-node-script | bash -x
           sudo snap connect openstack:juju-bin juju:juju-bin
