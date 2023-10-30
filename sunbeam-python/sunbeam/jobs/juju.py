@@ -17,11 +17,13 @@ import asyncio
 import base64
 import json
 import logging
+import time
 from dataclasses import asdict, dataclass
 from functools import wraps
 from pathlib import Path
 from typing import Awaitable, Dict, List, Optional, TypeVar, cast
 
+import tenacity
 import yaml
 from juju import utils as juju_utils
 from juju.application import Application
@@ -684,19 +686,39 @@ class JujuHelper:
         """
         model_impl = await self.get_model(model)
 
-        try:
-            # Wait for all the unit workload status to active and Agent status to idle
-            await model_impl.wait_for_idle(
-                apps=apps, status="active", timeout=timeout, raise_on_error=False
-            )
-        except (JujuMachineError, JujuAgentError, JujuUnitError, JujuAppError) as e:
-            raise JujuWaitException(
-                f"Error while waiting for model {model!r} to be ready: {str(e)}"
-            ) from e
-        except asyncio.TimeoutError as e:
-            raise TimeoutException(
-                f"Timed out while waiting for model {model!r} to be ready"
-            ) from e
+        stop = tenacity.stop_after_attempt(5)
+        if timeout:
+            stop |= tenacity.stop_after_delay(timeout)
+        start = time.time()
+
+        @tenacity.retry(
+            retry=tenacity.retry_if_exception_type(JujuAPIError),
+            wait=tenacity.wait_fixed(5),
+            stop=stop,
+        )
+        async def _wait_for_idle(start: float, timeout: Optional[int] = None):
+            if timeout:
+                now = time.time()
+                timeout = timeout - int(now - start)
+            try:
+                # Wait for all the unit workload status
+                # to active and Agent status to idle
+                await model_impl.wait_for_idle(
+                    apps=apps,
+                    status="active",
+                    timeout=timeout,
+                    raise_on_error=False,
+                )
+            except (JujuMachineError, JujuAgentError, JujuUnitError, JujuAppError) as e:
+                raise JujuWaitException(
+                    f"Error while waiting for model {model!r} to be ready: {str(e)}"
+                ) from e
+            except asyncio.TimeoutError as e:
+                raise TimeoutException(
+                    f"Timed out while waiting for model {model!r} to be ready"
+                ) from e
+
+        await _wait_for_idle(start, timeout)
 
     @controller
     async def set_application_config(self, model: str, app: str, config: dict):

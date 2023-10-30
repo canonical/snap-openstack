@@ -34,3 +34,5 @@ lightkube-models
 # For plugin repo
 jsonschema
 GitPython
+
+tenacity
