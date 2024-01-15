@@ -21,9 +21,8 @@ pexpect
 # YAML parsing library
 pyyaml>=6.0
 
-# Set upper bound to match Juju 3.2.x series target
-# 3.2.3 has introduced a regression
-juju>=3.2,<3.2.3
+# Set upper bound to match Juju 3.3.x series target
+juju>=3.3.0,<3.4.0
 
 # Used in the launch command to launch an instance
 petname

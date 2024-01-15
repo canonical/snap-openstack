@@ -131,14 +131,17 @@ parts:
     source: https://github.com/hashicorp/terraform
     source-depth: 1
     source-type: git
-    source-tag: "v1.3.7"
+    source-tag: "v1.6.6"
     build-snaps: [go]
     build-environment:
       - CGO_ENABLED: "0"
       - GOFLAGS: "-mod=readonly"
+      - LDFLAGS: "-s -w"
     override-build: |
+      export LDFLAGS="${LDFLAGS} -X 'github.com/hashicorp/terraform/version.Prerelease='"
+      export LDFLAGS="${LDFLAGS} -X 'github.com/hashicorp/terraform/version.Version=$(cat version/VERSION)'"
       go mod download
-      go build -ldflags "-s -w"
+      go build -ldflags "${LDFLAGS}"
       mkdir -p $SNAPCRAFT_PART_INSTALL/bin
       cp terraform $SNAPCRAFT_PART_INSTALL/bin/terraform
     stage:
