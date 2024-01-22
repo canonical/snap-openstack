@@ -20,6 +20,7 @@ import click
 from packaging.version import Version
 from rich.console import Console
 
+from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import ClusterServiceUnavailableException
 from sunbeam.commands.openstack import OPENSTACK_MODEL, PatchLoadBalancerServicesStep
 from sunbeam.commands.terraform import TerraformHelper, TerraformInitStep
@@ -45,9 +46,10 @@ class DnsPlugin(OpenStackControlPlanePlugin):
     version = Version("0.0.1")
     nameservers: Optional[str]
 
-    def __init__(self) -> None:
+    def __init__(self, client: Client) -> None:
         super().__init__(
-            name="dns",
+            "dns",
+            client,
             tf_plan_location=TerraformPlanLocation.SUNBEAM_TERRAFORM_REPO,
         )
         self.nameservers = None
@@ -61,11 +63,11 @@ class DnsPlugin(OpenStackControlPlanePlugin):
             backend="http",
             data_location=data_location,
         )
-        jhelper = JujuHelper(data_location)
+        jhelper = JujuHelper(self.client, data_location)
         plan = [
             TerraformInitStep(tfhelper),
-            EnableOpenStackApplicationStep(tfhelper, jhelper, self),
-            PatchBindLoadBalancerStep(),
+            EnableOpenStackApplicationStep(self.client, tfhelper, jhelper, self),
+            PatchBindLoadBalancerStep(self.client),
         ]
 
         run_plan(plan, console)
@@ -133,7 +135,7 @@ class DnsPlugin(OpenStackControlPlanePlugin):
         model = OPENSTACK_MODEL
         application = "bind"
         data_location = self.snap.paths.user_data
-        jhelper = JujuHelper(data_location)
+        jhelper = JujuHelper(self.client, data_location)
         model_impl = await jhelper.get_model(model)
         status = await model_impl.get_status([application])
         if application not in status["applications"]:

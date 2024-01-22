@@ -130,7 +130,7 @@ class PluginManager:
         return plugins
 
     @classmethod
-    def get_all_external_repos(cls, detail: bool = False) -> list:
+    def get_all_external_repos(cls, client: Client, detail: bool = False) -> list:
         """Return all external repos stored in DB.
 
         Returns just names by default, the format will be
@@ -147,7 +147,6 @@ class PluginManager:
         :returns: List of repos.
         """
         try:
-            client = Client()
             config = read_config(client, EXTERNAL_REPO_PLUGIN_KEY)
             if detail:
                 return config.get("repos", [])
@@ -254,7 +253,7 @@ class PluginManager:
         return enabled_plugins
 
     @classmethod
-    def register(cls, cli: click.Group) -> None:
+    def register(cls, cli: click.Group, client: Client) -> None:
         """Register the plugins.
 
         Register both the core plugins in snap-openstack repo and the plugins
@@ -263,13 +262,14 @@ class PluginManager:
         sunbeam cli.
 
         :param cli: Main click group for sunbeam cli.
+        :param client: Clusterd client object.
         """
         LOG.debug("Registering core plugins")
         core_plugin_file = cls.get_core_plugins_path() / PLUGIN_YAML
         for plugin in cls.get_plugin_classes(core_plugin_file):
-            plugin().register(cli)
+            plugin(client).register(cli)
 
-        repos = cls.get_all_external_repos()
+        repos = cls.get_all_external_repos(client)
         LOG.debug(f"Registering external repo plugins {repos}")
         for repo in repos:
             plugin_file = cls.get_external_plugins_base_path() / repo / PLUGIN_YAML

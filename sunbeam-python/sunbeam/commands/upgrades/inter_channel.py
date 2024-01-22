@@ -68,14 +68,24 @@ class UpgradeStrategy(TypedDict):
 
 
 class BaseUpgrade(BaseStep, JujuStepHelper):
-    def __init__(self, name, description, jhelper, tfhelper, model):
+    def __init__(
+        self,
+        name: str,
+        description: str,
+        client: Client,
+        jhelper: JujuHelper,
+        tfhelper: TerraformHelper,
+        model: str,
+    ):
         """Create instance of BaseUpgrade class.
 
+        :client: Client for interacting with clusterd
         :jhelper: Helper for interacting with pylibjuju
         :tfhelper: Helper for interaction with Terraform
         :model: Name of model containing charms.
         """
         super().__init__(name, description)
+        self.client = client
         self.jhelper = jhelper
         self.tfhelper = tfhelper
         self.model = model
@@ -158,7 +168,6 @@ class BaseUpgrade(BaseStep, JujuStepHelper):
         :param tfvars_delta: The delta of changes to be applied to the terraform
                              vars stored in microcluster.
         """
-        self.client = Client()
         tfvars = read_config(self.client, config_key)
         tfvars.update(tfvars_delta)
         update_config(self.client, config_key, tfvars)
@@ -167,9 +176,16 @@ class BaseUpgrade(BaseStep, JujuStepHelper):
 
 
 class UpgradeControlPlane(BaseUpgrade):
-    def __init__(self, jhelper, tfhelper, model):
+    def __init__(
+        self,
+        client: Client,
+        jhelper: JujuHelper,
+        tfhelper: TerraformHelper,
+        model: str,
+    ):
         """Create instance of BaseUpgrade class.
 
+        :client: Client for interacting with clusterd
         :jhelper: Helper for interacting with pylibjuju
         :tfhelper: Helper for interaction with Terraform
         :model: Name of model containing charms.
@@ -177,6 +193,7 @@ class UpgradeControlPlane(BaseUpgrade):
         super().__init__(
             "Upgrade K8S charms",
             "Upgrade K8S charms channels to align with snap",
+            client,
             jhelper,
             tfhelper,
             model,
@@ -217,7 +234,13 @@ class UpgradeControlPlane(BaseUpgrade):
 
 
 class UpgradeMachineCharms(BaseUpgrade):
-    def __init__(self, jhelper, tfhelper, model):
+    def __init__(
+        self,
+        client: Client,
+        jhelper: JujuHelper,
+        tfhelper: TerraformHelper,
+        model: str,
+    ):
         """Create instance of BaseUpgrade class.
 
         :jhelper: Helper for interacting with pylibjuju
@@ -227,6 +250,7 @@ class UpgradeMachineCharms(BaseUpgrade):
         super().__init__(
             "Upgrade Machine charms",
             "Upgrade machine charms channels to align with snap",
+            client,
             jhelper,
             tfhelper,
             model,
@@ -281,14 +305,16 @@ class UpgradeMachineCharms(BaseUpgrade):
 
 
 class ChannelUpgradeCoordinator(UpgradeCoordinator):
-    def __init__(self, jhelper: JujuHelper, tfhelper: TerraformHelper):
+    def __init__(self, client: Client, jhelper: JujuHelper, tfhelper: TerraformHelper):
         """Upgrade coordinator.
 
         Execute plan for conducting an upgrade.
 
+        :client: Client for interacting with clusterd
         :jhelper: Helper for interacting with pylibjuju
         :tfhelper: Helper for interaction with Terraform
         """
+        self.client = client
         self.jhelper = jhelper
         self.tfhelper = tfhelper
 
@@ -300,8 +326,10 @@ class ChannelUpgradeCoordinator(UpgradeCoordinator):
         plan = [
             ValidationCheck(self.jhelper, self.tfhelper),
             LatestInChannel(self.jhelper),
-            UpgradeControlPlane(self.jhelper, self.tfhelper, "openstack"),
-            UpgradeMachineCharms(self.jhelper, self.tfhelper, "controller"),
+            UpgradeControlPlane(self.client, self.jhelper, self.tfhelper, "openstack"),
+            UpgradeMachineCharms(
+                self.client, self.jhelper, self.tfhelper, "controller"
+            ),
             UpgradePlugins(self.jhelper, self.tfhelper, upgrade_release=True),
         ]
         return plan

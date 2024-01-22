@@ -34,8 +34,7 @@ from sunbeam.plugins.interface.v1.base import (
 
 @pytest.fixture()
 def cclient():
-    with patch("sunbeam.plugins.interface.v1.base.Client") as p:
-        yield p
+    yield Mock()
 
 
 @pytest.fixture()
@@ -77,11 +76,11 @@ class TestBasePlugin:
     def test_validate_commands(self, cclient):
         BasePlugin.__abstractmethods__ = set()
         with patch.object(BasePlugin, "commands") as mock_commands:
-            plugin = BasePlugin(name="test")
+            plugin = BasePlugin("test", cclient)
             mock_commands.return_value = {
                 "group1": [{"name": "cmd1", "command": click.Command("cmd1")}]
             }
-            plugin = BasePlugin(name="test")
+            plugin = BasePlugin("test", cclient)
             result = plugin.validate_commands()
             assert result is True
 
@@ -89,7 +88,7 @@ class TestBasePlugin:
         BasePlugin.__abstractmethods__ = set()
         with patch.object(BasePlugin, "commands") as mock_commands:
             mock_commands.return_value = {"group1": [{"name": "cmd1"}]}
-            plugin = BasePlugin(name="test")
+            plugin = BasePlugin("test", cclient)
             result = plugin.validate_commands()
             assert result is False
 
@@ -99,7 +98,7 @@ class TestBasePlugin:
             mock_commands.return_value = {
                 "group1": [{"command": click.Command("cmd1")}]
             }
-            plugin = BasePlugin(name="test")
+            plugin = BasePlugin("test", cclient)
             result = plugin.validate_commands()
             assert result is False
 
@@ -107,7 +106,7 @@ class TestBasePlugin:
         BasePlugin.__abstractmethods__ = set()
         with patch.object(BasePlugin, "commands") as mock_commands:
             mock_commands.return_value = {"group1": []}
-            plugin = BasePlugin(name="test")
+            plugin = BasePlugin("test", cclient)
             result = plugin.validate_commands()
             assert result is True
 
@@ -117,7 +116,7 @@ class TestBasePlugin:
             mock_commands.return_value = {
                 "group1": [{"name": "subgroup1", "command": click.Group("subgroup1")}]
             }
-            plugin = BasePlugin(name="test")
+            plugin = BasePlugin("test", cclient)
             result = plugin.validate_commands()
             assert result is True
 
@@ -134,7 +133,7 @@ class TestBasePlugin:
             mock_commands.return_value = {
                 "group1": [{"name": "cmd1", "command": cmd1_obj}]
             }
-            plugin = BasePlugin(name="test")
+            plugin = BasePlugin("test", cclient)
             plugin.register(cli)
             clickinstantiator.assert_called_once()
             mock_group_obj.add_command.assert_called_once_with(cmd1_obj, "cmd1")
@@ -154,7 +153,7 @@ class TestBasePlugin:
             mock_commands.return_value = {
                 "group1": [{"name": "cmd1", "command": cmd1_obj}]
             }
-            plugin = BasePlugin(name="test")
+            plugin = BasePlugin("test", cclient)
             plugin.register(cli)
             mock_group_obj.add_command.assert_not_called()
             clickinstantiator.assert_not_called()
@@ -172,27 +171,27 @@ class TestBasePlugin:
             mock_commands.return_value = {
                 "group1": [{"name": "cmd1", "command": cmd1_obj}]
             }
-            plugin = BasePlugin(name="test")
+            plugin = BasePlugin("test", cclient)
             plugin.register(cli)
             clickinstantiator.assert_not_called()
 
     def test_get_plugin_info(self, cclient, read_config):
         mock_info = {"version": "0.0.1"}
         read_config.return_value = mock_info
-        plugin = BasePlugin(name="test")
+        plugin = BasePlugin("test", cclient)
         info = plugin.get_plugin_info()
         assert info == mock_info
 
     def test_get_plugin_info_no_config_in_db(self, cclient, read_config):
         read_config.side_effect = ConfigItemNotFoundException()
-        plugin = BasePlugin(name="test")
+        plugin = BasePlugin("test", cclient)
         info = plugin.get_plugin_info()
         assert info == {}
 
     def test_update_plugin_info(self, cclient, read_config, update_config):
         mock_info = {}
         read_config.return_value = mock_info
-        plugin = BasePlugin(name="test")
+        plugin = BasePlugin("test", cclient)
         plugin.update_plugin_info({"test": "test"})
         assert update_config.call_args.args[2] == {"test": "test", "version": "0.0.0"}
 
@@ -201,7 +200,7 @@ class TestBasePlugin:
     ):
         mock_info = {"version": "0.0.1", "enabled": "true"}
         read_config.return_value = mock_info
-        plugin = BasePlugin(name="test")
+        plugin = BasePlugin("test", cclient)
         plugin.update_plugin_info({"test": "test"})
         assert update_config.call_args.args[2] == {
             "enabled": "true",
@@ -215,7 +214,7 @@ class TestBasePlugin:
         config = {"version": "1.0.0"}
         read_config.return_value = config
 
-        plugin = BasePlugin(name="test")
+        plugin = BasePlugin("test", cclient)
         plugin.client = client_instance
         version = plugin.fetch_plugin_version(plugin_key)
         assert version == Version("1.0.0")
@@ -225,7 +224,7 @@ class TestBasePlugin:
         client_instance = cclient()
         plugin_key = "test_plugin"
         read_config.side_effect = ConfigItemNotFoundException
-        plugin = BasePlugin(name="test")
+        plugin = BasePlugin("test", cclient)
         plugin.client = client_instance
         with pytest.raises(MissingPluginError):
             plugin.fetch_plugin_version(plugin_key)
@@ -236,7 +235,7 @@ class TestBasePlugin:
         plugin_key = "test_plugin"
         config = {}
         read_config.return_value = config
-        plugin = BasePlugin(name="test")
+        plugin = BasePlugin("test", cclient)
         plugin.client = client_instance
         with pytest.raises(MissingVersionInfoError):
             plugin.fetch_plugin_version(plugin_key)
@@ -270,8 +269,8 @@ def plugin_klass(version_: str) -> type[EnableDisablePlugin]:
 
         requires = {PluginRequirement("test_req>=1.0.0")}
 
-        def __init__(self):
-            pass
+        def __init__(self, client):
+            super().__init__(self.name, client)
 
         def enable_plugin(self, *args, **kwargs) -> None:
             pass
@@ -292,7 +291,7 @@ class TestEnableDisablePlugin:
     def test_check_enabled_plugin_is_compatible_with_compatible_requirement(
         self, cclient, mocker
     ):
-        plugin = DummyPlugin(name="test_plugin", client=cclient())
+        plugin = DummyPlugin("test_plugin", cclient)
         mocker.patch.object(plugin, "fetch_plugin_version", return_value="1.0.0")
         requirement = PluginRequirement("test_repo.test_plugin>=1.0.0")
         plugin.check_enabled_requirement_is_compatible(requirement)
@@ -300,7 +299,7 @@ class TestEnableDisablePlugin:
     def test_check_enabled_plugin_is_compatible_with_missing_version_info(
         self, cclient, mocker
     ):
-        plugin = DummyPlugin(name="test_plugin", client=cclient())
+        plugin = DummyPlugin("test_plugin", cclient)
 
         mocker.patch.object(
             plugin, "fetch_plugin_version", side_effect=MissingVersionInfoError
@@ -312,7 +311,7 @@ class TestEnableDisablePlugin:
     def test_check_enabled_plugin_is_compatible_with_incompatible_requirement(
         self, cclient, mocker
     ):
-        plugin = DummyPlugin(name="test_plugin", client=cclient())
+        plugin = DummyPlugin("test_plugin", cclient)
 
         mocker.patch.object(plugin, "fetch_plugin_version", return_value="0.9.0")
         requirement = PluginRequirement("test_repo.test_plugin>=1.0.0")
@@ -322,7 +321,7 @@ class TestEnableDisablePlugin:
     def test_check_enabled_plugin_is_compatible_with_optional_requirement(
         self, cclient, mocker
     ):
-        plugin = DummyPlugin(name="test_plugin", client=cclient())
+        plugin = DummyPlugin("test_plugin", cclient)
 
         mocker.patch.object(
             plugin, "fetch_plugin_version", side_effect=MissingVersionInfoError
@@ -334,7 +333,7 @@ class TestEnableDisablePlugin:
     def test_check_enabled_plugin_is_compatible_with_no_specifier_and_optional_requirement(  # noqa: E501
         self, cclient, mocker
     ):
-        plugin = DummyPlugin(name="test_plugin", client=cclient())
+        plugin = DummyPlugin("test_plugin", cclient)
 
         mocker.patch.object(
             plugin, "fetch_plugin_version", side_effect=MissingVersionInfoError
@@ -345,7 +344,7 @@ class TestEnableDisablePlugin:
     def test_check_enabled_plugin_is_compatible_with_no_specifier_and_required_requirement(  # noqa: E501
         self, cclient, mocker
     ):
-        plugin = DummyPlugin(name="test_plugin", client=cclient())
+        plugin = DummyPlugin("test_plugin", cclient)
 
         mocker.patch.object(
             plugin, "fetch_plugin_version", side_effect=MissingVersionInfoError
@@ -356,47 +355,47 @@ class TestEnableDisablePlugin:
     def test_check_plugin_class_is_compatible_with_compatible_requirement(
         self, cclient
     ):
-        plugin = DummyPlugin(name="test_plugin", client=cclient())
+        plugin = DummyPlugin("test_plugin", cclient)
 
         requirement = PluginRequirement("test_repo.test_plugin>=1.0.0")
 
         klass = plugin_klass("1.0.0")
-        plugin.check_plugin_class_is_compatible(klass(), requirement)
+        plugin.check_plugin_class_is_compatible(klass(cclient), requirement)
 
     def test_check_plugin_class_is_compatible_with_incompatible_requirement(
         self, cclient
     ):
-        plugin = DummyPlugin(name="test_plugin", client=cclient())
+        plugin = DummyPlugin("test_plugin", cclient)
 
         requirement = PluginRequirement("test_repo.test_plugin>=2.0.0")
 
         klass = plugin_klass("1.0.0")
         with pytest.raises(IncompatibleVersionError):
-            plugin.check_plugin_class_is_compatible(klass(), requirement)
+            plugin.check_plugin_class_is_compatible(klass(cclient), requirement)
 
     def test_check_plugin_class_is_compatible_with_core_plugin_and_incompatible_version(
         self, cclient
     ):
-        plugin = DummyPlugin(name="test_plugin", client=cclient())
+        plugin = DummyPlugin("test_plugin", cclient)
 
         requirement = PluginRequirement("core.test_plugin>=1.0.0")
 
         klass = plugin_klass("0.5.0")
         with pytest.raises(IncompatibleVersionError):
-            plugin.check_plugin_class_is_compatible(klass(), requirement)
+            plugin.check_plugin_class_is_compatible(klass(cclient), requirement)
 
     def test_check_plugin_class_is_compatible_with_no_specifier(self, cclient):
-        plugin = DummyPlugin(name="test_plugin", client=cclient())
+        plugin = DummyPlugin("test_plugin", cclient)
 
         requirement = PluginRequirement("test_repo.test_plugin")
 
         klass = plugin_klass("1.0.0")
-        plugin.check_plugin_class_is_compatible(klass(), requirement)
+        plugin.check_plugin_class_is_compatible(klass(cclient), requirement)
 
     def test_check_plugin_is_automatically_enableable_with_automatically_enableable_plugin(  # noqa: E501
         self, cclient
     ):
-        plugin = DummyPlugin(name="test_plugin", client=cclient())
+        plugin = DummyPlugin("test_plugin", cclient)
         plugin.check_plugin_is_automatically_enableable(plugin)  # type: ignore
 
     def test_check_plugin_is_automatically_enableable_with_non_automatically_enableable_plugin(  # noqa: E501
@@ -411,26 +410,23 @@ class TestEnableDisablePlugin:
 
         required_plugin = DummyPlugin_(name="test_plugin", client=cclient())
 
-        plugin = DummyPlugin(name="test_plugin", client=cclient())
+        plugin = DummyPlugin("test_plugin", cclient)
         with pytest.raises(NotAutomaticPluginError):
             plugin.check_plugin_is_automatically_enableable(required_plugin)  # type: ignore # noqa: E501
 
     @pytest.mark.parametrize("klass", plugin_classes())
-    @patch("snaphelpers.Snap")
-    def test_core_plugins_requirements(self, snap, cclient, klass):
-        from snaphelpers import Snap
-
-        Snap()
-        plugin = klass()
+    def test_core_plugins_requirements(self, cclient, klass):
+        plugin = klass(client=cclient)
 
         for requirement in plugin.requires:
-            plugin.check_plugin_class_is_compatible(requirement.klass(), requirement)
+            plugin.check_plugin_class_is_compatible(
+                requirement.klass(client=cclient), requirement
+            )
 
     def test_check_enablement_requirements_with_enabled_compatible_requirement(
         self, cclient, mocker
     ):
-        client = cclient()
-        plugin = DummyPlugin(client=client, name="test_req")
+        plugin = DummyPlugin(client=cclient, name="test_req")
         plugin.version = Version("1.0.1")
         klass = plugin_klass("0.0.1")
         mocker.patch.object(

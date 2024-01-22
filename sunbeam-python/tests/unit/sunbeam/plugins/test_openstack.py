@@ -41,8 +41,7 @@ def mock_run_sync(mocker):
 
 @pytest.fixture()
 def cclient():
-    with patch("sunbeam.plugins.interface.v1.openstack.Client") as p:
-        yield p
+    yield Mock()
 
 
 @pytest.fixture()
@@ -79,7 +78,9 @@ class TestEnableOpenStackApplicationStep:
         tfhelper,
         osplugin,
     ):
-        step = openstack.EnableOpenStackApplicationStep(tfhelper, jhelper, osplugin)
+        step = openstack.EnableOpenStackApplicationStep(
+            cclient, tfhelper, jhelper, osplugin
+        )
         result = step.run()
 
         tfhelper.write_tfvars.assert_called_once()
@@ -92,7 +93,9 @@ class TestEnableOpenStackApplicationStep:
     ):
         tfhelper.apply.side_effect = TerraformException("apply failed...")
 
-        step = openstack.EnableOpenStackApplicationStep(tfhelper, jhelper, osplugin)
+        step = openstack.EnableOpenStackApplicationStep(
+            cclient, tfhelper, jhelper, osplugin
+        )
         result = step.run()
 
         tfhelper.write_tfvars.assert_called_once()
@@ -106,7 +109,9 @@ class TestEnableOpenStackApplicationStep:
     ):
         jhelper.wait_until_active.side_effect = TimeoutException("timed out")
 
-        step = openstack.EnableOpenStackApplicationStep(tfhelper, jhelper, osplugin)
+        step = openstack.EnableOpenStackApplicationStep(
+            cclient, tfhelper, jhelper, osplugin
+        )
         result = step.run()
 
         tfhelper.write_tfvars.assert_called_once()
@@ -118,7 +123,9 @@ class TestEnableOpenStackApplicationStep:
 
 class TestDisableOpenStackApplicationStep:
     def test_run(self, cclient, read_config, jhelper, tfhelper, osplugin):
-        step = openstack.DisableOpenStackApplicationStep(tfhelper, jhelper, osplugin)
+        step = openstack.DisableOpenStackApplicationStep(
+            cclient, tfhelper, jhelper, osplugin
+        )
         result = step.run()
 
         tfhelper.write_tfvars.assert_called_once()
@@ -130,7 +137,9 @@ class TestDisableOpenStackApplicationStep:
     ):
         tfhelper.apply.side_effect = TerraformException("apply failed...")
 
-        step = openstack.DisableOpenStackApplicationStep(tfhelper, jhelper, osplugin)
+        step = openstack.DisableOpenStackApplicationStep(
+            cclient, tfhelper, jhelper, osplugin
+        )
         result = step.run()
 
         tfhelper.write_tfvars.assert_called_once()

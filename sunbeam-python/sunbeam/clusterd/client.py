@@ -14,10 +14,11 @@
 # limitations under the License.
 
 
-from pathlib import Path
+from urllib.parse import quote
 
 import requests
 import requests_unixsocket
+from snaphelpers import Snap
 
 from sunbeam.clusterd.cluster import ClusterService
 
@@ -25,12 +26,30 @@ from sunbeam.clusterd.cluster import ClusterService
 class Client:
     """A client for interacting with the remote client API."""
 
-    def __init__(self, version: str = "v2", socket_path: Path = "/run/snapd.socket"):
+    def __init__(self, endpoint: str):
         super(Client, self).__init__()
-        self.__version = version
-        self.__socket_path = socket_path
+        self._endpoint = endpoint
         self._session = requests.sessions.Session()
-        self._session.mount(
-            requests_unixsocket.DEFAULT_SCHEME, requests_unixsocket.UnixAdapter()
+        if self._endpoint.startswith("http+unix://"):
+            self._session.mount(
+                requests_unixsocket.DEFAULT_SCHEME, requests_unixsocket.UnixAdapter()
+            )
+        else:
+            # TODO(gboutry): remove this when proper TLS communication is
+            # implemented
+            self._session.verify = False
+
+        self.cluster = ClusterService(self._session, self._endpoint)
+
+    @classmethod
+    def from_socket(cls) -> "Client":
+        """Return a client initialized to the clusterd socket."""
+        escaped_socket_path = quote(
+            str(Snap().paths.common / "state" / "control.socket"), safe=""
         )
-        self.cluster = ClusterService(self._session)
+        return cls("http+unix://" + escaped_socket_path)
+
+    @classmethod
+    def from_http(cls, endpoint: str) -> "Client":
+        """Return a client initiliazed to the clusterd http endpoint."""
+        return cls(endpoint)

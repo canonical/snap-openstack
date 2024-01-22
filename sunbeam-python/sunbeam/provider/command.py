@@ -39,6 +39,7 @@ from sunbeam.jobs.common import (
     FORMAT_YAML,
     run_preflight_checks,
 )
+from sunbeam.provider.base import ProviderBase
 from sunbeam.provider.local import LocalProvider
 from sunbeam.provider.maas import MaasProvider
 from sunbeam.utils import CatchGroup
@@ -172,10 +173,10 @@ def show(name: str, format: str):
         console.print(yaml.dump(deployment), end="")
 
 
-def register_cli(cli: click.Group, provider: DeploymentType):
+def register_cli_and_get_http_client(cli: click.Group, provider: DeploymentType):
     """Register the CLI for the given provider."""
     cli.add_command(deployment)
-    providers = {
+    providers: dict[DeploymentType, ProviderBase] = {
         DeploymentType.LOCAL: LocalProvider(),
         DeploymentType.MAAS: MaasProvider(),
     }
@@ -183,3 +184,5 @@ def register_cli(cli: click.Group, provider: DeploymentType):
         provider_obj.register_add_cli(add)
         if provider_type == provider:
             provider_obj.register_cli(cli, deployment)
+            return provider_obj.get_clusterd_client()
+    raise ValueError(f"Unknown provider: {provider}")

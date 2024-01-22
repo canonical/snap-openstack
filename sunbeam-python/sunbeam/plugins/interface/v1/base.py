@@ -65,12 +65,13 @@ class NotAutomaticPluginError(PluginError):
 class ClickInstantiator:
     """Support invoking click commands on instance methods."""
 
-    def __init__(self, command, klass):
+    def __init__(self, command, klass, client):
         self.command = command
         self.klass = klass
+        self.client = client
 
     def __call__(self, *args, **kwargs):
-        return self.command(self.klass(), *args, **kwargs)
+        return self.command(self.klass(self.client), *args, **kwargs)
 
 
 class BasePlugin(ABC):
@@ -82,13 +83,13 @@ class BasePlugin(ABC):
     # Version of plugin
     version = Version("0.0.0")
 
-    def __init__(self, name: str) -> None:
+    def __init__(self, name: str, client: Client) -> None:
         """Constructor for Base plugin.
 
         :param name: Name of the plugin
         """
         self.name = name
-        self.client = Client()
+        self.client = client
 
     @property
     def plugin_key(self) -> str:
@@ -358,7 +359,7 @@ class BasePlugin(ABC):
                         )
                     continue
 
-                cmd.callback = ClickInstantiator(cmd.callback, type(self))
+                cmd.callback = ClickInstantiator(cmd.callback, type(self), self.client)
                 group_obj.add_command(cmd, cmd_name)
                 LOG.debug(
                     f"Plugin {self.name}: Command {cmd_name} registered in "
@@ -411,12 +412,12 @@ class EnableDisablePlugin(BasePlugin):
 
     requires: set[PluginRequirement] = set()
 
-    def __init__(self, name: str) -> None:
+    def __init__(self, name: str, client: Client) -> None:
         """Constructor for plugin interface.
 
         :param name: Name of the plugin
         """
-        super().__init__(name=name)
+        super().__init__(name, client)
 
     @property
     def enabled(self) -> bool:
@@ -516,7 +517,7 @@ class EnableDisablePlugin(BasePlugin):
         for klass in plugins:
             if not issubclass(klass, EnableDisablePlugin):
                 continue
-            plugin = klass()
+            plugin = klass(self.client)
             if not plugin.enabled:
                 continue
             for requirement in plugin.requires:
@@ -539,7 +540,7 @@ class EnableDisablePlugin(BasePlugin):
     def enable_requirements(self):
         """Iterate through requirements, enable plugins if possible."""
         for requirement in self.requires:
-            plugin = requirement.klass()
+            plugin = requirement.klass(self.client)
 
             if plugin.enabled:
                 self.check_enabled_requirement_is_compatible(requirement)

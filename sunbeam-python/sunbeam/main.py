@@ -91,7 +91,7 @@ def main():
     provider_guess = provider_cmds.guess_provider(
         snap.paths.real_home / deployment_cmds.DEPLOYMENT_CONFIG
     )
-    provider_cmds.register_cli(cli, provider_guess)
+    client = provider_cmds.register_cli_and_get_http_client(cli, provider_guess)
 
     cli.add_command(enable)
     cli.add_command(disable)
@@ -100,9 +100,10 @@ def main():
     utils.add_command(utils_cmds.juju_login)
 
     # Register the plugins after all groups,commands are registered
-    PluginManager.register(cli)
 
-    cli()
+    PluginManager.register(cli, client)
+
+    cli(obj=client)
 
 
 if __name__ == "__main__":

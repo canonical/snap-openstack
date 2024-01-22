@@ -81,6 +81,7 @@ class FillObservabilityOffersStep(BaseStep):
 
     def __init__(
         self,
+        client: Client,
         tfhelper: TerraformHelper,
         tfhelper_cos: TerraformHelper,
         jhelper: JujuHelper,
@@ -89,11 +90,11 @@ class FillObservabilityOffersStep(BaseStep):
             "Fill Observability Offers",
             "Fill Observability Offers in Openstack",
         )
+        self.client = client
         self.tfhelper = tfhelper
         self.tfhelper_cos = tfhelper_cos
         self.jhelper = jhelper
         self.model = OPENSTACK_MODEL
-        self.client = Client()
 
     def run(self, status: Optional[Status] = None) -> Result:
         """Apply terraform configuration"""
@@ -125,6 +126,7 @@ class FillObservabilityOffersStep(BaseStep):
 class RemoveObservabilityIntegrationStep(BaseStep):
     def __init__(
         self,
+        client: Client,
         tfhelper: TerraformHelper,
         jhelper: JujuHelper,
     ) -> None:
@@ -132,10 +134,10 @@ class RemoveObservabilityIntegrationStep(BaseStep):
             "Remove Observability Integration",
             "Remove Observability Integration in Openstack",
         )
+        self.client = client
         self.tfhelper = tfhelper
         self.jhelper = jhelper
         self.model = OPENSTACK_MODEL
-        self.client = Client()
 
     def run(self, status: Optional[Status] = None) -> Result:
         """Apply terraform configuration"""
@@ -430,8 +432,8 @@ class ObservabilityPlugin(EnableDisablePlugin):
     version = Version("0.0.1")
     requires = {PluginRequirement("telemetry", optional=True)}
 
-    def __init__(self) -> None:
-        super().__init__(name="observability")
+    def __init__(self, client: Client) -> None:
+        super().__init__("observability", client)
         self.snap = Snap()
         self.tfplan_cos = "deploy-cos"
         self.tfplan_grafana_agent = "deploy-grafana-agent"
@@ -469,13 +471,15 @@ class ObservabilityPlugin(EnableDisablePlugin):
             data_location=data_location,
         )
 
-        jhelper = JujuHelper(data_location)
+        jhelper = JujuHelper(self.client, data_location)
 
         cos_plan = [
             TerraformInitStep(tfhelper_cos),
             DeployObservabilityStackStep(self, tfhelper_cos, jhelper),
-            PatchCosLoadBalancerStep(),
-            FillObservabilityOffersStep(tfhelper_openstack, tfhelper_cos, jhelper),
+            PatchCosLoadBalancerStep(self.client),
+            FillObservabilityOffersStep(
+                self.client, tfhelper_openstack, tfhelper_cos, jhelper
+            ),
         ]
 
         grafana_agent_plan = [
@@ -513,11 +517,13 @@ class ObservabilityPlugin(EnableDisablePlugin):
             data_location=data_location,
         )
 
-        jhelper = JujuHelper(data_location)
+        jhelper = JujuHelper(self.client, data_location)
 
         cos_plan = [
             TerraformInitStep(tfhelper_cos),
-            RemoveObservabilityIntegrationStep(tfhelper_openstack, jhelper),
+            RemoveObservabilityIntegrationStep(
+                self.client, tfhelper_openstack, jhelper
+            ),
             RemoveObservabilityStackStep(self, tfhelper_cos, jhelper),
         ]
 
@@ -548,7 +554,7 @@ class ObservabilityPlugin(EnableDisablePlugin):
     def dashboard_url(self) -> None:
         """Retrieve COS Dashboard URL."""
         data_location = self.snap.paths.user_data
-        jhelper = JujuHelper(data_location)
+        jhelper = JujuHelper(self.client, data_location)
 
         with console.status("Retrieving dashboard URL from Grafana service ... "):
             # Retrieve config from juju actions

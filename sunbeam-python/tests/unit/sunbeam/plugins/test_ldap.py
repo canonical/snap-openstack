@@ -31,8 +31,7 @@ from sunbeam.plugins.ldap.plugin import (
 
 @pytest.fixture()
 def cclient():
-    with patch("sunbeam.plugins.ldap.plugin.Client") as p:
-        yield p
+    yield Mock()
 
 
 @pytest.fixture()
@@ -90,20 +89,20 @@ class TestAddLDAPDomainStep:
 
     def test_is_skip(self, cclient):
         self.plugin = FakeLDAPPlugin()
-        step = AddLDAPDomainStep(self.tfhelper, self.jhelper, self.plugin, {})
+        step = AddLDAPDomainStep(cclient, self.tfhelper, self.jhelper, self.plugin, {})
         result = step.is_skip()
         assert result.result_type == ResultType.COMPLETED
 
     def test_has_prompts(self, cclient):
         self.plugin = FakeLDAPPlugin()
-        step = AddLDAPDomainStep(self.tfhelper, self.jhelper, self.plugin, {})
+        step = AddLDAPDomainStep(cclient, self.tfhelper, self.jhelper, self.plugin, {})
         assert not step.has_prompts()
 
     def test_enable_first_domain(self, cclient, read_config, update_config, snap):
         self.plugin = FakeLDAPPlugin()
         read_config.return_value = {}
         step = AddLDAPDomainStep(
-            self.tfhelper, self.jhelper, self.plugin, self.charm_config
+            cclient, self.tfhelper, self.jhelper, self.plugin, self.charm_config
         )
         result = step.run()
         self.tfhelper.write_tfvars.assert_called_with(
@@ -125,7 +124,7 @@ class TestAddLDAPDomainStep:
             "ldap-apps": {"dom1": {"domain-name": "dom1"}},
         }
         step = AddLDAPDomainStep(
-            self.tfhelper, self.jhelper, self.plugin, {"domain-name": "dom2"}
+            cclient, self.tfhelper, self.jhelper, self.plugin, {"domain-name": "dom2"}
         )
         result = step.run()
         self.tfhelper.write_tfvars.assert_called_with(
@@ -148,7 +147,7 @@ class TestAddLDAPDomainStep:
         read_config.return_value = {}
         self.tfhelper.apply.side_effect = TerraformException("apply failed...")
         step = AddLDAPDomainStep(
-            self.tfhelper, self.jhelper, self.plugin, self.charm_config
+            cclient, self.tfhelper, self.jhelper, self.plugin, self.charm_config
         )
         result = step.run()
         self.tfhelper.apply.assert_called_once()
@@ -160,7 +159,7 @@ class TestAddLDAPDomainStep:
         self.plugin = FakeLDAPPlugin()
         read_config.return_value = {}
         step = AddLDAPDomainStep(
-            self.tfhelper, self.jhelper, self.plugin, self.charm_config
+            cclient, self.tfhelper, self.jhelper, self.plugin, self.charm_config
         )
         result = step.run()
         self.tfhelper.write_tfvars.assert_called_with(
@@ -185,13 +184,17 @@ class TestDisableLDAPDomainStep:
 
     def test_is_skip(self, cclient):
         self.plugin = FakeLDAPPlugin()
-        step = DisableLDAPDomainStep(self.tfhelper, self.jhelper, self.plugin, "dom1")
+        step = DisableLDAPDomainStep(
+            cclient, self.tfhelper, self.jhelper, self.plugin, "dom1"
+        )
         result = step.is_skip()
         assert result.result_type == ResultType.COMPLETED
 
     def test_has_prompts(self, cclient):
         self.plugin = FakeLDAPPlugin()
-        step = DisableLDAPDomainStep(self.tfhelper, self.jhelper, self.plugin, "dom1")
+        step = DisableLDAPDomainStep(
+            cclient, self.tfhelper, self.jhelper, self.plugin, "dom1"
+        )
         assert not step.has_prompts()
 
     def test_disable(self, cclient, read_config, update_config, snap):
@@ -200,7 +203,9 @@ class TestDisableLDAPDomainStep:
             "ldap-channel": "2023.2/edge",
             "ldap-apps": {"dom1": {"domain-name": "dom1"}},
         }
-        step = DisableLDAPDomainStep(self.tfhelper, self.jhelper, self.plugin, "dom1")
+        step = DisableLDAPDomainStep(
+            cclient, self.tfhelper, self.jhelper, self.plugin, "dom1"
+        )
         step.run()
         self.tfhelper.write_tfvars.assert_called_with(
             {"ldap-channel": "2023.2/edge", "ldap-apps": {}}
@@ -214,7 +219,9 @@ class TestDisableLDAPDomainStep:
             "ldap-channel": "2023.2/edge",
             "ldap-apps": {"dom1": {"domain-name": "dom1"}},
         }
-        step = DisableLDAPDomainStep(self.tfhelper, self.jhelper, self.plugin, "dom1")
+        step = DisableLDAPDomainStep(
+            cclient, self.tfhelper, self.jhelper, self.plugin, "dom1"
+        )
         result = step.run()
         self.tfhelper.write_tfvars.assert_called_with(
             {"ldap-channel": "2023.2/edge", "ldap-apps": {}}
@@ -229,7 +236,9 @@ class TestDisableLDAPDomainStep:
             "ldap-channel": "2023.2/edge",
             "ldap-apps": {"dom1": {"domain-name": "dom1"}},
         }
-        step = DisableLDAPDomainStep(self.tfhelper, self.jhelper, self.plugin, "dom2")
+        step = DisableLDAPDomainStep(
+            cclient, self.tfhelper, self.jhelper, self.plugin, "dom2"
+        )
         result = step.run()
         assert result.result_type == ResultType.FAILED
         assert result.message == "Domain not found"
@@ -244,7 +253,7 @@ class TestUpdateLDAPDomainStep:
     def test_is_skip(self, cclient):
         self.plugin = FakeLDAPPlugin()
         step = UpdateLDAPDomainStep(
-            self.tfhelper, self.jhelper, self.plugin, self.charm_config
+            cclient, self.tfhelper, self.jhelper, self.plugin, self.charm_config
         )
         result = step.is_skip()
         assert result.result_type == ResultType.COMPLETED
@@ -252,7 +261,7 @@ class TestUpdateLDAPDomainStep:
     def test_has_prompts(self, cclient):
         self.plugin = FakeLDAPPlugin()
         step = UpdateLDAPDomainStep(
-            self.tfhelper, self.jhelper, self.plugin, self.charm_config
+            cclient, self.tfhelper, self.jhelper, self.plugin, self.charm_config
         )
         assert not step.has_prompts()
 
@@ -263,7 +272,7 @@ class TestUpdateLDAPDomainStep:
             "ldap-apps": {"dom1": {"domain-name": "dom1"}},
         }
         step = UpdateLDAPDomainStep(
-            self.tfhelper, self.jhelper, self.plugin, self.charm_config
+            cclient, self.tfhelper, self.jhelper, self.plugin, self.charm_config
         )
         result = step.run()
         self.tfhelper.write_tfvars.assert_called_with(
@@ -285,7 +294,7 @@ class TestUpdateLDAPDomainStep:
             "ldap-apps": {"dom1": {"domain-name": "dom1"}},
         }
         step = UpdateLDAPDomainStep(
-            self.tfhelper, self.jhelper, self.plugin, {"domain-name": "dom2"}
+            cclient, self.tfhelper, self.jhelper, self.plugin, {"domain-name": "dom2"}
         )
         result = step.run()
         assert result.result_type == ResultType.FAILED
@@ -299,7 +308,7 @@ class TestUpdateLDAPDomainStep:
             "ldap-apps": {"dom1": {"domain-name": "dom1"}},
         }
         step = UpdateLDAPDomainStep(
-            self.tfhelper, self.jhelper, self.plugin, self.charm_config
+            cclient, self.tfhelper, self.jhelper, self.plugin, self.charm_config
         )
         result = step.run()
         self.tfhelper.apply.assert_called_once_with()
@@ -315,7 +324,7 @@ class TestUpdateLDAPDomainStep:
             "ldap-apps": {"dom1": {"domain-name": "dom1"}},
         }
         step = UpdateLDAPDomainStep(
-            self.tfhelper, self.jhelper, self.plugin, self.charm_config
+            cclient, self.tfhelper, self.jhelper, self.plugin, self.charm_config
         )
         result = step.run()
         self.tfhelper.apply.assert_called_once_with()

@@ -53,6 +53,7 @@ class GenerateCloudConfigStep(BaseStep):
 
     def __init__(
         self,
+        client: Client,
         admin_credentials: dict,
         cloud: str,
         is_admin: bool,
@@ -67,7 +68,7 @@ class GenerateCloudConfigStep(BaseStep):
         self.is_admin = is_admin
         self.update = update
         self.cloudfile = cloudfile
-        self.client = Client()
+        self.client = client
 
         if not self.cloudfile:
             home = os.environ.get("SNAP_REAL_HOME")
@@ -262,12 +263,13 @@ def cloud_config(
     if parameter_source == click.core.ParameterSource.DEFAULT and admin:
         cloud += "-admin"
 
+    client: Client = ctx.obj
     preflight_checks = []
-    preflight_checks.append(VerifyBootstrappedCheck())
+    preflight_checks.append(VerifyBootstrappedCheck(client))
     run_preflight_checks(preflight_checks, console)
     snap = Snap()
     data_location = snap.paths.user_data
-    jhelper = JujuHelper(data_location)
+    jhelper = JujuHelper(client, data_location)
     try:
         run_sync(jhelper.get_model(OPENSTACK_MODEL))
     except ModelNotFoundException:
@@ -276,6 +278,7 @@ def cloud_config(
     admin_credentials = retrieve_admin_credentials(jhelper, OPENSTACK_MODEL)
     plan = [
         GenerateCloudConfigStep(
+            client=client,
             admin_credentials=admin_credentials,
             cloud=cloud,
             is_admin=admin,

@@ -49,7 +49,6 @@ def mock_run_sync(mocker):
 class TestDeployHypervisorStep(unittest.TestCase):
     def __init__(self, methodName: str = "runTest") -> None:
         super().__init__(methodName)
-        self.client = patch("sunbeam.commands.hypervisor.Client")
         self.read_config = patch(
             "sunbeam.commands.hypervisor.read_config",
             Mock(
@@ -60,7 +59,7 @@ class TestDeployHypervisorStep(unittest.TestCase):
         )
 
     def setUp(self):
-        self.client.start()
+        self.client = Mock()
         self.read_config.start()
         self.jhelper = AsyncMock()
         self.tfhelper = Mock(path=Path())
@@ -69,7 +68,6 @@ class TestDeployHypervisorStep(unittest.TestCase):
         self.tfhelper_openstack.backend_config.return_value = {}
 
     def tearDown(self):
-        self.client.stop()
         self.read_config.stop()
 
     def test_is_skip(self):
@@ -78,7 +76,7 @@ class TestDeployHypervisorStep(unittest.TestCase):
         )
 
         step = DeployHypervisorApplicationStep(
-            self.tfhelper, self.tfhelper_openstack, self.jhelper
+            self.client, self.tfhelper, self.tfhelper_openstack, self.jhelper
         )
         result = step.is_skip()
 
@@ -87,7 +85,7 @@ class TestDeployHypervisorStep(unittest.TestCase):
 
     def test_is_skip_app_already_deployed(self):
         step = DeployHypervisorApplicationStep(
-            self.tfhelper, self.tfhelper_openstack, self.jhelper
+            self.client, self.tfhelper, self.tfhelper_openstack, self.jhelper
         )
         result = step.is_skip()
 
@@ -100,7 +98,7 @@ class TestDeployHypervisorStep(unittest.TestCase):
         )
 
         step = DeployHypervisorApplicationStep(
-            self.tfhelper, self.tfhelper_openstack, self.jhelper
+            self.client, self.tfhelper, self.tfhelper_openstack, self.jhelper
         )
         result = step.run()
 
@@ -112,7 +110,7 @@ class TestDeployHypervisorStep(unittest.TestCase):
         self.tfhelper.apply.side_effect = TerraformException("apply failed...")
 
         step = DeployHypervisorApplicationStep(
-            self.tfhelper, self.tfhelper_openstack, self.jhelper
+            self.client, self.tfhelper, self.tfhelper_openstack, self.jhelper
         )
         result = step.run()
 
@@ -124,7 +122,7 @@ class TestDeployHypervisorStep(unittest.TestCase):
         self.jhelper.wait_application_ready.side_effect = TimeoutException("timed out")
 
         step = DeployHypervisorApplicationStep(
-            self.tfhelper, self.tfhelper_openstack, self.jhelper
+            self.client, self.tfhelper, self.tfhelper_openstack, self.jhelper
         )
         result = step.run()
 
@@ -136,10 +134,6 @@ class TestDeployHypervisorStep(unittest.TestCase):
 class TestAddHypervisorUnitStep(unittest.TestCase):
     def __init__(self, methodName: str = "runTest") -> None:
         super().__init__(methodName)
-        self.clientMock = Mock()
-        self.client = patch(
-            "sunbeam.commands.hypervisor.Client", return_value=self.clientMock
-        )
         self.read_config = patch(
             "sunbeam.commands.hypervisor.read_config",
             Mock(
@@ -150,31 +144,29 @@ class TestAddHypervisorUnitStep(unittest.TestCase):
         )
 
     def setUp(self):
-        self.client.start()
+        self.client = Mock()
         self.read_config.start()
         self.jhelper = AsyncMock()
         self.name = "test-0"
 
     def tearDown(self):
-        self.client.stop()
         self.read_config.stop()
-        self.clientMock.reset_mock()
 
     def test_is_skip(self):
-        step = AddHypervisorUnitStep(self.name, self.jhelper)
+        step = AddHypervisorUnitStep(self.client, self.name, self.jhelper)
         result = step.is_skip()
 
         assert result.result_type == ResultType.COMPLETED
 
     def test_is_skip_node_missing(self):
-        self.clientMock.cluster.get_node_info.side_effect = (
-            NodeNotExistInClusterException("Node missing...")
+        self.client.cluster.get_node_info.side_effect = NodeNotExistInClusterException(
+            "Node missing..."
         )
 
-        step = AddHypervisorUnitStep(self.name, self.jhelper)
+        step = AddHypervisorUnitStep(self.client, self.name, self.jhelper)
         result = step.is_skip()
 
-        self.clientMock.cluster.get_node_info.assert_called_once()
+        self.client.cluster.get_node_info.assert_called_once()
         assert result.result_type == ResultType.FAILED
         assert result.message == "Node missing..."
 
@@ -183,7 +175,7 @@ class TestAddHypervisorUnitStep(unittest.TestCase):
             "Application missing..."
         )
 
-        step = AddHypervisorUnitStep(self.name, self.jhelper)
+        step = AddHypervisorUnitStep(self.client, self.name, self.jhelper)
         result = step.is_skip()
 
         self.jhelper.get_application.assert_called_once()
@@ -193,20 +185,20 @@ class TestAddHypervisorUnitStep(unittest.TestCase):
 
     def test_is_skip_unit_already_deployed(self):
         id = "1"
-        self.clientMock.cluster.get_node_info.return_value = {"machineid": id}
+        self.client.cluster.get_node_info.return_value = {"machineid": id}
         self.jhelper.get_application.return_value = Mock(
             units=[Mock(machine=Mock(id=id))]
         )
 
-        step = AddHypervisorUnitStep(self.name, self.jhelper)
+        step = AddHypervisorUnitStep(self.client, self.name, self.jhelper)
         result = step.is_skip()
 
-        self.clientMock.cluster.get_node_info.assert_called_once()
+        self.client.cluster.get_node_info.assert_called_once()
         self.jhelper.get_application.assert_called_once()
         assert result.result_type == ResultType.SKIPPED
 
     def test_run(self):
-        step = AddHypervisorUnitStep(self.name, self.jhelper)
+        step = AddHypervisorUnitStep(self.client, self.name, self.jhelper)
         result = step.run()
 
         assert result.result_type == ResultType.COMPLETED
@@ -216,7 +208,7 @@ class TestAddHypervisorUnitStep(unittest.TestCase):
             "Application missing..."
         )
 
-        step = AddHypervisorUnitStep(self.name, self.jhelper)
+        step = AddHypervisorUnitStep(self.client, self.name, self.jhelper)
         result = step.run()
 
         self.jhelper.add_unit.assert_called_once()
@@ -226,7 +218,7 @@ class TestAddHypervisorUnitStep(unittest.TestCase):
     def test_run_timeout(self):
         self.jhelper.wait_unit_ready.side_effect = TimeoutException("timed out")
 
-        step = AddHypervisorUnitStep(self.name, self.jhelper)
+        step = AddHypervisorUnitStep(self.client, self.name, self.jhelper)
         result = step.run()
 
         self.jhelper.wait_unit_ready.assert_called_once()
@@ -237,10 +229,6 @@ class TestAddHypervisorUnitStep(unittest.TestCase):
 class TestRemoveHypervisorUnitStep(unittest.TestCase):
     def __init__(self, methodName: str = "runTest") -> None:
         super().__init__(methodName)
-        self.clientMock = Mock()
-        self.client = patch(
-            "sunbeam.commands.hypervisor.Client", return_value=self.clientMock
-        )
         self.read_config = patch(
             "sunbeam.commands.hypervisor.read_config",
             Mock(
@@ -254,39 +242,37 @@ class TestRemoveHypervisorUnitStep(unittest.TestCase):
         self.guests = [guest]
 
     def setUp(self):
-        self.client.start()
+        self.client = Mock()
         self.read_config.start()
         self.jhelper = AsyncMock()
         self.name = "test-0"
 
     def tearDown(self):
-        self.client.stop()
         self.read_config.stop()
-        self.clientMock.reset_mock()
 
     def test_is_skip(self):
         id = "1"
-        self.clientMock.cluster.get_node_info.return_value = {"machineid": id}
+        self.client.cluster.get_node_info.return_value = {"machineid": id}
         self.jhelper.get_application.return_value = Mock(
             units=[Mock(machine=Mock(id=id))]
         )
 
-        step = RemoveHypervisorUnitStep(self.name, self.jhelper)
+        step = RemoveHypervisorUnitStep(self.client, self.name, self.jhelper)
         result = step.is_skip()
 
-        self.clientMock.cluster.get_node_info.assert_called_once()
+        self.client.cluster.get_node_info.assert_called_once()
         self.jhelper.get_application.assert_called_once()
         assert result.result_type == ResultType.COMPLETED
 
     def test_is_skip_node_missing(self):
-        self.clientMock.cluster.get_node_info.side_effect = (
-            NodeNotExistInClusterException("Node missing...")
+        self.client.cluster.get_node_info.side_effect = NodeNotExistInClusterException(
+            "Node missing..."
         )
 
-        step = RemoveHypervisorUnitStep(self.name, self.jhelper)
+        step = RemoveHypervisorUnitStep(self.client, self.name, self.jhelper)
         result = step.is_skip()
 
-        self.clientMock.cluster.get_node_info.assert_called_once()
+        self.client.cluster.get_node_info.assert_called_once()
         assert result.result_type == ResultType.SKIPPED
 
     def test_is_skip_application_missing(self):
@@ -294,20 +280,20 @@ class TestRemoveHypervisorUnitStep(unittest.TestCase):
             "Application missing..."
         )
 
-        step = RemoveHypervisorUnitStep(self.name, self.jhelper)
+        step = RemoveHypervisorUnitStep(self.client, self.name, self.jhelper)
         result = step.is_skip()
 
         self.jhelper.get_application.assert_called_once()
         assert result.result_type == ResultType.SKIPPED
 
     def test_is_skip_unit_missing(self):
-        self.clientMock.cluster.get_node_info.return_value = {}
+        self.client.cluster.get_node_info.return_value = {}
         self.jhelper.get_application.return_value = Mock(units=[])
 
-        step = RemoveHypervisorUnitStep(self.name, self.jhelper)
+        step = RemoveHypervisorUnitStep(self.client, self.name, self.jhelper)
         result = step.is_skip()
 
-        self.clientMock.cluster.get_node_info.assert_called_once()
+        self.client.cluster.get_node_info.assert_called_once()
         self.jhelper.get_application.assert_called_once()
         assert result.result_type == ResultType.SKIPPED
 
@@ -315,7 +301,7 @@ class TestRemoveHypervisorUnitStep(unittest.TestCase):
     @patch("sunbeam.commands.hypervisor.guests_on_hypervisor")
     def test_run(self, guests_on_hypervisor, remove_hypervisor):
         guests_on_hypervisor.return_value = []
-        step = RemoveHypervisorUnitStep(self.name, self.jhelper)
+        step = RemoveHypervisorUnitStep(self.client, self.name, self.jhelper)
         result = step.run()
         assert result.result_type == ResultType.COMPLETED
         remove_hypervisor.assert_called_once_with("test-0", self.jhelper)
@@ -324,7 +310,7 @@ class TestRemoveHypervisorUnitStep(unittest.TestCase):
     @patch("sunbeam.commands.hypervisor.guests_on_hypervisor")
     def test_run_guests(self, guests_on_hypervisor, remove_hypervisor):
         guests_on_hypervisor.return_value = self.guests
-        step = RemoveHypervisorUnitStep(self.name, self.jhelper)
+        step = RemoveHypervisorUnitStep(self.client, self.name, self.jhelper)
         result = step.run()
         assert result.result_type == ResultType.FAILED
         assert not remove_hypervisor.called
@@ -333,7 +319,7 @@ class TestRemoveHypervisorUnitStep(unittest.TestCase):
     @patch("sunbeam.commands.hypervisor.guests_on_hypervisor")
     def test_run_guests_force(self, guests_on_hypervisor, remove_hypervisor):
         guests_on_hypervisor.return_value = self.guests
-        step = RemoveHypervisorUnitStep(self.name, self.jhelper, True)
+        step = RemoveHypervisorUnitStep(self.client, self.name, self.jhelper, True)
         result = step.run()
         assert result.result_type == ResultType.COMPLETED
         remove_hypervisor.assert_called_once_with("test-0", self.jhelper)
@@ -346,7 +332,7 @@ class TestRemoveHypervisorUnitStep(unittest.TestCase):
             "Application missing..."
         )
 
-        step = RemoveHypervisorUnitStep(self.name, self.jhelper)
+        step = RemoveHypervisorUnitStep(self.client, self.name, self.jhelper)
         result = step.run()
 
         self.jhelper.remove_unit.assert_called_once()
@@ -359,7 +345,7 @@ class TestRemoveHypervisorUnitStep(unittest.TestCase):
         guests_on_hypervisor.return_value = []
         self.jhelper.wait_application_ready.side_effect = TimeoutException("timed out")
 
-        step = RemoveHypervisorUnitStep(self.name, self.jhelper)
+        step = RemoveHypervisorUnitStep(self.client, self.name, self.jhelper)
         result = step.run()
 
         self.jhelper.wait_application_ready.assert_called_once()
@@ -370,7 +356,6 @@ class TestRemoveHypervisorUnitStep(unittest.TestCase):
 class TestReapplyHypervisorTerraformPlanStep(unittest.TestCase):
     def __init__(self, methodName: str = "runTest") -> None:
         super().__init__(methodName)
-        self.client = patch("sunbeam.commands.hypervisor.Client", Mock())
         self.read_config = patch(
             "sunbeam.commands.hypervisor.read_config",
             Mock(
@@ -381,7 +366,7 @@ class TestReapplyHypervisorTerraformPlanStep(unittest.TestCase):
         )
 
     def setUp(self):
-        self.client.start()
+        self.client = Mock()
         self.read_config.start()
         self.jhelper = AsyncMock()
         self.tfhelper = Mock(path=Path())
@@ -390,11 +375,12 @@ class TestReapplyHypervisorTerraformPlanStep(unittest.TestCase):
         self.tfhelper_openstack.backend_config.return_value = {}
 
     def tearDown(self):
-        self.client.stop()
         self.read_config.stop()
 
     def test_is_skip(self):
-        step = ReapplyHypervisorTerraformPlanStep(self.tfhelper, self.jhelper)
+        step = ReapplyHypervisorTerraformPlanStep(
+            self.client, self.tfhelper, self.jhelper
+        )
         result = step.is_skip()
 
         assert result.result_type == ResultType.COMPLETED
@@ -404,7 +390,9 @@ class TestReapplyHypervisorTerraformPlanStep(unittest.TestCase):
             "not found"
         )
 
-        step = ReapplyHypervisorTerraformPlanStep(self.tfhelper, self.jhelper)
+        step = ReapplyHypervisorTerraformPlanStep(
+            self.client, self.tfhelper, self.jhelper
+        )
         result = step.run()
 
         self.tfhelper.write_tfvars.assert_called_once()
@@ -414,7 +402,9 @@ class TestReapplyHypervisorTerraformPlanStep(unittest.TestCase):
     def test_run_tf_apply_failed(self):
         self.tfhelper.apply.side_effect = TerraformException("apply failed...")
 
-        step = ReapplyHypervisorTerraformPlanStep(self.tfhelper, self.jhelper)
+        step = ReapplyHypervisorTerraformPlanStep(
+            self.client, self.tfhelper, self.jhelper
+        )
         result = step.run()
 
         self.tfhelper.apply.assert_called_once()
@@ -424,7 +414,9 @@ class TestReapplyHypervisorTerraformPlanStep(unittest.TestCase):
     def test_run_waiting_timed_out(self):
         self.jhelper.wait_application_ready.side_effect = TimeoutException("timed out")
 
-        step = ReapplyHypervisorTerraformPlanStep(self.tfhelper, self.jhelper)
+        step = ReapplyHypervisorTerraformPlanStep(
+            self.client, self.tfhelper, self.jhelper
+        )
         result = step.run()
 
         self.jhelper.wait_application_ready.assert_called_once()

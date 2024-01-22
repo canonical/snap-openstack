@@ -25,6 +25,7 @@ import petname
 from rich.console import Console
 from snaphelpers import Snap
 
+from sunbeam.clusterd.client import Client
 from sunbeam.commands.configure import retrieve_admin_credentials
 from sunbeam.commands.openstack import OPENSTACK_MODEL
 from sunbeam.jobs.juju import JujuHelper, ModelNotFoundException, run_sync
@@ -49,11 +50,18 @@ Creates a new key in ~/snap/openstack/current/ if the key does not exist in Open
 """,
 )
 @click.option("-n", "--name", help="The name for the instance.")
-def launch(image_name: str, key: str, name: Optional[str] = None) -> None:
+@click.pass_context
+def launch(
+    ctx: click.Context,
+    image_name: str,
+    key: str,
+    name: Optional[str] = None,
+) -> None:
     """Launch an OpenStack instance on demo setup"""
 
     data_location = snap.paths.user_data
-    jhelper = JujuHelper(data_location)
+    client: Client = ctx.obj
+    jhelper = JujuHelper(client, data_location)
     with console.status("Fetching user credentials ... "):
         try:
             run_sync(jhelper.get_model(OPENSTACK_MODEL))

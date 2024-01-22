@@ -14,7 +14,7 @@
 
 import asyncio
 import unittest
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -41,29 +41,21 @@ def mock_run_sync(mocker):
 class TestConfigureMicrocephOSDStep(unittest.TestCase):
     def __init__(self, methodName: str = "runTest") -> None:
         super().__init__(methodName)
-        self.clientMock = Mock()
-        self.client = patch(
-            "sunbeam.commands.microceph.Client", return_value=self.clientMock
-        )
 
     def setUp(self):
-        self.client.start()
+        self.client = Mock()
         self.jhelper = AsyncMock()
         self.name = "test-0"
 
-    def tearDown(self):
-        self.client.stop()
-        self.clientMock.reset_mock()
-
     def test_is_skip(self):
-        step = ConfigureMicrocephOSDStep(self.name, self.jhelper)
+        step = ConfigureMicrocephOSDStep(self.client, self.name, self.jhelper)
         step.disks = "/dev/sdb,/dev/sdc"
         result = step.is_skip()
 
         assert result.result_type == ResultType.COMPLETED
 
     def test_run(self):
-        step = ConfigureMicrocephOSDStep(self.name, self.jhelper)
+        step = ConfigureMicrocephOSDStep(self.client, self.name, self.jhelper)
         step.disks = "/dev/sdb,/dev/sdc"
         result = step.run()
 
@@ -73,7 +65,7 @@ class TestConfigureMicrocephOSDStep(unittest.TestCase):
     def test_run_action_failed(self):
         self.jhelper.run_action.side_effect = ActionFailedException("Action failed...")
 
-        step = ConfigureMicrocephOSDStep(self.name, self.jhelper)
+        step = ConfigureMicrocephOSDStep(self.client, self.name, self.jhelper)
         step.disks = "/dev/sdb,/dev/sdc"
         result = step.run()
 

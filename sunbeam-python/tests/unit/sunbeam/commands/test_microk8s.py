@@ -51,23 +51,16 @@ def mock_run_sync(mocker):
 class TestAddMicrok8sCloudStep(unittest.TestCase):
     def __init__(self, methodName: str = "runTest") -> None:
         super().__init__(methodName)
-        self.client = patch(
-            "sunbeam.commands.microk8s.Client",
-            Mock(return_value=Mock(cluster=Mock(get_config=Mock(return_value="{}")))),
-        )
 
     def setUp(self):
-        self.client.start()
+        self.client = Mock(cluster=Mock(get_config=Mock(return_value="{}")))
         self.jhelper = AsyncMock()
-
-    def tearDown(self):
-        self.client.stop()
 
     def test_is_skip(self):
         clouds = {}
         self.jhelper.get_clouds.return_value = clouds
 
-        step = AddMicrok8sCloudStep(self.jhelper)
+        step = AddMicrok8sCloudStep(self.client, self.jhelper)
         result = step.is_skip()
 
         assert result.result_type == ResultType.COMPLETED
@@ -76,14 +69,14 @@ class TestAddMicrok8sCloudStep(unittest.TestCase):
         clouds = {"cloud-sunbeam-microk8s": {"endpoint": "10.0.10.1"}}
         self.jhelper.get_clouds.return_value = clouds
 
-        step = AddMicrok8sCloudStep(self.jhelper)
+        step = AddMicrok8sCloudStep(self.client, self.jhelper)
         result = step.is_skip()
 
         assert result.result_type == ResultType.SKIPPED
 
     def test_run(self):
         with patch("sunbeam.commands.microk8s.read_config", Mock(return_value={})):
-            step = AddMicrok8sCloudStep(self.jhelper)
+            step = AddMicrok8sCloudStep(self.client, self.jhelper)
             result = step.run()
 
         self.jhelper.add_k8s_cloud.assert_called_with(
@@ -97,20 +90,13 @@ class TestAddMicrok8sCloudStep(unittest.TestCase):
 class TestStoreMicrok8sConfigStep(unittest.TestCase):
     def __init__(self, methodName: str = "runTest") -> None:
         super().__init__(methodName)
-        self.client = patch(
-            "sunbeam.commands.microk8s.Client",
-            Mock(return_value=Mock(cluster=Mock(get_config=Mock(return_value="{}")))),
-        )
 
     def setUp(self):
-        self.client.start()
+        self.client = Mock(cluster=Mock(get_config=Mock(return_value="{}")))
         self.jhelper = AsyncMock()
 
-    def tearDown(self):
-        self.client.stop()
-
     def test_is_skip(self):
-        step = StoreMicrok8sConfigStep(self.jhelper)
+        step = StoreMicrok8sConfigStep(self.client, self.jhelper)
         result = step.is_skip()
 
         assert result.result_type == ResultType.SKIPPED
@@ -120,7 +106,7 @@ class TestStoreMicrok8sConfigStep(unittest.TestCase):
             "sunbeam.commands.microk8s.read_config",
             Mock(side_effect=ConfigItemNotFoundException),
         ):
-            step = StoreMicrok8sConfigStep(self.jhelper)
+            step = StoreMicrok8sConfigStep(self.client, self.jhelper)
             result = step.is_skip()
 
         assert result.result_type == ResultType.COMPLETED
@@ -151,7 +137,7 @@ users:
         }
         self.jhelper.run_action.return_value = action_result
 
-        step = StoreMicrok8sConfigStep(self.jhelper)
+        step = StoreMicrok8sConfigStep(self.client, self.jhelper)
         result = step.run()
 
         self.jhelper.get_leader_unit.assert_called_once()
@@ -163,7 +149,7 @@ users:
             "Application missing..."
         )
 
-        step = StoreMicrok8sConfigStep(self.jhelper)
+        step = StoreMicrok8sConfigStep(self.client, self.jhelper)
         result = step.run()
 
         self.jhelper.get_leader_unit.assert_called_once()
@@ -175,7 +161,7 @@ users:
             "Leader missing..."
         )
 
-        step = StoreMicrok8sConfigStep(self.jhelper)
+        step = StoreMicrok8sConfigStep(self.client, self.jhelper)
         result = step.run()
 
         self.jhelper.get_leader_unit.assert_called_once()
@@ -185,7 +171,7 @@ users:
     def test_run_action_failed(self):
         self.jhelper.run_action.side_effect = ActionFailedException("Action failed...")
 
-        step = StoreMicrok8sConfigStep(self.jhelper)
+        step = StoreMicrok8sConfigStep(self.client, self.jhelper)
         result = step.run()
 
         self.jhelper.get_leader_unit.assert_called_once()

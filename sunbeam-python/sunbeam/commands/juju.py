@@ -28,11 +28,12 @@ import pexpect
 import pwgen
 import yaml
 from packaging import version
-from pyroute2 import Console
+from rich.console import Console
+from rich.status import Status
 from snaphelpers import Snap
 
 from sunbeam import utils
-from sunbeam.clusterd.client import Client as clusterClient
+from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import NodeNotExistInClusterException
 from sunbeam.jobs import questions
 from sunbeam.jobs.common import BaseStep, Result, ResultType
@@ -265,6 +266,7 @@ class BootstrapJujuStep(BaseStep, JujuStepHelper):
 
     def __init__(
         self,
+        client: Client,
         cloud_name: str,
         cloud_type: str,
         controller: str,
@@ -279,7 +281,7 @@ class BootstrapJujuStep(BaseStep, JujuStepHelper):
         self.preseed_file = preseed_file
         self.accept_defaults = accept_defaults
         self.juju_clouds = []
-        self.client = clusterClient()
+        self.client = client
 
         home = os.environ.get("SNAP_REAL_HOME")
         os.environ["JUJU_DATA"] = f"{home}/.local/share/juju"
@@ -568,11 +570,17 @@ class RegisterJujuUserStep(BaseStep, JujuStepHelper):
     """Register user in juju."""
 
     def __init__(
-        self, name: str, controller: str, data_location: Path, replace: bool = False
+        self,
+        client: Client,
+        name: str,
+        controller: str,
+        data_location: Path,
+        replace: bool = False,
     ):
         super().__init__(
             "Register Juju User", f"Registering machine user {name} using token"
         )
+        self.client = client
         self.username = name
         self.controller = controller
         self.data_location = data_location
@@ -609,8 +617,7 @@ class RegisterJujuUserStep(BaseStep, JujuStepHelper):
             # Error is about no controller register, which is okay is this case
             pass
 
-        client = clusterClient()
-        user = client.cluster.get_juju_user(self.username)
+        user = self.client.cluster.get_juju_user(self.username)
         self.registration_token = user.get("token")
         return Result(ResultType.COMPLETED)
 
@@ -784,9 +791,10 @@ class AddJujuMachineStep(BaseStep, JujuStepHelper):
 class RemoveJujuMachineStep(BaseStep, JujuStepHelper):
     """Remove machine in juju."""
 
-    def __init__(self, name: str):
+    def __init__(self, client: Client, name: str):
         super().__init__("Remove machine", f"Removing machine {name} from Juju model")
 
+        self.client = client
         self.name = name
         self.machine_id = -1
 
@@ -799,9 +807,8 @@ class RemoveJujuMachineStep(BaseStep, JujuStepHelper):
         :return: ResultType.SKIPPED if the Step should be skipped,
                  ResultType.COMPLETED or ResultType.FAILED otherwise
         """
-        client = clusterClient()
         try:
-            node = client.cluster.get_node_info(self.name)
+            node = self.client.cluster.get_node_info(self.name)
             self.machine_id = node.get("machineid")
         except NodeNotExistInClusterException as e:
             return Result(ResultType.FAILED, str(e))

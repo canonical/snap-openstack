@@ -14,10 +14,10 @@
 # limitations under the License.
 
 
-from collections import Counter
-from datetime import datetime
 import logging
 import sys
+from collections import Counter
+from datetime import datetime
 
 import click
 import yaml
@@ -25,13 +25,14 @@ from rich.console import Console
 from rich.table import Table
 from snaphelpers import Snap
 
+from sunbeam.clusterd.client import Client
 from sunbeam.commands import resize as resize_cmds
 from sunbeam.commands.deployment import deployment_path, get_active_deployment
 from sunbeam.commands.maas import (
     AddMaasDeployment,
+    DeploymentMachinesCheck,
     DeploymentTopologyCheck,
     MaasClient,
-    DeploymentMachinesCheck,
     MachineNetworkCheck,
     MachineRequirementsCheck,
     MachineRolesCheck,
@@ -49,6 +50,7 @@ from sunbeam.commands.maas import (
 from sunbeam.jobs.checks import (
     DiagnosticsCheck,
     DiagnosticsResult,
+    JujuSnapCheck,
     LocalShareCheck,
     VerifyClusterdNotBootstrappedCheck,
 )
@@ -129,6 +131,10 @@ class MaasProvider(ProviderBase):
         network.add_command(list_networks_cmd)
         deployment.add_command(validate_deployment_cmd)
 
+    def get_clusterd_client(self) -> Client:
+        """Get cluster client for active deployment."""
+        return NotImplemented
+
 
 @click.command()
 def bootstrap() -> None:
@@ -136,7 +142,15 @@ def bootstrap() -> None:
 
     Initialize the sunbeam cluster.
     """
-    raise NotImplementedError
+    preflight_checks = []
+    preflight_checks.append(JujuSnapCheck())
+    preflight_checks.append(LocalShareCheck())
+    preflight_checks.append(VerifyClusterdNotBootstrappedCheck())
+    run_preflight_checks(preflight_checks, console)
+
+    # snap = Snap()
+
+    # client = MaasClient.active(snap)
 
 
 @click.command("list")

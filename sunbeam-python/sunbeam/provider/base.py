@@ -18,6 +18,8 @@ import abc
 import click
 from rich.console import Console
 
+from sunbeam.clusterd.client import Client
+
 console = Console()
 
 
@@ -43,4 +45,9 @@ class ProviderBase(abc.ABC):
 
         Only called when the provider is enabled.
         """
+        pass
+
+    @abc.abstractmethod
+    def get_clusterd_client(self) -> Client:
+        """Get clusterd client for provider."""
         pass

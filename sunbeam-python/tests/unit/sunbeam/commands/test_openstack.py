@@ -64,14 +64,16 @@ class TestDeployControlPlaneStep(unittest.TestCase):
     def setUp(self):
         self.jhelper = AsyncMock()
         self.tfhelper = Mock(path=Path())
+        self.client = Mock()
 
-    @patch("sunbeam.commands.openstack.Client")
-    def test_run_pristine_installation(self, client):
+    def test_run_pristine_installation(self):
         self.jhelper.get_application.side_effect = ApplicationNotFoundException(
             "not found"
         )
 
-        step = DeployControlPlaneStep(self.tfhelper, self.jhelper, TOPOLOGY, DATABASE)
+        step = DeployControlPlaneStep(
+            self.client, self.tfhelper, self.jhelper, TOPOLOGY, DATABASE
+        )
         with patch(
             "sunbeam.commands.openstack.read_config",
             Mock(return_value={}),
@@ -82,11 +84,12 @@ class TestDeployControlPlaneStep(unittest.TestCase):
         self.tfhelper.apply.assert_called_once()
         assert result.result_type == ResultType.COMPLETED
 
-    @patch("sunbeam.commands.openstack.Client")
-    def test_run_tf_apply_failed(self, client):
+    def test_run_tf_apply_failed(self):
         self.tfhelper.apply.side_effect = TerraformException("apply failed...")
 
-        step = DeployControlPlaneStep(self.tfhelper, self.jhelper, TOPOLOGY, DATABASE)
+        step = DeployControlPlaneStep(
+            self.client, self.tfhelper, self.jhelper, TOPOLOGY, DATABASE
+        )
         with patch(
             "sunbeam.commands.openstack.read_config",
             Mock(return_value={}),
@@ -97,11 +100,12 @@ class TestDeployControlPlaneStep(unittest.TestCase):
         assert result.result_type == ResultType.FAILED
         assert result.message == "apply failed..."
 
-    @patch("sunbeam.commands.openstack.Client")
-    def test_run_waiting_timed_out(self, client):
+    def test_run_waiting_timed_out(self):
         self.jhelper.wait_until_active.side_effect = TimeoutException("timed out")
 
-        step = DeployControlPlaneStep(self.tfhelper, self.jhelper, TOPOLOGY, DATABASE)
+        step = DeployControlPlaneStep(
+            self.client, self.tfhelper, self.jhelper, TOPOLOGY, DATABASE
+        )
         with patch(
             "sunbeam.commands.openstack.read_config",
             Mock(return_value={}),
@@ -112,13 +116,14 @@ class TestDeployControlPlaneStep(unittest.TestCase):
         assert result.result_type == ResultType.FAILED
         assert result.message == "timed out"
 
-    @patch("sunbeam.commands.openstack.Client")
-    def test_run_unit_in_error_state(self, client):
+    def test_run_unit_in_error_state(self):
         self.jhelper.wait_until_active.side_effect = JujuWaitException(
             "Unit in error: placement/0"
         )
 
-        step = DeployControlPlaneStep(self.tfhelper, self.jhelper, TOPOLOGY, DATABASE)
+        step = DeployControlPlaneStep(
+            self.client, self.tfhelper, self.jhelper, TOPOLOGY, DATABASE
+        )
         with patch(
             "sunbeam.commands.openstack.read_config",
             Mock(return_value={}),
@@ -129,9 +134,10 @@ class TestDeployControlPlaneStep(unittest.TestCase):
         assert result.result_type == ResultType.FAILED
         assert result.message == "Unit in error: placement/0"
 
-    @patch("sunbeam.commands.openstack.Client")
-    def test_is_skip_pristine(self, client):
-        step = DeployControlPlaneStep(self.tfhelper, self.jhelper, TOPOLOGY, DATABASE)
+    def test_is_skip_pristine(self):
+        step = DeployControlPlaneStep(
+            self.client, self.tfhelper, self.jhelper, TOPOLOGY, DATABASE
+        )
         with patch(
             "sunbeam.commands.openstack.read_config",
             Mock(side_effect=ConfigItemNotFoundException("not found")),
@@ -140,9 +146,10 @@ class TestDeployControlPlaneStep(unittest.TestCase):
 
         assert result.result_type == ResultType.COMPLETED
 
-    @patch("sunbeam.commands.openstack.Client")
-    def test_is_skip_subsequent_run(self, client):
-        step = DeployControlPlaneStep(self.tfhelper, self.jhelper, TOPOLOGY, DATABASE)
+    def test_is_skip_subsequent_run(self):
+        step = DeployControlPlaneStep(
+            self.client, self.tfhelper, self.jhelper, TOPOLOGY, DATABASE
+        )
         with patch(
             "sunbeam.commands.openstack.read_config",
             Mock(return_value={"topology": "single", "database": "single"}),
@@ -151,9 +158,10 @@ class TestDeployControlPlaneStep(unittest.TestCase):
 
         assert result.result_type == ResultType.COMPLETED
 
-    @patch("sunbeam.commands.openstack.Client")
-    def test_is_skip_database_changed(self, client):
-        step = DeployControlPlaneStep(self.tfhelper, self.jhelper, TOPOLOGY, DATABASE)
+    def test_is_skip_database_changed(self):
+        step = DeployControlPlaneStep(
+            self.client, self.tfhelper, self.jhelper, TOPOLOGY, DATABASE
+        )
         with patch(
             "sunbeam.commands.openstack.read_config",
             Mock(return_value={"topology": "single", "database": "multi"}),
@@ -166,20 +174,20 @@ class TestDeployControlPlaneStep(unittest.TestCase):
 class TestResizeControlPlaneStep(unittest.TestCase):
     def __init__(self, methodName: str = "runTest") -> None:
         super().__init__(methodName)
-        self.client = patch("sunbeam.commands.openstack.Client")
         self.read_config = patch(
             "sunbeam.commands.openstack.read_config",
             Mock(return_value={"topology": "single", "database": "single"}),
         )
 
     def setUp(self):
-        self.client.start()
+        self.client = Mock(
+            cluster=Mock(list_nodes_by_role=Mock(return_value=[1, 2, 3, 4]))
+        )
         self.read_config.start()
         self.jhelper = AsyncMock()
         self.tfhelper = Mock(path=Path())
 
     def tearDown(self):
-        self.client.stop()
         self.read_config.stop()
 
     def test_run_pristine_installation(self):
@@ -187,7 +195,9 @@ class TestResizeControlPlaneStep(unittest.TestCase):
             "not found"
         )
 
-        step = ResizeControlPlaneStep(self.tfhelper, self.jhelper, "single", False)
+        step = ResizeControlPlaneStep(
+            self.client, self.tfhelper, self.jhelper, "single", False
+        )
         result = step.run()
 
         self.tfhelper.write_tfvars.assert_called_once()
@@ -197,7 +207,9 @@ class TestResizeControlPlaneStep(unittest.TestCase):
     def test_run_tf_apply_failed(self):
         self.tfhelper.apply.side_effect = TerraformException("apply failed...")
 
-        step = ResizeControlPlaneStep(self.tfhelper, self.jhelper, TOPOLOGY, False)
+        step = ResizeControlPlaneStep(
+            self.client, self.tfhelper, self.jhelper, TOPOLOGY, False
+        )
         result = step.run()
 
         self.tfhelper.apply.assert_called_once()
@@ -207,7 +219,9 @@ class TestResizeControlPlaneStep(unittest.TestCase):
     def test_run_waiting_timed_out(self):
         self.jhelper.wait_until_active.side_effect = TimeoutException("timed out")
 
-        step = ResizeControlPlaneStep(self.tfhelper, self.jhelper, TOPOLOGY, False)
+        step = ResizeControlPlaneStep(
+            self.client, self.tfhelper, self.jhelper, TOPOLOGY, False
+        )
         result = step.run()
 
         self.jhelper.wait_until_active.assert_called_once()
@@ -219,7 +233,9 @@ class TestResizeControlPlaneStep(unittest.TestCase):
             "Unit in error: placement/0"
         )
 
-        step = ResizeControlPlaneStep(self.tfhelper, self.jhelper, TOPOLOGY, False)
+        step = ResizeControlPlaneStep(
+            self.client, self.tfhelper, self.jhelper, TOPOLOGY, False
+        )
         result = step.run()
 
         self.jhelper.wait_until_active.assert_called_once()
@@ -227,14 +243,18 @@ class TestResizeControlPlaneStep(unittest.TestCase):
         assert result.message == "Unit in error: placement/0"
 
     def test_run_incompatible_topology(self):
-        step = ResizeControlPlaneStep(self.tfhelper, self.jhelper, "large", False)
+        step = ResizeControlPlaneStep(
+            self.client, self.tfhelper, self.jhelper, "large", False
+        )
         result = step.run()
 
         assert result.result_type == ResultType.FAILED
         assert "Cannot resize control plane to large" in result.message
 
     def test_run_force_incompatible_topology(self):
-        step = ResizeControlPlaneStep(self.tfhelper, self.jhelper, "large", True)
+        step = ResizeControlPlaneStep(
+            self.client, self.tfhelper, self.jhelper, "large", True
+        )
         result = step.run()
 
         self.jhelper.wait_until_active.assert_called_once()
@@ -246,7 +266,6 @@ class PatchLoadBalancerServicesStepTest(unittest.TestCase):
 
     def __init__(self, methodName: str = "runTest") -> None:
         super().__init__(methodName)
-        self.client = patch("sunbeam.commands.openstack.Client")
         self.read_config = patch(
             "sunbeam.commands.openstack.read_config",
             Mock(
@@ -275,11 +294,10 @@ class PatchLoadBalancerServicesStepTest(unittest.TestCase):
         )
 
     def setUp(self):
-        self.client.start()
+        self.client = Mock()
         self.read_config.start()
 
     def tearDown(self):
-        self.client.stop()
         self.read_config.stop()
 
     def test_is_skip(self):
@@ -295,7 +313,7 @@ class PatchLoadBalancerServicesStepTest(unittest.TestCase):
                 )
             ),
         ):
-            step = PatchLoadBalancerServicesStep()
+            step = PatchLoadBalancerServicesStep(self.client)
             result = step.is_skip()
         assert result.result_type == ResultType.SKIPPED
 
@@ -308,7 +326,7 @@ class PatchLoadBalancerServicesStepTest(unittest.TestCase):
                 )
             ),
         ):
-            step = PatchLoadBalancerServicesStep()
+            step = PatchLoadBalancerServicesStep(self.client)
             result = step.is_skip()
         assert result.result_type == ResultType.COMPLETED
 
@@ -317,7 +335,7 @@ class PatchLoadBalancerServicesStepTest(unittest.TestCase):
             "sunbeam.commands.openstack.read_config",
             new=Mock(side_effect=ConfigItemNotFoundException),
         ):
-            step = PatchLoadBalancerServicesStep()
+            step = PatchLoadBalancerServicesStep(self.client)
             result = step.is_skip()
         assert result.result_type == ResultType.FAILED
 
@@ -337,7 +355,7 @@ class PatchLoadBalancerServicesStepTest(unittest.TestCase):
                 )
             ),
         ):
-            step = PatchLoadBalancerServicesStep()
+            step = PatchLoadBalancerServicesStep(self.client)
             step.is_skip()
             result = step.run()
         assert result.result_type == ResultType.COMPLETED

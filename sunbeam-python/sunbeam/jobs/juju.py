@@ -40,7 +40,7 @@ from juju.errors import (
 from juju.model import Model
 from juju.unit import Unit
 
-from sunbeam.clusterd.client import Client as clusterClient
+from sunbeam.clusterd.client import Client
 
 LOG = logging.getLogger(__name__)
 CONTROLLER_MODEL = "admin/controller"
@@ -191,11 +191,11 @@ class JujuController:
         return asdict(self)
 
     @classmethod
-    def load(cls, client: clusterClient) -> "JujuController":
+    def load(cls, client: Client) -> "JujuController":
         controller = client.cluster.get_config(JUJU_CONTROLLER_KEY)
         return JujuController(**json.loads(controller))
 
-    def write(self, client: clusterClient):
+    def write(self, client: Client):
         client.cluster.update_config(JUJU_CONTROLLER_KEY, json.dumps(self.to_dict()))
 
 
@@ -205,8 +205,7 @@ def controller(func):
     @wraps(func)
     async def wrapper(self, *args, **kwargs):
         if self.controller is None:
-            client = clusterClient()
-            juju_controller = JujuController.load(client)
+            juju_controller = JujuController.load(self.client)
 
             account = JujuAccount.load(self.data_location)
 
@@ -225,7 +224,8 @@ def controller(func):
 class JujuHelper:
     """Helper function to manage Juju apis through pylibjuju."""
 
-    def __init__(self, data_location: Path):
+    def __init__(self, client: Client, data_location: Path):
+        self.client = client
         self.data_location = data_location
         self.controller = None
 
@@ -784,7 +784,7 @@ class JujuHelper:
                     )
         except asyncio.TimeoutError as e:
             raise TimeoutException(
-                f"Timed out while waiting for unit {name!r} to be ready"
+                f"Timed out while waiting for model {model!r} to be ready"
             ) from e
 
     @controller

@@ -19,7 +19,7 @@ import re
 from typing import List, Optional, Union
 
 from sunbeam import utils
-from sunbeam.clusterd.client import Client as clusterClient
+from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import (
     ClusterAlreadyBootstrappedException,
     ClusterServiceUnavailableException,
@@ -44,12 +44,12 @@ LOG = logging.getLogger(__name__)
 class ClusterInitStep(BaseStep):
     """Bootstrap clustering on sunbeam clusterd."""
 
-    def __init__(self, role: List[str]):
+    def __init__(self, client: Client, role: List[str]):
         super().__init__("Bootstrap Cluster", "Bootstrapping Sunbeam cluster")
 
         self.port = CLUSTERD_PORT
         self.role = role
-        self.client = clusterClient()
+        self.client = client
         self.fqdn = utils.get_fqdn()
         self.ip = utils.get_local_ip_by_default_route()
 
@@ -90,14 +90,14 @@ class ClusterInitStep(BaseStep):
 class ClusterAddNodeStep(BaseStep):
     """Generate token for new node to join in cluster."""
 
-    def __init__(self, name: str):
+    def __init__(self, client: Client, name: str):
         super().__init__(
             "Add Node Cluster",
             "Generating token for new node to join cluster",
         )
 
         self.node_name = name
-        self.client = clusterClient()
+        self.client = client
 
     def is_skip(self, status: Optional[Status] = None) -> Result:
         """Determines if the step should be skipped or not.
@@ -138,11 +138,11 @@ class ClusterAddNodeStep(BaseStep):
 class ClusterJoinNodeStep(BaseStep):
     """Join node to the sunbeam cluster."""
 
-    def __init__(self, token: str, role: List[str]):
+    def __init__(self, client: Client, token: str, role: List[str]):
         super().__init__("Join node to Cluster", "Adding node to Sunbeam cluster")
 
         self.port = CLUSTERD_PORT
-        self.client = clusterClient()
+        self.client = client
         self.token = token
         self.role = role
         self.fqdn = utils.get_fqdn()
@@ -187,9 +187,9 @@ class ClusterJoinNodeStep(BaseStep):
 class ClusterListNodeStep(BaseStep):
     """List nodes in the sunbeam cluster."""
 
-    def __init__(self):
+    def __init__(self, client: Client):
         super().__init__("List nodes of Cluster", "Listing nodes in Sunbeam cluster")
-        self.client = clusterClient()
+        self.client = client
 
     def run(self, status: Optional[Status] = None) -> Result:
         """List nodes in the sunbeam cluster"""
@@ -216,10 +216,14 @@ class ClusterUpdateNodeStep(BaseStep):
     """Update node info in the cluster database."""
 
     def __init__(
-        self, name: str, role: Optional[List[str]] = None, machine_id: int = -1
+        self,
+        client: Client,
+        name: str,
+        role: Optional[List[str]] = None,
+        machine_id: int = -1,
     ):
         super().__init__("Update node info", "Updating node info in cluster database")
-        self.client = clusterClient()
+        self.client = client
         self.name = name
         self.role = role
         self.machine_id = machine_id
@@ -237,12 +241,12 @@ class ClusterUpdateNodeStep(BaseStep):
 class ClusterRemoveNodeStep(BaseStep):
     """Remove node from the sunbeam cluster."""
 
-    def __init__(self, name: str):
+    def __init__(self, client: Client, name: str):
         super().__init__(
             "Remove node from Cluster", "Removing node from Sunbeam cluster"
         )
         self.node_name = name
-        self.client = clusterClient()
+        self.client = client
 
     def run(self, status: Optional[Status] = None) -> Result:
         """Remove node from sunbeam cluster"""
@@ -264,7 +268,7 @@ class ClusterRemoveNodeStep(BaseStep):
 class ClusterAddJujuUserStep(BaseStep):
     """Add Juju user in cluster database."""
 
-    def __init__(self, name: str, token: str):
+    def __init__(self, client: Client, name: str, token: str):
         super().__init__(
             "Add Juju user to cluster DB",
             "Adding Juju user to cluster database",
@@ -272,7 +276,7 @@ class ClusterAddJujuUserStep(BaseStep):
 
         self.username = name
         self.token = token
-        self.client = clusterClient()
+        self.client = client
 
     def is_skip(self, status: Optional[Status] = None) -> Result:
         """Determines if the step should be skipped or not.
@@ -304,13 +308,13 @@ class ClusterAddJujuUserStep(BaseStep):
 class ClusterUpdateJujuControllerStep(BaseStep, JujuStepHelper):
     """Save Juju controller in cluster database."""
 
-    def __init__(self, controller: str):
+    def __init__(self, client: Client, controller: str):
         super().__init__(
             "Add Juju controller to cluster DB",
             "Adding Juju controller to cluster database",
         )
 
-        self.client = clusterClient()
+        self.client = client
         self.controller = controller
 
     def _extract_ip(self, ip) -> Union[ipaddress.IPv4Address, ipaddress.IPv6Address]:

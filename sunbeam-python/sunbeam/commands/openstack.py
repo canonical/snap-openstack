@@ -130,6 +130,7 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
 
     def __init__(
         self,
+        client: Client,
         tfhelper: TerraformHelper,
         jhelper: JujuHelper,
         topology: str,
@@ -145,7 +146,7 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
         self.database = database
         self.model = OPENSTACK_MODEL
         self.cloud = MICROK8S_CLOUD
-        self.client = Client()
+        self.client = client
 
     def get_storage_tfvars(self) -> dict:
         """Create terraform variables related to storage."""
@@ -265,6 +266,7 @@ class ResizeControlPlaneStep(BaseStep, JujuStepHelper):
 
     def __init__(
         self,
+        client: Client,
         tfhelper: TerraformHelper,
         jhelper: JujuHelper,
         topology: str,
@@ -274,6 +276,7 @@ class ResizeControlPlaneStep(BaseStep, JujuStepHelper):
             "Resizing OpenStack Control Plane",
             "Resizing OpenStack Control Plane to match appropriate topology",
         )
+        self.client = client
         self.tfhelper = tfhelper
         self.jhelper = jhelper
         self.topology = topology
@@ -299,10 +302,9 @@ class ResizeControlPlaneStep(BaseStep, JujuStepHelper):
     def run(self, status: Optional[Status] = None) -> Result:
         """Execute configuration using terraform."""
         self.update_status(status, "fetching configuration")
-        client = Client()
-        topology_dict = read_config(client, TOPOLOGY_KEY)
+        topology_dict = read_config(self.client, TOPOLOGY_KEY)
         if self.topology == "auto":
-            topology = determine_target_topology(client)
+            topology = determine_target_topology(self.client)
         else:
             topology = self.topology
         topology_dict["topology"] = topology
@@ -318,13 +320,13 @@ class ResizeControlPlaneStep(BaseStep, JujuStepHelper):
                 ),
             )
         update_config(
-            client,
+            self.client,
             TOPOLOGY_KEY,
             topology_dict,
         )
-        tf_vars = read_config(client, self._CONFIG)
-        control_nodes = client.cluster.list_nodes_by_role("control")
-        storage_nodes = client.cluster.list_nodes_by_role("storage")
+        tf_vars = read_config(self.client, self._CONFIG)
+        control_nodes = self.client.cluster.list_nodes_by_role("control")
+        storage_nodes = self.client.cluster.list_nodes_by_role("storage")
         # NOTE(jamespage)
         # When dedicated control nodes are used, ceph is not enabled during
         # bootstrap - however storage nodes may be added later so re-assess
@@ -341,7 +343,7 @@ class ResizeControlPlaneStep(BaseStep, JujuStepHelper):
             }
         )
 
-        update_config(client, self._CONFIG, tf_vars)
+        update_config(self.client, self._CONFIG, tf_vars)
         self.update_status(status, "scaling services")
         self.tfhelper.write_tfvars(tf_vars)
         try:
@@ -379,11 +381,13 @@ class PatchLoadBalancerServicesStep(BaseStep):
 
     def __init__(
         self,
+        client: Client,
     ):
         super().__init__(
             "Patch LoadBalancer services",
             "Patch LoadBalancer service annotations",
         )
+        self.client = client
 
     def is_skip(self, status: Optional[Status] = None) -> Result:
         """Determines if the step should be skipped or not.
@@ -391,9 +395,8 @@ class PatchLoadBalancerServicesStep(BaseStep):
         :return: ResultType.SKIPPED if the Step should be skipped,
                 ResultType.COMPLETED or ResultType.FAILED otherwise
         """
-        client = Client()
         try:
-            self.kubeconfig = read_config(client, MICROK8S_KUBECONFIG_KEY)
+            self.kubeconfig = read_config(self.client, MICROK8S_KUBECONFIG_KEY)
         except ConfigItemNotFoundException:
             LOG.debug("MicroK8S config not found", exc_info=True)
             return Result(ResultType.FAILED, "MicroK8S config not found")

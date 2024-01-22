@@ -18,6 +18,7 @@ import click
 from rich.console import Console
 from snaphelpers import Snap
 
+from sunbeam.clusterd.client import Client
 from sunbeam.commands.terraform import TerraformHelper
 from sunbeam.commands.upgrades.inter_channel import ChannelUpgradeCoordinator
 from sunbeam.commands.upgrades.intra_channel import LatestInChannelCoordinator
@@ -36,7 +37,8 @@ snap = Snap()
     default=False,
     help="Upgrade OpenStack release.",
 )
-def refresh(upgrade_release) -> None:
+@click.pass_context
+def refresh(ctx: click.Context, upgrade_release: bool) -> None:
     """Refresh deployment.
 
     Refresh the deployment. If --upgrade-release is supplied then charms are
@@ -44,15 +46,16 @@ def refresh(upgrade_release) -> None:
     """
     tfplan = "deploy-openstack"
     data_location = snap.paths.user_data
+    client: Client = ctx.obj
     tfhelper = TerraformHelper(
         path=snap.paths.user_common / "etc" / tfplan,
         plan="openstack-plan",
         backend="http",
         data_location=data_location,
     )
-    jhelper = JujuHelper(data_location)
+    jhelper = JujuHelper(client, data_location)
     if upgrade_release:
-        a = ChannelUpgradeCoordinator(jhelper, tfhelper)
+        a = ChannelUpgradeCoordinator(client, jhelper, tfhelper)
         a.run_plan()
     else:
         a = LatestInChannelCoordinator(jhelper, tfhelper)

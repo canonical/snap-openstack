@@ -289,7 +289,7 @@ class SetHypervisorCharmConfigStep(BaseStep):
 
     IPVANYNETWORK_UNSET = "0.0.0.0/0"
 
-    def __init__(self, jhelper, ext_network: Path):
+    def __init__(self, client: Client, jhelper: JujuHelper, ext_network: Path):
         super().__init__(
             "Update charm config",
             "Updating openstack-hypervisor charm configuration",
@@ -298,7 +298,7 @@ class SetHypervisorCharmConfigStep(BaseStep):
         # File path with external_network details in json format
         self.ext_network_file = ext_network
         self.ext_network = {}
-        self.client = Client()
+        self.client = client
         self.jhelper = jhelper
         self.charm_config = {}
 
@@ -356,14 +356,14 @@ class SetHypervisorCharmConfigStep(BaseStep):
 class UserOpenRCStep(BaseStep):
     """Generate openrc for created cloud user."""
 
-    def __init__(self, auth_url: str, auth_version: str, openrc: Path):
+    def __init__(self, client: Client, auth_url: str, auth_version: str, openrc: Path):
         super().__init__(
             "Generate admin openrc", "Generating openrc for cloud admin usage"
         )
         self.auth_url = auth_url
         self.auth_version = auth_version
         self.openrc = openrc
-        self.client = Client()
+        self.client = client
 
     def is_skip(self, status: Optional[Status] = None) -> Result:
         """Determines if the step should be skipped or not.
@@ -430,16 +430,17 @@ class UserQuestions(BaseStep):
 
     def __init__(
         self,
+        client: Client,
         answer_file: str,
-        preseed_file: str = None,
+        preseed_file: str | None = None,
         accept_defaults: bool = False,
     ):
         super().__init__(
             "Collect cloud configuration", "Collecting cloud configuration"
         )
+        self.client = client
         self.accept_defaults = accept_defaults
         self.preseed_file = preseed_file
-        self.client = Client()
         self.answer_file = answer_file
 
     def has_prompts(self) -> bool:
@@ -558,6 +559,7 @@ class DemoSetup(BaseStep):
 
     def __init__(
         self,
+        client: Client,
         tfhelper: TerraformHelper,
         answer_file: str,
     ):
@@ -567,7 +569,7 @@ class DemoSetup(BaseStep):
         )
         self.answer_file = answer_file
         self.tfhelper = tfhelper
-        self.client = Client()
+        self.client = client
 
     def is_skip(self, status: Optional[Status] = None) -> Result:
         """Determines if the step should be skipped or not.
@@ -600,11 +602,12 @@ class DemoSetup(BaseStep):
 class TerraformDemoInitStep(TerraformInitStep):
     def __init__(
         self,
+        client: Client,
         tfhelper: TerraformHelper,
     ):
         super().__init__(tfhelper)
         self.tfhelper = tfhelper
-        self.client = Client()
+        self.client = client
 
     def is_skip(self, status: Optional[Status] = None) -> Result:
         """Determines if the step should be skipped or not.
@@ -623,16 +626,21 @@ class TerraformDemoInitStep(TerraformInitStep):
 
 class SetLocalHypervisorOptions(BaseStep):
     def __init__(
-        self, name, jhelper, join_mode: bool = False, preseed_file: Path = None
+        self,
+        client: Client,
+        name: str,
+        jhelper: JujuHelper,
+        join_mode: bool = False,
+        preseed_file: Path | None = None,
     ):
         super().__init__(
             "Apply local hypervisor settings", "Applying local hypervisor settings"
         )
+        self.client = client
         self.name = name
         self.jhelper = jhelper
         self.join_mode = join_mode
         self.preseed_file = preseed_file
-        self.client = Client()
         self.preseed_file = preseed_file
 
     def has_prompts(self) -> bool:
@@ -718,13 +726,14 @@ class SetLocalHypervisorOptions(BaseStep):
 
 
 def _configure(
+    client: Client,
     openrc: Optional[Path] = None,
     preseed: Optional[Path] = None,
     accept_defaults: bool = False,
 ):
     preflight_checks = []
     preflight_checks.append(DaemonGroupCheck())
-    preflight_checks.append(VerifyBootstrappedCheck())
+    preflight_checks.append(VerifyBootstrappedCheck(client))
     run_preflight_checks(preflight_checks, console)
 
     name = utils.get_fqdn()
@@ -740,7 +749,7 @@ def _configure(
     shutil.copytree(src, dst, dirs_exist_ok=True)
 
     data_location = snap.paths.user_data
-    jhelper = JujuHelper(data_location)
+    jhelper = JujuHelper(client, data_location)
     try:
         run_sync(jhelper.get_model(OPENSTACK_MODEL))
     except ModelNotFoundException:
@@ -758,28 +767,32 @@ def _configure(
     plan = [
         JujuLoginStep(data_location),
         UserQuestions(
+            client,
             answer_file=answer_file,
             preseed_file=preseed,
             accept_defaults=accept_defaults,
         ),
-        TerraformDemoInitStep(tfhelper),
+        TerraformDemoInitStep(client, tfhelper),
         DemoSetup(
+            client=client,
             tfhelper=tfhelper,
             answer_file=answer_file,
         ),
         UserOpenRCStep(
+            client=client,
             auth_url=admin_credentials["OS_AUTH_URL"],
             auth_version=admin_credentials["OS_AUTH_VERSION"],
             openrc=openrc,
         ),
-        SetHypervisorCharmConfigStep(jhelper, ext_network=answer_file),
+        SetHypervisorCharmConfigStep(client, jhelper, ext_network=answer_file),
     ]
     compute_nodenames = [
-        node["name"] for node in Client().cluster.list_nodes_by_role("compute")
+        node["name"] for node in client.cluster.list_nodes_by_role("compute")
     ]
     if name in compute_nodenames:
         plan.append(
             SetLocalHypervisorOptions(
+                client,
                 name,
                 jhelper,
                 # Accept preseed file but do not allow 'accept_defaults' as nic
@@ -815,7 +828,8 @@ def configure(
     """Configure cloud with some sensible defaults."""
     if ctx.invoked_subcommand is not None:
         return
-    _configure(openrc, preseed, accept_defaults)
+    client: Client = ctx.obj
+    _configure(client, openrc, preseed, accept_defaults)
     for name, command in configure.commands.items():
         LOG.debug("Running configure %r", name)
         cmd_ctx = click.Context(

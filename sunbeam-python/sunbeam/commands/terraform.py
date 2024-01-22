@@ -26,7 +26,7 @@ from rich.status import Status
 from snaphelpers import Snap
 
 from sunbeam import utils
-from sunbeam.clusterd.client import Client as clusterClient
+from sunbeam.clusterd.client import Client
 from sunbeam.jobs.common import BaseStep, Result, ResultType
 from sunbeam.jobs.juju import JujuAccount, JujuController
 
@@ -134,9 +134,9 @@ class TerraformHelper:
         os_env = {}
         if self.data_location:
             LOG.debug("Updating terraform env variables related to juju credentials")
-            client = clusterClient()
             account = JujuAccount.load(self.data_location)
-            controller = JujuController.load(client)
+            # TODO(gboutry): refactor when Manifest support lands
+            controller = JujuController.load(Client.from_socket())
             os_env.update(
                 JUJU_USERNAME=account.user,
                 JUJU_PASSWORD=account.password,

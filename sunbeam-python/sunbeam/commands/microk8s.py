@@ -91,12 +91,14 @@ class DeployMicrok8sApplicationStep(DeployMachineApplicationStep):
 
     def __init__(
         self,
+        client: Client,
         tfhelper: TerraformHelper,
         jhelper: JujuHelper,
         preseed_file: Optional[Path] = None,
         accept_defaults: bool = False,
     ):
         super().__init__(
+            client,
             tfhelper,
             jhelper,
             MICROK8S_CONFIG_KEY,
@@ -158,8 +160,9 @@ class DeployMicrok8sApplicationStep(DeployMachineApplicationStep):
 class AddMicrok8sUnitStep(AddMachineUnitStep):
     """Add Microk8s Unit."""
 
-    def __init__(self, name: str, jhelper: JujuHelper):
+    def __init__(self, client: Client, name: str, jhelper: JujuHelper):
         super().__init__(
+            client,
             name,
             jhelper,
             MICROK8S_CONFIG_KEY,
@@ -176,8 +179,9 @@ class AddMicrok8sUnitStep(AddMachineUnitStep):
 class RemoveMicrok8sUnitStep(RemoveMachineUnitStep):
     """Remove Microk8s Unit."""
 
-    def __init__(self, name: str, jhelper: JujuHelper):
+    def __init__(self, client: Client, name: str, jhelper: JujuHelper):
         super().__init__(
+            client,
             name,
             jhelper,
             MICROK8S_CONFIG_KEY,
@@ -194,13 +198,13 @@ class RemoveMicrok8sUnitStep(RemoveMachineUnitStep):
 class AddMicrok8sCloudStep(BaseStep, JujuStepHelper):
     _CONFIG = MICROK8S_KUBECONFIG_KEY
 
-    def __init__(self, jhelper: JujuHelper):
+    def __init__(self, client: Client, jhelper: JujuHelper):
         super().__init__(
             "Add MicroK8S cloud", "Adding MicroK8S cloud to Juju controller"
         )
-
-        self.name = MICROK8S_CLOUD
+        self.client = client
         self.jhelper = jhelper
+        self.name = MICROK8S_CLOUD
         self.credential_name = f"{MICROK8S_CLOUD}{CREDENTIAL_SUFFIX}"
 
     def is_skip(self, status: Optional[Status] = None) -> Result:
@@ -220,7 +224,7 @@ class AddMicrok8sCloudStep(BaseStep, JujuStepHelper):
     def run(self, status: Optional[Status] = None) -> Result:
         """Add microk8s clouds to Juju controller."""
         try:
-            kubeconfig = read_config(Client(), self._CONFIG)
+            kubeconfig = read_config(self.client, self._CONFIG)
             run_sync(
                 self.jhelper.add_k8s_cloud(self.name, self.credential_name, kubeconfig)
             )
@@ -234,11 +238,12 @@ class AddMicrok8sCloudStep(BaseStep, JujuStepHelper):
 class StoreMicrok8sConfigStep(BaseStep, JujuStepHelper):
     _CONFIG = MICROK8S_KUBECONFIG_KEY
 
-    def __init__(self, jhelper: JujuHelper):
+    def __init__(self, client: Client, jhelper: JujuHelper):
         super().__init__(
             "Store MicroK8S config",
             "Storing MicroK8S configuration in sunbeam database",
         )
+        self.client = client
         self.jhelper = jhelper
 
     def is_skip(self, status: Optional[Status] = None) -> Result:
@@ -248,7 +253,7 @@ class StoreMicrok8sConfigStep(BaseStep, JujuStepHelper):
                 ResultType.COMPLETED or ResultType.FAILED otherwise
         """
         try:
-            read_config(Client(), self._CONFIG)
+            read_config(self.client, self._CONFIG)
         except ConfigItemNotFoundException:
             return Result(ResultType.COMPLETED)
 
@@ -265,7 +270,7 @@ class StoreMicrok8sConfigStep(BaseStep, JujuStepHelper):
                     "ERROR: Failed to retrieve kubeconfig",
                 )
             kubeconfig = yaml.safe_load(result["content"])
-            update_config(Client(), self._CONFIG, kubeconfig)
+            update_config(self.client, self._CONFIG, kubeconfig)
         except (
             ApplicationNotFoundException,
             LeaderNotFoundException,

@@ -26,6 +26,7 @@ from rich.console import Console
 from rich.status import Status
 from snaphelpers import Snap
 
+from sunbeam.clusterd.client import Client
 from sunbeam.commands.juju import JujuStepHelper
 from sunbeam.commands.terraform import (
     TerraformException,
@@ -147,8 +148,8 @@ class DisableUbuntuProApplicationStep(BaseStep, JujuStepHelper):
 class ProPlugin(EnableDisablePlugin):
     version = Version("0.0.1")
 
-    def __init__(self) -> None:
-        super().__init__(name="pro")
+    def __init__(self, client: Client) -> None:
+        super().__init__("pro", client)
         self.token = None
         self.snap = Snap()
         self.tfplan = f"deploy-{self.name}"
@@ -167,7 +168,7 @@ class ProPlugin(EnableDisablePlugin):
             backend="http",
             data_location=data_location,
         )
-        jhelper = JujuHelper(data_location)
+        jhelper = JujuHelper(self.client, data_location)
         plan = [
             TerraformInitStep(tfhelper),
             EnableUbuntuProApplicationStep(tfhelper, jhelper, self.token),

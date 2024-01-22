@@ -40,8 +40,7 @@ def mock_run_sync(mocker):
 
 @pytest.fixture()
 def cclient():
-    with patch("sunbeam.commands.generate_cloud_config.Client") as p:
-        yield p
+    yield Mock()
 
 
 @pytest.fixture()
@@ -62,7 +61,7 @@ class TestConfigureCloudsYamlStep:
         load_answers.return_value = {"user": {"run_demo_setup": True}}
         admin_credentials = {"OS_AUTH_URL": "http://keystone:5000"}
         step = generate.GenerateCloudConfigStep(
-            admin_credentials, "sunbeam", False, True, clouds_yaml
+            cclient, admin_credentials, "sunbeam", False, True, clouds_yaml
         )
         result = step.is_skip()
         assert result.result_type == ResultType.COMPLETED
@@ -72,7 +71,7 @@ class TestConfigureCloudsYamlStep:
         load_answers.return_value = {"user": {"run_demo_setup": False}}
         admin_credentials = {"OS_AUTH_URL": "http://keystone:5000"}
         step = generate.GenerateCloudConfigStep(
-            admin_credentials, "sunbeam", False, True, clouds_yaml
+            cclient, admin_credentials, "sunbeam", False, True, clouds_yaml
         )
         result = step.is_skip()
         assert result.result_type == ResultType.SKIPPED
@@ -81,7 +80,7 @@ class TestConfigureCloudsYamlStep:
         clouds_yaml = tmp_path / ".config" / "openstack" / "clouds.yaml"
         admin_credentials = {"OS_AUTH_URL": "http://keystone:5000"}
         step = generate.GenerateCloudConfigStep(
-            admin_credentials, "sunbeam", True, True, clouds_yaml
+            cclient, admin_credentials, "sunbeam", True, True, clouds_yaml
         )
         result = step.is_skip()
         assert result.result_type == ResultType.COMPLETED
@@ -106,7 +105,7 @@ class TestConfigureCloudsYamlStep:
         run.return_value = runout_mock
         admin_credentials = {"OS_AUTH_URL": "http://keystone:5000"}
         step = generate.GenerateCloudConfigStep(
-            admin_credentials, "sunbeam", False, True, clouds_yaml
+            cclient, admin_credentials, "sunbeam", False, True, clouds_yaml
         )
         step.run()
 
@@ -141,7 +140,7 @@ class TestConfigureCloudsYamlStep:
             "OS_PROJECT_NAME": "projectname",
         }
         step = generate.GenerateCloudConfigStep(
-            admin_credentials, "sunbeam", True, True, clouds_yaml
+            cclient, admin_credentials, "sunbeam", True, True, clouds_yaml
         )
         step.run()
 
@@ -177,7 +176,7 @@ class TestConfigureCloudsYamlStep:
         run.return_value = runout_mock
         admin_credentials = {"OS_AUTH_URL": "http://keystone:5000"}
         step = generate.GenerateCloudConfigStep(
-            admin_credentials, "sunbeam", False, False, None
+            cclient, admin_credentials, "sunbeam", False, False, None
         )
         step.run()
 

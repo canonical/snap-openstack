@@ -24,11 +24,11 @@ import textwrap
 from pathlib import Path
 from typing import Optional, TypeGuard
 
+import yaml
 from maas.client import bones, connect
 from rich.console import Console
 from rich.status import Status
 from snaphelpers import Snap
-import yaml
 
 from sunbeam.commands.deployment import (
     Deployment,

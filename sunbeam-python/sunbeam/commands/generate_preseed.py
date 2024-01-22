@@ -66,10 +66,11 @@ def show_questions(
 
 
 @click.command()
-def generate_preseed() -> None:
+@click.pass_context
+def generate_preseed(ctx: click.Context) -> None:
     """Generate preseed file."""
     name = utils.get_fqdn()
-    client = Client()
+    client: Client = ctx.obj
     try:
         variables = sunbeam.jobs.questions.load_answers(client, BOOTSTRAP_CONFIG_KEY)
     except ClusterServiceUnavailableException:

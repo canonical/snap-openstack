@@ -19,6 +19,7 @@ import click
 from rich.console import Console
 from snaphelpers import Snap
 
+from sunbeam.clusterd.client import Client
 from sunbeam.commands.openstack import OPENSTACK_MODEL
 from sunbeam.jobs import juju
 from sunbeam.jobs.checks import DaemonGroupCheck, VerifyBootstrappedCheck
@@ -30,15 +31,17 @@ snap = Snap()
 
 
 @click.command()
-def openrc() -> None:
+@click.pass_context
+def openrc(ctx: click.Context) -> None:
     """Retrieve openrc for cloud admin account."""
+    client: Client = ctx.obj
     preflight_checks = []
     preflight_checks.append(DaemonGroupCheck())
-    preflight_checks.append(VerifyBootstrappedCheck())
+    preflight_checks.append(VerifyBootstrappedCheck(client))
     run_preflight_checks(preflight_checks, console)
 
     data_location = snap.paths.user_data
-    jhelper = juju.JujuHelper(data_location)
+    jhelper = juju.JujuHelper(client, data_location)
 
     with console.status("Retrieving openrc from Keystone service ... "):
         # Retrieve config from juju actions

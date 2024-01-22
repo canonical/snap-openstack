@@ -24,6 +24,7 @@ from sunbeam.versions import (
 
 class TestBaseUpgrade:
     def setup_method(self):
+        self.client = Mock()
         self.jhelper = AsyncMock()
         self.tfhelper = Mock()
         self.upgrade_service = (
@@ -38,7 +39,12 @@ class TestBaseUpgrade:
             return channels[app_name]
 
         upgrader = BaseUpgrade(
-            "test name", "test description", self.jhelper, self.tfhelper, "openstack"
+            "test name",
+            "test description",
+            self.client,
+            self.jhelper,
+            self.tfhelper,
+            "openstack",
         )
         get_new_channel_mock = Mock()
         get_new_channel_mock.side_effect = _get_new_channel_mock
@@ -57,7 +63,12 @@ class TestBaseUpgrade:
     def test_get_new_channel_os_service(self, mocker):
         self.jhelper.get_charm_channel.return_value = "2023.1/edge"
         upgrader = BaseUpgrade(
-            "test name", "test description", self.jhelper, self.tfhelper, "openstack"
+            "test name",
+            "test description",
+            self.client,
+            self.jhelper,
+            self.tfhelper,
+            "openstack",
         )
         new_channel = upgrader.get_new_channel("cinder", "openstack")
         assert new_channel == "2023.2/edge"
@@ -65,7 +76,12 @@ class TestBaseUpgrade:
     def test_get_new_channel_os_service_same(self, mocker):
         self.jhelper.get_charm_channel.return_value = "2023.2/edge"
         upgrader = BaseUpgrade(
-            "test name", "test description", self.jhelper, self.tfhelper, "openstack"
+            "test name",
+            "test description",
+            self.client,
+            self.jhelper,
+            self.tfhelper,
+            "openstack",
         )
         new_channel = upgrader.get_new_channel("cinder", "openstack")
         assert new_channel is None
@@ -73,7 +89,12 @@ class TestBaseUpgrade:
     def test_get_new_channel_os_downgrade(self, mocker):
         self.jhelper.get_charm_channel.return_value = "2023.2/edge"
         upgrader = BaseUpgrade(
-            "test name", "test description", self.jhelper, self.tfhelper, "openstack"
+            "test name",
+            "test description",
+            self.client,
+            self.jhelper,
+            self.tfhelper,
+            "openstack",
         )
         new_channel = upgrader.get_new_channel("cinder", "openstack")
         assert new_channel is None
@@ -81,14 +102,24 @@ class TestBaseUpgrade:
     def test_get_new_channel_nonos_service(self, mocker):
         self.jhelper.get_charm_channel.return_value = "3.8/stable"
         upgrader = BaseUpgrade(
-            "test name", "test description", self.jhelper, self.tfhelper, "openstack"
+            "test name",
+            "test description",
+            self.client,
+            self.jhelper,
+            self.tfhelper,
+            "openstack",
         )
         new_channel = upgrader.get_new_channel("rabbitmq", "openstack")
         assert new_channel == "3.12/edge"
 
     def test_get_new_channel_unknown(self, mocker):
         upgrader = BaseUpgrade(
-            "test name", "test description", self.jhelper, self.tfhelper, "openstack"
+            "test name",
+            "test description",
+            self.client,
+            self.jhelper,
+            self.tfhelper,
+            "openstack",
         )
         new_channel = upgrader.get_new_channel("foo", "openstack")
         assert new_channel is None

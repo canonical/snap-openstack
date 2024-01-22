@@ -23,10 +23,8 @@ from packaging.version import Version
 from rich.console import Console
 from rich.status import Status
 
-from sunbeam.clusterd.service import (
-    ClusterServiceUnavailableException,
-    ConfigItemNotFoundException,
-)
+from sunbeam.clusterd.client import Client
+from sunbeam.clusterd.service import ClusterServiceUnavailableException
 from sunbeam.commands.configure import retrieve_admin_credentials
 from sunbeam.commands.openstack import OPENSTACK_MODEL
 from sunbeam.commands.terraform import (
@@ -34,15 +32,13 @@ from sunbeam.commands.terraform import (
     TerraformHelper,
     TerraformInitStep,
 )
-from sunbeam.jobs.common import BaseStep, Result, ResultType, read_config, run_plan
+from sunbeam.jobs.common import BaseStep, Result, ResultType, run_plan
 from sunbeam.jobs.juju import JujuHelper
 from sunbeam.plugins.interface.v1.base import PluginRequirement
 from sunbeam.plugins.interface.v1.openstack import (
     OpenStackControlPlanePlugin,
     TerraformPlanLocation,
 )
-from sunbeam.plugins.orchestration.plugin import OrchestrationPlugin
-from sunbeam.plugins.secrets.plugin import SecretsPlugin
 
 LOG = logging.getLogger(__name__)
 console = Console()
@@ -80,9 +76,10 @@ class CaasPlugin(OpenStackControlPlanePlugin):
         PluginRequirement("loadbalancer", optional=True),
     }
 
-    def __init__(self) -> None:
+    def __init__(self, client: Client) -> None:
         super().__init__(
-            name="caas",
+            "caas",
+            client,
             tf_plan_location=TerraformPlanLocation.SUNBEAM_TERRAFORM_REPO,
         )
         self.configure_plan = "caas-setup"
@@ -114,32 +111,6 @@ class CaasPlugin(OpenStackControlPlanePlugin):
         """Set terraform variables to resize the application."""
         return {}
 
-    def pre_enable(self) -> None:
-        """Check required plugins are enabled."""
-        super().pre_enable()
-        # TODO(gboutry): Remove this when plugin dependency is implemented
-        try:
-            secrets_info = read_config(self.client, SecretsPlugin().plugin_key)
-            enabled = secrets_info.get("enabled", False)
-            if enabled == "false":
-                raise ValueError("Secrets plugin is not enabled")
-        except (ConfigItemNotFoundException, ValueError) as e:
-            raise click.ClickException(
-                "OpenStack CaaS plugin requires Secrets plugin to be enabled"
-            ) from e
-        try:
-            orchestration_info = read_config(
-                self.client, OrchestrationPlugin().plugin_key
-            )
-            enabled = orchestration_info.get("enabled", False)
-            if enabled == "false":
-                raise ValueError("Orchestration plugin is not enabled")
-        except (ConfigItemNotFoundException, ValueError) as e:
-            raise click.ClickException(
-                "OpenStack Container as a Service plugin requires Orchestration"
-                " plugin to be enabled"
-            ) from e
-
     @click.command()
     def enable_plugin(self) -> None:
         """Enable Container as a Service plugin."""
@@ -159,7 +130,7 @@ class CaasPlugin(OpenStackControlPlanePlugin):
         shutil.copytree(src, dst, dirs_exist_ok=True)
 
         data_location = self.snap.paths.user_data
-        jhelper = JujuHelper(data_location)
+        jhelper = JujuHelper(self.client, data_location)
         admin_credentials = retrieve_admin_credentials(jhelper, OPENSTACK_MODEL)
         tfhelper = TerraformHelper(
             path=self.snap.paths.user_common / "etc" / self.configure_plan,

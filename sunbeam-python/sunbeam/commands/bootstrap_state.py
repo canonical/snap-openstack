@@ -26,9 +26,9 @@ LOG = logging.getLogger(__name__)
 class SetBootstrapped(BaseStep):
     """Post Deployment step to update bootstrap flag in cluster DB."""
 
-    def __init__(self):
+    def __init__(self, client: Client):
         super().__init__("Mark bootstrapped", "Mark deployment bootstrapped")
-        self.client = Client()
+        self.client = client
 
     def run(self, status: Optional[Status] = None) -> Result:
         LOG.debug("Setting deployment as bootstrapped")
