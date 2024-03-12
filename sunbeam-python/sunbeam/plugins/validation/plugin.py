@@ -345,6 +345,8 @@ class ValidationPlugin(OpenStackControlPlanePlugin):
                 [
                     "juju",
                     "ssh",
+                    "--model",
+                    OPENSTACK_MODEL,
                     "--container",
                     TEMPEST_CONTAINER_NAME,
                     unit,
@@ -381,6 +383,8 @@ class ValidationPlugin(OpenStackControlPlanePlugin):
                     [
                         "juju",
                         "scp",
+                        "--model",
+                        OPENSTACK_MODEL,
                         "--container",
                         TEMPEST_CONTAINER_NAME,
                         f"{unit}:{source}",
