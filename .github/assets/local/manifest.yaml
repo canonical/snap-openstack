@@ -1,0 +1,5 @@
+software:
+  juju:
+    bootstrap_args:
+      - --model-default
+      - logging-config=<root>=INFO;unit=DEBUG
