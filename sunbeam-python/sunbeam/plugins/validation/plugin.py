@@ -25,15 +25,11 @@ from croniter import croniter
 from packaging.version import Version
 from rich import box
 from rich.console import Console
-from rich.status import Status
 from rich.table import Column, Table
 
-from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import ClusterServiceUnavailableException
 from sunbeam.commands.juju import JujuLoginStep
 from sunbeam.commands.openstack import OPENSTACK_MODEL
-from sunbeam.commands.terraform import TerraformException, TerraformInitStep
-from sunbeam.jobs.common import BaseStep, Result, ResultType, run_plan
 from sunbeam.jobs.deployment import Deployment
 from sunbeam.jobs.juju import (
     ActionFailedException,
@@ -43,7 +39,6 @@ from sunbeam.jobs.juju import (
     UnitNotFoundException,
     run_sync,
 )
-from sunbeam.jobs.manifest import Manifest
 from sunbeam.jobs.plugin import PluginManager
 from sunbeam.plugins.interface.v1.openstack import (
     OpenStackControlPlanePlugin,
@@ -188,49 +183,6 @@ def validated_config_args(args: Dict[str, str]) -> Config:
     return Config(**args)
 
 
-class ConfigureValidationStep(BaseStep):
-    """Configure validation plugin."""
-
-    def __init__(
-        self,
-        config_changes: Config,
-        client: Client,
-        manifest: Manifest,
-        tfplan: str,
-        tfvar_map: dict,
-    ):
-        super().__init__(
-            "Configure validation plugin",
-            "Changing the configuration options for tempest",
-        )
-        self.config_changes = config_changes
-        self.client = client
-        self.manifest = manifest
-        self.tfplan = tfplan
-        self.tfvar_map = tfvar_map
-
-    def run(self, status: Optional[Status] = None) -> Result:
-        """Execute step using terraform."""
-        try:
-            # See ValidationPlugin.manifest_attributes_tfvar_map
-            charms = self.tfvar_map[self.tfplan]["charms"]
-            tempest_k8s_config_var = charms["tempest-k8s"]["config"]
-            if self.config_changes.schedule is None:
-                override_tfvars = {}
-            else:
-                override_tfvars = {
-                    tempest_k8s_config_var: {"schedule": self.config_changes.schedule}
-                }
-            self.manifest.update_tfvars_and_apply_tf(
-                self.client, tfplan=self.tfplan, override_tfvars=override_tfvars
-            )
-        except TerraformException as e:
-            LOG.exception("Error configuring validation pluging.")
-            return Result(ResultType.FAILED, str(e))
-
-        return Result(ResultType.COMPLETED)
-
-
 class ValidationPlugin(OpenStackControlPlanePlugin):
     """Deploy tempest to openstack model."""
 
@@ -244,35 +196,16 @@ class ValidationPlugin(OpenStackControlPlanePlugin):
             tf_plan_location=TerraformPlanLocation.SUNBEAM_TERRAFORM_REPO,
         )
 
-    def manifest_defaults(self) -> dict:
-        """Manifest plugin part in dict format."""
-        return {"charms": {"tempest-k8s": {"channel": TEMPEST_CHANNEL}}}
-
-    def manifest_attributes_tfvar_map(self) -> dict:
-        """Manifest attributes terraformvars map."""
-        return {
-            self.tfplan: {
-                "charms": {
-                    "tempest-k8s": {
-                        "config": "tempest-config",
-                        "channel": "tempest-channel",
-                        "revision": "tempest-revision",
-                    }
-                }
-            },
-        }
-
     def set_application_names(self) -> list:
         """Application names handled by the terraform plan."""
         return [TEMPEST_APP_NAME]
 
     def set_tfvars_on_enable(self) -> dict:
         """Set terraform variables to enable the application."""
-        return {"enable-validation": True}
-
-    def set_tfvars_on_disable(self) -> dict:
-        """Set terraform variables to disable the application."""
-        return {"enable-validation": False}
+        return {
+            "enable-validation": True,
+            "tempest-channel": TEMPEST_CHANNEL,
+        }
 
     def set_application_timeout_on_enable(self) -> int:
         """Set Application Timeout on enabling the plugin.
@@ -289,6 +222,10 @@ class ValidationPlugin(OpenStackControlPlanePlugin):
         are not removed within this time.
         """
         return VALIDATION_PLUGIN_DEPLOY_TIMEOUT
+
+    def set_tfvars_on_disable(self) -> dict:
+        """Set terraform variables to disable the application."""
+        return {"enable-validation": False}
 
     def set_tfvars_on_resize(self) -> dict:
         """Set terraform variables to resize the application."""
@@ -436,19 +373,17 @@ class ValidationPlugin(OpenStackControlPlanePlugin):
 
         config_changes = validated_config_args(parse_config_args(options))
 
-        run_plan(
-            [
-                TerraformInitStep(self.manifest.get_tfhelper(self.tfplan)),
-                ConfigureValidationStep(
-                    config_changes,
-                    self.deployment.get_client(),
-                    self.manifest,
-                    self.tfplan,
-                    self.manifest_attributes_tfvar_map(),
-                ),
-            ],
-            console,
-        )
+        if config_changes.schedule is not None:
+            jhelper = JujuHelper(self.deployment.get_connected_controller())
+            with console.status("Configuring validation plugin ..."):
+                run_sync(
+                    jhelper.set_application_config(
+                        OPENSTACK_MODEL,
+                        TEMPEST_APP_NAME,
+                        config={"schedule": config_changes.schedule},
+                    )
+                )
+                console.print(f"Schedule has been set to '{config_changes.schedule}'")
 
     @click.command()
     @click.argument(
