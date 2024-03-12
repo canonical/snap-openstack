@@ -3,3 +3,5 @@ software:
     bootstrap_args:
       - --model-default
       - logging-config=<root>=INFO;unit=DEBUG
+      - --config
+      - model-logs-size=25M
