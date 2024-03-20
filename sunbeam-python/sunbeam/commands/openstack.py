@@ -219,7 +219,10 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
                 "model": self.model,
                 "cloud": self.cloud,
                 "credential": f"{self.cloud}{CREDENTIAL_SUFFIX}",
-                "config": {"workload-storage": MICROK8S_DEFAULT_STORAGECLASS},
+                "config": {
+                    "workload-storage": MICROK8S_DEFAULT_STORAGECLASS,
+                    "logging-config": "<root>=INFO;unit=DEBUG",
+                },
                 "many-mysql": self.database == "multi",
                 "ha-scale": compute_ha_scale(self.topology, len(control_nodes)),
                 "os-api-scale": compute_os_api_scale(self.topology, len(control_nodes)),

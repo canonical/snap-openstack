@@ -47,7 +47,7 @@ jobs:
           sudo snap connect openstack:juju-bin juju:juju-bin
           sudo snap connect openstack:dot-local-share-juju
           sudo snap connect openstack:dot-config-openstack
-          sg snap_daemon "openstack.sunbeam -v cluster bootstrap --accept-defaults"
+          sg snap_daemon "openstack.sunbeam -v cluster bootstrap --accept-defaults --manifest .github/assets/local/manifest.yaml"
           sg snap_daemon "openstack.sunbeam enable orchestration"
           sg snap_daemon "openstack.sunbeam cluster list"
           sg snap_daemon "openstack.sunbeam enable loadbalancer"
