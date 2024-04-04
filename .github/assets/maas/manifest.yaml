@@ -1,0 +1,6 @@
+software:
+  juju:
+    bootstrap_args:
+      - --debug
+      - --config
+      - bootstrap-timeout=2400

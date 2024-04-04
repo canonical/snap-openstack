@@ -1,0 +1,88 @@
+name: Collect logs
+description: Collect logs from a sunbeam deployment
+runs:
+  using: composite
+  steps:
+    - name: Get models
+      id: get-models
+      shell: bash
+      run: |
+        set -x
+        juju whoami
+        models=$(juju models --format json | jq -r --compact-output '[.models[].name] | join(" ")')
+        echo "Models: $models"
+        echo "models=$models" >> $GITHUB_OUTPUT
+    - name: Collect logs
+      id: collect-logs
+      shell: bash
+      run: |
+        set -x
+        models="${{ steps.get-models.outputs.models }}"
+        mkdir collect
+        for model in $models; do
+          echo "Collecting status: $model"
+          model_name=$(echo $model | tr '/' '-')
+          juju status --model $model | tee collect/$model_name-status.txt
+          juju status --format json --model $model --output collect/$model_name-status.json
+          echo "Collecting model logs: $model"
+          juju debug-log --replay --model $model > collect/$model_name-debug-log.txt
+        done
+        tar -czf status.tar.gz -C collect/ $(find collect/ -type f -printf "%P\n")
+    - name: Upload collect result
+      uses: actions/upload-artifact@v4
+      with:
+        name: status-and-logs
+        path: status.tar.gz
+        retention-days: 5
+    - name: Collect var logs in machine/pods
+      id: collect-var-logs
+      shell: bash
+      run: |
+        models="${{ steps.get-models.outputs.models }}"
+        mkdir collect-var
+        # is kubectl available ??
+        if ! command -v kubectl; then
+            sudo snap install kubectl --channel 1.28 --classic
+        fi
+        # Fetch kubeconfig
+        for model in $models; do
+            echo $model
+            has_microk8s=$(juju status --model $model --format json | jq -r '.applications[]."charm-name" | select(. == "microk8s")')
+            if [[ ! -z "$has_microk8s" ]]; then
+            juju run -m $model microk8s/0 kubeconfig --format json | jq -r '."microk8s/0".results.content' | tee log-kubeconfig
+            fi
+            unset has_microk8s
+        done
+        for model in $models; do
+            status=$(juju status --format json --model $model)
+            type=$(echo $status | jq -r '.model.type')
+            echo "Collecting var logs: $model, type: $type"
+            if [ "$type" = "caas" ] && test -f log-kubeconfig; then
+              namespace=$(echo $model | cut -d'/' -f2)
+              mkdir -p collect-var/$namespace
+              units=$(echo $status | jq -r '.applications[].units | keys[]')
+              for unit in $units; do
+                  pod=$(echo $unit | tr '/' '-')
+                  containers=$(kubectl --kubeconfig log-kubeconfig get pods --namespace $namespace $pod --output json | jq -r '.spec.containers[].name')
+                  for container in $containers; do
+                  juju ssh --container $container --model $model $unit "tar zcf /tmp/logs.tgz /var/log/"
+                  juju scp --container $container --model $model $unit:/tmp/logs.tgz collect-var/$namespace/$pod-$container.tgz
+                  done
+              done
+            else
+              machines=$(echo $status | jq -r '.machines | keys[]')
+              short_model=$(echo $model | tr '/' '-')
+              mkdir -p collect-var/$short_model
+              for machine in $machines; do
+                  juju ssh --model $model $machine 'sudo tar -czf /var/log.tar.gz /var/log'
+                  juju scp --model $model $machine:/var/log.tar.gz collect-var/$short_model/$machine.tar.gz
+              done
+            fi
+        done
+        tar -czf collect-var.tar.gz -C collect-var/ $(find collect-var/ -type f -printf "%P\n")
+    - name: Upload collect result
+      uses: actions/upload-artifact@v4
+      with:
+        name: var-logs
+        path: collect-var.tar.gz
+        retention-days: 5

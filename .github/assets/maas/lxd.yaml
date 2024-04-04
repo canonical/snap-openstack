@@ -1,0 +1,37 @@
+config:
+  core.https_address: '[::]:8443'
+  core.trust_password: password
+networks:
+- config:
+    ipv4.address: 10.25.25.1/24
+    ipv4.dhcp: 'false'
+    ipv6.dhcp: 'false'
+    # dns.mode: none
+  name: lxdbr0
+  project: default
+- config:
+    ipv4.address: 10.44.44.1/24
+    ipv4.dhcp: 'false'
+    ipv6.dhcp: 'false'
+    # dns.mode: none
+  name: computebr0
+  project: default
+storage_pools:
+- config:
+    size: 60GB
+  name: default
+  driver: zfs
+profiles:
+- config: {}
+  description: ""
+  devices:
+    eth0:
+      name: eth0
+      network: lxdbr0
+      type: nic
+    root:
+      path: /
+      pool: default
+      type: disk
+  name: default
+projects: []

@@ -53,12 +53,166 @@ jobs:
           sg snap_daemon "openstack.sunbeam enable loadbalancer"
           sg snap_daemon "openstack.sunbeam -v configure -a"
           sg snap_daemon "openstack.sunbeam -v launch"
-      - name: Collect juju status
+      - name: Collect status and logs
+        uses: ./.github/actions/collect-logs
         if: always()
+      - name: Setup tmate session
+        if: ${{ failure() && runner.debug }}
+        uses: canonical/action-tmate@main
+
+  functional-test-maas:
+    needs: build
+    name: Functional test MAAS
+    runs-on: [self-hosted, large, jammy, x64]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+      - name: Download snap artifact
+        id: download
+        uses: actions/download-artifact@v3
+        with:
+          name: local-${{ needs.build.outputs.snap }}
+      - name: Setup LXD
         run: |
-          juju status
-          juju status -m openstack
-          juju debug-log -m openstack --replay
+          sudo snap refresh lxd --channel=latest/stable
+          lxd init --verbose --preseed < .github/assets/maas/lxd.yaml
+          # IP Forward
+          sudo sysctl net.ipv4.ip_forward=1
+          sudo iptables -A FORWARD -i lxdbr0 -j ACCEPT 
+      - name: Setup MAAS
+        uses: canonical/setup-maas@main
+        with:
+          channel: 3.4/stable
+          maas-url: http://10.25.25.1:5240/MAAS
+      - name: Create MAAS admin
+        run: |
+          # Need to wait a bit for things to settle down 
+          sleep 30
+          sudo maas createadmin --username=admin --password=test --email=fake@example.org
+          sudo maas apikey --username admin > api.key
+      - name: Configure MAAS datacenter (LXD host)
+        timeout-minutes: 60
+        run: |
+          maas login admin http://10.25.25.1:5240/MAAS $(cat api.key)
+
+          # Configure DNS
+          PRIMARY_RACK=$(maas admin rack-controllers read | jq -r ".[] | .system_id")
+          dns_server=$(grep -oPm1 'Current DNS Server: \K[^\s]+' <<< "$(resolvectl status)")
+          echo "DNS server: $dns_server"
+          maas admin maas set-config name=upstream_dns value=$dns_server
+
+          # Add Jammy as boot images
+          maas admin boot-source-selections create 1 os="ubuntu" release=jammy arches=amd64 subarches="*" labels="*"
+          # Import boot images
+          maas admin boot-resources import
+          while [ $(maas admin boot-resources is-importing | cat) == "true" ];
+          do 
+            echo "waiting for boot resources to import"
+            sleep 30
+          done
+          echo "syncing finished"
+
+          sudo snap install jq
+
+          set -x
+
+          # Configure networking
+          networks=(10.25.25:management 10.44.44:compute)
+          for network in "${networks[@]}" ; do
+            sub=${network%%:*}
+            space=${network#*:}
+            SUBNET=$sub.0/24
+            FABRIC_ID=$(maas admin subnet read "$SUBNET" | jq -r ".vlan.fabric_id")
+            VLAN_ID=$(maas admin subnet read "$SUBNET" | jq -r ".vlan.id")
+            VLAN_TAG=$(maas admin subnet read "$SUBNET" | jq -r ".vlan.vid")
+            maas admin spaces create name=$space
+            maas admin subnet update $SUBNET vlan=$VLAN_ID gateway_ip=$sub.1
+            maas admin ipranges create type=dynamic start_ip=$sub.230 end_ip=$sub.240
+            maas admin vlan update $FABRIC_ID $VLAN_TAG space=$space dhcp_on=True primary_rack=$PRIMARY_RACK
+          done
+
+          # Configure ip ranges used by sunbeam to expose API endpoints
+          MANAGEMENT_SUBNET_ID=$(maas admin subnet read 10.25.25.0/24 | jq -r ".id")
+          maas admin ipranges create subnet=$MANAGEMENT_SUBNET_ID type=reserved start_ip=10.25.25.30 end_ip=10.25.25.39 comment=sunbeam-internal-api
+          maas admin ipranges create subnet=$MANAGEMENT_SUBNET_ID type=reserved start_ip=10.25.25.40 end_ip=10.25.25.50 comment=sunbeam-public-api
+
+          # Add LXD as a VM host
+          br_cidr=$(lxc network list --format json | jq -r '.[] | select(.name == "lxdbr0").config."ipv4.address"')
+          host_ip=$(echo $br_cidr | cut -d'/' -f1)
+          vm_host_id=$(maas admin vm-hosts create type=lxd power_address=$host_ip:8443 password=password project=maas-vm-lxd name=sunbeam-lxd | jq '.id')
+          maas admin vm-host refresh $vm_host_id
+
+          pool=$(maas admin resource-pools create name=sunbeam01 | jq -r '.id')
+
+          maas admin tags create name=juju-controller
+          maas admin tags create name=control
+          maas admin tags create name=compute
+          maas admin tags create name=storage
+
+          # compose 2 VMs to use in deployment
+          juju_controller=$(maas admin vm-host compose $vm_host_id \
+            cores=2 memory=4096 architecture="amd64/generic" \
+            interfaces="0:space=management" \
+            storage="root:20(ssd)" \
+            pool=$pool \
+            hostname="juju-controller" | jq -r '.system_id')
+          maas admin tag update-nodes juju-controller add=$juju_controller
+
+          converged=$(maas admin vm-host compose $vm_host_id \
+            cores=4 memory=24576 architecture="amd64/generic" \
+            storage="root:25(ssd),add1:3(ceph,ssd),add2:3(ceph,ssd),add3:3(ceph,ssd)" \
+            interfaces="0:space=management;1:space=compute" \
+            pool=$pool \
+            hostname="sunbeam-node-01" | jq -r '.system_id')
+          maas admin tag update-nodes control add=$converged
+          maas admin tag update-nodes compute add=$converged
+          maas admin tag update-nodes storage add=$converged
+
+          while [ $(maas admin nodes read | jq -r '[.[].status_name] | unique | del(.[]|nulls) | first') != "Ready" ];
+          do
+            echo "waiting for VMs to be commissioned"
+            sleep 30
+          done
+
+          # Set additional interface to unconfigured
+          compute_interface=$(maas admin interfaces read $converged | jq '.[] | select(.vlan.space == "compute").id')
+          maas admin interface add-tag $converged $compute_interface tag=compute
+          maas admin interface link-subnet $converged $compute_interface subnet=10.44.44.0/24 mode=LINK_UP force=true
+          # Tag ceph storage block devices
+          storage_blockdevices=$(maas admin block-devices read $converged | jq -r '.[] | select(.used_for == "Unused").id')
+          for blockdevice in $storage_blockdevices; do
+            maas admin block-device add-tag $converged $blockdevice tag=ceph
+          done
+      - name: test
+        timeout-minutes: 180
+        run: |
+          export COLUMNS=256
+          sudo snap install  ${{ needs.build.outputs.snap }} --dangerous
+          openstack.sunbeam prepare-node-script | bash -x
+          sudo snap connect openstack:juju-bin juju:juju-bin
+          sudo snap connect openstack:dot-local-share-juju
+          sudo snap connect openstack:dot-local-share-openstack
+          sudo snap connect openstack:dot-config-openstack
+          sg snap_daemon "openstack.sunbeam -v deployment add maas --name sunbeam --token $(cat api.key) --url http://10.25.25.1:5240/MAAS --resource-pool sunbeam01"
+          sg snap_daemon "openstack.sunbeam deployment machine list"
+          sg snap_daemon "openstack.sunbeam deployment machine show juju-controller"
+          sg snap_daemon "openstack.sunbeam deployment machine show sunbeam-node-01"
+          for network in public storage storage-cluster internal data management;do
+            sg snap_daemon "openstack.sunbeam deployment space map management $network"
+          done
+          sg snap_daemon "openstack.sunbeam deployment network list"
+          sg snap_daemon "openstack.sunbeam -v deployment validate"
+          cat $HOME/snap/openstack/common/reports/*.yaml
+          sg snap_daemon "openstack.sunbeam -v cluster bootstrap --manifest .github/assets/maas/manifest.yaml --accept-defaults"
+          sg snap_daemon "openstack.sunbeam -v cluster deploy"
+          sg snap_daemon "openstack.sunbeam enable orchestration"
+          # sg snap_daemon "openstack.sunbeam cluster list"
+          sg snap_daemon "openstack.sunbeam enable loadbalancer"
+          sg snap_daemon "openstack.sunbeam -v configure -a"
+          sg snap_daemon "openstack.sunbeam -v launch"
+      - name: Collect status and logs
+        uses: ./.github/actions/collect-logs
+        if: always()
       - name: Setup tmate session
         if: ${{ failure() && runner.debug }}
         uses: canonical/action-tmate@main
