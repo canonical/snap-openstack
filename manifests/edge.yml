@@ -1,58 +1,58 @@
 software:
   charms:
     aodh-k8s:
-      channel: 2023.2/edge
+      channel: 2024.1/edge
     barbican-k8s:
-      channel: 2023.2/edge
+      channel: 2024.1/edge
     ceilometer-k8s:
-      channel: 2023.2/edge
+      channel: 2024.1/edge
     cinder-ceph-k8s:
-      channel: 2023.2/edge
+      channel: 2024.1/edge
     cinder-k8s:
-      channel: 2023.2/edge
+      channel: 2024.1/edge
     designate-bind-k8s:
       channel: 9/edge
     designate-k8s:
-      channel: 2023.2/edge
+      channel: 2024.1/edge
     glance-k8s:
-      channel: 2023.2/edge
+      channel: 2024.1/edge
     gnocchi-k8s:
-      channel: 2023.2/edge
+      channel: 2024.1/edge
     heat-k8s:
-      channel: 2023.2/edge
+      channel: 2024.1/edge
     horizon-k8s:
-      channel: 2023.2/edge
+      channel: 2024.1/edge
     keystone-k8s:
-      channel: 2023.2/edge
+      channel: 2024.1/edge
     keystone-ldap-k8s:
-      channel: 2023.2/edge
+      channel: 2024.1/edge
     magnum-k8s:
-      channel: 2023.2/edge
+      channel: 2024.1/edge
     neutron-k8s:
-      channel: 2023.2/edge
+      channel: 2024.1/edge
     nova-k8s:
-      channel: 2023.2/edge
+      channel: 2024.1/edge
     octavia-k8s:
-      channel: 2023.2/edge
+      channel: 2024.1/edge
     openstack-exporter-k8s:
-      channel: 2023.2/edge
+      channel: 2024.1/edge
     openstack-hypervisor:
-      channel: 2023.2/edge
+      channel: 2024.1/edge
       config:
-        snap-channel: 2023.2/edge
+        snap-channel: 2024.1/edge
     ovn-central-k8s:
-      channel: 23.09/edge
+      channel: 24.03/edge
     ovn-relay-k8s:
-      channel: 23.09/edge
+      channel: 24.03/edge
     placement-k8s:
-      channel: 2023.2/edge
+      channel: 2024.1/edge
     sunbeam-clusterd:
-      channel: 2023.2/edge
+      channel: 2024.1/edge
       config:
-        snap-channel: 2023.2/edge
+        snap-channel: 2024.1/edge
     sunbeam-machine:
-      channel: 2023.2/edge
+      channel: 2024.1/edge
     tempest-k8s:
-      channel: 2023.2/edge
+      channel: 2024.1/edge
     microceph:
       channel: reef/edge
