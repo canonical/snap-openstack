@@ -141,3 +141,16 @@ resource "juju_integration" "hypervisor-cinder-ceph" {
     offer_url = data.terraform_remote_state.openstack.outputs.cinder-ceph-offer-url
   }
 }
+
+resource "juju_integration" "hypervisor-nova-controller" {
+  model = var.machine_model
+
+  application {
+    name     = juju_application.openstack-hypervisor.name
+    endpoint = "nova-service"
+  }
+
+  application {
+    offer_url = data.terraform_remote_state.openstack.outputs.nova-offer-url
+  }
+}
