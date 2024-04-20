@@ -17,20 +17,20 @@
 SUPPORTED_RELEASE = "jammy"
 JUJU_CHANNEL = "3.4/stable"
 JUJU_BASE = "ubuntu@22.04"
-OPENSTACK_CHANNEL = "2023.2/stable"
+OPENSTACK_CHANNEL = "2024.1/stable"
 OVN_CHANNEL = "23.09/stable"
 RABBITMQ_CHANNEL = "3.12/stable"
 TRAEFIK_CHANNEL = "1.0/stable"
 MICROCEPH_CHANNEL = "reef/candidate"
-SUNBEAM_MACHINE_CHANNEL = "2023.2/stable"
-SUNBEAM_CLUSTERD_CHANNEL = "2023.2/stable"
-SNAP_SUNBEAM_CLUSTERD_CHANNEL = "2023.2/stable"
+SUNBEAM_MACHINE_CHANNEL = "2024.1/stable"
+SUNBEAM_CLUSTERD_CHANNEL = "2024.1/stable"
+SNAP_SUNBEAM_CLUSTERD_CHANNEL = "2024.1/stable"
 MICROK8S_CHANNEL = "legacy/stable"
 MYSQL_CHANNEL = "8.0/stable"
 CERT_AUTH_CHANNEL = "latest/beta"
 BIND_CHANNEL = "9/stable"
 VAULT_CHANNEL = "latest/edge"  # Pinned to a specific revision in TF plans
-TEMPEST_CHANNEL = "2023.2/stable"
+TEMPEST_CHANNEL = "2024.1/stable"
 
 # List of charms with default channels
 OPENSTACK_CHARMS_K8S = {

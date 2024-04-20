@@ -1,58 +1,58 @@
 software:
   charms:
     aodh-k8s:
-      channel: 2023.2/candidate
+      channel: 2024.1/candidate
     barbican-k8s:
-      channel: 2023.2/candidate
+      channel: 2024.1/candidate
     ceilometer-k8s:
-      channel: 2023.2/candidate
+      channel: 2024.1/candidate
     cinder-ceph-k8s:
-      channel: 2023.2/candidate
+      channel: 2024.1/candidate
     cinder-k8s:
-      channel: 2023.2/candidate
+      channel: 2024.1/candidate
     designate-bind-k8s:
       channel: 9/candidate
     designate-k8s:
-      channel: 2023.2/candidate
+      channel: 2024.1/candidate
     glance-k8s:
-      channel: 2023.2/candidate
+      channel: 2024.1/candidate
     gnocchi-k8s:
-      channel: 2023.2/candidate
+      channel: 2024.1/candidate
     heat-k8s:
-      channel: 2023.2/candidate
+      channel: 2024.1/candidate
     horizon-k8s:
-      channel: 2023.2/candidate
+      channel: 2024.1/candidate
     keystone-k8s:
-      channel: 2023.2/candidate
+      channel: 2024.1/candidate
     keystone-ldap-k8s:
-      channel: 2023.2/candidate
+      channel: 2024.1/candidate
     magnum-k8s:
-      channel: 2023.2/candidate
+      channel: 2024.1/candidate
     neutron-k8s:
-      channel: 2023.2/candidate
+      channel: 2024.1/candidate
     nova-k8s:
-      channel: 2023.2/candidate
+      channel: 2024.1/candidate
     octavia-k8s:
-      channel: 2023.2/candidate
+      channel: 2024.1/candidate
     openstack-exporter-k8s:
-      channel: 2023.2/candidate
+      channel: 2024.1/candidate
     openstack-hypervisor:
-      channel: 2023.2/candidate
+      channel: 2024.1/candidate
       config:
-        snap-channel: 2023.2/candidate
+        snap-channel: 2024.1/candidate
     ovn-central-k8s:
-      channel: 23.09/candidate
+      channel: 24.03/candidate
     ovn-relay-k8s:
-      channel: 23.09/candidate
+      channel: 24.03/candidate
     placement-k8s:
-      channel: 2023.2/candidate
+      channel: 2024.1/candidate
     sunbeam-clusterd:
-      channel: 2023.2/candidate
+      channel: 2024.1/candidate
       config:
-        snap-channel: 2023.2/candidate
+        snap-channel: 2024.1/candidate
     sunbeam-machine:
-      channel: 2023.2/candidate
+      channel: 2024.1/candidate
     tempest-k8s:
-      channel: 2023.2/candidate
+      channel: 2024.1/candidate
     microceph:
       channel: reef/candidate
