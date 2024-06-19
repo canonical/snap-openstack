@@ -85,6 +85,12 @@ class OrchestrationPlugin(OpenStackControlPlanePlugin):
         """Set terraform variables to resize the application."""
         return {}
 
+    def get_database_charm_processes(self) -> dict[str, dict[str, int]]:
+        """Returns the database processes accessing this service."""
+        return {
+            "heat": {"heat-k8s": 4},
+        }
+
     @click.command()
     def enable_plugin(self) -> None:
         """Enable Orchestration service."""

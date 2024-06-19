@@ -15,6 +15,7 @@
 
 import asyncio
 import logging
+import math
 from typing import Optional
 
 from lightkube.core import exceptions
@@ -56,8 +57,32 @@ OPENSTACK_DEPLOY_TIMEOUT = 5400  # 90 minutes
 
 CONFIG_KEY = "TerraformVarsOpenstack"
 TOPOLOGY_KEY = "Topology"
+DATABASE_MEMORY_KEY = "DatabaseMemory"
 REGION_CONFIG_KEY = "Region"
 DEFAULT_REGION = "RegionOne"
+
+DATABASE_MAX_POOL_SIZE = 2
+DATABASE_ADDITIONAL_BUFFER_SIZE = 600
+DATABASE_OVERSIZE_FACTOR = 1.2
+MB_BYTES_PER_CONNECTION = 12
+
+
+# This dict maps every databases that can be used by OpenStack services
+# to the number of processes each service needs to the database.
+CONNECTIONS = {
+    "cinder": {
+        "cinder-ceph-k8s": 4,
+        "cinder-k8s": 5,
+    },
+    "glance": {"glance-k8s": 5},
+    # Horizon does not pool connections, actual value is 40
+    # but set it to 20 because of max_pool_size multiplier
+    "horizon": {"horizon-k8s": 20},
+    "keystone": {"keystone-k8s": 4},
+    "neutron": {"neutron-k8s": 4},
+    "nova": {"nova-k8s": 4 * 3},
+    "placement": {"placement-k8s": 4},
+}
 
 
 def determine_target_topology(client: Client) -> str:
@@ -100,6 +125,81 @@ def compute_ingress_scale(topology: str, control_nodes: int) -> int:
     if topology == "single":
         return 1
     return min(control_nodes, 3)
+
+
+def compute_resources_for_service(
+    database: dict[str, int], max_pool_size: int
+) -> tuple[int, int]:
+    """Compute resources needed for a single unit service."""
+    memory_needed = 0
+    total_connections = 0
+    for connection in database.values():
+        nb_connections = max_pool_size * connection
+        total_connections += nb_connections
+        memory_needed += nb_connections * MB_BYTES_PER_CONNECTION
+    return total_connections, memory_needed
+
+
+def get_database_resource_dict(client: Client) -> dict[str, tuple[int, int]]:
+    """Returns a dict containing the resource allocation for each database service.
+
+    Resource allocation is only for a single unit service.
+    """
+    try:
+        memory_dict = read_config(client, DATABASE_MEMORY_KEY)
+    except ConfigItemNotFoundException:
+        memory_dict = {}
+    memory_dict.update(
+        {
+            service: compute_resources_for_service(connection, DATABASE_MAX_POOL_SIZE)
+            for service, connection in CONNECTIONS.items()
+        }
+    )
+
+    return memory_dict
+
+
+def write_database_resource_dict(
+    client: Client, resource_dict: dict[str, tuple[int, int]]
+):
+    """Write the resource allocation for each database service."""
+    update_config(client, DATABASE_MEMORY_KEY, resource_dict)
+
+
+def get_database_tfvars(
+    many_mysql: bool, resource_dict: dict[str, tuple[int, int]], service_scale: int
+) -> dict[str, bool | dict]:
+    """Create terraform variables related to database."""
+    tfvars: dict[str, bool | dict] = {"many-mysql": many_mysql}
+
+    if many_mysql:
+        tfvars["mysql-config-map"] = {
+            service: {
+                "profile-limit-memory": (
+                    math.ceil(memory * DATABASE_OVERSIZE_FACTOR) * service_scale
+                )
+                + DATABASE_ADDITIONAL_BUFFER_SIZE,
+                "experimental-max-connections": math.floor(
+                    connections * DATABASE_OVERSIZE_FACTOR
+                )
+                * service_scale,
+            }
+            for service, (connections, memory) in resource_dict.items()
+        }
+    else:
+        connections, memories = list(zip(*resource_dict.values()))
+        total_memory = (
+            math.ceil(sum(memories) * DATABASE_OVERSIZE_FACTOR)
+            + DATABASE_ADDITIONAL_BUFFER_SIZE
+        )
+        tfvars["mysql-config"] = {
+            "profile-limit-memory": (total_memory),
+            "experimental-max-connections": math.floor(
+                sum(connections) * DATABASE_OVERSIZE_FACTOR
+            ),
+        }
+
+    return tfvars
 
 
 class DeployControlPlaneStep(BaseStep, JujuStepHelper):
@@ -150,6 +250,13 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
             tfvars["enable-ceph"] = False
 
         return tfvars
+
+    def get_database_tfvars(self, service_scale: int) -> dict:
+        """Create terraform variables related to database."""
+        many_mysql = self.database == "multi"
+        resource_dict = get_database_resource_dict(self.client)
+        write_database_resource_dict(self.client, resource_dict)
+        return get_database_tfvars(many_mysql, resource_dict, service_scale)
 
     def get_region_tfvars(self) -> dict:
         """Create terraform variables related to region."""
@@ -216,17 +323,18 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
         self.update_status(status, "computing deployment sizing")
         model_config = convert_proxy_to_model_configs(self.proxy_settings)
         model_config.update({"workload-storage": K8SHelper.get_default_storageclass()})
+        service_scale = compute_os_api_scale(self.topology, len(control_nodes))
         extra_tfvars = self.get_storage_tfvars(storage_nodes)
         extra_tfvars.update(self.get_region_tfvars())
+        extra_tfvars.update(self.get_database_tfvars(service_scale))
         extra_tfvars.update(
             {
                 "model": self.model,
                 "cloud": self.cloud,
                 "credential": f"{self.cloud}{CREDENTIAL_SUFFIX}",
                 "config": model_config,
-                "many-mysql": self.database == "multi",
                 "ha-scale": compute_ha_scale(self.topology, len(control_nodes)),
-                "os-api-scale": compute_os_api_scale(self.topology, len(control_nodes)),
+                "os-api-scale": service_scale,
                 "ingress-scale": compute_ingress_scale(
                     self.topology, len(control_nodes)
                 ),

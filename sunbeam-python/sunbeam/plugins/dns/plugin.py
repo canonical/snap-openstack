@@ -129,6 +129,12 @@ class DnsPlugin(OpenStackControlPlanePlugin):
         """Set terraform variables to resize the application."""
         return {}
 
+    def get_database_charm_processes(self) -> dict[str, dict[str, int]]:
+        """Returns the database processes accessing this service."""
+        return {
+            "designate": {"designate-k8s": 8},
+        }
+
     @click.command()
     @click.option(
         "--nameservers",
