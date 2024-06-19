@@ -29,7 +29,15 @@ from snaphelpers import Snap
 
 from sunbeam.clusterd.service import ConfigItemNotFoundException
 from sunbeam.commands.juju import JujuStepHelper
-from sunbeam.commands.openstack import OPENSTACK_MODEL, TOPOLOGY_KEY
+from sunbeam.commands.openstack import (
+    DATABASE_MAX_POOL_SIZE,
+    OPENSTACK_MODEL,
+    TOPOLOGY_KEY,
+    compute_resources_for_service,
+    get_database_resource_dict,
+    get_database_tfvars,
+    write_database_resource_dict,
+)
 from sunbeam.commands.terraform import (
     TerraformException,
     TerraformHelper,
@@ -215,6 +223,47 @@ class OpenStackControlPlaneFeature(EnableDisableFeature):
         client = self.deployment.get_client()
         topology = read_config(client, TOPOLOGY_KEY)
         return topology["database"]
+
+    def get_database_charm_processes(self) -> dict[str, dict[str, int]]:
+        """Returns the database processes accessing this service.
+
+        Example:
+        {
+            "cinder": {
+              "cinder-k8s": 4,
+              "cinder-ceph-k8s": 4,
+            }
+        }
+        """
+        return {}
+
+    def get_database_resource_tfvars(self, *, enable: bool) -> dict:
+        """Return tfvars for configuring memory for database."""
+        client = self.deployment.get_client()
+        try:
+            config = read_config(client, self.get_tfvar_config_key())
+        except ConfigItemNotFoundException:
+            config = {}
+        database_processes = self.get_database_charm_processes()
+        resource_dict = get_database_resource_dict(client)
+        if enable:
+            resource_dict.update(
+                {
+                    service: compute_resources_for_service(
+                        connection, DATABASE_MAX_POOL_SIZE
+                    )
+                    for service, connection in database_processes.items()
+                }
+            )
+        else:
+            for service in database_processes:
+                resource_dict.pop(service, None)
+        write_database_resource_dict(client, resource_dict)
+        return get_database_tfvars(
+            config.get("many-mysql", False),
+            resource_dict,
+            config.get("os-api-scale", 1),
+        )
 
     def set_application_timeout_on_enable(self) -> int:
         """Set Application Timeout on enabling the feature.
@@ -432,6 +481,7 @@ class EnableOpenStackApplicationStep(BaseStep, JujuStepHelper):
         """Apply terraform configuration to deploy openstack application."""
         config_key = self.feature.get_tfvar_config_key()
         extra_tfvars = self.feature.set_tfvars_on_enable()
+        extra_tfvars.update(self.feature.get_database_resource_tfvars(enable=True))
 
         try:
             self.tfhelper.update_tfvars_and_apply_tf(
@@ -502,6 +552,9 @@ class DisableOpenStackApplicationStep(BaseStep, JujuStepHelper):
             else:
                 # Update terraform variables to disable the application
                 extra_tfvars = self.feature.set_tfvars_on_disable()
+                extra_tfvars.update(
+                    self.feature.get_database_resource_tfvars(enable=False)
+                )
                 self.tfhelper.update_tfvars_and_apply_tf(
                     self.feature.deployment.get_client(),
                     self.feature.manifest,
