@@ -15,7 +15,7 @@
 
 
 SUPPORTED_RELEASE = "jammy"
-JUJU_CHANNEL = "3.4/stable"
+JUJU_CHANNEL = "3.5/stable"
 JUJU_BASE = "ubuntu@22.04"
 OPENSTACK_CHANNEL = "2024.1/stable"
 OVN_CHANNEL = "24.03/stable"
