@@ -25,6 +25,7 @@ from sunbeam.commands import configure as configure_cmds
 from sunbeam.commands import dashboard_url as dasboard_url_cmds
 from sunbeam.commands import generate_cloud_config as generate_cloud_config_cmds
 from sunbeam.commands import inspect as inspect_cmds
+from sunbeam.commands import juju_utils as juju_cmds
 from sunbeam.commands import launch as launch_cmds
 from sunbeam.commands import manifest as manifest_cmds
 from sunbeam.commands import openrc as openrc_cmds
@@ -95,6 +96,12 @@ def utils(ctx):
     """Utilities for debugging and managing sunbeam."""
 
 
+@click.group("juju", context_settings=CONTEXT_SETTINGS, cls=CatchGroup)
+@click.pass_context
+def juju(ctx):
+    """Utilities for managing juju."""
+
+
 def main():
     snap = Snap()
     logfile = log.prepare_logfile(snap.paths.user_common / "logs", "sunbeam")
@@ -132,6 +139,9 @@ def main():
 
     cli.add_command(utils)
     utils.add_command(utils_cmds.juju_login)
+
+    cli.add_command(juju)
+    juju.add_command(juju_cmds.register_controller)
 
     # Register the plugins after all groups,commands are registered
     PluginManager.register(deployment, cli)

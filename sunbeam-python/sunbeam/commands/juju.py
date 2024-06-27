@@ -857,9 +857,10 @@ class RegisterJujuUserStep(BaseStep, JujuStepHelper):
         # client need to login/logout?
         # Does saving the password in $HOME/.local/share/juju/accounts.yaml
         # avoids login/logout?
-        register_args = ["register", self.registration_token]
+        register_args = ["--debug", "register", self.registration_token]
         if self.replace:
             register_args.append("--replace")
+        LOG.debug(f"User registration args: {register_args}")
 
         try:
             child = pexpect.spawn(
@@ -894,6 +895,52 @@ class RegisterJujuUserStep(BaseStep, JujuStepHelper):
             LOG.exception(f"Error registering user {self.username} in Juju")
             LOG.warning(e)
             return Result(ResultType.FAILED, str(e))
+
+        return Result(ResultType.COMPLETED)
+
+
+class RegisterRemoteJujuUserStep(RegisterJujuUserStep):
+    """Register remote user/controller in juju."""
+
+    def __init__(
+        self,
+        client: Client,
+        name: str,
+        token: str,
+        controller: str,
+        data_location: Path,
+        replace: bool = False,
+    ):
+        super().__init__(client, name, controller, data_location, replace)
+        self.registration_token = token
+        self.account_file = f"{self.controller}.yaml"
+
+    def is_skip(self, status: Optional["Status"] = None) -> Result:
+        """Determines if the step should be skipped or not.
+
+        :return: ResultType.SKIPPED if the Step should be skipped,
+                 ResultType.COMPLETED or ResultType.FAILED otherwise
+        """
+        try:
+            users = self._juju_cmd("users", "-c", self.controller)
+            LOG.debug(f"Found users in {self.controller}: {users}")
+            for user in users:
+                if user.get("user-name") == self.username:
+                    return Result(ResultType.SKIPPED)
+        except subprocess.CalledProcessError as e:
+            if f"controller {self.controller} not found" not in e.stderr:
+                LOG.exception("Error retrieving authenticated user from Juju.")
+                LOG.warning(e.stderr)
+                return Result(ResultType.FAILED, str(e))
+
+        try:
+            self.juju_account = JujuAccount.load(self.data_location, self.account_file)
+            LOG.debug(f"Local account found: {self.juju_account.user}")
+        except JujuAccountNotFound:
+            password = pwgen.pwgen(12)
+            self.juju_account = JujuAccount(user=self.username, password=password)
+            LOG.debug(f"Writing to file {self.juju_account}")
+            self.juju_account.write(self.data_location, self.account_file)
 
         return Result(ResultType.COMPLETED)
 
@@ -1594,5 +1641,33 @@ class BindJujuApplicationStep(BaseStep):
         except JujuException as e:
             message = f"Failed to bind application to space: {str(e)}"
             return Result(ResultType.FAILED, message)
+
+        return Result(ResultType.COMPLETED)
+
+
+class SwitchToController(BaseStep, JujuStepHelper):
+    """Switch to controller in juju."""
+
+    def __init__(
+        self,
+        controller: str,
+    ):
+        super().__init__(
+            "Switch to juju controller", f"Switching to juju controller {controller}"
+        )
+        self.controller = controller
+
+    def run(self, status: Optional["Status"] = None) -> Result:
+        """Switch to juju controller."""
+        try:
+            cmd = [self._get_juju_binary(), "switch", self.controller]
+            LOG.debug(f'Running command {" ".join(cmd)}')
+            process = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            LOG.debug(
+                f"Command finished. stdout={process.stdout}, stderr={process.stderr}"
+            )
+        except subprocess.CalledProcessError as e:
+            LOG.exception(f"Error in switching the controller to {self.controller}")
+            return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.COMPLETED)
