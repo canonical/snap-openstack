@@ -170,9 +170,11 @@ class JujuAccount(pydantic.BaseModel):
         return self.model_dump()
 
     @classmethod
-    def load(cls, data_location: Path) -> "JujuAccount":
+    def load(
+        cls, data_location: Path, account_file: str = ACCOUNT_FILE
+    ) -> "JujuAccount":
         """Load account from file."""
-        data_file = data_location / ACCOUNT_FILE
+        data_file = data_location / account_file
         try:
             with data_file.open() as file:
                 return JujuAccount(**yaml.safe_load(file))
@@ -182,9 +184,9 @@ class JujuAccount(pydantic.BaseModel):
                 f"cluster yet? {data_file}"
             ) from e
 
-    def write(self, data_location: Path):
+    def write(self, data_location: Path, account_file: str = ACCOUNT_FILE):
         """Dump self to file."""
-        data_file = data_location / ACCOUNT_FILE
+        data_file = data_location / account_file
         if not data_file.exists():
             data_file.touch()
         data_file.chmod(0o660)
