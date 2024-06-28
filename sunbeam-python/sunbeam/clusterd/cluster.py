@@ -239,6 +239,12 @@ class ExtendedAPIService(service.BaseService):
         """
         return self._get("/local/certpair/server", redact_response=True).get("metadata")
 
+    def get_status(self) -> dict[str, dict]:
+        """Get status of the cluster."""
+        cluster = self._get("/1.0/status")
+        members = cluster.get("metadata", {})
+        return {member["name"]: {"status": member["status"]} for member in members}
+
 
 class ClusterService(MicroClusterService, ExtendedAPIService):
     """Lists and manages cluster."""

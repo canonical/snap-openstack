@@ -336,11 +336,17 @@ class JujuHelper:
         owner = model_impl.info.owner_tag.removeprefix(OWNER_TAG_PREFIX)
         return f"{owner}/{model_impl.info.name}"
 
-    async def get_model_status_full(self, model: str) -> Dict:
-        """Get juju status for the model."""
+    async def get_model_status(
+        self, model: str, filter: list[str] | None = None
+    ) -> dict:
+        """Get juju filtered status."""
         model_impl = await self.get_model(model)
-        status = await model_impl.get_status()
-        return status
+        status = await model_impl.get_status(filter)
+        return json.loads(status.to_json())
+
+    async def get_model_status_full(self, model: str) -> dict:
+        """Get juju status for the model."""
+        return await self.get_model_status(model)
 
     async def get_application_names(self, model: str) -> List[str]:
         """Get Application names in the model.

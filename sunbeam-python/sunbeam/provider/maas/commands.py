@@ -28,8 +28,8 @@ from rich.console import Console
 from rich.table import Table
 from snaphelpers import Snap
 
+from sunbeam.commands import cluster_status, utils
 from sunbeam.commands import resize as resize_cmds
-from sunbeam.commands import utils
 from sunbeam.commands.bootstrap_state import SetBootstrapped
 from sunbeam.commands.certificates import APPLICATION as CERTIFICATES_APPLICATION
 from sunbeam.commands.certificates import DeployCertificatesProviderApplicationStep
@@ -53,6 +53,7 @@ from sunbeam.commands.juju import (
     DownloadJujuControllerCharmStep,
     IntegrateJujuApplicationsStep,
     JujuLoginStep,
+    UpdateJujuMachineIDStep,
 )
 from sunbeam.commands.k8s import (
     AddK8SCloudStep,
@@ -132,6 +133,7 @@ from sunbeam.provider.maas.steps import (
     DeploymentTopologyCheck,
     MaasAddMachinesToClusterdStep,
     MaasBootstrapJujuStep,
+    MaasClusterStatusStep,
     MaasConfigureMicrocephOSDStep,
     MaasDeployK8SApplicationStep,
     MaasDeployMachinesStep,
@@ -386,6 +388,12 @@ def bootstrap(
     client = deployment.get_client()
     plan3 = []
     plan3.append(AddManifestStep(client, manifest_path))
+    plan3.append(MaasAddMachinesToClusterdStep(client, maas_client))
+    plan3.append(
+        UpdateJujuMachineIDStep(
+            client, jhelper, CONTROLLER_MODEL.split("/")[-1], CLUSTERD_APPLICATION
+        )
+    )
     run_plan(plan3, console)
 
     if proxy_from_user and isinstance(proxy_from_user, dict):
@@ -775,9 +783,17 @@ def configure_cmd(
     default=FORMAT_TABLE,
     help="Output format.",
 )
-def list_nodes(format: str) -> None:
+@click.pass_context
+def list_nodes(ctx: click.Context, format: str) -> None:
     """List nodes in the custer."""
-    raise NotImplementedError
+    deployment: MaasDeployment = ctx.obj
+    jhelper = JujuHelper(deployment.get_connected_controller())
+    step = MaasClusterStatusStep(deployment, jhelper, console, format)
+    results = run_plan([step], console)
+    msg = get_step_message(results, MaasClusterStatusStep)
+    renderables = cluster_status.format_status(msg, format)
+    for renderable in renderables:
+        console.print(renderable)
 
 
 @click.command("maas")

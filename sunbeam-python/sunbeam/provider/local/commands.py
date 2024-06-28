@@ -20,10 +20,10 @@ from typing import Tuple, Type
 import click
 import yaml
 from rich.console import Console
-from rich.table import Table
 from snaphelpers import Snap
 
 from sunbeam import utils
+from sunbeam.commands import cluster_status
 from sunbeam.commands import refresh as refresh_cmds
 from sunbeam.commands import resize as resize_cmds
 from sunbeam.commands.bootstrap_state import SetBootstrapped
@@ -33,7 +33,6 @@ from sunbeam.commands.clusterd import (
     ClusterAddNodeStep,
     ClusterInitStep,
     ClusterJoinNodeStep,
-    ClusterListNodeStep,
     ClusterRemoveNodeStep,
     ClusterUpdateJujuControllerStep,
     ClusterUpdateNodeStep,
@@ -133,7 +132,10 @@ from sunbeam.jobs.juju import JujuHelper, ModelNotFoundException, run_sync
 from sunbeam.jobs.manifest import AddManifestStep
 from sunbeam.provider.base import ProviderBase
 from sunbeam.provider.local.deployment import LOCAL_TYPE, LocalDeployment
-from sunbeam.provider.local.steps import LocalSetHypervisorUnitsOptionsStep
+from sunbeam.provider.local.steps import (
+    LocalClusterStatusStep,
+    LocalSetHypervisorUnitsOptionsStep,
+)
 from sunbeam.utils import CatchGroup
 
 LOG = logging.getLogger(__name__)
@@ -751,35 +753,13 @@ def list(ctx: click.Context, format: str) -> None:
     preflight_checks = [DaemonGroupCheck()]
     run_preflight_checks(preflight_checks, console)
     deployment: LocalDeployment = ctx.obj
-    client = deployment.get_client()
-    plan = [ClusterListNodeStep(client)]
-    results = run_plan(plan, console)
-
-    list_node_step_result = results.get("ClusterListNodeStep")
-    nodes = list_node_step_result.message
-
-    if format == FORMAT_TABLE:
-        table = Table()
-        table.add_column("Node", justify="left")
-        table.add_column("Status", justify="center")
-        table.add_column("Control", justify="center")
-        table.add_column("Compute", justify="center")
-        table.add_column("Storage", justify="center")
-        for name, node in nodes.items():
-            table.add_row(
-                name,
-                (
-                    "[green]up[/green]"
-                    if node.get("status") == "ONLINE"
-                    else "[red]down[/red]"
-                ),
-                "x" if "control" in node.get("roles", []) else "",
-                "x" if "compute" in node.get("roles", []) else "",
-                "x" if "storage" in node.get("roles", []) else "",
-            )
-        console.print(table)
-    elif format == FORMAT_YAML:
-        click.echo(yaml.dump(nodes, sort_keys=True))
+    jhelper = JujuHelper(deployment.get_connected_controller())
+    step = LocalClusterStatusStep(deployment, jhelper, console, format)
+    results = run_plan([step], console)
+    msg = get_step_message(results, LocalClusterStatusStep)
+    renderables = cluster_status.format_status(msg, format)
+    for renderable in renderables:
+        console.print(renderable)
 
 
 @click.command()

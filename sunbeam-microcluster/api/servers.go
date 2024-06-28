@@ -27,6 +27,7 @@ var Servers = []rest.Server{
 					configCmd,
 					manifestsCmd,
 					manifestCmd,
+					statusCmd,
 				},
 			},
 			{
