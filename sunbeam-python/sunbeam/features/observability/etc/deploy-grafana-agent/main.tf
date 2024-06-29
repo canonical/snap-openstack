@@ -24,11 +24,6 @@ terraform {
   }
 }
 
-data "terraform_remote_state" "cos" {
-  backend = var.cos-state-backend
-  config  = var.cos-state-config
-}
-
 resource "juju_application" "grafana-agent" {
   name  = "grafana-agent"
   trust = false
@@ -62,6 +57,7 @@ resource "juju_integration" "principal-application-to-grafana-agent" {
 
 # juju integrate grafana-agent cos.prometheus-receive-remote-write
 resource "juju_integration" "grafana-agent-to-cos-prometheus" {
+  count = var.receive-remote-write-offer-url != null ? 1 : 0
   model = var.principal-application-model
 
   application {
@@ -69,12 +65,13 @@ resource "juju_integration" "grafana-agent-to-cos-prometheus" {
   }
 
   application {
-    offer_url = data.terraform_remote_state.cos.outputs.prometheus-receive-remote-write-offer-url
+    offer_url = var.receive-remote-write-offer-url
   }
 }
 
 # juju integrate grafana-agent cos.loki-logging
 resource "juju_integration" "grafana-agent-to-cos-loki" {
+  count = var.logging-offer-url != null ? 1 : 0 
   model = var.principal-application-model
 
   application {
@@ -82,12 +79,13 @@ resource "juju_integration" "grafana-agent-to-cos-loki" {
   }
 
   application {
-    offer_url = data.terraform_remote_state.cos.outputs.loki-logging-offer-url
+    offer_url = var.logging-offer-url
   }
 }
 
 # juju integrate grafana-agent cos.grafana-dashboards
 resource "juju_integration" "grafana-agent-to-cos-grafana" {
+  count = var.grafana-dashboard-offer-url != null ? 1 : 0
   model = var.principal-application-model
 
   application {
@@ -95,6 +93,6 @@ resource "juju_integration" "grafana-agent-to-cos-grafana" {
   }
 
   application {
-    offer_url = data.terraform_remote_state.cos.outputs.grafana-dashboard-offer-url
+    offer_url = var.grafana-dashboard-offer-url
   }
 }
