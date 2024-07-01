@@ -237,6 +237,7 @@ async def test_jhelper_get_model_unknown_error(
 
 @pytest.mark.asyncio
 async def test_jhelper_get_model_status_full(jhelper: juju.JujuHelper, model):
+    model.get_status.return_value = Mock(to_json=Mock(return_value="{}"))
     await jhelper.get_model_status_full("control-plane")
     jhelper.controller.get_model.assert_called_with("control-plane")
     model.get_status.assert_called_once()

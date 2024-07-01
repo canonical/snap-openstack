@@ -35,6 +35,8 @@ import sunbeam.provider.maas.client as maas_client
 import sunbeam.provider.maas.deployment as maas_deployment
 import sunbeam.utils as sunbeam_utils
 from sunbeam.clusterd.client import Client
+from sunbeam.commands import clusterd
+from sunbeam.commands.cluster_status import ClusterStatusStep
 from sunbeam.commands.clusterd import APPLICATION as CLUSTERD_APPLICATION
 from sunbeam.commands.configure import (
     CLOUD_CONFIG_SECTION,
@@ -61,6 +63,7 @@ from sunbeam.jobs.common import (
 from sunbeam.jobs.deployment import CertPair, Networks
 from sunbeam.jobs.deployments import DeploymentsConfig
 from sunbeam.jobs.juju import (
+    CONTROLLER_MODEL,
     ActionFailedException,
     JujuController,
     JujuHelper,
@@ -1209,6 +1212,7 @@ class MaasAddMachinesToClusterdStep(BaseStep):
         for machine in maas_machines:
             if set(machine["roles"]).intersection(
                 {
+                    maas_deployment.RoleTags.JUJU_CONTROLLER.value,
                     maas_deployment.RoleTags.CONTROL.value,
                     maas_deployment.RoleTags.COMPUTE.value,
                     maas_deployment.RoleTags.STORAGE.value,
@@ -2012,3 +2016,31 @@ class MaasUserQuestions(BaseStep):
     def run(self, status: Status | None = None) -> Result:
         """Run the step to completion."""
         return Result(ResultType.COMPLETED)
+
+
+class MaasClusterStatusStep(ClusterStatusStep):
+    def _controller_model(self) -> str:
+        return CONTROLLER_MODEL.split("/")[1]
+
+    def models(self) -> list[str]:
+        """List of models to query status from."""
+        return [self._controller_model(), self.deployment.infrastructure_model]
+
+    def _update_microcluster_status(self, status: dict, microcluster_status: dict):
+        """How to update microcluster status in the status dict.
+
+        In MAAS, clusterd is deployed as an application. We have to map the unit
+        to the machine to display the correct status.
+        """
+        for member, member_status in microcluster_status.items():
+            for node_status in status[self._controller_model()].values():
+                clusterd_status = node_status.get("applications", {}).get(
+                    clusterd.APPLICATION
+                )
+                if not clusterd_status:
+                    # machine does not have a cluster unit
+                    continue
+                unit_name = clusterd_status.get("name")
+                if member == unit_name.replace("/", "-"):
+                    node_status["clusterd-status"] = member_status
+                    break

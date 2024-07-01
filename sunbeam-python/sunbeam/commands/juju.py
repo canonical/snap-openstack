@@ -1659,3 +1659,95 @@ class IntegrateJujuApplicationsStep(BaseStep):
             LOG.warning(str(e))
             return Result(ResultType.FAILED, str(e))
         return Result(ResultType.COMPLETED)
+
+
+class UpdateJujuMachineIDStep(BaseStep):
+    """Make sure machines IDs have been updated in Juju."""
+
+    def __init__(
+        self,
+        client: Client,
+        jhelper: JujuHelper,
+        model: str,
+        application: str,
+    ):
+        super().__init__("Update Machine ID", f"Updating machine ID for {application}")
+        self.client = client
+        self.jhelper = jhelper
+        self.model = model
+        self.application = application
+        self.nodes_to_update = []
+        self.hostname_id = {}
+
+    def is_skip(self, status: Status | None) -> Result:
+        """Determines if the step should be skipped or not."""
+        clusterd_nodes = self.client.cluster.list_nodes()
+        if len(clusterd_nodes) == 0:
+            return Result(ResultType.SKIPPED)
+
+        model_status = run_sync(
+            self.jhelper.get_model_status(self.model, [self.application])
+        )
+        juju_machines = run_sync(self.jhelper.get_machines(self.model))
+
+        if self.application not in model_status["applications"]:
+            return Result(ResultType.FAILED, "Application not found in model")
+
+        app_status = model_status["applications"][self.application]
+
+        machines_ids = []
+        for name, unit in app_status["units"].items():
+            machines_ids.append(int(unit["machine"]))
+        hostname_id = {}
+        for id, machine in juju_machines.items():
+            if int(id) in machines_ids:
+                hostname_id[machine.hostname] = int(id)
+
+        if len(hostname_id) != len(machines_ids):
+            return Result(ResultType.FAILED, "Not all machines found in Juju")
+
+        nodes_to_update = []
+        for node in clusterd_nodes:
+            node_machine_id = node["machineid"]
+            for id, machine in juju_machines.items():
+                if node["name"] == machine.hostname:
+                    if int(id) != node_machine_id and node_machine_id != -1:
+                        return Result(
+                            ResultType.FAILED,
+                            f"Machine {node['name']} already exists in model"
+                            f" {self.model} with id {id},"
+                            f" expected the id {node['machineid']}.",
+                        )
+                    if (
+                        node["systemid"] != machine.instance_id
+                        and node["systemid"] != ""  # noqa: W503
+                    ):
+                        return Result(
+                            ResultType.FAILED,
+                            f"Machine {node['name']} already exists in model"
+                            f" {self.model} with systemid {machine.instance_id},"
+                            f" expected the systemid {node['systemid']}.",
+                        )
+                    if node_machine_id == -1:
+                        nodes_to_update.append(node)
+                    break
+
+        self.hostname_id = hostname_id
+        self.nodes_to_update = nodes_to_update
+
+        if not nodes_to_update:
+            return Result(ResultType.SKIPPED)
+
+        return Result(ResultType.COMPLETED)
+
+    def run(self, status: Status | None) -> Result:
+        """Integrate applications."""
+        for node in self.nodes_to_update:
+            LOG.debug(f"Updating machine {node['name']} in model {self.model}")
+            if (machine_id := self.hostname_id.get(node["name"])) is not None:
+                self.client.cluster.update_node_info(node["name"], machineid=machine_id)
+            else:
+                return Result(
+                    ResultType.FAILED, f"Machine ID not found for node {node['name']}"
+                )
+        return Result(ResultType.COMPLETED)

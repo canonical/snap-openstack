@@ -22,6 +22,7 @@ from rich.prompt import InvalidResponse, PromptBase
 import sunbeam.jobs.questions
 from sunbeam import utils
 from sunbeam.clusterd.client import Client
+from sunbeam.commands.cluster_status import ClusterStatusStep
 from sunbeam.commands.configure import (
     CLOUD_CONFIG_SECTION,
     SetHypervisorUnitsOptionsStep,
@@ -185,3 +186,17 @@ class LocalSetHypervisorUnitsOptionsStep(SetHypervisorUnitsOptionsStep):
                 self.nics[self.names[0]] = ext_net_preseed.get("nic")
             else:
                 self.nics[self.names[0]] = self.prompt_for_nic()
+
+
+class LocalClusterStatusStep(ClusterStatusStep):
+    def models(self) -> list[str]:
+        """List of models to query status from."""
+        return [self.deployment.infrastructure_model]
+
+    def _update_microcluster_status(self, status: dict, microcluster_status: dict):
+        """How to update microcluster status in the status dict."""
+        for member, member_status in microcluster_status.items():
+            for node_status in status[self.deployment.infrastructure_model].values():
+                if node_status.get("name") != member:
+                    continue
+                node_status["clusterd-status"] = member_status
