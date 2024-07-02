@@ -302,7 +302,7 @@ class TestEnableDisablePlugin:
     ):
         plugin = DummyPlugin("test_plugin", deployment)
         mocker.patch.object(plugin, "fetch_plugin_version", return_value="1.0.0")
-        requirement = PluginRequirement("test_repo.test_plugin>=1.0.0")
+        requirement = PluginRequirement("test_plugin>=1.0.0")
         plugin.check_enabled_requirement_is_compatible(requirement)
 
     def test_check_enabled_plugin_is_compatible_with_missing_version_info(
@@ -313,7 +313,7 @@ class TestEnableDisablePlugin:
         mocker.patch.object(
             plugin, "fetch_plugin_version", side_effect=MissingVersionInfoError
         )
-        requirement = PluginRequirement("test_repo.test_plugin>=1.0.0")
+        requirement = PluginRequirement("test_plugin>=1.0.0")
         with pytest.raises(PluginError):
             plugin.check_enabled_requirement_is_compatible(requirement)
 
@@ -323,7 +323,7 @@ class TestEnableDisablePlugin:
         plugin = DummyPlugin("test_plugin", deployment)
 
         mocker.patch.object(plugin, "fetch_plugin_version", return_value="0.9.0")
-        requirement = PluginRequirement("test_repo.test_plugin>=1.0.0")
+        requirement = PluginRequirement("test_plugin>=1.0.0")
         with pytest.raises(IncompatibleVersionError):
             plugin.check_enabled_requirement_is_compatible(requirement)
 
@@ -335,7 +335,7 @@ class TestEnableDisablePlugin:
         mocker.patch.object(
             plugin, "fetch_plugin_version", side_effect=MissingVersionInfoError
         )
-        requirement = PluginRequirement("test_repo.test_plugin>=1.0.0", optional=True)
+        requirement = PluginRequirement("test_plugin>=1.0.0", optional=True)
         with pytest.raises(PluginError):
             plugin.check_enabled_requirement_is_compatible(requirement)
 
@@ -347,7 +347,7 @@ class TestEnableDisablePlugin:
         mocker.patch.object(
             plugin, "fetch_plugin_version", side_effect=MissingVersionInfoError
         )
-        requirement = PluginRequirement("test_repo.test_plugin", optional=True)
+        requirement = PluginRequirement("test_plugin", optional=True)
         plugin.check_enabled_requirement_is_compatible(requirement)
 
     def test_check_enabled_plugin_is_compatible_with_no_specifier_and_required_requirement(  # noqa: E501
@@ -358,7 +358,7 @@ class TestEnableDisablePlugin:
         mocker.patch.object(
             plugin, "fetch_plugin_version", side_effect=MissingVersionInfoError
         )
-        requirement = PluginRequirement("test_repo.test_plugin", optional=False)
+        requirement = PluginRequirement("test_plugin", optional=False)
         plugin.check_enabled_requirement_is_compatible(requirement)
 
     def test_check_plugin_class_is_compatible_with_compatible_requirement(
@@ -366,7 +366,7 @@ class TestEnableDisablePlugin:
     ):
         plugin = DummyPlugin("test_plugin", deployment)
 
-        requirement = PluginRequirement("test_repo.test_plugin>=1.0.0")
+        requirement = PluginRequirement("test_plugin>=1.0.0")
 
         klass = plugin_klass("1.0.0")
         plugin.check_plugin_class_is_compatible(klass(deployment), requirement)
@@ -376,7 +376,7 @@ class TestEnableDisablePlugin:
     ):
         plugin = DummyPlugin("test_plugin", deployment)
 
-        requirement = PluginRequirement("test_repo.test_plugin>=2.0.0")
+        requirement = PluginRequirement("test_plugin>=2.0.0")
 
         klass = plugin_klass("1.0.0")
         with pytest.raises(IncompatibleVersionError):
@@ -387,7 +387,7 @@ class TestEnableDisablePlugin:
     ):
         plugin = DummyPlugin("test_plugin", deployment)
 
-        requirement = PluginRequirement("core.test_plugin>=1.0.0")
+        requirement = PluginRequirement("test_plugin>=1.0.0")
 
         klass = plugin_klass("0.5.0")
         with pytest.raises(IncompatibleVersionError):
@@ -396,7 +396,7 @@ class TestEnableDisablePlugin:
     def test_check_plugin_class_is_compatible_with_no_specifier(self, deployment):
         plugin = DummyPlugin("test_plugin", deployment)
 
-        requirement = PluginRequirement("test_repo.test_plugin")
+        requirement = PluginRequirement("test_plugin")
 
         klass = plugin_klass("1.0.0")
         plugin.check_plugin_class_is_compatible(klass(deployment), requirement)

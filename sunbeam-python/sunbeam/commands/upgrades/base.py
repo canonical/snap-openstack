@@ -49,7 +49,7 @@ class UpgradePlugins(BaseStep):
     def run(self, status: Optional[Status] = None) -> Result:
         """Upgrade plugins."""
         PluginManager.update_plugins(
-            self.deployment, repos=["core"], upgrade_release=self.upgrade_release
+            self.deployment, upgrade_release=self.upgrade_release
         )
         return Result(ResultType.COMPLETED)
 

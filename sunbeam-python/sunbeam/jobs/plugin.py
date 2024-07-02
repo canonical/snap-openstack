@@ -15,28 +15,19 @@
 
 import importlib
 import logging
-import sys
 from pathlib import Path
 from typing import Dict, List, Optional
 
 import click
 import yaml
-from snaphelpers import Snap
 
 from sunbeam import utils
-from sunbeam.clusterd.client import Client
-from sunbeam.clusterd.service import (
-    ClusterServiceUnavailableException,
-    ConfigItemNotFoundException,
-)
-from sunbeam.jobs.common import SunbeamException, read_config
+from sunbeam.jobs.common import SunbeamException
 from sunbeam.jobs.deployment import Deployment
 from sunbeam.jobs.manifest import SoftwareConfig
 
 LOG = logging.getLogger(__name__)
 PLUGIN_YAML = "plugins.yaml"
-# Plugin-<repo plugin name>
-EXTERNAL_REPO_PLUGIN_KEY = "Plugin-repo"
 
 
 class PluginManager:
@@ -46,11 +37,6 @@ class PluginManager:
     cli or any other cluster operations that need to be
     triggered on all or some of the plugins.
     """
-
-    @classmethod
-    def get_external_plugins_base_path(cls) -> Path:
-        """Returns the path in snap where external repos are cloned."""
-        return Snap().paths.user_data / "plugins"
 
     @classmethod
     def get_core_plugins_path(cls) -> Path:
@@ -123,141 +109,48 @@ class PluginManager:
 
     @classmethod
     def get_all_plugin_classes(cls) -> List[type]:
-        """Return a lsit of plugin classes from all repositories."""
+        """Return a list of plugin classes."""
         core_plugin_file = cls.get_core_plugins_path() / PLUGIN_YAML
         plugins = cls.get_plugin_classes(core_plugin_file)
-        for path in cls.get_external_plugins_base_path().glob("*"):
-            if not path.is_dir():
-                continue
-            plugins.extend(cls.get_plugin_classes(path / PLUGIN_YAML))
         return plugins
 
     @classmethod
-    def get_all_external_repos(cls, client: Client, detail: bool = False) -> list:
-        """Return all external repos stored in DB.
-
-        Returns just names by default, the format will be
-        [<repo1>, <repo2>,...]
-        If details is True, returns names and git repo, branch details.
-        The format will be
-        [
-            {"name": <repo1>, "git_repo": <repo url>, "git_branch": <repo branch>},
-            {"name": <repo2>, "git_repo": <repo url>, "git_branch": <repo branch>},
-            ...
-        ]
-
-        :param client: Clusterd client object.
-        :param detail: If true, includes repo path and branch as well.
-        :returns: List of repos.
-        """
-        try:
-            config = read_config(client, EXTERNAL_REPO_PLUGIN_KEY)
-            if detail:
-                return config.get("repos", [])
-            else:
-                repos = [
-                    repo.get("name")
-                    for repo in config.get("repos", [])
-                    if "name" in repo
-                ]
-                return repos
-        except (ConfigItemNotFoundException, ClusterServiceUnavailableException) as e:
-            LOG.debug(str(e))
-            return []
-
-    @classmethod
-    def get_plugins(cls, deployment: Deployment, repos: Optional[list] = []) -> dict:
+    def get_plugins(cls, deployment: Deployment) -> list:
         """Returns list of plugin name and description.
 
-        Get all plugins information for each repo specified in repos.
-        If repos is None or empty list, get plugins for all the repos
-        including the internal plugins in snap-openstack repo. Repo name
-        core is reserved for internal plugins in snap-openstack repo.
-
         :param deployment: Deployment instance.
-        :param repos: List of repos
-        :returns: Dictionary of repo with plugin name and description
+        :returns: List of plugin name and description
 
         Sample output:
-        {
-            "core": {
-                [
-                    ("pro", "Ubuntu pro management plugin"),
-                    ("repo", "External plugin repo management"
-                ]
-            }
-        }
+        [
+            ("pro", "Ubuntu pro management plugin"),
+        ]
         """
-        if not repos:
-            repos.append("core")
-            repos.extend(cls.get_all_external_repos(deployment.get_client()))
+        plugin_file = cls.get_core_plugins_path() / PLUGIN_YAML
 
-        plugins = {}
-        for repo in repos:
-            if repo == "core":
-                plugin_file = cls.get_core_plugins_path() / PLUGIN_YAML
-            else:
-                plugin_file = cls.get_external_plugins_base_path() / repo / PLUGIN_YAML
+        plugins_yaml = {}
+        with plugin_file.open() as file:
+            plugins_yaml = yaml.safe_load(file)
 
-            plugins_yaml = {}
-            with plugin_file.open() as file:
-                plugins_yaml = yaml.safe_load(file)
-
-            plugins_list = plugins_yaml.get("sunbeam-plugins", {}).get("plugins", {})
-            plugins[repo] = []
-            plugins[repo].extend(
-                [
-                    (plugin.get("name"), plugin.get("description"))
-                    for plugin in plugins_list
-                ]
-            )
-
-        return plugins
+        plugins_list = plugins_yaml.get("sunbeam-plugins", {}).get("plugins", {})
+        return [
+            (plugin.get("name"), plugin.get("description")) for plugin in plugins_list
+        ]
 
     @classmethod
-    def enabled_plugins(
-        cls, deployment: Deployment, repos: Optional[list] = []
-    ) -> list:
+    def enabled_plugins(cls, deployment: Deployment) -> list:
         """Returns plugin names that are enabled.
 
-        Get all plugins from the list of repos and return plugins that have enabled
-        as True.
-        Repo name core is reserved for internal plugins in snap-openstack repo.
-        If repos is None or empty list, get plugins from all repos defined in
-        cluster db including the internal plugins.
-
         :param deployment: Deployment instance.
-        :param repos: List of repos
         :returns: List of enabled plugins
         """
         enabled_plugins = []
-        if not repos:
-            repos.append("core")
-            repos.extend(cls.get_all_external_repos(deployment.get_client()))
+        for plugin in cls.get_all_plugin_classes():
+            p = plugin(deployment)
+            if hasattr(plugin, "enabled") and p.enabled:
+                enabled_plugins.append(p.name)
 
-        for repo in repos:
-            if repo == "core":
-                plugin_file = cls.get_core_plugins_path() / PLUGIN_YAML
-            else:
-                plugin_file = cls.get_external_plugins_base_path() / repo / PLUGIN_YAML
-                plugin_repo_path = str(plugin_file.parent)
-                if plugin_repo_path not in sys.path:
-                    sys.path.append(plugin_repo_path)
-
-            # If the repo folder is already deleted
-            if not plugin_file.exists():
-                LOG.debug(
-                    f"Discarding loading plugins for repo {repo} as Plugin "
-                    "yaml does not exist"
-                )
-                continue
-
-            for plugin in cls.get_plugin_classes(plugin_file):
-                p = plugin(deployment)
-                if hasattr(plugin, "enabled") and p.enabled:
-                    enabled_plugins.append(p.name)
-
-        LOG.debug(f"Enabledplugins in repos {repos}: {enabled_plugins}")
+        LOG.debug(f"Enabled plugins: {enabled_plugins}")
         return enabled_plugins
 
     @classmethod
@@ -337,17 +230,14 @@ class PluginManager:
     ) -> None:
         """Register the plugins.
 
-        Register both the core plugins in snap-openstack repo and the plugins
-        in the external repos added to sunbeam by the user. Once registeted,
-        all the commands/groups defined by plugins will be shown as part of
-        sunbeam cli.
+        Register the plugins. Once registeted, all the commands/groups defined by
+        plugins will be shown as part of sunbeam cli.
 
         :param deployment: Deployment instance.
         :param cli: Main click group for sunbeam cli.
         """
         LOG.debug("Registering core plugins")
-        core_plugin_file = cls.get_core_plugins_path() / PLUGIN_YAML
-        for plugin in cls.get_plugin_classes(core_plugin_file):
+        for plugin in cls.get_all_plugin_classes():
             try:
                 plugin(deployment).register(cli)
             except (ValueError, SunbeamException) as e:
@@ -356,42 +246,15 @@ class PluginManager:
                     LOG.debug("Sunbeam not bootstrapped. Ignoring plugin registration.")
                     continue
                 raise e
-        try:
-            client = deployment.get_client()
-        except (ValueError, SunbeamException) as e:
-            if "Clusterd address" in str(e) or "Insufficient permissions" in str(e):
-                LOG.debug(
-                    "Sunbeam not bootstrapped. Ignoring external plugin registration."
-                )
-                return
-            raise e
-        repos = cls.get_all_external_repos(client)
-        LOG.debug(f"Registering external repo plugins {repos}")
-        for repo in repos:
-            plugin_file = cls.get_external_plugins_base_path() / repo / PLUGIN_YAML
-            plugin_repo_path = str(plugin_file.parent)
-            if plugin_repo_path not in sys.path:
-                sys.path.append(plugin_repo_path)
-
-            # If the repo folder is already deleted
-            if not plugin_file.exists():
-                continue
-
-            for plugin in cls.get_plugin_classes(plugin_file):
-                plugin(deployment).register(cli)
 
     @classmethod
-    def resolve_plugin(cls, repo: str, plugin: str) -> Optional[type]:
+    def resolve_plugin(cls, plugin: str) -> Optional[type]:
         """Resolve a plugin name to a class.
 
-        Lookup core and external plugins to find a plugin with the given name.
+        Lookup plugins to find a plugin with the given name.
         """
-        if repo == "core":
-            plugin_file = cls.get_core_plugins_path() / PLUGIN_YAML
-        else:
-            plugin_file = cls.get_external_plugins_base_path() / repo / PLUGIN_YAML
+        plugin_file = cls.get_core_plugins_path() / PLUGIN_YAML
         plugins = cls.get_plugins_map(plugin_file)
-
         return plugins.get(plugin)
 
     @classmethod
@@ -415,53 +278,32 @@ class PluginManager:
     def update_plugins(
         cls,
         deployment: Deployment,
-        repos: Optional[list] = [],
         upgrade_release: bool = False,
     ) -> None:
         """Call plugin upgrade hooks.
 
-        Get all the plugins defined in repos and call the corresponding plugin
-        upgrade hooks if the plugin is enabled and version is changed. Do not
-        run any upgrade hooks if repos is empty list.
+        Get all the plugins and call the corresponding plugin upgrade hooks
+        if the plugin is enabled and version is changed.
 
         :param deployment: Deployment instance.
-        :param repos: List of repos
+        :param upgrade_release: Upgrade release flag.
         """
-        if not repos:
-            return
-
-        for repo in repos:
-            LOG.debug(f"Upgrading plugins for repo {repo}")
-            if repo == "core":
-                plugin_file = cls.get_core_plugins_path() / PLUGIN_YAML
-            else:
-                plugin_file = cls.get_external_plugins_base_path() / repo / PLUGIN_YAML
-                plugin_repo_path = str(plugin_file.parent)
-                if plugin_repo_path not in sys.path:
-                    sys.path.append(plugin_repo_path)
-
-            # If the repo folder is already deleted
-            if not plugin_file.exists():
-                continue
-
-            for plugin in cls.get_plugin_classes(plugin_file):
-                p = plugin(deployment)
-                LOG.debug(f"Object created {p.name}")
-                if hasattr(plugin, "enabled"):
-                    LOG.debug(f"enabled - {p.enabled}")
-                if (
-                    hasattr(plugin, "enabled")
-                    and p.enabled  # noqa W503
-                    and hasattr(plugin, "upgrade_hook")  # noqa W503
-                ):
-                    LOG.debug(f"Upgrading plugin {p.name} defined in repo {repo}")
-                    try:
-                        p.upgrade_hook(upgrade_release=upgrade_release)
-                    except TypeError:
-                        LOG.debug(
-                            (
-                                f"Plugin {p.name} does not support upgrades "
-                                "between channels"
-                            )
+        for plugin in cls.get_all_plugin_classes():
+            p = plugin(deployment)
+            LOG.debug(f"Object created {p.name}")
+            if (
+                hasattr(plugin, "enabled")
+                and p.enabled  # noqa W503
+                and hasattr(plugin, "upgrade_hook")  # noqa W503
+            ):
+                LOG.debug(f"Upgrading plugin {p.name}")
+                try:
+                    p.upgrade_hook(upgrade_release=upgrade_release)
+                except TypeError:
+                    LOG.debug(
+                        (
+                            f"Plugin {p.name} does not support upgrades "
+                            "between channels"
                         )
-                        p.upgrade_hook()
+                    )
+                    p.upgrade_hook()

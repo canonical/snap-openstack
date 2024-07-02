@@ -114,9 +114,7 @@ class BasePlugin(ABC):
         """Upgrade hook for the plugin.
 
         snap-openstack upgrade hook handler invokes this function on all the
-        plugins. In case of external repo plugins, this hook is invoked
-        whenever the plugin repo gets updated. Plugins should override this
-        function if required.
+        plugins. Plugins should override this function if required.
         """
         pass
 
@@ -463,22 +461,11 @@ class PluginRequirement(Requirement):
     def __init__(self, requirement_string: str, optional: bool = False):
         super().__init__(requirement_string)
         self.optional = optional
-        match self.name.split("."):
-            case [plugin]:
-                self.repo = "core"
-                self.name = plugin
-            case [repo, plugin]:
-                self.repo = repo
-                self.name = plugin
-            case _:
-                raise InvalidRequirementError(
-                    f"Invalid format {self.name!r}," " valid format is: '[repo.]plugin'"
-                )
 
     @property
     def klass(self) -> Type["EnableDisablePlugin"]:
         """Return the plugin class for the requirement."""
-        klass = PluginManager().resolve_plugin(self.repo, self.name)
+        klass = PluginManager().resolve_plugin(self.name)
         if klass is None:
             raise InvalidRequirementError(f"Plugin {self.name} not found")
         if not issubclass(klass, EnableDisablePlugin):
@@ -524,20 +511,20 @@ class EnableDisablePlugin(BasePlugin):
         if len(requirement.specifier) == 0:
             # No version requirement, so no need to check version
             return
-        display_name = requirement.repo + "." + requirement.name
+
         try:
             current_version = self.fetch_plugin_version(requirement.name)
-            LOG.debug(f"Plugin {display_name} version {current_version} found")
+            LOG.debug(f"Plugin {requirement.name} version {current_version} found")
         except MissingVersionInfoError as e:
-            LOG.debug(f"Version info for plugin {display_name} not found")
+            LOG.debug(f"Version info for plugin {requirement.name} not found")
             raise PluginError(
-                f"{display_name} has no version recorded,"
+                f"{requirement.name} has no version recorded,"
                 f" {requirement.specifier} required"
             ) from e
 
         if not requirement.specifier.contains(current_version):
             raise IncompatibleVersionError(
-                f"Plugin {self.name} requires '{display_name}"
+                f"Plugin {self.name} requires '{requirement.name}"
                 f"{requirement.specifier}' but enabled plugin is {current_version}"
             )
 
@@ -548,7 +535,7 @@ class EnableDisablePlugin(BasePlugin):
         if len(requirement.specifier) == 0:
             # No version requirement, so no need to check version
             return
-        display_name = requirement.repo + "." + requirement.name
+
         klass_version_compatible = all(
             (
                 plugin.version,
@@ -559,27 +546,16 @@ class EnableDisablePlugin(BasePlugin):
 
         if not klass_version_compatible:
             message = (
-                f"Plugin {self.name} requires '{display_name}"
+                f"Plugin {self.name} requires '{requirement.name}"
                 f"{requirement.specifier}' but loaded plugin version"
                 f" is {plugin.version}"
             )
-            if requirement.repo == "core":
-                raise IncompatibleVersionError(
-                    " ".join(
-                        (
-                            "Core plugin has an incompatible version.",
-                            "This should not happen.",
-                            message,
-                        )
-                    )
-                )
             raise IncompatibleVersionError(
                 " ".join(
                     (
-                        f"Plugin repository {requirement.repo} has",
-                        "an incompatible version.",
+                        "Plugin has an incompatible version.",
+                        "This should not happen.",
                         message,
-                        "Check for a repository update.",
                     )
                 )
             )

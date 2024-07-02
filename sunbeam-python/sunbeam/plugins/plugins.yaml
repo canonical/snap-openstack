@@ -7,12 +7,6 @@ sunbeam-plugins:
       path: sunbeam.plugins.pro.plugin.ProPlugin
       supported_architectures:
         - amd64
-    - name: "repo"
-      version: "0.0.1"
-      description: "External Plugin repo management"
-      path: sunbeam.plugins.repo.plugin.RepoPlugin
-      supported_architectures:
-        - amd64
     - name: "vault"
       version: "0.0.1"
       description: "Vault plugin"
