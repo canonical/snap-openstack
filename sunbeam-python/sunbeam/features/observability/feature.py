@@ -270,15 +270,12 @@ class DeployGrafanaAgentStep(BaseStep, JujuStepHelper):
 
     def run(self, status: Status | None = None) -> Result:
         """Execute configuration using terraform."""
-        cos_backend = self.tfhelper_cos.backend
-        cos_backend_config = self.tfhelper_cos.backend_config()
-
         extra_tfvars = {
             "principal-application-model": self.model,
-            "cos-state-backend": cos_backend,
-            "cos-state-config": cos_backend_config,
             "principal-application": "openstack-hypervisor",
         }
+        # Offer URLs from COS are added from feature
+        extra_tfvars.update(self.feature.set_tfvars_on_enable())
 
         try:
             self.update_status(status, "deploying services")
@@ -412,6 +409,11 @@ class ObservabilityFeature(OpenStackControlPlaneFeature):
         self.tfplan_grafana_agent_dir = "deploy-grafana-agent"
         self.tfplan_grafana_agent_k8s_dir = "deploy-grafana-agent-k8s"
 
+        self.external = None
+        self.prometheus_offer_url = None
+        self.grafana_offer_url = None
+        self.loki_offer_url = None
+
     @property
     def manifest(self) -> Manifest:
         """Return the manifest."""
@@ -529,18 +531,32 @@ class ObservabilityFeature(OpenStackControlPlaneFeature):
         # main plan only handles grafana-agent-k8s, named grafana-agent
         return ["grafana-agent"]
 
+    def get_cos_offer_urls(self) -> dict:
+        """Return COS offer URLs."""
+        if self.external:
+            return {
+                "grafana-dashboard-offer-url": self.grafana_offer_url,
+                "logging-offer-url": self.loki_offer_url,
+                "receive-remote-write-offer-url": self.prometheus_offer_url,
+            }
+        else:
+            tfhelper_cos = self.deployment.get_tfhelper(self.tfplan_cos)
+            output = tfhelper_cos.output()
+            return {
+                "grafana-dashboard-offer-url": output["grafana-dashboard-offer-url"],
+                "logging-offer-url": output["loki-logging-offer-url"],
+                "receive-remote-write-offer-url": output[
+                    "prometheus-receive-remote-write-offer-url"
+                ],
+            }
+
     def set_tfvars_on_enable(self) -> dict:
         """Set terraform variables to enable the application."""
-        tfhelper_cos = self.deployment.get_tfhelper(self.tfplan_cos)
-        output = tfhelper_cos.output()
-        return {
+        tfvars = {
             "enable-observability": True,
-            "grafana-dashboard-offer-url": output["grafana-dashboard-offer-url"],
-            "logging-offer-url": output["loki-logging-offer-url"],
-            "receive-remote-write-offer-url": output[
-                "prometheus-receive-remote-write-offer-url"
-            ],
         }
+        tfvars.update(self.get_cos_offer_urls())
+        return tfvars
 
     def set_tfvars_on_disable(self) -> dict:
         """Set terraform variables to disable the application."""
@@ -568,11 +584,15 @@ class ObservabilityFeature(OpenStackControlPlaneFeature):
         if self.user_manifest:
             plan.append(AddManifestStep(client, self.user_manifest))
 
-        cos_plan = [
-            TerraformInitStep(tfhelper_cos),
-            DeployObservabilityStackStep(self, tfhelper_cos, jhelper),
-            PatchCosLoadBalancerStep(client),
-        ]
+        if self.external:
+            # TODO(hemanth): Add verification to check if controller exists
+            cos_plan = []
+        else:
+            cos_plan = [
+                TerraformInitStep(tfhelper_cos),
+                DeployObservabilityStackStep(self, tfhelper_cos, jhelper),
+                PatchCosLoadBalancerStep(client),
+            ]
 
         grafana_agent_k8s_plan = [
             TerraformInitStep(tfhelper),
@@ -612,10 +632,14 @@ class ObservabilityFeature(OpenStackControlPlaneFeature):
             ),
         ]
 
-        cos_plan = [
-            TerraformInitStep(tfhelper_cos),
-            RemoveObservabilityStackStep(self, tfhelper_cos, jhelper),
-        ]
+        cos_plan = []
+        if not self.external:
+            cos_plan.append(
+                [
+                    TerraformInitStep(tfhelper_cos),
+                    RemoveObservabilityStackStep(self, tfhelper_cos, jhelper),
+                ]
+            )
 
         run_plan(agent_grafana_k8s_plan, console)
         run_plan(grafana_agent_plan, console)
@@ -623,8 +647,58 @@ class ObservabilityFeature(OpenStackControlPlaneFeature):
         click.echo("Observability disabled.")
 
     @click.command()
-    def enable_feature(self) -> None:
+    @click.option(
+        "-l", "--loki-logging-offer-url", type=str, help="Loki push API offer url"
+    )
+    @click.option(
+        "-g",
+        "--grafana-dashboard-offer-url",
+        type=str,
+        help="Grafana dashboard offer url",
+    )
+    @click.option(
+        "-p",
+        "--prometheus-receive-remote-write-offer-url",
+        type=str,
+        help="Prometheus receive-remote-write offer url",
+    )
+    @click.option(
+        "-e",
+        "--external",
+        type=str,
+        help="Name of the private controller to connect to cos",
+    )
+    def enable_feature(
+        self,
+        external: str,
+        prometheus_receive_remote_write_offer_url: str,
+        grafana_dashboard_offer_url: str,
+        loki_logging_offer_url: str,
+    ) -> None:
         """Enable Observability."""
+        if external:
+            if not all(
+                item
+                for item in [
+                    prometheus_receive_remote_write_offer_url,
+                    grafana_dashboard_offer_url,
+                    loki_logging_offer_url,
+                ]
+            ):
+                message = (
+                    "Ensure to set following options "
+                    "--prometheus-receive-remote-write-endpoint, "
+                    "--grafana-dashboard-offer-url, --loki-logging-offer-url"
+                )
+                raise click.ClickException(message)
+
+            self.external = external
+            self.prometheus_offer_url = (
+                f"{external}:{prometheus_receive_remote_write_offer_url}"
+            )
+            self.grafana_offer_url = f"{external}:{grafana_dashboard_offer_url}"
+            self.loki_offer_url = f"{external}:{loki_logging_offer_url}"
+
         super().enable_feature()
 
     @click.command()

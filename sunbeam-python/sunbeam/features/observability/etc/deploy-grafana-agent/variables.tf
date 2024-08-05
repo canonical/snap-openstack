@@ -44,12 +44,20 @@ variable "grafana-agent-config" {
   default     = {}
 }
 
-variable "cos-state-backend" {
-  description = "Backend type used for cos state"
+variable "receive-remote-write-offer-url" {
+  description = "Offer URL from prometheus-k8s:receive-remote-write application"
   type        = string
-  default     = "http"
+  default     = null
 }
 
-variable "cos-state-config" {
-  type = map(any)
+variable "grafana-dashboard-offer-url" {
+  description = "Offer URL from grafana-k8s:grafana-dashboard application"
+  type        = string
+  default     = null
+}
+
+variable "logging-offer-url" {
+  description = "Offer URL from loki-k8s:logging application"
+  type        = string
+  default     = null
 }
