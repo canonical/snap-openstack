@@ -149,8 +149,16 @@ DEPLOY_OPENSTACK_TFVAR_MAP = {
         for charm, channel in K8S_CHARMS.items()
     }
 }
+
 # mysql-k8s supports a config map when deployed in many-mysql mode
 DEPLOY_OPENSTACK_TFVAR_MAP["charms"]["mysql-k8s"]["config-map"] = "mysql-config-map"
+# mysql-k8s supports a storage map when deployed in many-mysql mode
+DEPLOY_OPENSTACK_TFVAR_MAP["charms"]["mysql-k8s"]["storage-map"] = "mysql-storage-map"
+# mysql-k8s storage directive when deployed in single mode
+DEPLOY_OPENSTACK_TFVAR_MAP["charms"]["mysql-k8s"]["storage"] = "mysql-storage"
+# glance-k8s storage directive
+DEPLOY_OPENSTACK_TFVAR_MAP["charms"]["glance-k8s"]["storage"] = "glance-storage"
+
 DEPLOY_OPENSTACK_TFVAR_MAP["charms"]["self-signed-certificates"] = {
     "channel": "certificate-authority-channel",
     "revision": "certificate-authority-revision",
