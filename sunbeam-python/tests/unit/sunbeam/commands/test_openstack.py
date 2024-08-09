@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import asyncio
+import json
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -20,6 +21,8 @@ import pytest
 
 from sunbeam.clusterd.service import ConfigItemNotFoundException
 from sunbeam.commands.openstack import (
+    DATABASE_MEMORY_KEY,
+    REGION_CONFIG_KEY,
     DeployControlPlaneStep,
     OpenStackPatchLoadBalancerServicesStep,
     ReapplyOpenStackTerraformPlanStep,
@@ -67,11 +70,29 @@ class TestDeployControlPlaneStep(unittest.TestCase):
         self.jhelper.run_action.return_value = {}
         self.tfhelper = Mock()
         self.manifest = Mock()
+        self.client = Mock()
         self.deployment = Mock()
-        self.deployment.get_client().cluster.list_nodes_by_role.side_effect = [
+        self.deployment.get_client.return_value = self.client
+        self.client.cluster.list_nodes_by_role.side_effect = [
             [{"name": f"control-{i}"} for i in range(4)],
             [{"name": f"storage-{i}"} for i in range(4)],
         ]
+        self.configs = {
+            REGION_CONFIG_KEY: json.dumps(
+                {
+                    "region": "TestOne",
+                }
+            ),
+            DATABASE_MEMORY_KEY: json.dumps({}),
+        }
+
+        def _read_config_mock(key):
+            if value := self.configs.get(key):
+                return value
+            raise ConfigItemNotFoundException(f"Config item {key} not found")
+
+        self.client.cluster.get_config.side_effect = _read_config_mock
+
         self.snap.start()
 
     def tearDown(self):
@@ -92,11 +113,7 @@ class TestDeployControlPlaneStep(unittest.TestCase):
             DATABASE,
             MODEL,
         )
-        with patch(
-            "sunbeam.commands.openstack.read_config",
-            Mock(return_value={"region": "TestOne"}),
-        ):
-            result = step.run()
+        result = step.run()
 
         self.tfhelper.update_tfvars_and_apply_tf.assert_called_once()
         assert result.result_type == ResultType.COMPLETED
@@ -116,11 +133,7 @@ class TestDeployControlPlaneStep(unittest.TestCase):
             DATABASE,
             MODEL,
         )
-        with patch(
-            "sunbeam.commands.openstack.read_config",
-            Mock(return_value={"region": "TestOne"}),
-        ):
-            result = step.run()
+        result = step.run()
 
         self.tfhelper.update_tfvars_and_apply_tf.assert_called_once()
         assert result.result_type == ResultType.FAILED
@@ -139,11 +152,7 @@ class TestDeployControlPlaneStep(unittest.TestCase):
             DATABASE,
             MODEL,
         )
-        with patch(
-            "sunbeam.commands.openstack.read_config",
-            Mock(return_value={"region": "TestOne"}),
-        ):
-            result = step.run()
+        result = step.run()
 
         self.jhelper.wait_until_active.assert_called_once()
         assert result.result_type == ResultType.FAILED
@@ -164,11 +173,7 @@ class TestDeployControlPlaneStep(unittest.TestCase):
             DATABASE,
             MODEL,
         )
-        with patch(
-            "sunbeam.commands.openstack.read_config",
-            Mock(return_value={"region": "TestOne"}),
-        ):
-            result = step.run()
+        result = step.run()
 
         self.jhelper.wait_until_active.assert_called_once()
         assert result.result_type == ResultType.FAILED

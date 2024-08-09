@@ -85,6 +85,12 @@ class LoadbalancerFeature(OpenStackControlPlaneFeature):
         """Set terraform variables to resize the application."""
         return {}
 
+    def get_database_charm_processes(self) -> dict[str, dict[str, int]]:
+        """Returns the database processes accessing this service."""
+        return {
+            "octavia": {"octavia-k8s": 6},
+        }
+
     @click.command()
     def enable_feature(self) -> None:
         """Enable Loadbalancer service."""

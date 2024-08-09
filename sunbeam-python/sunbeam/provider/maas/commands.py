@@ -69,7 +69,6 @@ from sunbeam.commands.microk8s import (
     AddMicrok8sUnitsStep,
     StoreMicrok8sConfigStep,
 )
-from sunbeam.commands.mysql import ConfigureMySQLStep
 from sunbeam.commands.openstack import (
     OPENSTACK_MODEL,
     DeployControlPlaneStep,
@@ -714,7 +713,6 @@ def deploy(
             refresh=True,
         )
     )
-    plan2.append(ConfigureMySQLStep(jhelper))
     plan2.append(OpenStackPatchLoadBalancerServicesStep(client))
     plan2.append(TerraformInitStep(tfhelper_hypervisor_deploy))
     plan2.append(

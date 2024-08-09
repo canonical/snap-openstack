@@ -361,7 +361,6 @@ class TerraformHelper:
         :param tf_apply_extra_args: Extra args to terraform apply command
         :type tf_apply_extra_args: list or None
         """
-        current_tfvars = None
         updated_tfvars = {}
         if tfvar_config:
             try:
