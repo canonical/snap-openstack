@@ -45,15 +45,13 @@ sudo grep -r $USER /etc/{{sudoers,sudoers.d}} | grep NOPASSWD:ALL &> /dev/null |
     rm -f /tmp/90-$USER-sudo-access
 }}
 
-# Ensure OpenSSH server is installed
-dpkg -s openssh-server &> /dev/null || {{
-    sudo apt install -y openssh-server
-}}
-
-# Ensure Curl is installed
-dpkg -s curl &> /dev/null || {{
-    sudo apt install -y curl
-}}
+# Ensure pre-reqs - e.g. OpenSSH server are installed
+PREREQ_DPKGS=("curl" "openssh-server")
+for pkg in ${PREREQ_DPKS[@]}; do
+  dpkg -s $pkg &> /dev/null || {
+    sudo apt install -y $pkg
+  }
+done
 
 # Add $USER to the snap_daemon group supporting interaction
 # with the sunbeam clustering daemon for cluster operations.
