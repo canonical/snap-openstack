@@ -50,6 +50,11 @@ dpkg -s openssh-server &> /dev/null || {{
     sudo apt install -y openssh-server
 }}
 
+# Ensure Curl is installed
+dpkg -s curl &> /dev/null || {{
+    sudo apt install -y curl
+}}
+
 # Add $USER to the snap_daemon group supporting interaction
 # with the sunbeam clustering daemon for cluster operations.
 sudo usermod --append --groups snap_daemon $USER
