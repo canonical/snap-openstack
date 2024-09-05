@@ -47,7 +47,7 @@ sudo grep -r $USER /etc/{{sudoers,sudoers.d}} | grep NOPASSWD:ALL &> /dev/null |
 
 # Ensure pre-reqs - e.g. OpenSSH server are installed
 PREREQ_DPKGS=("curl" "openssh-server")
-for pkg in ${PREREQ_DPKS[@]}; do
+for pkg in ${PREREQ_DPKGS[@]}; do
   dpkg -s $pkg &> /dev/null || {
     sudo apt install -y $pkg
   }
