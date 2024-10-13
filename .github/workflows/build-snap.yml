@@ -79,6 +79,8 @@ jobs:
           sg snap_daemon "openstack.sunbeam enable vault"
           sg snap_daemon "openstack.sunbeam enable secrets"
           sg snap_daemon "openstack.sunbeam enable resource-optimization"
+          sg snap_daemon "openstack.sunbeam enable consul"
+          sg snap_daemon "openstack.sunbeam enable masakari"
           # Disable caas temporarily while MySQL memory gets adjusted
           # sg snap_daemon "openstack.sunbeam enable caas"
           # sg snap_daemon "openstack.sunbeam enable validation"
@@ -86,6 +88,7 @@ jobs:
           # sg snap_daemon "openstack.sunbeam validation run smoke"
           # sg snap_daemon "openstack.sunbeam validation run --output tempest_validation.log"
           # sg snap_daemon "openstack.sunbeam disable caas"
+          sg snap_daemon "openstack.sunbeam disable masakari"
           # Disable consul as the pods are stuck in getting terminated
           # sg snap_daemon "openstack.sunbeam disable consul"
           sg snap_daemon "openstack.sunbeam disable resource-optimization"
