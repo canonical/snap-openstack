@@ -155,3 +155,17 @@ resource "juju_integration" "hypervisor-nova-controller" {
     offer_url = data.terraform_remote_state.openstack.outputs.nova-offer-url
   }
 }
+
+resource "juju_integration" "hypervisor-masakari" {
+  count = try(data.terraform_remote_state.openstack.outputs.masakari-offer-url, null) != null ? 1 : 0
+  model = var.machine_model
+
+  application {
+    name     = juju_application.openstack-hypervisor.name
+    endpoint = "masakari-service"
+  }
+
+  application {
+    offer_url = data.terraform_remote_state.openstack.outputs.masakari-offer-url
+  }
+}

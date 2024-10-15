@@ -101,3 +101,8 @@ features:
           channel: 1.19/edge
         consul-client:
           channel: 1.19/edge
+  instance-recovery:
+    software:
+      charms:
+        masakari-k8s:
+          channel: 2024.1/edge
