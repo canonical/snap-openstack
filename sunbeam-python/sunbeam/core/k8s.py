@@ -12,7 +12,6 @@
 # implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import ipaddress
 import logging
 
 from snaphelpers import Snap
@@ -34,24 +33,6 @@ SERVICE_LB_ANNOTATION = "io.cilium/lb-ipam-ips"
 SUPPORTED_K8S_PROVIDERS = ["k8s", "microk8s"]
 CREDENTIAL_SUFFIX = "-creds"
 K8S_CLOUD_SUFFIX = "-k8s"
-
-
-def validate_cidr_or_ip_range(ip_ranges: str):
-    for ip_range in ip_ranges.split(","):
-        ips = ip_range.split("-")
-        if len(ips) == 1:
-            if "/" not in ips[0]:
-                raise ValueError(
-                    "Invalid CIDR definition, must be in the form 'ip/mask'"
-                )
-            ipaddress.ip_network(ips[0])
-        elif len(ips) == 2:
-            ipaddress.ip_address(ips[0])
-            ipaddress.ip_address(ips[1])
-        else:
-            raise ValueError(
-                "Invalid IP range, must be in the form of 'ip-ip' or 'cidr'"
-            )
 
 
 class K8SHelper:

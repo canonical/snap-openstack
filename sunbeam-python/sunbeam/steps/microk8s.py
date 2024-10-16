@@ -22,7 +22,14 @@ from rich.status import Status
 from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import ConfigItemNotFoundException
 from sunbeam.core import questions
-from sunbeam.core.common import BaseStep, Result, ResultType, read_config, update_config
+from sunbeam.core.common import (
+    BaseStep,
+    Result,
+    ResultType,
+    read_config,
+    update_config,
+    validate_cidr_or_ip_ranges,
+)
 from sunbeam.core.deployment import Deployment, Networks
 from sunbeam.core.juju import (
     ActionFailedException,
@@ -37,7 +44,6 @@ from sunbeam.core.k8s import (
     CREDENTIAL_SUFFIX,
     K8S_CLOUD_SUFFIX,
     MICROK8S_KUBECONFIG_KEY,
-    validate_cidr_or_ip_range,
 )
 from sunbeam.core.manifest import Manifest
 from sunbeam.core.steps import (
@@ -59,10 +65,10 @@ MICROK8S_ADDONS_CONFIG_KEY = "TerraformVarsMicrok8sAddons"
 def microk8s_addons_questions():
     return {
         "metallb": questions.PromptQuestion(
-            "MetalLB address allocation range "
-            "(supports multiple ranges, comma separated)",
-            default_value="10.20.21.10-10.20.21.20",
-            validation_function=validate_cidr_or_ip_range,
+            "OpenStack APIs IP ranges"
+            " (supports multiple ranges/cidrs, comma separated)",
+            default_value="172.16.1.201-172.16.1.240",
+            validation_function=validate_cidr_or_ip_ranges,
         ),
     }
 

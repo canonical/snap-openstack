@@ -36,6 +36,7 @@ from sunbeam.commands.configure import (
     UserOpenRCStep,
     retrieve_admin_credentials,
 )
+from sunbeam.commands.dashboard_url import retrieve_dashboard_url
 from sunbeam.commands.proxy import PromptForProxyStep
 from sunbeam.core.checks import (
     Check,
@@ -829,6 +830,12 @@ def configure_cmd(
     ]
 
     run_plan(plan, console)
+    dashboard_url = retrieve_dashboard_url(jhelper)
+    console.print("The cloud has been configured for sample usage.")
+    console.print(
+        "You can start using the OpenStack client"
+        f" or access the OpenStack dashboard at {dashboard_url}"
+    )
 
 
 @click.command("list")

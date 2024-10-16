@@ -2136,17 +2136,12 @@ class MaasUserQuestions(BaseStep):
             new_default=default_gateway
         )
 
-        default_allocation_range_start = self.variables["external_network"].get(
-            "start"
-        ) or str(external_network_hosts[1])
-        self.variables["external_network"]["start"] = ext_net_bank.start.ask(
-            new_default=default_allocation_range_start
+        default_allocation_range = (
+            self.variables["external_network"].get("range")
+            or f"{external_network_hosts[1]}-{external_network_hosts[-1]}"
         )
-        default_allocation_range_end = self.variables["external_network"].get(
-            "end"
-        ) or str(external_network_hosts[-1])
-        self.variables["external_network"]["end"] = ext_net_bank.end.ask(
-            new_default=default_allocation_range_end
+        self.variables["external_network"]["range"] = ext_net_bank.range.ask(
+            new_default=default_allocation_range
         )
 
         self.variables["external_network"]["physical_network"] = VARIABLE_DEFAULTS[

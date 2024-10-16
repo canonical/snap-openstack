@@ -136,8 +136,8 @@ def launch(
             external_network = conn.network.find_network("external-network")
             ip_ = conn.network.create_ip(floating_network_id=external_network.id)
             conn.add_ips_to_server(server, ips=[ip_.floating_ip_address])
+            console.print("Access the instance by running the following command:")
             console.print(
-                "Access instance with",
                 f"`ssh -i {key_path} ubuntu@{ip_.floating_ip_address}`",
             )
         except openstack.exceptions.SDKException as e:

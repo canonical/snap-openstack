@@ -211,15 +211,15 @@ def proxy_questions():
             default_value=False,
         ),
         "http_proxy": PromptQuestion(
-            "Enter value for http_proxy:",
+            "http_proxy (url):",
             validation_function=does_not_contain_quotes,
         ),
         "https_proxy": PromptQuestion(
-            "Enter value for https_proxy:",
+            "https_proxy (url):",
             validation_function=does_not_contain_quotes,
         ),
         "no_proxy": PromptQuestion(
-            "Enter value for no_proxy:",
+            "no_proxy (comma separated domain/IP/cidr):",
             validation_function=does_not_contain_quotes,
         ),
     }

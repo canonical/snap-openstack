@@ -60,7 +60,7 @@ CLUSTERD_PORT = 7000
 def bootstrap_questions():
     return {
         "management_cidr": questions.PromptQuestion(
-            "Management networks shared by hosts (CIDRs, separated by comma)",
+            "Management network (CIDRs, separated by comma)",
             default_value=utils.get_local_cidr_by_default_route(),
         ),
     }

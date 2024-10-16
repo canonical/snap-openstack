@@ -195,8 +195,7 @@ class CoreConfig(pydantic.BaseModel):
         nic: str | None = None
         cidr: str | None = None
         gateway: str | None = None
-        start: str | None = None
-        end: str | None = None
+        range: str | None = None
         network_type: typing.Literal["vlan", "flat"] | None = None
         segmentation_id: int | None = None
 

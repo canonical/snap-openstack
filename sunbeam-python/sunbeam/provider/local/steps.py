@@ -111,9 +111,7 @@ class NicQuestion(sunbeam.core.questions.Question[str]):
 
 def local_hypervisor_questions():
     return {
-        "nic": NicQuestion(
-            "Free network interface that will be configured for external traffic"
-        ),
+        "nic": NicQuestion("External network's interface"),
     }
 
 
