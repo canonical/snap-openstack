@@ -70,36 +70,41 @@ jobs:
           openstack console log show --lines 200 test
           demo_floating_ip="$(openstack floating ip list -c 'Floating IP Address' -f value | head -n1)"
           ssh -oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null -i ~/snap/openstack/current/sunbeam "ubuntu@${demo_floating_ip}" true
+
+          # Enable/Disable plugins in batches as kubelet has disk pressure
+          # when all plugins are enabled
           sg snap_daemon "openstack.sunbeam enable orchestration"
           sg snap_daemon "openstack.sunbeam enable loadbalancer"
           sg snap_daemon "openstack.sunbeam enable dns --nameservers=testing.github."
-          sg snap_daemon "openstack.sunbeam enable telemetry"
-          sg snap_daemon "openstack.sunbeam enable observability embedded"
-          sg snap_daemon "openstack.sunbeam enable vault"
-          sg snap_daemon "openstack.sunbeam enable secrets"
-          sg snap_daemon "openstack.sunbeam enable resource-optimization"
-          sg snap_daemon "openstack.sunbeam enable consul"
-          sg snap_daemon "openstack.sunbeam enable instance-recovery"
           # Disable caas temporarily while MySQL memory gets adjusted
           # sg snap_daemon "openstack.sunbeam enable caas"
+          # sg snap_daemon "openstack.sunbeam disable caas"
+          sg snap_daemon "openstack.sunbeam disable dns"
+          sg snap_daemon "openstack.sunbeam disable loadbalancer"
+          sg snap_daemon "openstack.sunbeam disable orchestration"
+
+          sg snap_daemon "openstack.sunbeam enable vault"
+          sg snap_daemon "openstack.sunbeam enable secrets"
+          sg snap_daemon "openstack.sunbeam enable consul"
+          sg snap_daemon "openstack.sunbeam enable instance-recovery"
+          sg snap_daemon "openstack.sunbeam enable resource-optimization"
+          sg snap_daemon "openstack.sunbeam disable resource-optimization"
+          # sg snap_daemon "openstack.sunbeam disable instance-recovery"
+          # Disable consul as the pods are stuck in getting terminated
+          # sg snap_daemon "openstack.sunbeam disable consul"
+          sg snap_daemon "openstack.sunbeam disable secrets"
+          sg snap_daemon "openstack.sunbeam disable vault"
+
+          sg snap_daemon "openstack.sunbeam enable telemetry"
+          sg snap_daemon "openstack.sunbeam enable observability embedded"
           # sg snap_daemon "openstack.sunbeam enable validation"
           # If smoke tests fails, logs should be collected via sunbeam command in "Collect logs"
           # sg snap_daemon "openstack.sunbeam validation run smoke"
           # sg snap_daemon "openstack.sunbeam validation run --output tempest_validation.log"
-          # sg snap_daemon "openstack.sunbeam disable caas"
-          sg snap_daemon "openstack.sunbeam disable instance-recovery"
-          # Disable consul as the pods are stuck in getting terminated
-          # sg snap_daemon "openstack.sunbeam disable consul"
-          sg snap_daemon "openstack.sunbeam disable resource-optimization"
-          sg snap_daemon "openstack.sunbeam disable secrets"
-          sg snap_daemon "openstack.sunbeam disable vault"
+          # sg snap_daemon "openstack.sunbeam disable validation"
           # Commented disabling observability due to LP#1998282
           # sg snap_daemon "openstack.sunbeam disable observability embedded"
           # sg snap_daemon "openstack.sunbeam disable telemetry"
-          sg snap_daemon "openstack.sunbeam disable dns"
-          sg snap_daemon "openstack.sunbeam disable loadbalancer"
-          sg snap_daemon "openstack.sunbeam disable orchestration"
-          # sg snap_daemon "openstack.sunbeam disable validation"
 
       - name: Collect logs
         if: always()
