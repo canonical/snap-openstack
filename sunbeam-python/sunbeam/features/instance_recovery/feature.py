@@ -68,6 +68,13 @@ class InstanceRecoveryFeature(OpenStackControlPlaneFeature):
             }
         }
 
+    def pre_enable(self, deployment: Deployment, config: FeatureConfig) -> None:
+        """Handler to perform tasks before enabling the feature."""
+        if self.get_cluster_topology(deployment) == "single":
+            click.echo("WARNING: This feature is meant for multi-node deployment only.")
+
+        super().pre_enable(deployment, config)
+
     def run_enable_plans(self, deployment: Deployment, config: FeatureConfig) -> None:
         """Run plans to enable feature."""
         tfhelper = deployment.get_tfhelper(self.tfplan)

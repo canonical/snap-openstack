@@ -76,22 +76,14 @@ jobs:
           sg snap_daemon "openstack.sunbeam enable orchestration"
           sg snap_daemon "openstack.sunbeam enable loadbalancer"
           sg snap_daemon "openstack.sunbeam enable dns --nameservers=testing.github."
+          sg snap_daemon "openstack.sunbeam enable vault"
+          sg snap_daemon "openstack.sunbeam enable secrets"
           # Disable caas temporarily while MySQL memory gets adjusted
           # sg snap_daemon "openstack.sunbeam enable caas"
           # sg snap_daemon "openstack.sunbeam disable caas"
           sg snap_daemon "openstack.sunbeam disable dns"
           sg snap_daemon "openstack.sunbeam disable loadbalancer"
           sg snap_daemon "openstack.sunbeam disable orchestration"
-
-          sg snap_daemon "openstack.sunbeam enable vault"
-          sg snap_daemon "openstack.sunbeam enable secrets"
-          sg snap_daemon "openstack.sunbeam enable consul"
-          sg snap_daemon "openstack.sunbeam enable instance-recovery"
-          sg snap_daemon "openstack.sunbeam enable resource-optimization"
-          sg snap_daemon "openstack.sunbeam disable resource-optimization"
-          # sg snap_daemon "openstack.sunbeam disable instance-recovery"
-          # Disable consul as the pods are stuck in getting terminated
-          # sg snap_daemon "openstack.sunbeam disable consul"
           sg snap_daemon "openstack.sunbeam disable secrets"
           sg snap_daemon "openstack.sunbeam disable vault"
 
@@ -105,6 +97,14 @@ jobs:
           # Commented disabling observability due to LP#1998282
           # sg snap_daemon "openstack.sunbeam disable observability embedded"
           # sg snap_daemon "openstack.sunbeam disable telemetry"
+
+          sg snap_daemon "openstack.sunbeam enable resource-optimization"
+          sg snap_daemon "openstack.sunbeam enable consul"
+          sg snap_daemon "openstack.sunbeam enable instance-recovery"
+          # sg snap_daemon "openstack.sunbeam disable instance-recovery"
+          # Disable consul as the pods are stuck in getting terminated
+          # sg snap_daemon "openstack.sunbeam disable consul"
+          sg snap_daemon "openstack.sunbeam disable resource-optimization"
 
       - name: Collect logs
         if: always()
