@@ -101,3 +101,8 @@ features:
           channel: 1.19/candidate
         consul-client:
           channel: 1.19/candidate
+  instance-recovery:
+    software:
+      charms:
+        masakari-k8s:
+          channel: 2024.1/candidate

@@ -101,4 +101,8 @@ features:
           channel: 1.19/beta
         consul-client:
           channel: 1.19/beta
-
+  instance-recovery:
+    software:
+      charms:
+        masakari-k8s:
+          channel: 2024.1/beta

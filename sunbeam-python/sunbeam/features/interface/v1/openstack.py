@@ -217,6 +217,13 @@ class OpenStackControlPlaneFeature(EnableDisableFeature, typing.Generic[ConfigTy
         topology = read_config(client, TOPOLOGY_KEY)
         return topology["database"]
 
+    def get_cluster_topology(self, deployment: Deployment) -> str:
+        """Returns the cluster topology of the cluster."""
+        # Topology can be set only during bootstrap and cannot be changed.
+        client = deployment.get_client()
+        topology = read_config(client, TOPOLOGY_KEY)
+        return topology["topology"]
+
     def get_database_charm_processes(self) -> dict[str, dict[str, int]]:
         """Returns the database processes accessing this service.
 
