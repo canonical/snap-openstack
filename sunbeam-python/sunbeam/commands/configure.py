@@ -24,7 +24,7 @@ from rich.console import Console
 import sunbeam.core.questions
 from sunbeam import utils
 from sunbeam.clusterd.client import Client
-from sunbeam.core.common import BaseStep, Result, ResultType, Status
+from sunbeam.core.common import BaseStep, Result, ResultType, Status, validate_ip_range
 from sunbeam.core.juju import (
     ActionFailedException,
     JujuHelper,
@@ -58,12 +58,12 @@ def user_questions():
             password=True,
         ),
         "cidr": sunbeam.core.questions.PromptQuestion(
-            "Network range to use for project network",
-            default_value="192.168.122.0/24",
+            "Project network (CIDR)",
+            default_value="192.168.0.0/24",
             validation_function=ipaddress.ip_network,
         ),
         "nameservers": sunbeam.core.questions.PromptQuestion(
-            "List of nameservers guests should use for DNS resolution",
+            "Project network's nameservers (space separated)",
             default_function=lambda: " ".join(utils.get_nameservers()),
         ),
         "security_group_rules": sunbeam.core.questions.ConfirmQuestion(
@@ -80,32 +80,27 @@ def user_questions():
 def ext_net_questions():
     return {
         "cidr": sunbeam.core.questions.PromptQuestion(
-            "CIDR of network to use for external networking",
-            default_value="10.20.20.0/24",
+            "External network (CIDR)",
+            default_value="172.16.2.0/24",
             validation_function=ipaddress.ip_network,
         ),
         "gateway": sunbeam.core.questions.PromptQuestion(
-            "IP address of default gateway for external network",
+            "External network's gateway (IP)",
             default_value=None,
             validation_function=ipaddress.ip_address,
         ),
-        "start": sunbeam.core.questions.PromptQuestion(
-            "Start of IP allocation range for external network",
+        "range": sunbeam.core.questions.PromptQuestion(
+            "External network's allocation range (IP range)",
             default_value=None,
-            validation_function=ipaddress.ip_address,
-        ),
-        "end": sunbeam.core.questions.PromptQuestion(
-            "End of IP allocation range for external network",
-            default_value=None,
-            validation_function=ipaddress.ip_address,
+            validation_function=validate_ip_range,
         ),
         "network_type": sunbeam.core.questions.PromptQuestion(
-            "Network type for access to external network",
+            "External network's type [flat/vlan]",
             choices=["flat", "vlan"],
             default_value="flat",
         ),
         "segmentation_id": sunbeam.core.questions.PromptQuestion(
-            "VLAN ID to use for external network", default_value=0
+            "External network's segmentation id", default_value=0
         ),
     }
 
@@ -113,30 +108,22 @@ def ext_net_questions():
 def ext_net_questions_local_only():
     return {
         "cidr": sunbeam.core.questions.PromptQuestion(
-            (
-                "CIDR of OpenStack external network - arbitrary but must not "
-                "be in use"
-            ),
-            default_value="10.20.20.0/24",
+            ("External network (CIDR) - arbitrary but must not be in use"),
+            default_value="172.16.2.0/24",
             validation_function=ipaddress.ip_network,
         ),
-        "start": sunbeam.core.questions.PromptQuestion(
-            "Start of IP allocation range for external network",
+        "range": sunbeam.core.questions.PromptQuestion(
+            "External network's allocation range (IP range)",
             default_value=None,
-            validation_function=ipaddress.ip_address,
-        ),
-        "end": sunbeam.core.questions.PromptQuestion(
-            "End of IP allocation range for external network",
-            default_value=None,
-            validation_function=ipaddress.ip_address,
+            validation_function=validate_ip_range,
         ),
         "network_type": sunbeam.core.questions.PromptQuestion(
-            "Network type for access to external network",
+            "External network's type [flat/vlan]",
             choices=["flat", "vlan"],
             default_value="flat",
         ),
         "segmentation_id": sunbeam.core.questions.PromptQuestion(
-            "VLAN ID to use for external network", default_value=0
+            "External network's segmentation id", default_value=0
         ),
     }
 
@@ -144,14 +131,13 @@ def ext_net_questions_local_only():
 VARIABLE_DEFAULTS: dict[str, dict[str, str | int | bool | None]] = {
     "user": {
         "username": "demo",
-        "cidr": "192.168.122.0/24",
+        "cidr": "192.168.0.0/24",
         "security_group_rules": True,
     },
     "external_network": {
-        "cidr": "10.20.20.0/24",
+        "cidr": "172.16.2.0/24",
         "gateway": None,
-        "start": None,
-        "end": None,
+        "range": None,
         "physical_network": "physnet1",
         "network_type": "flat",
         "segmentation_id": 0,
@@ -467,17 +453,12 @@ class UserQuestions(BaseStep):
                 new_default=default_gateway
             )
 
-        default_allocation_range_start = self.variables["external_network"].get(
-            "start"
-        ) or str(external_network_hosts[1])
-        self.variables["external_network"]["start"] = ext_net_bank.start.ask(
-            new_default=default_allocation_range_start
+        default_allocation_range = (
+            self.variables["external_network"].get("range")
+            or f"{external_network_hosts[1]}-{external_network_hosts[-1]}"
         )
-        default_allocation_range_end = self.variables["external_network"].get(
-            "end"
-        ) or str(external_network_hosts[-1])
-        self.variables["external_network"]["end"] = ext_net_bank.end.ask(
-            new_default=default_allocation_range_end
+        self.variables["external_network"]["range"] = ext_net_bank.range.ask(
+            new_default=default_allocation_range
         )
 
         self.variables["external_network"]["physical_network"] = VARIABLE_DEFAULTS[

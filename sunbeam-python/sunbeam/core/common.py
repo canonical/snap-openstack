@@ -15,6 +15,7 @@
 
 import asyncio
 import enum
+import ipaddress
 import json
 import logging
 import os
@@ -492,3 +493,30 @@ def infer_risk(snap: Snap) -> RiskLevel:
             return RiskLevel.EDGE
         case _:
             return RiskLevel.STABLE
+
+
+def validate_cidr_or_ip_ranges(ip_ranges: str):
+    for ip_range in ip_ranges.split(","):
+        validate_cidr_or_ip_range(ip_range)
+
+
+def validate_cidr_or_ip_range(ip_range: str):
+    ips = ip_range.split("-")
+    if len(ips) == 1:
+        if "/" not in ips[0]:
+            raise ValueError("Invalid CIDR definition, must be in the form 'ip/mask'")
+        ipaddress.ip_network(ips[0])
+    elif len(ips) == 2:
+        ipaddress.ip_address(ips[0])
+        ipaddress.ip_address(ips[1])
+    else:
+        raise ValueError("Invalid IP range, must be in the form of 'ip-ip' or 'cidr'")
+
+
+def validate_ip_range(ip_range: str):
+    ips = ip_range.split("-")
+    if len(ips) == 2:
+        ipaddress.ip_address(ips[0])
+        ipaddress.ip_address(ips[1])
+    else:
+        raise ValueError("Invalid IP range, must be in the form of 'ip-ip'")

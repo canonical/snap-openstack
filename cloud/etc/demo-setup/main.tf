@@ -75,8 +75,8 @@ resource "openstack_networking_subnet_v2" "external_subnet" {
   ip_version  = 4
   enable_dhcp = false
   allocation_pool {
-    start = var.external_network.start
-    end   = var.external_network.end
+    start = split("-", var.external_network.range)[0]
+    end   = split("-", var.external_network.range)[1]
   }
   gateway_ip = var.external_network.gateway
 }

@@ -55,7 +55,7 @@ MICROCEPH_UNIT_TIMEOUT = (
 def microceph_questions():
     return {
         "osd_devices": questions.PromptQuestion(
-            "Disks to attach to MicroCeph (comma separated list)",
+            "Ceph devices (paths, separated by a comma)",
         ),
     }
 

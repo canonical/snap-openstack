@@ -242,7 +242,7 @@ class QuestionBank:
                 ),
                 "cidr": PromptQuestion(
                     "Network range to use for project network",
-                    default_value="192.168.122.0/24"
+                    default_value="192.168.0.0/24"
                 ),
                 "security_group_rules": ConfirmQuestion(
                     "Setup security group rules for SSH and ICMP ingress",

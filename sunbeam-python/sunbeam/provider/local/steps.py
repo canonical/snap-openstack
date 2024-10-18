@@ -40,9 +40,7 @@ console = Console()
 
 def local_hypervisor_questions():
     return {
-        "nic": sunbeam.core.questions.PromptQuestion(
-            "Free network interface that will be configured for external traffic"
-        ),
+        "nic": sunbeam.core.questions.PromptQuestion("External network's interface"),
     }
 
 

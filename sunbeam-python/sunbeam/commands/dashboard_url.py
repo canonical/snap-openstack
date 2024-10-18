@@ -27,6 +27,23 @@ LOG = logging.getLogger(__name__)
 console = Console()
 
 
+def retrieve_dashboard_url(jhelper: juju.JujuHelper) -> str:
+    """Retrieve dashboard URL from Horizon service."""
+    model = OPENSTACK_MODEL
+    app = "horizon"
+    action_cmd = "get-dashboard-url"
+    try:
+        unit = juju.run_sync(jhelper.get_leader_unit(app, model))
+    except juju.LeaderNotFoundException:
+        raise ValueError(f"Unable to get {app} leader")
+    action_result = juju.run_sync(jhelper.run_action(unit, model, action_cmd))
+    if action_result.get("return-code", 0) > 1:
+        _message = "Unable to retrieve URL from Horizon service"
+        raise ValueError(_message)
+    else:
+        return action_result["url"]
+
+
 @click.command()
 @click.pass_context
 def dashboard_url(ctx: click.Context) -> None:
@@ -38,19 +55,7 @@ def dashboard_url(ctx: click.Context) -> None:
     jhelper = juju.JujuHelper(deployment.get_connected_controller())
 
     with console.status("Retrieving dashboard URL from Horizon service ... "):
-        # Retrieve config from juju actions
-        model = OPENSTACK_MODEL
-        app = "horizon"
-        action_cmd = "get-dashboard-url"
-        unit = juju.run_sync(jhelper.get_leader_unit(app, model))
-        if not unit:
-            _message = f"Unable to get {app} leader"
-            raise click.ClickException(_message)
-
-        action_result = juju.run_sync(jhelper.run_action(unit, model, action_cmd))
-
-        if action_result.get("return-code", 0) > 1:
-            _message = "Unable to retrieve URL from Horizon service"
-            raise click.ClickException(_message)
-        else:
-            console.print(action_result.get("url"))
+        try:
+            console.print(retrieve_dashboard_url(jhelper))
+        except Exception as e:
+            raise click.ClickException(str(e))

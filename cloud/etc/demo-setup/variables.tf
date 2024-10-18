@@ -3,8 +3,7 @@ variable "external_network" {
   type = object({
     cidr             = string
     gateway          = string
-    start            = string
-    end              = string
+    range            = string
     physical_network = string
     network_type     = string
     segmentation_id  = number
