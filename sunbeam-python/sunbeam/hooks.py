@@ -24,7 +24,7 @@ LOG = logging.getLogger(__name__)
 DEFAULT_CONFIG = {
     "daemon.group": "snap_daemon",
     "daemon.debug": False,
-    "k8s.provider": "microk8s",
+    "k8s.provider": "k8s",
     "deployment.risk": "stable",
 }
 
