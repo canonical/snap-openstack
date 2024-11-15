@@ -52,6 +52,7 @@ from juju.unit import Unit
 from packaging import version
 from snaphelpers import Snap
 
+from sunbeam import utils
 from sunbeam.clusterd.client import Client
 from sunbeam.core.common import SunbeamException
 from sunbeam.versions import JUJU_BASE, SUPPORTED_RELEASE
@@ -82,6 +83,12 @@ class JujuException(SunbeamException):
 
 class ControllerNotFoundException(JujuException):
     """Raised when controller is missing."""
+
+    pass
+
+
+class ControllerNotReachableException(JujuException):
+    """Raised when controller is not reachable."""
 
     pass
 
@@ -1369,6 +1376,17 @@ class JujuHelper:
         }
         return credentials
 
+    @staticmethod
+    def empty_credential(cloud: str):
+        """Create empty credential definition."""
+        credentials: dict[str, dict] = {"credentials": {}}
+        credentials["credentials"][cloud] = {
+            "empty-creds": {
+                "auth-type": "empty",
+            }
+        }
+        return credentials
+
     async def get_spaces(self, model: str) -> list[dict]:
         """Get spaces in model."""
         model_impl = await self.get_model(model)
@@ -1559,6 +1577,23 @@ class JujuStepHelper:
             LOG.debug(e)
             raise ControllerNotFoundException() from e
 
+    def get_controller_ip(self, controller: str) -> str:
+        """Get Controller IP of given juju controller.
+
+        Returns Juju Controller IP.
+        Raises ControllerNotFoundException or ControllerNotReachableException.
+        """
+        controller_details = self.get_controller(controller)
+        endpoints = controller_details.get("details", {}).get("api-endpoints", [])
+        controller_ip_port = utils.first_connected_server(endpoints)
+        if not controller_ip_port:
+            raise ControllerNotReachableException(
+                f"Juju Controller {controller} not reachable"
+            )
+
+        controller_ip = controller_ip_port.rsplit(":", 1)[0]
+        return controller_ip
+
     def add_cloud(self, name: str, cloud: dict, controller: str | None) -> bool:
         """Add cloud to client clouds.
 
@@ -1589,8 +1624,35 @@ class JujuStepHelper:
 
         return True
 
+    def add_k8s_cloud_in_client(self, name: str, kubeconfig: dict):
+        """Add k8s cloud in juju client."""
+        with tempfile.NamedTemporaryFile() as temp:
+            temp.write(yaml.dump(kubeconfig).encode("utf-8"))
+            temp.flush()
+            cmd = [
+                self._get_juju_binary(),
+                "add-k8s",
+                name,
+                "--client",
+                "--region=localhost/localhost",
+            ]
+
+            env = os.environ.copy()
+            env.update({"KUBECONFIG": temp.name})
+            LOG.debug(f'Running command {" ".join(cmd)}')
+            process = subprocess.run(
+                cmd, capture_output=True, text=True, check=True, env=env
+            )
+            LOG.debug(
+                f"Command finished. stdout={process.stdout}, stderr={process.stderr}"
+            )
+
     def add_credential(self, cloud: str, credential: dict, controller: str | None):
-        """Add credential to client credentials."""
+        """Add credentials to client or controller.
+
+        If controller is specidifed, credential is added to controller.
+        If controller is None, credential is added to client.
+        """
         with tempfile.NamedTemporaryFile() as temp:
             temp.write(yaml.dump(credential).encode("utf-8"))
             temp.flush()
@@ -1600,10 +1662,11 @@ class JujuStepHelper:
                 cloud,
                 "--file",
                 temp.name,
-                "--client",
             ]
             if controller:
                 cmd.extend(["--controller", controller])
+            else:
+                cmd.extend(["--client"])
             LOG.debug(f'Running command {" ".join(cmd)}')
             process = subprocess.run(cmd, capture_output=True, text=True, check=True)
             LOG.debug(

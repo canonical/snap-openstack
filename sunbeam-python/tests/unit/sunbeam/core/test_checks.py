@@ -14,6 +14,7 @@
 # limitations under the License.
 
 import base64
+import grp
 import json
 import os
 from unittest.mock import Mock
@@ -291,3 +292,51 @@ class TestTokenCheck:
         result = check.run()
 
         assert result is True
+
+
+class TestLxdGroupCheck:
+    def test_user_in_lxd_group(self, mocker):
+        user = os.environ.get("USER")
+        grp_struct = Mock()
+        mocker.patch.object(grp, "getgrnam", return_value=grp_struct)
+        grp_struct.gr_mem = [user]
+
+        check = checks.LxdGroupCheck()
+        result = check.run()
+
+        assert result is True
+
+    def test_user_not_in_lxd_group(self, mocker):
+        user = os.environ.get("USER")
+        grp_struct = Mock()
+        mocker.patch.object(grp, "getgrnam", return_value=grp_struct)
+        grp_struct.gr_mem = []
+
+        check = checks.LxdGroupCheck()
+        result = check.run()
+
+        assert result is False
+        assert f"{user} not part of lxd group" in check.message
+
+
+class TestLxdControllerRegistrationCheck:
+    def test_lxd_controller_exists(self, mocker):
+        jsh = Mock()
+        mocker.patch.object(checks, "JujuStepHelper", return_value=jsh)
+        jsh.get_controllers.return_value = ["lxdcloud"]
+
+        check = checks.LXDJujuControllerRegistrationCheck()
+        result = check.run()
+
+        assert result is True
+
+    def test_lxd_controller_does_not_exist(self, mocker):
+        jsh = Mock()
+        mocker.patch.object(checks, "JujuStepHelper", return_value=jsh)
+        jsh.get_controllers.return_value = []
+
+        check = checks.LXDJujuControllerRegistrationCheck()
+        result = check.run()
+
+        assert result is False
+        assert "Missing Juju controller on LXD" in check.message

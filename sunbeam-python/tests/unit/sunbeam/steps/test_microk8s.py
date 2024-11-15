@@ -25,9 +25,11 @@ from sunbeam.core.juju import (
     ApplicationNotFoundException,
     LeaderNotFoundException,
 )
-from sunbeam.steps.microk8s import (
+from sunbeam.steps.k8s import (
     CREDENTIAL_SUFFIX,
     K8S_CLOUD_SUFFIX,
+)
+from sunbeam.steps.microk8s import (
     AddMicrok8sCloudStep,
     StoreMicrok8sConfigStep,
 )

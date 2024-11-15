@@ -253,6 +253,10 @@ class ClusterService(MicroClusterService, ExtendedAPIService):
     # sucessfully run. Note: this is distinct from microcluster bootstrap.
     SUNBEAM_BOOTSTRAP_KEY = "sunbeam_bootstrapped"
 
+    # This key is used to determine if Juju controller is migrated to k8s
+    # from lxd. This is used only in local type deployment.
+    JUJU_CONTROLLER_MIGRATE_KEY = "juju_controller_migrated_to_k8s"
+
     def bootstrap(
         self, name: str, address: str, role: list[str], machineid: int = -1
     ) -> None:
@@ -298,6 +302,24 @@ class ClusterService(MicroClusterService, ExtendedAPIService):
         """Check if the sunbeam deployment has been bootstrapped."""
         try:
             state = json.loads(self.get_config(self.SUNBEAM_BOOTSTRAP_KEY))
+        except service.ConfigItemNotFoundException:
+            state = False
+        except service.ClusterServiceUnavailableException:
+            state = False
+        return state
+
+    def unset_juju_controller_migrated(self) -> None:
+        """Remove juju controller migrated key."""
+        self.update_config(self.JUJU_CONTROLLER_MIGRATE_KEY, json.dumps("False"))
+
+    def set_juju_controller_migrated(self) -> None:
+        """Mark juju controller as migrated."""
+        self.update_config(self.JUJU_CONTROLLER_MIGRATE_KEY, json.dumps("True"))
+
+    def check_juju_controller_migrated(self) -> bool:
+        """Check if juju controller has been migrated."""
+        try:
+            state = json.loads(self.get_config(self.JUJU_CONTROLLER_MIGRATE_KEY))
         except service.ConfigItemNotFoundException:
             state = False
         except service.ClusterServiceUnavailableException:

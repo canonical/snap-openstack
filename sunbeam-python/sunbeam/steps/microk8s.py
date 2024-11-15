@@ -37,12 +37,9 @@ from sunbeam.core.juju import (
     JujuHelper,
     JujuStepHelper,
     LeaderNotFoundException,
-    UnsupportedKubeconfigException,
     run_sync,
 )
 from sunbeam.core.k8s import (
-    CREDENTIAL_SUFFIX,
-    K8S_CLOUD_SUFFIX,
     LOADBALANCER_QUESTION_DESCRIPTION,
     MICROK8S_KUBECONFIG_KEY,
 )
@@ -53,6 +50,8 @@ from sunbeam.core.steps import (
 )
 from sunbeam.core.terraform import TerraformHelper
 from sunbeam.steps.k8s import (
+    AddK8SCloudInClientStep,
+    AddK8SCloudStep,
     AddK8SCredentialStep,
     CheckMysqlK8SDistributionStep,
     CheckOvnK8SDistributionStep,
@@ -214,46 +213,12 @@ class RemoveMicrok8sUnitsStep(RemoveK8SUnitsStep):
     _K8S_UNIT_TIMEOUT = MICROK8S_UNIT_TIMEOUT
 
 
-class AddMicrok8sCloudStep(BaseStep, JujuStepHelper):
-    _CONFIG = MICROK8S_KUBECONFIG_KEY
+class AddMicrok8sCloudStep(AddK8SCloudStep):
+    _KUBECONFIG = MICROK8S_KUBECONFIG_KEY
 
-    def __init__(self, deployment: Deployment, jhelper: JujuHelper):
-        super().__init__(
-            "Add MicroK8S cloud", "Adding MicroK8S cloud to Juju controller"
-        )
-        self.client = deployment.get_client()
-        self.jhelper = jhelper
-        self.cloud_name = f"{deployment.name}{K8S_CLOUD_SUFFIX}"
-        self.credential_name = f"{self.cloud_name}{CREDENTIAL_SUFFIX}"
 
-    def is_skip(self, status: Status | None = None) -> Result:
-        """Determines if the step should be skipped or not.
-
-        :return: ResultType.SKIPPED if the Step should be skipped,
-                ResultType.COMPLETED or ResultType.FAILED otherwise
-        """
-        clouds = run_sync(self.jhelper.get_clouds())
-        LOG.debug(f"Clouds registered in the controller: {clouds}")
-        # TODO(hemanth): Need to check if cloud credentials are also created?
-        if f"cloud-{self.cloud_name}" in clouds.keys():
-            return Result(ResultType.SKIPPED)
-
-        return Result(ResultType.COMPLETED)
-
-    def run(self, status: Status | None = None) -> Result:
-        """Add microk8s clouds to Juju controller."""
-        try:
-            kubeconfig = read_config(self.client, self._CONFIG)
-            run_sync(
-                self.jhelper.add_k8s_cloud(
-                    self.cloud_name, self.credential_name, kubeconfig
-                )
-            )
-        except (ConfigItemNotFoundException, UnsupportedKubeconfigException) as e:
-            LOG.debug("Failed to add k8s cloud to Juju controller", exc_info=True)
-            return Result(ResultType.FAILED, str(e))
-
-        return Result(ResultType.COMPLETED)
+class AddMicrok8sCloudInClientStep(AddK8SCloudInClientStep):
+    _KUBECONFIG = MICROK8S_KUBECONFIG_KEY
 
 
 class UpdateMicroK8SCloudStep(UpdateK8SCloudStep):

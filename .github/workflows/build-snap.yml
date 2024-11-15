@@ -48,6 +48,15 @@ jobs:
           sudo apt remove --purge docker.io containerd runc -y
           sudo rm -rf /run/containerd
 
+          sudo lxd init --auto
+          sudo lxc network create br0
+          sudo lxc profile device remove default eth0
+          sudo lxc profile device add default eth0 nic network=br0 name=eth0
+          sudo lxc network delete lxdbr0
+
+          sudo snap install juju --channel 3.6/stable
+          juju bootstrap localhost lxdcloud
+
           sudo snap install  ${{ needs.build.outputs.snap }} --dangerous
           openstack.sunbeam prepare-node-script | bash -x
           sudo snap connect openstack:juju-bin juju:juju-bin
