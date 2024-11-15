@@ -13,13 +13,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from unittest.mock import AsyncMock, MagicMock, Mock
+import json
+import subprocess
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 from requests.exceptions import HTTPError
 
 import sunbeam.clusterd.service as service
+import sunbeam.core.questions
 from sunbeam.clusterd.cluster import ClusterService
+from sunbeam.clusterd.service import ConfigItemNotFoundException
 from sunbeam.core.common import ResultType
 from sunbeam.core.juju import ApplicationNotFoundException
 from sunbeam.steps.clusterd import (
@@ -44,6 +48,12 @@ def cclient():
 @pytest.fixture()
 def model():
     return "test-model"
+
+
+@pytest.fixture()
+def load_answers():
+    with patch.object(sunbeam.core.questions, "load_answers") as p:
+        yield p
 
 
 class TestClusterdSteps:
@@ -605,6 +615,86 @@ class TestClusterUpdateJujuControllerStep:
             ["10.0.0.6:17070", "[fd42:5eda:f578:7bba:216:3eff:fe3d:7ef6]:17070"],
             "10.0.0.0/24",
         ) == ["10.0.0.6:17070"]
+
+    def test_skip(self, cclient, snap, run, load_answers):
+        controller_name = "lxdcloud"
+        endpoints = ["10.0.0.1:17070", "[fd42:9331:57e6:2088:216:3eff:fe82:2bb6]:17070"]
+        management_cidr = "10.0.0.0/24"
+
+        controller = json.dumps(
+            {controller_name: {"details": {"api-endpoints": endpoints}}}
+        )
+        run.return_value = subprocess.CompletedProcess(
+            args={}, returncode=0, stdout=controller
+        )
+
+        load_answers.return_value = {"bootstrap": {"management_cidr": management_cidr}}
+        cclient.cluster.get_config.side_effect = ConfigItemNotFoundException()
+
+        step = ClusterUpdateJujuControllerStep(cclient, controller_name)
+        result = step.is_skip()
+
+        assert result.result_type == ResultType.COMPLETED
+
+    def test_skip_when_controller_details_exist_in_clusterdb(
+        self, cclient, snap, run, load_answers
+    ):
+        controller_name = "lxdcloud"
+        endpoints = ["10.0.0.1:17070", "[fd42:9331:57e6:2088:216:3eff:fe82:2bb6]:17070"]
+        management_cidr = "10.0.0.0/24"
+
+        controller = json.dumps(
+            {controller_name: {"details": {"api-endpoints": endpoints}}}
+        )
+        run.return_value = subprocess.CompletedProcess(
+            args={}, returncode=0, stdout=controller
+        )
+
+        load_answers.return_value = {"bootstrap": {"management_cidr": management_cidr}}
+        cclient.cluster.get_config.return_value = json.dumps(
+            {
+                "name": controller_name,
+                "api_endpoints": [endpoints[0]],
+                "ca_cert": "TMP_CA_CERT",
+                "is_external": False,
+            }
+        )
+
+        step = ClusterUpdateJujuControllerStep(cclient, controller_name)
+        result = step.is_skip()
+
+        assert result.result_type == ResultType.SKIPPED
+
+    def test_skip_reapply_step_with_no_endpoints_filter(
+        self, cclient, snap, run, load_answers
+    ):
+        controller_name = "lxdcloud"
+        endpoints = ["10.0.0.1:17070", "[fd42:9331:57e6:2088:216:3eff:fe82:2bb6]:17070"]
+        management_cidr = "10.0.0.0/24"
+
+        controller = json.dumps(
+            {controller_name: {"details": {"api-endpoints": endpoints}}}
+        )
+        run.return_value = subprocess.CompletedProcess(
+            args={}, returncode=0, stdout=controller
+        )
+
+        load_answers.return_value = {"bootstrap": {"management_cidr": management_cidr}}
+        cclient.cluster.get_config.return_value = json.dumps(
+            {
+                "name": controller_name,
+                "api_endpoints": [endpoints[0]],
+                "ca_cert": "TMP_CA_CERT",
+                "is_external": False,
+            }
+        )
+
+        step = ClusterUpdateJujuControllerStep(
+            cclient, controller_name, filter_endpoints=False
+        )
+        result = step.is_skip()
+
+        assert result.result_type == ResultType.COMPLETED
 
 
 @pytest.fixture()
