@@ -143,6 +143,13 @@ class TerraformHelper:
                 )
             )
 
+    def reload_env(self, env: dict) -> None:
+        """Update environment variables."""
+        if self.env:
+            self.env.update(env)
+        else:
+            self.env = env
+
     def init(self) -> None:
         """Terraform init."""
         os_env = os.environ.copy()

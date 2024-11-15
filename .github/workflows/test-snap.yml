@@ -66,6 +66,15 @@ jobs:
           # 2023.x, 2024.1/beta does not support k8s provider
           if [[ ! ${{ inputs.snap-channel }} =~ "2024.1/edge" && ${{ inputs.k8s-provider }} == "k8s" ]]; then echo "k8s provider not supported"; exit 1; fi
 
+          sudo lxd init --auto
+          sudo lxc network create br0
+          sudo lxc profile device remove default eth0
+          sudo lxc profile device add default eth0 nic network=br0 name=eth0
+          sudo lxc network delete lxdbr0
+
+          sudo snap install juju --channel 3.6/stable
+          juju bootstrap localhost lxdcloud
+
           sudo snap install openstack --channel ${{ inputs.snap-channel }}
           sudo snap set openstack k8s.provider=${{ inputs.k8s-provider }}
 
