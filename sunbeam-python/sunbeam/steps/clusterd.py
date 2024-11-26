@@ -467,9 +467,22 @@ class ClusterAddJujuUserStep(BaseStep):
 
 
 class ClusterUpdateJujuControllerStep(BaseStep, JujuStepHelper):
-    """Save Juju controller in cluster database."""
+    """Save Juju controller in cluster database.
 
-    def __init__(self, client: Client, controller: str, is_external: bool = False):
+    The controller IP is filtered based on the management_cidr
+    saved in the cluster database by default.
+    If filter_endpoints is False, the controller IP is not
+    filtered and all the controller IPs are saved in cluster
+    database.
+    """
+
+    def __init__(
+        self,
+        client: Client,
+        controller: str,
+        is_external: bool = False,
+        filter_endpoints: bool = True,
+    ):
         super().__init__(
             "Add Juju controller to cluster DB",
             "Adding Juju controller to cluster database",
@@ -478,6 +491,7 @@ class ClusterUpdateJujuControllerStep(BaseStep, JujuStepHelper):
         self.client = client
         self.controller = controller
         self.is_external = is_external
+        self.filter_endpoints = filter_endpoints
 
     def _extract_ip(self, ip) -> ipaddress.IPv4Address | ipaddress.IPv6Address:
         """Extract ip from ipv4 or ipv6 ip:port."""
@@ -513,9 +527,16 @@ class ClusterUpdateJujuControllerStep(BaseStep, JujuStepHelper):
         :return: ResultType.SKIPPED if the Step should be skipped,
                  ResultType.COMPLETED or ResultType.FAILED otherwise
         """
+        self.controller_details = self.get_controller(self.controller)["details"]
+
         try:
             variables = questions.load_answers(self.client, BOOTSTRAP_CONFIG_KEY)
             self.networks = variables.get("bootstrap", {}).get("management_cidr")
+
+            # Do not filter api endpoints based on management cidr
+            if not self.filter_endpoints:
+                self.networks = None
+
             juju_controller = JujuController.load(self.client)
             LOG.debug(f"Controller(s) present at: {juju_controller.api_endpoints}")
             if not juju_controller.api_endpoints:
@@ -526,7 +547,7 @@ class ClusterUpdateJujuControllerStep(BaseStep, JujuStepHelper):
                 return Result(ResultType.COMPLETED)
 
             if juju_controller.api_endpoints == self.filter_ips(
-                juju_controller.api_endpoints, self.networks
+                self.controller_details["api-endpoints"], self.networks
             ):
                 # Controller found, and parsed successfully
                 return Result(ResultType.SKIPPED)
@@ -543,12 +564,12 @@ class ClusterUpdateJujuControllerStep(BaseStep, JujuStepHelper):
 
     def run(self, status: Status | None = None) -> Result:
         """Save controller in sunbeam cluster."""
-        controller = self.get_controller(self.controller)["details"]
-
         juju_controller = JujuController(
             name=self.controller,
-            api_endpoints=self.filter_ips(controller["api-endpoints"], self.networks),
-            ca_cert=controller["ca-cert"],
+            api_endpoints=self.filter_ips(
+                self.controller_details["api-endpoints"], self.networks
+            ),
+            ca_cert=self.controller_details["ca-cert"],
             is_external=self.is_external,
         )
         try:

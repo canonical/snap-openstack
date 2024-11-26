@@ -43,6 +43,16 @@ jobs:
         run: |
           set -x
           export COLUMNS=256
+
+          sudo lxd init --auto
+          sudo lxc network create br0
+          sudo lxc profile device remove default eth0
+          sudo lxc profile device add default eth0 nic network=br0 name=eth0
+          sudo lxc network delete lxdbr0
+
+          sudo snap install juju --channel 3.5/stable
+          juju bootstrap localhost lxdcloud
+
           sudo snap install  ${{ needs.build.outputs.snap }} --dangerous
           openstack.sunbeam prepare-node-script | bash -x
           sudo snap connect openstack:juju-bin juju:juju-bin
@@ -70,14 +80,21 @@ jobs:
           openstack console log show --lines 200 test
           demo_floating_ip="$(openstack floating ip list -c 'Floating IP Address' -f value | head -n1)"
           ssh -oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null -i ~/snap/openstack/current/sunbeam "ubuntu@${demo_floating_ip}" true
+
           sg snap_daemon "openstack.sunbeam enable orchestration"
           sg snap_daemon "openstack.sunbeam enable loadbalancer"
           sg snap_daemon "openstack.sunbeam enable dns --nameservers=testing.github."
-          sg snap_daemon "openstack.sunbeam enable telemetry"
-          sg snap_daemon "openstack.sunbeam enable observability embedded"
+          sg snap_daemon "openstack.sunbeam disable dns"
+          sg snap_daemon "openstack.sunbeam disable loadbalancer"
+          sg snap_daemon "openstack.sunbeam disable orchestration"
+
           sg snap_daemon "openstack.sunbeam enable vault"
           sg snap_daemon "openstack.sunbeam enable secrets"
           sg snap_daemon "openstack.sunbeam enable resource-optimization"
+          sg snap_daemon "openstack.sunbeam disable secrets"
+          sg snap_daemon "openstack.sunbeam disable vault"
+          sg snap_daemon "openstack.sunbeam disable resource-optimization"
+
           # Disable caas temporarily while MySQL memory gets adjusted
           # sg snap_daemon "openstack.sunbeam enable caas"
           # sg snap_daemon "openstack.sunbeam enable validation"
@@ -85,21 +102,17 @@ jobs:
           # sg snap_daemon "openstack.sunbeam validation run smoke"
           # sg snap_daemon "openstack.sunbeam validation run --output tempest_validation.log"
           # sg snap_daemon "openstack.sunbeam disable caas"
-          sg snap_daemon "openstack.sunbeam disable secrets"
-          sg snap_daemon "openstack.sunbeam disable vault"
-          # Commented disabling observability due to LP#1998282
-          # sg snap_daemon "openstack.sunbeam disable observability embedded"
-          # sg snap_daemon "openstack.sunbeam disable telemetry"
-          sg snap_daemon "openstack.sunbeam disable dns"
-          sg snap_daemon "openstack.sunbeam disable loadbalancer"
-          sg snap_daemon "openstack.sunbeam disable orchestration"
-          sg snap_daemon "openstack.sunbeam disable resource-optimization"
           # sg snap_daemon "openstack.sunbeam disable validation"
 
           sg snap_daemon "openstack.sunbeam enable instance-recovery"
           # Disable IR as the consul pods are stuck in getting terminated
           # sg snap_daemon "openstack.sunbeam disable instance-recovery"
 
+          sg snap_daemon "openstack.sunbeam enable telemetry"
+          sg snap_daemon "openstack.sunbeam enable observability embedded"
+          # Commented disabling observability due to LP#1998282
+          # sg snap_daemon "openstack.sunbeam disable observability embedded"
+          # sg snap_daemon "openstack.sunbeam disable telemetry"
       - name: Collect logs
         if: always()
         run: |
