@@ -35,7 +35,7 @@ from sunbeam.core.common import (
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import JujuHelper, ModelNotFoundException, run_sync
 from sunbeam.core.steps import BaseStep
-from sunbeam.steps import clusterd, hypervisor, k8s, microceph, microk8s
+from sunbeam.steps import clusterd, hypervisor, k8s, microceph
 from sunbeam.utils import merge_dict
 
 LOG = logging.getLogger(__name__)
@@ -138,7 +138,6 @@ class ClusterStatusStep(abc.ABC, BaseStep):
         """Mapping of applications to columns."""
         return {
             clusterd.APPLICATION: "clusterd",
-            microk8s.APPLICATION: "control",
             k8s.APPLICATION: "control",
             hypervisor.APPLICATION: "compute",
             microceph.APPLICATION: "storage",

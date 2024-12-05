@@ -25,7 +25,6 @@ from sunbeam.core.terraform import TerraformInitStep
 from sunbeam.steps.hypervisor import ReapplyHypervisorTerraformPlanStep
 from sunbeam.steps.k8s import DeployK8SApplicationStep
 from sunbeam.steps.microceph import DeployMicrocephApplicationStep
-from sunbeam.steps.microk8s import DeployMicrok8sApplicationStep
 from sunbeam.steps.openstack import ReapplyOpenStackTerraformPlanStep
 from sunbeam.steps.sunbeam_machine import DeploySunbeamMachineApplicationStep
 from sunbeam.steps.upgrades.base import UpgradeCoordinator, UpgradeFeatures
@@ -151,36 +150,20 @@ class LatestInChannelCoordinator(UpgradeCoordinator):
             ),
         ]
 
-        if self.k8s_provider == "k8s":
-            plan.extend(
-                [
-                    TerraformInitStep(self.deployment.get_tfhelper("k8s-plan")),
-                    DeployK8SApplicationStep(
-                        self.deployment,
-                        self.client,
-                        self.deployment.get_tfhelper("k8s-plan"),
-                        self.jhelper,
-                        self.manifest,
-                        self.deployment.openstack_machines_model,
-                        refresh=True,
-                    ),
-                ]
-            )
-        else:
-            plan.extend(
-                [
-                    TerraformInitStep(self.deployment.get_tfhelper("microk8s-plan")),
-                    DeployMicrok8sApplicationStep(
-                        self.deployment,
-                        self.client,
-                        self.deployment.get_tfhelper("microk8s-plan"),
-                        self.jhelper,
-                        self.manifest,
-                        self.deployment.openstack_machines_model,
-                        refresh=True,
-                    ),
-                ]
-            )
+        plan.extend(
+            [
+                TerraformInitStep(self.deployment.get_tfhelper("k8s-plan")),
+                DeployK8SApplicationStep(
+                    self.deployment,
+                    self.client,
+                    self.deployment.get_tfhelper("k8s-plan"),
+                    self.jhelper,
+                    self.manifest,
+                    self.deployment.openstack_machines_model,
+                    refresh=True,
+                ),
+            ]
+        )
 
         plan.extend(
             [
