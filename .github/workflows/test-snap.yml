@@ -52,13 +52,10 @@ on:
           - single
           - multi
       k8s-provider:
-        description: Select k8s provider
+        description: Specify k8s provider
         required: true
-        default: microk8s
-        type: choice
-        options:
-          - microk8s
-          - k8s
+        default: k8s
+        type: string
 
 jobs:
   functional-test:
@@ -133,7 +130,7 @@ jobs:
         if: always()
         run: |
           mkdir -p logs
-          if [ ${{ inputs.k8s-provider }} == "k8s" ]; then kubectl="k8s kubectl"; else kubectl="microk8s.kubectl"; fi
+          kubectl="k8s kubectl"
           cp -rf $HOME/snap/openstack/common/logs/*.log logs/
           models=$(juju models --format json | jq -r .models[].name)
           for model in $models;

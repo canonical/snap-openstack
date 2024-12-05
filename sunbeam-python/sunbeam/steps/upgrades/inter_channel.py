@@ -40,7 +40,6 @@ from sunbeam.core.terraform import TerraformException, TerraformHelper
 from sunbeam.steps.hypervisor import CONFIG_KEY as HYPERVISOR_CONFIG_KEY
 from sunbeam.steps.k8s import K8S_CONFIG_KEY
 from sunbeam.steps.microceph import CONFIG_KEY as MICROCEPH_CONFIG_KEY
-from sunbeam.steps.microk8s import MICROK8S_CONFIG_KEY
 from sunbeam.steps.openstack import CONFIG_KEY as OPENSTACK_CONFIG_KEY
 from sunbeam.steps.openstack import OPENSTACK_DEPLOY_TIMEOUT
 from sunbeam.steps.sunbeam_machine import CONFIG_KEY as SUNBEAM_MACHINE_CONFIG_KEY
@@ -320,36 +319,6 @@ class UpgradeMicrocephCharm(UpgradeMachineCharm):
         )
 
 
-class UpgradeMicrok8sCharm(UpgradeMachineCharm):
-    def __init__(
-        self,
-        client: Client,
-        tfhelper: TerraformHelper,
-        jhelper: JujuHelper,
-        manifest: Manifest,
-        model: str,
-    ):
-        """Create instance of UpgradeMicrok8sCharm class.
-
-        :client: Client to connect to clusterdb
-        :jhelper: Helper for interacting with pylibjuju
-        :manifest: Manifest object
-        :model: Name of model containing charms.
-        """
-        super().__init__(
-            "Upgrade Microk8s charm",
-            "Upgrading Microk8s charm",
-            client,
-            tfhelper,
-            jhelper,
-            manifest,
-            model,
-            ["microk8s"],
-            MICROK8S_CONFIG_KEY,
-            1200,
-        )
-
-
 class UpgradeK8SCharm(UpgradeMachineCharm):
     def __init__(
         self,
@@ -465,26 +434,15 @@ class ChannelUpgradeCoordinator(UpgradeCoordinator):
                 "controller",
             ),
         ]
-        if self.k8s_provider == "k8s":
-            plan.append(
-                UpgradeK8SCharm(
-                    self.client,
-                    get_tf("k8s-plan"),
-                    self.jhelper,
-                    self.manifest,
-                    "controller",
-                )
+        plan.append(
+            UpgradeK8SCharm(
+                self.client,
+                get_tf("k8s-plan"),
+                self.jhelper,
+                self.manifest,
+                "controller",
             )
-        else:
-            plan.append(
-                UpgradeMicrok8sCharm(
-                    self.client,
-                    get_tf("microk8s-plan"),
-                    self.jhelper,
-                    self.manifest,
-                    "controller",
-                )
-            )
+        )
 
         plan.extend(
             [
