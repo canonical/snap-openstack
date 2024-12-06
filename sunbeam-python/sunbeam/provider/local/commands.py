@@ -138,14 +138,6 @@ from sunbeam.steps.microceph import (
     DeployMicrocephApplicationStep,
     RemoveMicrocephUnitsStep,
 )
-from sunbeam.steps.microk8s import (
-    AddMicrok8sCloudStep,
-    AddMicrok8sCredentialStep,
-    AddMicrok8sUnitsStep,
-    DeployMicrok8sApplicationStep,
-    RemoveMicrok8sUnitsStep,
-    StoreMicrok8sConfigStep,
-)
 from sunbeam.steps.openstack import (
     DeployControlPlaneStep,
     OpenStackPatchLoadBalancerServicesIPStep,
@@ -294,7 +286,6 @@ def bootstrap(
     pretty_roles = ", ".join(role.name.lower() for role in roles)
     LOG.debug(f"Bootstrap node: roles {roles_str}")
 
-    k8s_provider = snap.config.get("k8s.provider")
     juju_bootstrap_args = manifest.core.software.juju.bootstrap_args
     data_location = snap.paths.user_data
 
@@ -539,52 +530,26 @@ def bootstrap(
         )
     )
 
-    if k8s_provider == "k8s":
-        k8s_tfhelper = deployment.get_tfhelper("k8s-plan")
-        plan4.append(TerraformInitStep(k8s_tfhelper))
-        plan4.append(
-            DeployK8SApplicationStep(
-                deployment,
-                client,
-                k8s_tfhelper,
-                jhelper,
-                manifest,
-                deployment.openstack_machines_model,
-                accept_defaults=accept_defaults,
-            )
+    k8s_tfhelper = deployment.get_tfhelper("k8s-plan")
+    plan4.append(TerraformInitStep(k8s_tfhelper))
+    plan4.append(
+        DeployK8SApplicationStep(
+            deployment,
+            client,
+            k8s_tfhelper,
+            jhelper,
+            manifest,
+            deployment.openstack_machines_model,
+            accept_defaults=accept_defaults,
         )
-        plan4.append(
-            AddK8SUnitsStep(client, fqdn, jhelper, deployment.openstack_machines_model)
-        )
-        plan4.append(
-            StoreK8SKubeConfigStep(client, jhelper, deployment.openstack_machines_model)
-        )
-        plan4.append(AddK8SCloudStep(deployment, jhelper))
-    else:
-        k8s_tfhelper = deployment.get_tfhelper("microk8s-plan")
-        plan4.append(TerraformInitStep(k8s_tfhelper))
-        plan4.append(
-            DeployMicrok8sApplicationStep(
-                deployment,
-                client,
-                k8s_tfhelper,
-                jhelper,
-                manifest,
-                deployment.openstack_machines_model,
-                accept_defaults=accept_defaults,
-            )
-        )
-        plan4.append(
-            AddMicrok8sUnitsStep(
-                client, fqdn, jhelper, deployment.openstack_machines_model
-            )
-        )
-        plan4.append(
-            StoreMicrok8sConfigStep(
-                client, jhelper, deployment.openstack_machines_model
-            )
-        )
-        plan4.append(AddMicrok8sCloudStep(deployment, jhelper))
+    )
+    plan4.append(
+        AddK8SUnitsStep(client, fqdn, jhelper, deployment.openstack_machines_model)
+    )
+    plan4.append(
+        StoreK8SKubeConfigStep(client, jhelper, deployment.openstack_machines_model)
+    )
+    plan4.append(AddK8SCloudStep(deployment, jhelper))
 
     # Deploy Microceph application during bootstrap irrespective of node role.
     microceph_tfhelper = deployment.get_tfhelper("microceph-plan")
@@ -820,8 +785,6 @@ def join(
     pretty_roles = ", ".join(role_.name.lower() for role_ in roles)
     LOG.debug(f"Node joining the cluster with roles: {pretty_roles}")
 
-    k8s_provider = Snap().config.get("k8s.provider")
-
     preflight_checks: list[Check] = []
     preflight_checks.append(SystemRequirementsCheck())
     preflight_checks.append(JujuSnapCheck())
@@ -906,20 +869,10 @@ def join(
     )
 
     if is_control_node:
-        if k8s_provider == "k8s":
-            plan4.append(
-                AddK8SUnitsStep(
-                    client, name, jhelper, deployment.openstack_machines_model
-                )
-            )
-            plan4.append(AddK8SCredentialStep(deployment, jhelper))
-        else:
-            plan4.append(
-                AddMicrok8sUnitsStep(
-                    client, name, jhelper, deployment.openstack_machines_model
-                )
-            )
-            plan4.append(AddMicrok8sCredentialStep(deployment, jhelper))
+        plan4.append(
+            AddK8SUnitsStep(client, name, jhelper, deployment.openstack_machines_model)
+        )
+        plan4.append(AddK8SCredentialStep(deployment, jhelper))
 
     if is_storage_node:
         plan4.append(
@@ -1004,8 +957,6 @@ def remove(ctx: click.Context, name: str, force: bool, show_hints: bool) -> None
     client = deployment.get_client()
     jhelper = JujuHelper(deployment.get_connected_controller())
 
-    k8s_provider = Snap().config.get("k8s.provider")
-
     preflight_checks = [DaemonGroupCheck()]
     run_preflight_checks(preflight_checks, console)
 
@@ -1016,18 +967,9 @@ def remove(ctx: click.Context, name: str, force: bool, show_hints: bool) -> None
         ),
     ]
 
-    if k8s_provider == "k8s":
-        plan.append(
-            RemoveK8SUnitsStep(
-                client, name, jhelper, deployment.openstack_machines_model
-            )
-        )
-    else:
-        plan.append(
-            RemoveMicrok8sUnitsStep(
-                client, name, jhelper, deployment.openstack_machines_model
-            )
-        )
+    plan.append(
+        RemoveK8SUnitsStep(client, name, jhelper, deployment.openstack_machines_model)
+    )
 
     plan.extend(
         [

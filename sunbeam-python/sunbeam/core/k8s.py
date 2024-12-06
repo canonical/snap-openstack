@@ -24,15 +24,11 @@ from lightkube.generic_resource import (
 from lightkube.models.meta_v1 import ObjectMeta
 from lightkube.resources.core_v1 import Node, PersistentVolumeClaim, Pod
 from lightkube.types import CascadeType
-from snaphelpers import Snap
+from snaphelpers import Snap  # noqa: F401 - required for test mocks
 
 from sunbeam.core.common import SunbeamException
 
 LOG = logging.getLogger(__name__)
-
-# --- Microk8s specific
-MICROK8S_KUBECONFIG_KEY = "Microk8sConfig"
-MICROK8S_DEFAULT_STORAGECLASS = "microk8s-hostpath"
 
 # --- K8s specific
 K8S_DEFAULT_STORAGECLASS = "csi-rawfile-default"
@@ -44,7 +40,6 @@ METALLB_IP_ANNOTATION = "metallb.universe.tf/loadBalancerIPs"
 METALLB_ADDRESS_POOL_ANNOTATION = "metallb.universe.tf/address-pool"
 METALLB_ALLOCATED_POOL_ANNOTATION = "metallb.universe.tf/ip-allocated-from-pool"
 
-SUPPORTED_K8S_PROVIDERS = ["k8s", "microk8s"]
 CREDENTIAL_SUFFIX = "-creds"
 K8S_CLOUD_SUFFIX = "-k8s"
 LOADBALANCER_QUESTION_DESCRIPTION = """\
@@ -70,13 +65,7 @@ class K8SHelper:
     @classmethod
     def get_provider(cls) -> str:
         """Return k8s provider from snap settings."""
-        provider = Snap().config.get("k8s.provider")
-        if provider not in SUPPORTED_K8S_PROVIDERS:
-            raise SunbeamException(
-                f"k8s provider should be one of {SUPPORTED_K8S_PROVIDERS}"
-            )
-
-        return provider
+        return "k8s"
 
     @classmethod
     def get_cloud(cls, deployment_name: str) -> str:
@@ -86,20 +75,12 @@ class K8SHelper:
     @classmethod
     def get_default_storageclass(cls) -> str:
         """Return storageclass matching provider."""
-        match cls.get_provider():
-            case "k8s":
-                return K8S_DEFAULT_STORAGECLASS
-            case _:
-                return MICROK8S_DEFAULT_STORAGECLASS
+        return K8S_DEFAULT_STORAGECLASS
 
     @classmethod
     def get_kubeconfig_key(cls) -> str:
         """Return kubeconfig key matching provider."""
-        match cls.get_provider():
-            case "k8s":
-                return K8S_KUBECONFIG_KEY
-            case _:
-                return MICROK8S_KUBECONFIG_KEY
+        return K8S_KUBECONFIG_KEY
 
     @classmethod
     def get_loadbalancer_ip_annotation(cls) -> str:
