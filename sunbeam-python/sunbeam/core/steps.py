@@ -22,6 +22,7 @@ from lightkube.config.kubeconfig import KubeConfig
 from lightkube.core import exceptions
 from lightkube.core.client import Client as KubeClient
 from lightkube.core.exceptions import ApiError
+from lightkube.models.meta_v1 import ObjectMeta
 from lightkube.resources.core_v1 import Service
 from rich.status import Status
 
@@ -475,17 +476,17 @@ class DestroyMachineApplicationStep(BaseStep):
         return Result(ResultType.COMPLETED)
 
 
-class PatchLoadBalancerServicesStep(BaseStep, abc.ABC):
+class PatchLoadBalancerServicesIPStep(BaseStep, abc.ABC):
     def __init__(
         self,
         client: Client,
     ):
         super().__init__(
             "Patch LoadBalancer services",
-            "Patch LoadBalancer service annotations",
+            "Patch LoadBalancer service IP annotation",
         )
         self.client = client
-        self.lb_annotation = K8SHelper.get_loadbalancer_annotation()
+        self.lb_ip_annotation = K8SHelper.get_loadbalancer_ip_annotation()
 
     @abc.abstractmethod
     def services(self) -> list[str]:
@@ -543,7 +544,7 @@ class PatchLoadBalancerServicesStep(BaseStep, abc.ABC):
             service_annotations = service.metadata.annotations
             if (
                 service_annotations is None
-                or self.lb_annotation not in service_annotations
+                or self.lb_ip_annotation not in service_annotations
             ):
                 return Result(ResultType.COMPLETED)
 
@@ -564,7 +565,7 @@ class PatchLoadBalancerServicesStep(BaseStep, abc.ABC):
             service_annotations = service.metadata.annotations
             if service_annotations is None:
                 service_annotations = {}
-            if self.lb_annotation not in service_annotations:
+            if self.lb_ip_annotation not in service_annotations:
                 if not service.status:
                     return Result(
                         ResultType.FAILED, f"k8s service {service_name!r} has no status"
@@ -580,9 +581,245 @@ class PatchLoadBalancerServicesStep(BaseStep, abc.ABC):
                         f"k8s service {service_name!r} has no loadBalancer ingress",
                     )
                 loadbalancer_ip = service.status.loadBalancer.ingress[0].ip
-                service_annotations[self.lb_annotation] = loadbalancer_ip
+                service_annotations[self.lb_ip_annotation] = loadbalancer_ip
                 service.metadata.annotations = service_annotations
                 LOG.debug(f"Patching {service_name!r} to use IP {loadbalancer_ip!r}")
                 self.kube.patch(Service, service_name, obj=service)
+
+        return Result(ResultType.COMPLETED)
+
+
+class PatchLoadBalancerServicesIPPoolStep(BaseStep, abc.ABC):
+    def __init__(
+        self,
+        client: Client,
+        pool_name: str,
+    ):
+        super().__init__(
+            "Patch LoadBalancer services",
+            "Patch LoadBalancer service IP pool annotation",
+        )
+        self.client = client
+        self.pool_name = pool_name
+        self.lb_pool_annotation = K8SHelper.get_loadbalancer_address_pool_annotation()
+        self.lb_ip_annotation = K8SHelper.get_loadbalancer_ip_annotation()
+        self.lb_allocated_pool_annotation = (
+            K8SHelper.get_loadbalancer_allocated_pool_annotation()
+        )
+
+    @abc.abstractmethod
+    def services(self) -> list[str]:
+        """List of services to patch."""
+        pass
+
+    @abc.abstractmethod
+    def model(self) -> str:
+        """Name of the model to use.
+
+        This must resolve to a namespaces in the cluster.
+        """
+        pass
+
+    def _get_service(self, service_name: str, find_lb: bool = True) -> Service:
+        """Look up a service by name, optionally looking for a LoadBalancer service."""
+        search_service = service_name
+        if find_lb:
+            search_service += "-lb"
+        try:
+            return self.kube.get(Service, search_service)
+        except ApiError as e:
+            if e.status.code == 404 and search_service.endswith("-lb"):
+                return self._get_service(service_name, find_lb=False)
+            raise e
+
+    def check_lb_pool_exists_in_annotations(
+        self, service_annotations: dict, lb_pool: str
+    ) -> bool:
+        """Check if loadbalancer pool is already in annotations.
+
+        Also check if ip address is allocated from same pool.
+        """
+        if (
+            service_annotations.get(self.lb_pool_annotation) == lb_pool
+            and service_annotations.get(self.lb_allocated_pool_annotation) == lb_pool
+        ):
+            return True
+
+        return False
+
+    def run(self, status: Status | None = None) -> Result:
+        """Patch LoadBalancer services annotations with LB IP pool."""
+        try:
+            self.kubeconfig = read_config(self.client, K8SHelper.get_kubeconfig_key())
+        except ConfigItemNotFoundException:
+            LOG.debug("K8S kubeconfig not found", exc_info=True)
+            return Result(ResultType.FAILED, "K8S kubeconfig not found")
+
+        kubeconfig = KubeConfig.from_dict(self.kubeconfig)
+        try:
+            self.kube = KubeClient(kubeconfig, self.model(), trust_env=False)
+        except exceptions.ConfigError as e:
+            LOG.debug("Error creating k8s client", exc_info=True)
+            return Result(ResultType.FAILED, str(e))
+
+        for service_name in self.services():
+            try:
+                service = self._get_service(service_name, find_lb=True)
+            except ApiError as e:
+                return Result(ResultType.FAILED, str(e))
+            if not service.metadata:
+                return Result(
+                    ResultType.FAILED, f"k8s service {service_name!r} has no metadata"
+                )
+            service_name = str(service.metadata.name)
+            service_annotations = service.metadata.annotations
+            if service_annotations is None:
+                service_annotations = {}
+
+            if not self.check_lb_pool_exists_in_annotations(
+                service_annotations, self.pool_name
+            ):
+                if not service.status:
+                    return Result(
+                        ResultType.FAILED, f"k8s service {service_name!r} has no status"
+                    )
+                if not service.status.loadBalancer:
+                    return Result(
+                        ResultType.FAILED,
+                        f"k8s service {service_name!r} has no loadBalancer status",
+                    )
+                if not service.status.loadBalancer.ingress:
+                    return Result(
+                        ResultType.FAILED,
+                        f"k8s service {service_name!r} has no loadBalancer ingress",
+                    )
+
+                service_annotations[self.lb_pool_annotation] = self.pool_name
+                if self.lb_ip_annotation in service_annotations:
+                    LOG.debug(
+                        f"Removing {self.lb_ip_annotation!r} for service "
+                        f"{service_name!r}"
+                    )
+                    service_annotations.pop(self.lb_ip_annotation)
+                if self.lb_allocated_pool_annotation in service_annotations:
+                    LOG.debug(
+                        f"Removing {self.lb_allocated_pool_annotation!r} for service"
+                        f" {service_name!r}"
+                    )
+                    service_annotations.pop(self.lb_allocated_pool_annotation)
+                LOG.debug(
+                    f"Patching {service_name!r} to use annotation "
+                    f"{self.lb_pool_annotation!r} with value {self.pool_name!r}"
+                )
+                self.kube.patch(Service, service_name, obj=service)
+
+        return Result(ResultType.COMPLETED)
+
+
+class CreateLoadBalancerIPPoolsStep(BaseStep, abc.ABC):
+    """Create IPPool and L2Advertisement resources."""
+
+    def __init__(
+        self,
+        client: Client,
+    ):
+        super().__init__(
+            "Create LoadBalancer pool",
+            "Creating LoadBalancer pool",
+        )
+        self.client = client
+        self.lbpool_resource = K8SHelper.get_lightkube_loadbalancer_resource()
+        self.l2_advertisement_resource = (
+            K8SHelper.get_lightkube_l2_advertisement_resource()
+        )
+        self.model = K8SHelper.get_loadbalancer_namespace()
+
+    @abc.abstractmethod
+    def ippools(self) -> dict[str, list[str]]:
+        """IPAddress pools.
+
+        Pools should be in format of
+        {<pool name>: <List of ipaddresses>}
+        """
+        pass
+
+    def handle_lb_pools(self, name: str, addresses: list[str]):
+        """Manage Loadbalancer IP Address pool."""
+        pool = None
+        try:
+            pool = self.kube.get(self.lbpool_resource, name=name, namespace=self.model)
+        except ApiError as e:
+            if e.status.code != 404:
+                raise e
+
+        # Pool already exists in k8s, replace the pool if addresses vary
+        if pool:
+            if pool.spec["addresses"] != addresses:
+                LOG.debug(f"Update IP Address pool {name} addresses with {addresses}")
+                pool.spec["addresses"] = addresses
+                self.kube.replace(pool)
+        else:
+            LOG.debug(f"Create new IP Address Pool {name} with addresses {addresses}")
+            new_ippool = self.lbpool_resource(
+                metadata=ObjectMeta(name=name),
+                spec={"addresses": addresses, "autoAssign": False},
+            )
+            self.kube.create(new_ippool)
+
+    def handle_l2_advertisement(self, name: str):
+        """Manage L2Advertisement resource."""
+        l2advertisement = None
+        try:
+            l2advertisement = self.kube.get(
+                self.l2_advertisement_resource, name=name, namespace=self.model
+            )
+        except ApiError as e:
+            if e.status.code != 404:
+                raise e
+
+        if l2advertisement:
+            if name not in l2advertisement.spec["ipAddressPools"]:
+                LOG.debug(f"Update L2 advertisement {name} with pool {name}")
+                l2advertisement.spec["ipAddressPools"] = name
+                self.kube.replace(l2advertisement)
+        else:
+            LOG.debug(f"Create new L2 Advertisement {name} with pool {name}")
+            new_l2advertisement = self.l2_advertisement_resource(
+                metadata=ObjectMeta(name=name),
+                spec={"ipAddressPools": [name]},
+            )
+            self.kube.create(new_l2advertisement)
+
+    def run(self, status: Status | None = None) -> Result:
+        """Create Loadbalancer IPPool."""
+        try:
+            self.kubeconfig = read_config(self.client, K8SHelper.get_kubeconfig_key())
+        except ConfigItemNotFoundException:
+            LOG.debug("K8S kubeconfig not found", exc_info=True)
+            return Result(ResultType.FAILED, "K8S kubeconfig not found")
+
+        kubeconfig = KubeConfig.from_dict(self.kubeconfig)
+        try:
+            self.kube = KubeClient(kubeconfig, self.model, trust_env=False)
+        except exceptions.ConfigError as e:
+            LOG.debug("Error creating k8s client", exc_info=True)
+            return Result(ResultType.FAILED, str(e))
+
+        for name, addresses in self.ippools().items():
+            try:
+                self.handle_lb_pools(name, addresses)
+            except ApiError as e:
+                return Result(
+                    ResultType.FAILED,
+                    f"Error in processing LoadBalancer pool {name}: {str(e)}",
+                )
+
+            try:
+                self.handle_l2_advertisement(name)
+            except ApiError as e:
+                return Result(
+                    ResultType.FAILED,
+                    f"Error in processing L2Advertisement {name}: {str(e)}",
+                )
 
         return Result(ResultType.COMPLETED)

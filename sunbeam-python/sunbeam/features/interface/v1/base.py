@@ -32,6 +32,7 @@ from sunbeam.core.manifest import FeatureConfig, Manifest, SoftwareConfig
 
 # from sunbeam.feature_manager import FeatureManager
 from sunbeam.features.interface import utils
+from sunbeam.provider.maas.deployment import MAAS_TYPE
 
 LOG = logging.getLogger(__name__)
 _GROUPS: dict[str, Type["BaseFeatureGroup"]] = {}
@@ -841,3 +842,11 @@ class EnableDisableFeature(BaseFeature, Generic[ConfigType]):
         Return the commands available once the feature is enabled.
         """
         return {}
+
+
+def is_maas_deployment(deployment: Deployment) -> bool:
+    """Check if deployment type is maas."""
+    if deployment.type == MAAS_TYPE:
+        return True
+
+    return False

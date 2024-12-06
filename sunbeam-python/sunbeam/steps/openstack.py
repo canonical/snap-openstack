@@ -53,7 +53,10 @@ from sunbeam.core.questions import (
     load_answers,
     write_answers,
 )
-from sunbeam.core.steps import PatchLoadBalancerServicesStep
+from sunbeam.core.steps import (
+    PatchLoadBalancerServicesIPPoolStep,
+    PatchLoadBalancerServicesIPStep,
+)
 from sunbeam.core.terraform import TerraformException, TerraformHelper
 
 LOG = logging.getLogger(__name__)
@@ -540,7 +543,7 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
         return Result(ResultType.COMPLETED)
 
 
-class OpenStackPatchLoadBalancerServicesStep(PatchLoadBalancerServicesStep):
+class OpenStackPatchLoadBalancerServicesIPStep(PatchLoadBalancerServicesIPStep):
     def __init__(
         self,
         client: Client,
@@ -550,6 +553,26 @@ class OpenStackPatchLoadBalancerServicesStep(PatchLoadBalancerServicesStep):
     def services(self):
         """List of services to patch."""
         services = ["traefik", "traefik-public", "rabbitmq", "ovn-relay"]
+        if self.client.cluster.list_nodes_by_role("storage"):
+            services.append("traefik-rgw")
+        return services
+
+    def model(self):
+        """Name of the model to use."""
+        return OPENSTACK_MODEL
+
+
+class OpenStackPatchLoadBalancerServicesIPPoolStep(PatchLoadBalancerServicesIPPoolStep):
+    def __init__(
+        self,
+        client: Client,
+        pool_name: str,
+    ):
+        super().__init__(client, pool_name)
+
+    def services(self):
+        """List of services to patch."""
+        services = ["traefik-public"]
         if self.client.cluster.list_nodes_by_role("storage"):
             services.append("traefik-rgw")
         return services

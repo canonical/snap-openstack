@@ -26,7 +26,11 @@ from sunbeam.core.juju import (
     JujuWaitException,
     TimeoutException,
 )
-from sunbeam.core.k8s import METALLB_ANNOTATION
+from sunbeam.core.k8s import (
+    METALLB_ADDRESS_POOL_ANNOTATION,
+    METALLB_ALLOCATED_POOL_ANNOTATION,
+    METALLB_IP_ANNOTATION,
+)
 from sunbeam.core.manifest import Manifest
 from sunbeam.core.terraform import TerraformException
 from sunbeam.steps.openstack import (
@@ -35,7 +39,8 @@ from sunbeam.steps.openstack import (
     DEFAULT_STORAGE_SINGLE_DATABASE,
     REGION_CONFIG_KEY,
     DeployControlPlaneStep,
-    OpenStackPatchLoadBalancerServicesStep,
+    OpenStackPatchLoadBalancerServicesIPPoolStep,
+    OpenStackPatchLoadBalancerServicesIPStep,
     ReapplyOpenStackTerraformPlanStep,
     compute_ha_scale,
     compute_ingress_scale,
@@ -284,7 +289,7 @@ class TestDeployControlPlaneStep(unittest.TestCase):
         assert result.result_type == ResultType.COMPLETED
 
 
-class PatchLoadBalancerServicesStepTest(unittest.TestCase):
+class PatchLoadBalancerServicesIPStepTest(unittest.TestCase):
     def __init__(self, methodName: str = "runTest") -> None:
         super().__init__(methodName)
         self.read_config = patch(
@@ -334,13 +339,15 @@ class PatchLoadBalancerServicesStepTest(unittest.TestCase):
                 return_value=Mock(
                     get=Mock(
                         return_value=Mock(
-                            metadata=Mock(annotations={METALLB_ANNOTATION: "fake-ip"})
+                            metadata=Mock(
+                                annotations={METALLB_IP_ANNOTATION: "fake-ip"}
+                            )
                         )
                     )
                 )
             ),
         ):
-            step = OpenStackPatchLoadBalancerServicesStep(self.client)
+            step = OpenStackPatchLoadBalancerServicesIPStep(self.client)
             result = step.is_skip()
         assert result.result_type == ResultType.SKIPPED
 
@@ -354,7 +361,7 @@ class PatchLoadBalancerServicesStepTest(unittest.TestCase):
                 )
             ),
         ):
-            step = OpenStackPatchLoadBalancerServicesStep(self.client)
+            step = OpenStackPatchLoadBalancerServicesIPStep(self.client)
             result = step.is_skip()
         assert result.result_type == ResultType.COMPLETED
 
@@ -364,7 +371,7 @@ class PatchLoadBalancerServicesStepTest(unittest.TestCase):
             "sunbeam.core.steps.read_config",
             new=Mock(side_effect=ConfigItemNotFoundException),
         ):
-            step = OpenStackPatchLoadBalancerServicesStep(self.client)
+            step = OpenStackPatchLoadBalancerServicesIPStep(self.client)
             result = step.is_skip()
         assert result.result_type == ResultType.FAILED
 
@@ -385,14 +392,173 @@ class PatchLoadBalancerServicesStepTest(unittest.TestCase):
                 )
             ),
         ):
-            step = OpenStackPatchLoadBalancerServicesStep(self.client)
+            step = OpenStackPatchLoadBalancerServicesIPStep(self.client)
             step.is_skip()
             result = step.run()
         assert result.result_type == ResultType.COMPLETED
         annotation = step.kube.patch.mock_calls[0][2]["obj"].metadata.annotations[
-            METALLB_ANNOTATION
+            METALLB_IP_ANNOTATION
         ]
         assert annotation == "fake-ip"
+
+
+class PatchLoadBalancerServicesIPPoolStepTest(unittest.TestCase):
+    def __init__(self, methodName: str = "runTest") -> None:
+        super().__init__(methodName)
+        self.pool_name = "fake-pool"
+        self.read_config = patch(
+            "sunbeam.core.steps.read_config",
+            Mock(
+                return_value={
+                    "apiVersion": "v1",
+                    "clusters": [
+                        {
+                            "cluster": {
+                                "server": "http://localhost:8888",
+                            },
+                            "name": "mock-cluster",
+                        }
+                    ],
+                    "contexts": [
+                        {
+                            "context": {"cluster": "mock-cluster", "user": "admin"},
+                            "name": "mock",
+                        }
+                    ],
+                    "current-context": "mock",
+                    "kind": "Config",
+                    "preferences": {},
+                    "users": [{"name": "admin", "user": {"token": "mock-token"}}],
+                }
+            ),
+        )
+        self.snap_mock = Mock()
+        self.snap = patch("sunbeam.core.k8s.Snap", self.snap_mock)
+
+    def setUp(self):
+        self.client = Mock()
+        self.client.cluster.list_nodes_by_role.return_value = ["node-1"]
+        self.read_config.start()
+        self.snap.start()
+
+    def tearDown(self):
+        self.read_config.stop()
+        self.snap.stop()
+
+    def test_run(self):
+        self.snap_mock().config.get.return_value = "k8s"
+        with patch(
+            "sunbeam.core.steps.KubeClient",
+            new=Mock(
+                return_value=Mock(
+                    get=Mock(
+                        return_value=Mock(
+                            metadata=Mock(
+                                annotations={
+                                    METALLB_ADDRESS_POOL_ANNOTATION: self.pool_name
+                                }
+                            )
+                        )
+                    )
+                )
+            ),
+        ):
+            step = OpenStackPatchLoadBalancerServicesIPPoolStep(
+                self.client, self.pool_name
+            )
+            result = step.run()
+        assert result.result_type == ResultType.COMPLETED
+        annotation = step.kube.patch.mock_calls[0][2]["obj"].metadata.annotations[
+            METALLB_ADDRESS_POOL_ANNOTATION
+        ]
+        assert annotation == self.pool_name
+
+    def test_run_missing_annotation(self):
+        self.snap_mock().config.get.return_value = "k8s"
+        with patch(
+            "sunbeam.core.steps.KubeClient",
+            new=Mock(
+                return_value=Mock(
+                    get=Mock(return_value=Mock(metadata=Mock(annotations={})))
+                )
+            ),
+        ):
+            step = OpenStackPatchLoadBalancerServicesIPPoolStep(
+                self.client, self.pool_name
+            )
+            result = step.run()
+        assert result.result_type == ResultType.COMPLETED
+        annotation = step.kube.patch.mock_calls[0][2]["obj"].metadata.annotations[
+            METALLB_ADDRESS_POOL_ANNOTATION
+        ]
+        assert annotation == self.pool_name
+
+    def test_run_missing_config(self):
+        self.snap_mock().config.get.return_value = "k8s"
+        with patch(
+            "sunbeam.core.steps.read_config",
+            new=Mock(side_effect=ConfigItemNotFoundException),
+        ):
+            step = OpenStackPatchLoadBalancerServicesIPPoolStep(
+                self.client, self.pool_name
+            )
+            result = step.run()
+        assert result.result_type == ResultType.FAILED
+
+    def test_run_same_ippool_already_allocation(self):
+        self.snap_mock().config.get.return_value = "k8s"
+        with patch(
+            "sunbeam.core.steps.KubeClient",
+            new=Mock(
+                return_value=Mock(
+                    get=Mock(
+                        return_value=Mock(
+                            metadata=Mock(
+                                annotations={
+                                    METALLB_ADDRESS_POOL_ANNOTATION: self.pool_name,
+                                    METALLB_ALLOCATED_POOL_ANNOTATION: self.pool_name,
+                                }
+                            )
+                        )
+                    )
+                )
+            ),
+        ):
+            step = OpenStackPatchLoadBalancerServicesIPPoolStep(
+                self.client, self.pool_name
+            )
+            result = step.run()
+        assert result.result_type == ResultType.COMPLETED
+        step.kube.patch.assert_not_called()
+
+    def test_run_different_ippool_already_allocated(self):
+        self.snap_mock().config.get.return_value = "k8s"
+        with patch(
+            "sunbeam.core.steps.KubeClient",
+            new=Mock(
+                return_value=Mock(
+                    get=Mock(
+                        return_value=Mock(
+                            metadata=Mock(
+                                annotations={
+                                    METALLB_ADDRESS_POOL_ANNOTATION: self.pool_name,
+                                    METALLB_ALLOCATED_POOL_ANNOTATION: "another-pool",
+                                }
+                            )
+                        )
+                    )
+                )
+            ),
+        ):
+            step = OpenStackPatchLoadBalancerServicesIPPoolStep(
+                self.client, self.pool_name
+            )
+            result = step.run()
+        assert result.result_type == ResultType.COMPLETED
+        annotation = step.kube.patch.mock_calls[0][2]["obj"].metadata.annotations[
+            METALLB_ADDRESS_POOL_ANNOTATION
+        ]
+        assert annotation == self.pool_name
 
 
 @pytest.mark.parametrize(

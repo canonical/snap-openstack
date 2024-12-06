@@ -64,6 +64,7 @@ from sunbeam.core.juju import (
     run_sync,
 )
 from sunbeam.core.manifest import Manifest
+from sunbeam.core.steps import CreateLoadBalancerIPPoolsStep
 from sunbeam.core.terraform import TerraformHelper
 from sunbeam.steps import clusterd
 from sunbeam.steps.cluster_status import ClusterStatusStep
@@ -1845,9 +1846,7 @@ class MaasDeployK8SApplicationStep(k8s.DeployK8SApplicationStep):
             )
             return Result(ResultType.FAILED, str(e))
         try:
-            public_metallb_range = self._to_joined_range(
-                public_ranges, self.deployment.public_api_label
-            )
+            self._to_joined_range(public_ranges, self.deployment.public_api_label)
         except ValueError:
             LOG.debug(
                 "No iprange with label %r found",
@@ -1855,7 +1854,6 @@ class MaasDeployK8SApplicationStep(k8s.DeployK8SApplicationStep):
                 exc_info=True,
             )
             return Result(ResultType.FAILED, "No public ip range found")
-        self.ranges = public_metallb_range
 
         try:
             internal_ranges = maas_client.get_ip_ranges_from_space(
@@ -1880,6 +1878,7 @@ class MaasDeployK8SApplicationStep(k8s.DeployK8SApplicationStep):
                 exc_info=True,
             )
             return Result(ResultType.FAILED, "No internal ip range found")
+        self.ranges = internal_metallb_range
 
         return super().is_skip(status)
 
@@ -2104,3 +2103,53 @@ class MaasClusterStatusStep(ClusterStatusStep):
                 if member == unit_name.replace("/", "-"):
                     node_status["clusterd-status"] = member_status
                     break
+
+
+class MaasCreateLoadBalancerIPPoolsStep(CreateLoadBalancerIPPoolsStep):
+    """Create Loadbalancer IP Pool."""
+
+    def __init__(
+        self,
+        deployment: maas_deployment.MaasDeployment,
+        client: Client,
+        maas_client: maas_client.MaasClient,
+    ):
+        super().__init__(client)
+        self.deployment = deployment
+        self.maas_client = maas_client
+
+    def _to_range(self, subnet_ranges: dict[str, list[dict]], label: str) -> list[str]:
+        """Convert a list of ip ranges to a list for cni config.
+
+        Current cni config format is: [<ip start>-<ip end>,<ip  start>-<ip end>,...]
+        """
+        lb_range = []
+        for ip_ranges in subnet_ranges.values():
+            for ip_range in ip_ranges:
+                if ip_range["label"] == label:
+                    lb_range.append(f"{ip_range['start']}-{ip_range['end']}")
+
+        return lb_range
+
+    def ippools(self) -> dict[str, list[str]]:
+        """IPAddress pools.
+
+        Pools should be in format of
+        {<pool name>: <List of ipaddresses>}
+        """
+        public_space = self.deployment.get_space(Networks.PUBLIC)
+
+        try:
+            public_ranges = maas_client.get_ip_ranges_from_space(
+                self.maas_client, public_space
+            )
+            LOG.debug("Public ip ranges: %r", public_ranges)
+        except ValueError:
+            LOG.debug("Failed to ip ranges for space: %r", public_space, exc_info=True)
+            return {}
+
+        public_metallb_range = self._to_range(  # noqa
+            public_ranges, self.deployment.public_api_label
+        )
+
+        return {self.deployment.public_api_label: public_metallb_range}

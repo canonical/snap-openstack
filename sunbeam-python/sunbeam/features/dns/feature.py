@@ -30,8 +30,12 @@ from sunbeam.core.manifest import (
     SoftwareConfig,
 )
 from sunbeam.core.openstack import OPENSTACK_MODEL
-from sunbeam.core.steps import PatchLoadBalancerServicesStep
+from sunbeam.core.steps import (
+    PatchLoadBalancerServicesIPPoolStep,
+    PatchLoadBalancerServicesIPStep,
+)
 from sunbeam.core.terraform import TerraformInitStep
+from sunbeam.features.interface.v1.base import is_maas_deployment
 from sunbeam.features.interface.v1.openstack import (
     EnableOpenStackApplicationStep,
     OpenStackControlPlaneFeature,
@@ -63,7 +67,17 @@ class DnsFeatureConfig(FeatureConfig):
         return v
 
 
-class PatchBindLoadBalancerStep(PatchLoadBalancerServicesStep):
+class PatchBindLoadBalancerIPStep(PatchLoadBalancerServicesIPStep):
+    def services(self) -> list[str]:
+        """List of services to patch."""
+        return ["bind"]
+
+    def model(self) -> str:
+        """Name of the model to use."""
+        return OPENSTACK_MODEL
+
+
+class PatchBindLoadBalancerIPPoolStep(PatchLoadBalancerServicesIPPoolStep):
     def services(self) -> list[str]:
         """List of services to patch."""
         return ["bind"]
@@ -126,9 +140,16 @@ class DnsFeature(OpenStackControlPlaneFeature):
                 EnableOpenStackApplicationStep(
                     deployment, config, tfhelper, jhelper, self
                 ),
-                PatchBindLoadBalancerStep(deployment.get_client()),
             ]
         )
+        if is_maas_deployment(deployment):
+            plan.append(
+                PatchBindLoadBalancerIPPoolStep(
+                    deployment.get_client(),
+                    deployment.public_api_label,  # type: ignore [attr-defined]
+                )
+            )
+        plan.append(PatchBindLoadBalancerIPStep(deployment.get_client()))
 
         run_plan(plan, console, show_hints)
         click.echo(f"OpenStack {self.display_name} application enabled.")

@@ -38,6 +38,7 @@ from sunbeam.provider.maas.steps import (
     MaasAddMachinesToClusterdStep,
     MaasBootstrapJujuStep,
     MaasConfigureMicrocephOSDStep,
+    MaasCreateLoadBalancerIPPoolsStep,
     MaasDeployInfraMachinesStep,
     MaasDeployK8SApplicationStep,
     MaasDeployMachinesStep,
@@ -1377,3 +1378,205 @@ class TestMaasDeployK8SApplicationStep:
         result = step.is_skip()
         assert result.result_type == ResultType.FAILED
         assert result.message == "No internal ip range found"
+
+
+class FakeIPPool:
+    """k8s ipaddresspool."""
+
+    def __init__(self, addresses):
+        self.spec = {"addresses": addresses}
+
+
+class FakeL2Advertisement:
+    """k8s ipaddresspool."""
+
+    def __init__(self, name):
+        self.spec = {"ipAddressPools": [name]}
+
+
+class TestMaasCreateLoadBalancerIPPoolsStep:
+    @pytest.fixture
+    def read_config(self, mocker):
+        kubeconfig = {
+            "apiVersion": "v1",
+            "clusters": [
+                {
+                    "cluster": {
+                        "server": "http://localhost:8888",
+                    },
+                    "name": "mock-cluster",
+                }
+            ],
+            "contexts": [
+                {
+                    "context": {"cluster": "mock-cluster", "user": "admin"},
+                    "name": "mock",
+                }
+            ],
+            "current-context": "mock",
+            "kind": "Config",
+            "preferences": {},
+            "users": [{"name": "admin", "user": {"token": "mock-token"}}],
+        }
+
+        with mocker.patch(
+            "sunbeam.core.steps.read_config", return_value=kubeconfig
+        ) as p:
+            yield p
+
+    def test_run(self, deployment_k8s, mocker, read_config):
+        pool_name = deployment_k8s.public_api_label
+        ippool_from_maas = {
+            "10.149.100.128/25": [
+                {"label": pool_name, "start": "10.149.100.200", "end": "10.149.100.210"}
+            ]
+        }
+
+        cclient = Mock()
+        maas_client = Mock()
+        k8s_snap = Mock()
+        mocker.patch("sunbeam.core.k8s.Snap", k8s_snap)
+        mocker.patch(
+            "sunbeam.core.steps.KubeClient",
+            new=Mock(
+                return_value=Mock(
+                    get=Mock(
+                        side_effect=[
+                            FakeIPPool(["10.149.100.200-10.149.100.210"]),
+                            FakeL2Advertisement(pool_name),
+                        ]
+                    )
+                )
+            ),
+        )
+        k8s_snap().config.get.return_value = "k8s"
+        get_ip_ranges_from_space_mock = mocker.patch(
+            "sunbeam.provider.maas.client.get_ip_ranges_from_space",
+            return_value=ippool_from_maas,
+        )
+
+        step = MaasCreateLoadBalancerIPPoolsStep(deployment_k8s, cclient, maas_client)
+
+        result = step.run()
+        assert result.result_type == ResultType.COMPLETED
+        get_ip_ranges_from_space_mock.assert_any_call(maas_client, "public_space")
+        step.kube.create.assert_not_called()
+
+    def test_run_with_missing_ipaddresspool(self, deployment_k8s, mocker, read_config):
+        pool_name = deployment_k8s.public_api_label
+        ippool_from_maas = {
+            "10.149.100.128/25": [
+                {"label": pool_name, "start": "10.149.100.200", "end": "10.149.100.210"}
+            ]
+        }
+
+        cclient = Mock()
+        maas_client = Mock()
+        k8s_snap = Mock()
+        mocker.patch("sunbeam.core.k8s.Snap", k8s_snap)
+        mocker.patch(
+            "sunbeam.core.steps.KubeClient",
+            new=Mock(return_value=Mock(get=Mock(side_effect=[None, None]))),
+        )
+        k8s_snap().config.get.return_value = "k8s"
+        get_ip_ranges_from_space_mock = mocker.patch(
+            "sunbeam.provider.maas.client.get_ip_ranges_from_space",
+            return_value=ippool_from_maas,
+        )
+
+        step = MaasCreateLoadBalancerIPPoolsStep(deployment_k8s, cclient, maas_client)
+
+        result = step.run()
+        assert result.result_type == ResultType.COMPLETED
+        get_ip_ranges_from_space_mock.assert_any_call(maas_client, "public_space")
+        assert step.kube.create.call_count == 2
+        assert step.kube.create.mock_calls[0][1][0].get("spec", {}).get(
+            "addresses"
+        ) == ["10.149.100.200-10.149.100.210"]
+        assert step.kube.create.mock_calls[1][1][0].get("spec", {}).get(
+            "ipAddressPools"
+        ) == [pool_name]
+
+    def test_run_with_missing_l2advertisement(
+        self, deployment_k8s, mocker, read_config
+    ):
+        pool_name = deployment_k8s.public_api_label
+        ippool_from_maas = {
+            "10.149.100.128/25": [
+                {"label": pool_name, "start": "10.149.100.200", "end": "10.149.100.210"}
+            ]
+        }
+
+        cclient = Mock()
+        maas_client = Mock()
+        k8s_snap = Mock()
+        mocker.patch("sunbeam.core.k8s.Snap", k8s_snap)
+        mocker.patch(
+            "sunbeam.core.steps.KubeClient",
+            new=Mock(
+                return_value=Mock(
+                    get=Mock(
+                        side_effect=[
+                            FakeIPPool(["10.149.100.200-10.149.100.210"]),
+                            None,
+                        ]
+                    )
+                )
+            ),
+        )
+        k8s_snap().config.get.return_value = "k8s"
+        get_ip_ranges_from_space_mock = mocker.patch(
+            "sunbeam.provider.maas.client.get_ip_ranges_from_space",
+            return_value=ippool_from_maas,
+        )
+
+        step = MaasCreateLoadBalancerIPPoolsStep(deployment_k8s, cclient, maas_client)
+
+        result = step.run()
+        assert result.result_type == ResultType.COMPLETED
+        get_ip_ranges_from_space_mock.assert_any_call(maas_client, "public_space")
+        assert step.kube.create.call_count == 1
+        assert step.kube.create.mock_calls[0][1][0].get("spec", {}).get(
+            "ipAddressPools"
+        ) == [pool_name]
+
+    def test_run_with_different_ippool(self, deployment_k8s, mocker, read_config):
+        pool_name = deployment_k8s.public_api_label
+        ippool_from_maas = {
+            "10.149.100.128/25": [
+                {"label": pool_name, "start": "10.149.100.200", "end": "10.149.100.210"}
+            ]
+        }
+
+        cclient = Mock()
+        maas_client = Mock()
+        k8s_snap = Mock()
+        mocker.patch("sunbeam.core.k8s.Snap", k8s_snap)
+        mocker.patch(
+            "sunbeam.core.steps.KubeClient",
+            new=Mock(
+                return_value=Mock(
+                    get=Mock(
+                        side_effect=[
+                            FakeIPPool(["10.149.100.120-10.149.100.130"]),
+                            FakeL2Advertisement(pool_name),
+                        ]
+                    )
+                )
+            ),
+        )
+        k8s_snap().config.get.return_value = "k8s"
+        get_ip_ranges_from_space_mock = mocker.patch(
+            "sunbeam.provider.maas.client.get_ip_ranges_from_space",
+            return_value=ippool_from_maas,
+        )
+
+        step = MaasCreateLoadBalancerIPPoolsStep(deployment_k8s, cclient, maas_client)
+
+        result = step.run()
+        assert result.result_type == ResultType.COMPLETED
+        get_ip_ranges_from_space_mock.assert_any_call(maas_client, "public_space")
+        assert step.kube.replace.call_count == 1
+        assert step.kube.replace.mock_calls[0][1][0].spec.get("addresses") == [
+            "10.149.100.200-10.149.100.210"
+        ]

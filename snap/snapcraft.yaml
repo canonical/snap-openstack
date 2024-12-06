@@ -215,6 +215,8 @@ parts:
       - cython3
       - rustc
       - cargo
+    stage-packages:
+      - openssh-client
     override-prime: |
       craftctl default
       # Write out snap hooks

@@ -67,13 +67,20 @@ from sunbeam.core.manifest import (
     TerraformManifest,
 )
 from sunbeam.core.openstack import OPENSTACK_MODEL
-from sunbeam.core.steps import PatchLoadBalancerServicesStep
+from sunbeam.core.steps import (
+    PatchLoadBalancerServicesIPPoolStep,
+    PatchLoadBalancerServicesIPStep,
+)
 from sunbeam.core.terraform import (
     TerraformException,
     TerraformHelper,
     TerraformInitStep,
 )
-from sunbeam.features.interface.v1.base import BaseFeatureGroup, FeatureRequirement
+from sunbeam.features.interface.v1.base import (
+    BaseFeatureGroup,
+    FeatureRequirement,
+    is_maas_deployment,
+)
 from sunbeam.features.interface.v1.openstack import (
     DisableOpenStackApplicationStep,
     EnableOpenStackApplicationStep,
@@ -388,7 +395,17 @@ class RemoveGrafanaAgentStep(BaseStep, JujuStepHelper):
         return Result(ResultType.COMPLETED)
 
 
-class PatchCosLoadBalancerStep(PatchLoadBalancerServicesStep):
+class PatchCosLoadBalancerIPStep(PatchLoadBalancerServicesIPStep):
+    def services(self) -> list[str]:
+        """List of services to patch."""
+        return ["traefik"]
+
+    def model(self) -> str:
+        """Name of the model to use."""
+        return OBSERVABILITY_MODEL
+
+
+class PatchCosLoadBalancerIPPoolStep(PatchLoadBalancerServicesIPPoolStep):
     def services(self) -> list[str]:
         """List of services to patch."""
         return ["traefik"]
@@ -841,8 +858,12 @@ class EmbeddedObservabilityFeature(ObservabilityFeature):
         cos_plan = [
             TerraformInitStep(tfhelper_cos),
             DeployObservabilityStackStep(deployment, self, tfhelper_cos, jhelper),
-            PatchCosLoadBalancerStep(client),
         ]
+        if is_maas_deployment(deployment):
+            cos_plan.append(
+                PatchCosLoadBalancerIPPoolStep(client, deployment.public_api_label)  # type: ignore [attr-defined]
+            )
+        cos_plan.append(PatchCosLoadBalancerIPStep(client))
 
         grafana_agent_k8s_plan = [
             TerraformInitStep(tfhelper),

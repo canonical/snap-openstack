@@ -288,7 +288,7 @@ class VaultUnsealStep(BaseStep):
         self.vhelper = VaultHelper(jhelper)
         self.unseal_key = key
 
-    def _get_remaning_keys_count(self, status: dict) -> int:
+    def _get_remaining_keys_count(self, status: dict) -> int:
         """Return number of keys required to unseal."""
         progress = status.get("progress")
         # After running vault unseal command, if progress is 0
@@ -338,10 +338,10 @@ class VaultUnsealStep(BaseStep):
                 # last threshold key as part of the command execution.
                 # This is not the case with non-leader units.
                 if res.get("sealed"):
-                    remaining = self._get_remaning_keys_count(res)
+                    remaining = self._get_remaining_keys_count(res)
                     message = (
                         f"Vault unseal operation status: {remaining} key shares "
-                        "remaining"
+                        "required to unseal"
                     )
                 else:
                     if len(non_leader_units) == 0:
@@ -361,14 +361,14 @@ class VaultUnsealStep(BaseStep):
             for unit in non_leader_units:
                 LOG.debug(f"Running vault unseal command on unit {unit}")
                 res = self.vhelper.unseal_vault(unit, self.unseal_key)
-                unseal_status[unit] = self._get_remaning_keys_count(res)
+                unseal_status[unit] = self._get_remaining_keys_count(res)
 
             LOG.debug(f"Unseal status non leader units: {unseal_status}")
-            # Some units are sealed if remaning is greater than 0
+            # Some units are sealed if remaining is greater than 0
             if any(v > 0 for k, v in unseal_status.items()):
                 message = "Vault unseal operation status: "
                 for unit, remaining in unseal_status.items():
-                    message += f"\n{unit} : {remaining} key shares remaining"
+                    message += f"\n{unit} : {remaining} key shares required to unseal"
             else:
                 message = "Vault unseal operation status: completed"
 

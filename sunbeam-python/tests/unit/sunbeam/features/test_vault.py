@@ -227,12 +227,12 @@ class TestVaultUnsealStep:
             # Unseal with the first key out of 3
             (
                 {"sealed": True, "t": 3, "progress": 1},
-                "Vault unseal operation status: 2 key shares remaining",
+                "Vault unseal operation status: 2 key shares required to unseal",
             ),
             # Unseal with second key out of 3
             (
                 {"sealed": True, "t": 3, "progress": 2},
-                "Vault unseal operation status: 1 key shares remaining",
+                "Vault unseal operation status: 1 key shares required to unseal",
             ),
             # Unseal with final key out of 3
             (
@@ -276,8 +276,8 @@ class TestVaultUnsealStep:
                 ],
                 (
                     "Vault unseal operation status: "
-                    "\nvault/1 : 2 key shares remaining"
-                    "\nvault/2 : 2 key shares remaining"
+                    "\nvault/1 : 2 key shares required to unseal"
+                    "\nvault/2 : 2 key shares required to unseal"
                 ),
             ),
             # Unseal with second key out of 3
@@ -288,8 +288,8 @@ class TestVaultUnsealStep:
                 ],
                 (
                     "Vault unseal operation status: "
-                    "\nvault/1 : 1 key shares remaining"
-                    "\nvault/2 : 1 key shares remaining"
+                    "\nvault/1 : 1 key shares required to unseal"
+                    "\nvault/2 : 1 key shares required to unseal"
                 ),
             ),
             # Unseal with final key out of 3
@@ -308,8 +308,8 @@ class TestVaultUnsealStep:
                 ],
                 (
                     "Vault unseal operation status: "
-                    "\nvault/1 : 2 key shares remaining"
-                    "\nvault/2 : 1 key shares remaining"
+                    "\nvault/1 : 2 key shares required to unseal"
+                    "\nvault/2 : 1 key shares required to unseal"
                 ),
             ),
             # One non-leader-unit already unsealed

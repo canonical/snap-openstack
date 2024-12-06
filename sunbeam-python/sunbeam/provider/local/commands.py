@@ -140,7 +140,7 @@ from sunbeam.steps.microceph import (
 )
 from sunbeam.steps.openstack import (
     DeployControlPlaneStep,
-    OpenStackPatchLoadBalancerServicesStep,
+    OpenStackPatchLoadBalancerServicesIPStep,
     PromptRegionStep,
 )
 from sunbeam.steps.sunbeam_machine import (
@@ -617,7 +617,7 @@ def bootstrap(
     plan5: list[BaseStep] = []
 
     if is_control_node:
-        plan5.append(OpenStackPatchLoadBalancerServicesStep(client))
+        plan5.append(OpenStackPatchLoadBalancerServicesIPStep(client))
 
     # NOTE(jamespage):
     # As with MicroCeph, always deploy the openstack-hypervisor charm
