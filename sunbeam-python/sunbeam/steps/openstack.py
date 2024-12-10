@@ -37,6 +37,7 @@ from sunbeam.core.common import (
 )
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import (
+    ApplicationNotFoundException,
     JujuHelper,
     JujuStepHelper,
     JujuWaitException,
@@ -74,6 +75,13 @@ DATABASE_MAX_POOL_SIZE = 2
 DATABASE_ADDITIONAL_BUFFER_SIZE = 600
 DATABASE_OVERSIZE_FACTOR = 1.2
 MB_BYTES_PER_CONNECTION = 12
+
+# Typically the applications will be in active state when feature
+# is enabled. However some applications require manual intervention
+# or running more configuration steps to make the application active.
+# List of all the apps that will be blocked when corresponding
+# feature is enabled.
+APPS_BLOCKED_WHEN_FEATURE_ENABLED = ["barbican", "vault"]
 
 
 # This dict maps every databases that can be used by OpenStack services
@@ -411,6 +419,24 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
         """Create terraform variables related to region."""
         return {"region": read_config(self.client, REGION_CONFIG_KEY)["region"]}
 
+    def remove_blocked_apps_from_features(self) -> list:
+        """Apps that are in blocked state from features.
+
+        Only consider the apps that will be in blocked state after
+        enabling the feature.
+        """
+        apps_to_remove = []
+        for app_name in APPS_BLOCKED_WHEN_FEATURE_ENABLED:
+            try:
+                app = run_sync(self.jhelper.get_application(app_name, OPENSTACK_MODEL))
+                LOG.debug(f"Application status for {app_name}: {app.status}")
+                if app.status != "active":
+                    apps_to_remove.append(app)
+            except ApplicationNotFoundException:
+                pass
+
+        return apps_to_remove
+
     def is_skip(self, status: Status | None = None) -> Result:
         """Determines if the step should be skipped or not.
 
@@ -521,7 +547,9 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
         apps = run_sync(self.jhelper.get_application_names(self.model))
         if not extra_tfvars.get("enable-ceph") and "cinder-ceph" in apps:
             apps.remove("cinder-ceph")
-        LOG.debug(f"Application monitored for readiness: {apps}")
+        apps = list(set(apps) - set(self.remove_blocked_apps_from_features()))
+
+        LOG.debug(f"Applications monitored for readiness: {apps}")
         queue: asyncio.queues.Queue[str] = asyncio.queues.Queue(maxsize=len(apps))
         task = run_sync(update_status_background(self, apps, queue, status))
         try:
