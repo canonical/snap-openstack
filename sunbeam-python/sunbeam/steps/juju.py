@@ -690,6 +690,32 @@ class RegisterJujuUserStep(BaseStep, JujuStepHelper):
                 ResultType.FAILED, "No registration token found in Cluster database"
             )
 
+        if self.replace:
+            # If controller exists with same name, unregister the controller.
+            try:
+                self.get_controller(self.controller)
+                cmd = [
+                    self._get_juju_binary(),
+                    "unregister",
+                    self.controller,
+                    "--no-prompt",
+                ]
+                LOG.debug(f'Running command {" ".join(cmd)}')
+                process = subprocess.run(
+                    cmd, capture_output=True, text=True, check=True
+                )
+                LOG.debug(
+                    f"Command finished. stdout={process.stdout}, "
+                    f"stderr={process.stderr}"
+                )
+            except ControllerNotFoundException:
+                LOG.debug("No controller found to replace, register the juju user")
+            except subprocess.CalledProcessError as e:
+                return Result(
+                    ResultType.FAILED,
+                    f"Error in unregistering controller {self.controller}: {str(e)}",
+                )
+
         snap = Snap()
         log_file = Path(f"register_juju_user_{self.username}_{self.controller}.log")
         log_file = snap.paths.user_common / log_file
