@@ -270,10 +270,7 @@ class BootstrapJujuStep(BaseStep, JujuStepHelper):
         :return:
         """
         try:
-            cmd = [
-                self._get_juju_binary(),
-                "bootstrap",
-            ]
+            cmd = [self._get_juju_binary(), "bootstrap"]
             cmd.extend(self.bootstrap_args)
             cmd.extend([self.cloud, self.controller])
             if "HTTP_PROXY" in self.proxy_settings:
@@ -305,9 +302,11 @@ class BootstrapJujuStep(BaseStep, JujuStepHelper):
                     option, _ = arg.split("=")
                     arg = "=".join((option, "********"))
                 hidden_cmd.append(arg)
+
             LOG.debug(f'Running command {" ".join(hidden_cmd)}')
             env = os.environ.copy()
             env.update(self.proxy_settings)
+
             process = subprocess.run(
                 cmd, capture_output=True, text=True, check=True, env=env
             )
@@ -1157,8 +1156,9 @@ class SaveJujuUserLocallyStep(BaseStep):
         try:
             juju_account = JujuAccount.load(self.data_location)
             LOG.debug(f"Local account found: {juju_account.user}")
-            # TODO(gboutry): make user password updateable ?
-            return Result(ResultType.SKIPPED)
+            if juju_account.user == self.username:
+                # TODO(gboutry): make user password updateable ?
+                return Result(ResultType.SKIPPED)
         except JujuAccountNotFound:
             LOG.debug("Local account not found")
             pass
@@ -1200,6 +1200,63 @@ class SaveJujuRemoteUserLocallyStep(SaveJujuUserLocallyStep):
         """
         juju_account = JujuAccount.load(self.data_location, f"{self.controller}.yaml")
         juju_account.write(self.data_location)
+
+        return Result(ResultType.COMPLETED)
+
+
+class SaveJujuAdminUserLocallyStep(BaseStep):
+    """Save juju admin user locally in accounts yaml file.
+
+    Save only if the current user is admin.
+    """
+
+    def __init__(self, controller: str, data_location: Path):
+        super().__init__("Save Admin User", "Saving admin user for local usage")
+        self.controller = controller
+        self.data_location = data_location
+        self.home = os.environ.get("SNAP_REAL_HOME")
+
+    def _get_credentials_from_local_juju(
+        self, controller: str
+    ) -> tuple[str, str] | None:
+        """Get user name from local juju accounts file."""
+        try:
+            with open(f"{self.home}/.local/share/juju/accounts.yaml") as f:
+                accounts = yaml.safe_load(f)
+                user = (
+                    accounts.get("controllers", {}).get(self.controller, {}).get("user")
+                )
+                password = (
+                    accounts.get("controllers", {})
+                    .get(self.controller, {})
+                    .get("password")
+                )
+                LOG.debug(f"Found user from accounts.yaml for {controller}: {user}")
+                return user, password
+        except FileNotFoundError as e:
+            LOG.debug(f"Error in retrieving local user: {str(e)}")
+            user = None
+
+        return None
+
+    def run(self, status: Status | None = None) -> Result:
+        """Run the step to completion.
+
+        Invoked when the step is run and returns a ResultType to indicate
+
+        :return:
+        """
+        account = self._get_credentials_from_local_juju(self.controller)
+        if account is None:
+            return Result(ResultType.FAILED, "Error in retrieving Juju acccount")
+
+        user = account[0]
+        if user == "admin":
+            juju_account = JujuAccount(
+                user=user,
+                password=account[1],
+            )
+            juju_account.write(self.data_location)
 
         return Result(ResultType.COMPLETED)
 
@@ -2077,4 +2134,99 @@ class RemoveSaasApplicationsStep(BaseStep):
         for saas in self._remote_app_to_delete:
             LOG.debug("Removing remote application on %s", saas)
             run_sync(model.remove_saas(saas))
+        return Result(ResultType.COMPLETED)
+
+
+class MigrateModelStep(BaseStep, JujuStepHelper):
+    """Migrate model to another controller in juju."""
+
+    def __init__(
+        self,
+        model: str,
+        from_controller: str,
+        to_controller: str,
+    ):
+        super().__init__(
+            "Migrate the model",
+            f"Migrating model {model} to juju controller {to_controller}",
+        )
+        self.model = model
+        self.from_controller = from_controller
+        self.to_controller = to_controller
+
+    def _switch_controller(self, controller: str):
+        cmd = [self._get_juju_binary(), "switch", controller]
+        LOG.debug(f'Running command {" ".join(cmd)}')
+        process = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        LOG.debug(f"Command finished. stdout={process.stdout}, stderr={process.stderr}")
+
+    @tenacity.retry(
+        wait=tenacity.wait_fixed(10),
+        stop=tenacity.stop_after_delay(300),
+        retry=tenacity.retry_if_exception_type(ValueError),
+        reraise=True,
+    )
+    def _wait_for_model(self, model: str) -> bool:
+        models = self._juju_cmd("models")
+        LOG.debug(f"Models: {models}")
+        models = models.get("models", [])
+        LOG.debug(f"models: {models} .. looking for {model}")
+        for model_ in models:
+            if model_.get("short-name") == model:
+                return True
+
+        raise ValueError(f"No model {model} found")
+
+    def is_skip(self, status: Status | None = None) -> Result:
+        """Determines if the step should be skipped or not."""
+        try:
+            self._switch_controller(self.to_controller)
+        except subprocess.CalledProcessError as e:
+            LOG.exception(f"Error in switching to controller {self.to_controller}")
+            return Result(ResultType.FAILED, str(e))
+
+        models = self._juju_cmd("models")
+        LOG.debug(f"Models: {models}")
+        models = models.get("models", [])
+        LOG.debug(f"models: {models} .. looking for {self.model}")
+        for model_ in models:
+            if model_.get("short-name") == self.model:
+                return Result(ResultType.SKIPPED)
+
+        return Result(ResultType.COMPLETED)
+
+    def run(self, status: Status | None = None) -> Result:
+        """Model mirgate and switch to new controller."""
+        try:
+            self._switch_controller(self.from_controller)
+        except subprocess.CalledProcessError as e:
+            LOG.exception(f"Error in switching to controller {self.from_controller}")
+            return Result(ResultType.FAILED, str(e))
+
+        try:
+            cmd = [self._get_juju_binary(), "migrate", self.model, self.to_controller]
+            LOG.debug(f'Running command {" ".join(cmd)}')
+            process = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            LOG.debug(
+                f"Command finished. stdout={process.stdout}, stderr={process.stderr}"
+            )
+        except subprocess.CalledProcessError as e:
+            LOG.exception(
+                f"Error in migrating model {self.model}  from {self.from_controller}"
+                f"to controller {self.to_controller}"
+            )
+            return Result(ResultType.FAILED, str(e))
+
+        try:
+            self._switch_controller(self.to_controller)
+        except subprocess.CalledProcessError as e:
+            LOG.exception(f"Error in switching to controller {self.to_controller}")
+            return Result(ResultType.FAILED, str(e))
+
+        try:
+            # If the model is visible in to_controller, consider migration is completed.
+            self._wait_for_model(self.model)
+        except ValueError as e:
+            return Result(ResultType.FAILED, str(e))
+
         return Result(ResultType.COMPLETED)

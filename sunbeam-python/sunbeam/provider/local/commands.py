@@ -44,6 +44,8 @@ from sunbeam.core.checks import (
     JujuControllerRegistrationCheck,
     JujuSnapCheck,
     LocalShareCheck,
+    LxdGroupCheck,
+    LXDJujuControllerRegistrationCheck,
     SshKeysConnectedCheck,
     SystemRequirementsCheck,
     TokenCheck,
@@ -78,7 +80,8 @@ from sunbeam.core.juju import (
     ModelNotFoundException,
     run_sync,
 )
-from sunbeam.core.manifest import AddManifestStep
+from sunbeam.core.k8s import K8S_CLOUD_SUFFIX
+from sunbeam.core.manifest import AddManifestStep, Manifest
 from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.core.terraform import TerraformInitStep
 from sunbeam.provider.base import ProviderBase
@@ -108,23 +111,27 @@ from sunbeam.steps.hypervisor import (
 )
 from sunbeam.steps.juju import (
     AddCloudJujuStep,
+    AddCredentialsJujuStep,
     AddJujuMachineStep,
     AddJujuModelStep,
     AddJujuSpaceStep,
     BackupBootstrapUserStep,
-    BindJujuApplicationStep,
     BootstrapJujuStep,
     CreateJujuUserStep,
     JujuGrantModelAccessStep,
     JujuLoginStep,
+    MigrateModelStep,
     RegisterJujuUserStep,
     RemoveJujuMachineStep,
     SaveControllerStep,
+    SaveJujuAdminUserLocallyStep,
     SaveJujuRemoteUserLocallyStep,
     SaveJujuUserLocallyStep,
+    SwitchToController,
     UpdateJujuModelConfigStep,
 )
 from sunbeam.steps.k8s import (
+    AddK8SCloudInClientStep,
     AddK8SCloudStep,
     AddK8SCredentialStep,
     AddK8SUnitsStep,
@@ -139,6 +146,7 @@ from sunbeam.steps.microceph import (
     RemoveMicrocephUnitsStep,
 )
 from sunbeam.steps.microk8s import (
+    AddMicrok8sCloudInClientStep,
     AddMicrok8sCloudStep,
     AddMicrok8sCredentialStep,
     AddMicrok8sUnitsStep,
@@ -165,6 +173,7 @@ from sunbeam.utils import (
 LOG = logging.getLogger(__name__)
 console = Console()
 DEPLOYMENTS_CONFIG_KEY = "deployments"
+DEFAULT_LXD_CLOUD = "localhost"
 
 
 @click.group("cluster", context_settings=CONTEXT_SETTINGS, cls=CatchGroup)
@@ -206,6 +215,332 @@ class LocalProvider(ProviderBase):
     def deployment_type(self) -> Tuple[str, Type[Deployment]]:
         """Retrieve the deployment type and class."""
         return LOCAL_TYPE, LocalDeployment
+
+
+def get_sunbeam_machine_plans(
+    deployment: Deployment, manifest: Manifest
+) -> list[BaseStep]:
+    plans: list[BaseStep] = []
+    client = deployment.get_client()
+    jhelper = JujuHelper(deployment.get_connected_controller())
+    proxy_settings = deployment.get_proxy_settings()
+    fqdn = utils.get_fqdn()
+
+    sunbeam_machine_tfhelper = deployment.get_tfhelper("sunbeam-machine-plan")
+    plans.extend(
+        [
+            TerraformInitStep(sunbeam_machine_tfhelper),
+            DeploySunbeamMachineApplicationStep(
+                deployment,
+                client,
+                sunbeam_machine_tfhelper,
+                jhelper,
+                manifest,
+                deployment.openstack_machines_model,
+                refresh=True,
+                proxy_settings=proxy_settings,
+            ),
+            AddSunbeamMachineUnitsStep(
+                client, fqdn, jhelper, deployment.openstack_machines_model
+            ),
+        ]
+    )
+
+    return plans
+
+
+def get_k8s_plans(
+    deployment: Deployment, manifest: Manifest, k8s_provider: str, accept_defaults: bool
+) -> list[BaseStep]:
+    plans: list[BaseStep] = []
+    client = deployment.get_client()
+    jhelper = JujuHelper(deployment.get_connected_controller())
+    fqdn = utils.get_fqdn()
+
+    if k8s_provider == "k8s":
+        k8s_tfhelper = deployment.get_tfhelper("k8s-plan")
+        plans.extend(
+            [
+                TerraformInitStep(k8s_tfhelper),
+                DeployK8SApplicationStep(
+                    deployment,
+                    client,
+                    k8s_tfhelper,
+                    jhelper,
+                    manifest,
+                    deployment.openstack_machines_model,
+                    accept_defaults=accept_defaults,
+                ),
+                AddK8SUnitsStep(
+                    client, fqdn, jhelper, deployment.openstack_machines_model
+                ),
+                StoreK8SKubeConfigStep(
+                    client, jhelper, deployment.openstack_machines_model
+                ),
+            ]
+        )
+    else:
+        k8s_tfhelper = deployment.get_tfhelper("microk8s-plan")
+        plans.extend(
+            [
+                TerraformInitStep(k8s_tfhelper),
+                DeployMicrok8sApplicationStep(
+                    deployment,
+                    client,
+                    k8s_tfhelper,
+                    jhelper,
+                    manifest,
+                    deployment.openstack_machines_model,
+                    accept_defaults=accept_defaults,
+                ),
+                AddMicrok8sUnitsStep(
+                    client, fqdn, jhelper, deployment.openstack_machines_model
+                ),
+                StoreMicrok8sConfigStep(
+                    client, jhelper, deployment.openstack_machines_model
+                ),
+            ]
+        )
+
+    return plans
+
+
+def get_juju_controller_plans(
+    deployment: Deployment,
+    controller: str,
+    data_location: Path,
+    external_controller: bool = False,
+) -> list[BaseStep]:
+    """Get Juju controller related plans.
+
+    Plans include the following:
+    * Add cloud to juju controller
+    * Add credentials if required to juju controller
+    * Update Juju controller details to cluster db
+    * Save Juju credentials locally
+    """
+    client = deployment.get_client()
+    controller_ip = JujuStepHelper().get_controller_ip(controller)
+    cloud_definition = JujuHelper.manual_cloud(deployment.name, controller_ip)
+    credential_definition = JujuHelper.empty_credential(deployment.name)
+
+    if external_controller:
+        return [
+            AddCloudJujuStep(deployment.name, cloud_definition, controller),
+            # Not creating Juju user in external controller case because of juju bug
+            # https://bugs.launchpad.net/juju/+bug/2073741
+            ClusterUpdateJujuControllerStep(client, deployment.controller, True),
+            SaveJujuRemoteUserLocallyStep(controller, data_location),
+        ]
+    else:
+        return [
+            AddCloudJujuStep(deployment.name, cloud_definition, controller),
+            AddCredentialsJujuStep(
+                deployment.name, "empty-creds", credential_definition, controller
+            ),
+            BackupBootstrapUserStep("admin", data_location),
+            ClusterUpdateJujuControllerStep(client, controller, False, False),
+            SaveJujuAdminUserLocallyStep(controller, data_location),
+        ]
+
+
+def get_juju_model_machine_plans(
+    deployment: Deployment,
+    jhelper: JujuHelper,
+    local_management_ip: str,
+    credential_name: str | None,
+) -> list[BaseStep]:
+    """Get Juju model and machine related plans."""
+    proxy_settings = deployment.get_proxy_settings()
+    return [
+        AddJujuModelStep(
+            jhelper,
+            deployment.openstack_machines_model,
+            deployment.name,
+            credential_name,
+            proxy_settings,
+        ),
+        AddJujuMachineStep(
+            local_management_ip, deployment.openstack_machines_model, jhelper
+        ),
+    ]
+
+
+def get_juju_spaces_plans(
+    deployment: Deployment,
+    jhelper: JujuHelper,
+    management_cidr: str,
+) -> list[BaseStep]:
+    """Get Juju spaces related plans."""
+    return [
+        AddJujuSpaceStep(
+            jhelper,
+            deployment.openstack_machines_model,
+            deployment.get_space(Networks.MANAGEMENT),
+            [management_cidr],
+        ),
+        UpdateJujuModelConfigStep(
+            jhelper,
+            deployment.openstack_machines_model,
+            {
+                "default-space": deployment.get_space(Networks.MANAGEMENT),
+            },
+        ),
+    ]
+
+
+def get_juju_migrate_plans(
+    deployment: Deployment,
+    from_controller: str,
+    to_controller: str,
+    data_location: Path,
+) -> list[BaseStep]:
+    """Get Juju migrate related plans."""
+    client = deployment.get_client()
+    controller_ip = JujuStepHelper().get_controller_ip(to_controller)
+    cloud_definition = JujuHelper.manual_cloud(deployment.name, controller_ip)
+    credential_definition = JujuHelper.empty_credential(deployment.name)
+
+    return [
+        SwitchToController(deployment.controller),
+        AddCloudJujuStep(deployment.name, cloud_definition, deployment.controller),
+        AddCredentialsJujuStep(
+            deployment.name,
+            "empty-creds",
+            credential_definition,
+            deployment.controller,
+        ),
+        MigrateModelStep(
+            deployment.openstack_machines_model,
+            from_controller,
+            to_controller,
+        ),
+        ClusterUpdateJujuControllerStep(client, deployment.controller, False, False),
+        SaveJujuAdminUserLocallyStep(deployment.controller, data_location),
+    ]
+
+
+def get_juju_user_plans(
+    deployment: Deployment,
+    jhelper: JujuHelper,
+    data_location: Path,
+    token: str,
+) -> list[BaseStep]:
+    """Get Juju User related plans."""
+    client = deployment.get_client()
+    fqdn = utils.get_fqdn()
+
+    return [
+        ClusterAddJujuUserStep(client, fqdn, token),
+        JujuGrantModelAccessStep(jhelper, fqdn, deployment.openstack_machines_model),
+        BackupBootstrapUserStep(fqdn, data_location),
+        SaveJujuUserLocallyStep(fqdn, data_location),
+        RegisterJujuUserStep(
+            client, fqdn, deployment.controller, data_location, replace=True
+        ),
+    ]
+
+
+def get_juju_bootstrap_plans(
+    deployment: Deployment,
+    jhelper: JujuHelper,
+    bootstrap_args: list,
+    k8s_provider: str,
+):
+    """Get Juju Bootstrap related plans."""
+    client = deployment.get_client()
+    proxy_settings = deployment.get_proxy_settings()
+    bootstrap_args.extend(["--config", "controller-service-type=loadbalancer"])
+
+    plan: list[BaseStep] = []
+    if k8s_provider == "k8s":
+        plan.append(AddK8SCloudInClientStep(deployment, jhelper))
+    else:
+        plan.append(AddMicrok8sCloudInClientStep(deployment, jhelper))
+
+    plan.append(
+        BootstrapJujuStep(
+            client,
+            f"{deployment.name}{K8S_CLOUD_SUFFIX}",
+            "k8s",
+            deployment.controller,
+            bootstrap_args=bootstrap_args,
+            proxy_settings=proxy_settings,
+        )
+    )
+    return plan
+
+
+def deploy_and_migrate_juju_controller(
+    deployment: LocalDeployment,
+    manifest: Manifest,
+    local_management_ip: str,
+    management_cidr: str,
+    data_location: Path,
+    k8s_provider: str,
+    accept_defaults: bool,
+    show_hints: bool = False,
+):
+    """Deploy LXD controller and migrate to k8s."""
+    plan1: list[BaseStep] = []
+    plan2: list[BaseStep] = []
+    plan3: list[BaseStep] = []
+    plan4: list[BaseStep] = []
+    plan5: list[BaseStep] = []
+    plan6: list[BaseStep] = []
+
+    client = deployment.get_client()
+    fqdn = utils.get_fqdn()
+    juju_bootstrap_args = []
+    if manifest.core.software.juju.bootstrap_args:
+        juju_bootstrap_args = manifest.core.software.juju.bootstrap_args.copy()
+
+    # Atmost one controller will be returned as one cloud is passed as argument.
+    # lxd_controllers cannot be empty list since this is verified in preflight check.
+    lxd_controllers = JujuStepHelper().get_controllers([DEFAULT_LXD_CLOUD])
+    lxd_controller = lxd_controllers[0]
+
+    if not client.cluster.check_juju_controller_migrated():
+        plan1 = get_juju_controller_plans(
+            deployment, lxd_controller, data_location, external_controller=False
+        )
+        run_plan(plan1, console, show_hints)
+
+    # Reload deployment with lxd controller admin user credentials
+    deployment.reload_credentials()
+    jhelper = JujuHelper(deployment.get_connected_controller())
+
+    plan2 = get_juju_model_machine_plans(
+        deployment, jhelper, local_management_ip, "empty-creds"
+    )
+    run_plan(plan2, console, show_hints)
+
+    plan3 = get_juju_spaces_plans(deployment, jhelper, management_cidr)
+    plan3.extend(get_sunbeam_machine_plans(deployment, manifest))
+    plan3.extend(get_k8s_plans(deployment, manifest, k8s_provider, accept_defaults))
+    plan3.extend(
+        get_juju_bootstrap_plans(deployment, jhelper, juju_bootstrap_args, k8s_provider)
+    )
+    run_plan(plan3, console, show_hints)
+
+    plan4 = get_juju_migrate_plans(
+        deployment, lxd_controller, deployment.controller, data_location
+    )
+    run_plan(plan4, console, show_hints)
+    client.cluster.set_juju_controller_migrated()
+
+    # Reload deployment with sunbeam-controller admin user credentials
+    deployment.reload_credentials()
+    jhelper = JujuHelper(deployment.get_connected_controller())
+
+    plan5 = [
+        CreateJujuUserStep(fqdn),
+    ]
+    plan5_results = run_plan(plan5, console, show_hints)
+    token = get_step_message(plan5_results, CreateJujuUserStep)
+
+    plan6 = get_juju_user_plans(deployment, jhelper, data_location, token)
+    run_plan(plan6, console, show_hints)
 
 
 @click.command()
@@ -295,7 +630,6 @@ def bootstrap(
     LOG.debug(f"Bootstrap node: roles {roles_str}")
 
     k8s_provider = snap.config.get("k8s.provider")
-    juju_bootstrap_args = manifest.core.software.juju.bootstrap_args
     data_location = snap.paths.user_data
 
     preflight_checks: list[Check] = []
@@ -313,6 +647,9 @@ def bootstrap(
         preflight_checks.append(
             JujuControllerRegistrationCheck(juju_controller, data_location)
         )
+    else:
+        preflight_checks.append(LxdGroupCheck())
+        preflight_checks.append(LXDJujuControllerRegistrationCheck())
 
     run_preflight_checks(preflight_checks, console)
 
@@ -339,20 +676,6 @@ def bootstrap(
         )
         local_management_ip = utils.get_local_cidr_by_default_route()
 
-    if juju_controller:
-        controller_details = JujuStepHelper().get_controller(juju_controller)
-        endpoints = controller_details.get("details", {}).get("api-endpoints", [])
-        controller_ip_port = utils.first_connected_server(endpoints)
-        if not controller_ip_port:
-            raise click.ClickException("Juju Controller not reachable")
-
-        controller_ip = controller_ip_port.rsplit(":", 1)[0]
-    else:
-        controller_ip = local_management_ip
-
-    LOG.debug(f"Juju Controller IP: {controller_ip}")
-    cloud_definition = JujuHelper.manual_cloud(deployment.name, controller_ip)
-
     plan: list[BaseStep] = []
     plan.append(
         SaveControllerStep(
@@ -373,223 +696,73 @@ def bootstrap(
             deployment, accept_defaults=accept_defaults, manifest=manifest
         )
     )
+    plan.append(PromptRegionStep(client, manifest, accept_defaults))
     run_plan(plan, console, show_hints)
 
     update_config(client, DEPLOYMENTS_CONFIG_KEY, deployments.get_minimal_info())
     proxy_settings = deployment.get_proxy_settings()
     LOG.debug(f"Proxy settings: {proxy_settings}")
 
-    plan1: list[BaseStep]
-    plan2: list[BaseStep]
-    plan3: list[BaseStep]
-    plan4: list[BaseStep]
     if juju_controller:
-        plan1 = []
-        plan1.append(
-            AddCloudJujuStep(deployment.name, cloud_definition, juju_controller)
-        )
-        run_plan(plan1, console, show_hints)
+        plan11: list[BaseStep] = []
+        plan12: list[BaseStep] = []
+        plan13: list[BaseStep] = []
 
-        # Not creating Juju user in external controller case because of below juju bug
-        # https://bugs.launchpad.net/juju/+bug/2073741
-        plan2 = []
-        plan2.append(
-            ClusterUpdateJujuControllerStep(client, deployment.controller, True)
+        plan11 = get_juju_controller_plans(
+            deployment, juju_controller, data_location, external_controller=True
         )
-        plan2.append(SaveJujuRemoteUserLocallyStep(juju_controller, data_location))
-        run_plan(plan2, console, show_hints)
+        run_plan(plan11, console, show_hints)
 
         deployment.reload_credentials()
         jhelper = JujuHelper(deployment.get_connected_controller())
 
-        plan3 = []
-        plan3.append(
-            AddJujuModelStep(
-                jhelper,
-                deployment.openstack_machines_model,
-                deployment.name,
-                None,
-                proxy_settings,
-            )
+        plan12 = get_juju_model_machine_plans(
+            deployment, jhelper, local_management_ip, None
         )
-        plan3.append(
-            AddJujuMachineStep(
-                local_management_ip, deployment.openstack_machines_model, jhelper
-            )
-        )
-        run_plan(plan3, console, show_hints)
+        run_plan(plan12, console, show_hints)
 
-        plan4 = []
-        plan4.append(
-            AddJujuSpaceStep(
-                jhelper,
-                deployment.openstack_machines_model,
-                deployment.get_space(Networks.MANAGEMENT),
-                [management_cidr],
-            )
+        plan13 = get_juju_spaces_plans(deployment, jhelper, management_cidr)
+        plan13.extend(get_sunbeam_machine_plans(deployment, manifest))
+        plan13.extend(
+            get_k8s_plans(deployment, manifest, k8s_provider, accept_defaults)
         )
-        plan4.append(
-            UpdateJujuModelConfigStep(
-                jhelper,
-                deployment.openstack_machines_model,
-                {
-                    "default-space": deployment.get_space(Networks.MANAGEMENT),
-                },
-            )
-        )
+        if k8s_provider == "k8s":
+            plan13.append(AddK8SCloudStep(deployment, jhelper))
+        else:
+            plan13.append(AddMicrok8sCloudStep(deployment, jhelper))
+        run_plan(plan13, console, show_hints)
     else:
-        plan1 = []
-        plan1.append(
-            AddCloudJujuStep(deployment.name, cloud_definition, juju_controller)
-        )
-        plan1.append(
-            BootstrapJujuStep(
-                client,
-                deployment.name,
-                cloud_definition["clouds"][deployment.name]["type"],
-                deployment.controller,
-                bootstrap_args=juju_bootstrap_args,
-                proxy_settings=proxy_settings,
-            )
-        )
-        run_plan(plan1, console, show_hints)
+        plan21: list[BaseStep] = []
 
-        plan2 = []
-        plan2.append(CreateJujuUserStep(fqdn))
-        plan2.append(
-            ClusterUpdateJujuControllerStep(client, deployment.controller, False)
-        )
-        plan2_results = run_plan(plan2, console, show_hints)
-
-        token = get_step_message(plan2_results, CreateJujuUserStep)
-
-        plan3 = []
-        plan3.append(ClusterAddJujuUserStep(client, fqdn, token))
-        plan3.append(BackupBootstrapUserStep(fqdn, data_location))
-        plan3.append(SaveJujuUserLocallyStep(fqdn, data_location))
-        plan3.append(
-            RegisterJujuUserStep(
-                client, fqdn, deployment.controller, data_location, replace=True
-            )
-        )
-        run_plan(plan3, console, show_hints)
-
-        deployment.reload_credentials()
-        jhelper = JujuHelper(deployment.get_connected_controller())
-        plan4 = []
-        plan4.append(
-            AddJujuSpaceStep(
-                jhelper,
-                deployment.openstack_machines_model,
-                deployment.get_space(Networks.MANAGEMENT),
-                [management_cidr],
-            )
-        )
-        plan4.append(
-            UpdateJujuModelConfigStep(
-                jhelper,
-                deployment.openstack_machines_model,
-                {
-                    "default-space": deployment.get_space(Networks.MANAGEMENT),
-                },
-            )
-        )
-        plan4.append(
-            # TODO(gboutry): fix when LP#2067617 is released
-            # This should be replaced by a juju controller set config
-            # when the previous bug is fixed
-            # Binding controller's endpoints to the management space
-            BindJujuApplicationStep(
-                jhelper,
-                deployment.openstack_machines_model,
-                "controller",
-                deployment.get_space(Networks.MANAGEMENT),
-            )
-        )
-        plan4.append(
-            SaveControllerStep(
-                deployment.controller,
-                deployment.name,
-                deployments,
-                data_location,
-                bool(juju_controller),
-                force=True,
-            )
-        )
-
-    plan4.append(PromptRegionStep(client, manifest, accept_defaults))
-    # Deploy sunbeam machine charm
-    sunbeam_machine_tfhelper = deployment.get_tfhelper("sunbeam-machine-plan")
-    plan4.append(TerraformInitStep(sunbeam_machine_tfhelper))
-    plan4.append(
-        DeploySunbeamMachineApplicationStep(
+        deploy_and_migrate_juju_controller(
             deployment,
-            client,
-            sunbeam_machine_tfhelper,
-            jhelper,
             manifest,
-            deployment.openstack_machines_model,
-            refresh=True,
-            proxy_settings=proxy_settings,
+            local_management_ip,
+            management_cidr,
+            data_location,
+            k8s_provider,
+            accept_defaults,
+            show_hints,
         )
-    )
-    plan4.append(
-        AddSunbeamMachineUnitsStep(
-            client, fqdn, jhelper, deployment.openstack_machines_model
-        )
-    )
 
-    if k8s_provider == "k8s":
-        k8s_tfhelper = deployment.get_tfhelper("k8s-plan")
-        plan4.append(TerraformInitStep(k8s_tfhelper))
-        plan4.append(
-            DeployK8SApplicationStep(
-                deployment,
-                client,
-                k8s_tfhelper,
-                jhelper,
-                manifest,
-                deployment.openstack_machines_model,
-                accept_defaults=accept_defaults,
-            )
-        )
-        plan4.append(
-            AddK8SUnitsStep(client, fqdn, jhelper, deployment.openstack_machines_model)
-        )
-        plan4.append(
-            StoreK8SKubeConfigStep(client, jhelper, deployment.openstack_machines_model)
-        )
-        plan4.append(AddK8SCloudStep(deployment, jhelper))
-    else:
-        k8s_tfhelper = deployment.get_tfhelper("microk8s-plan")
-        plan4.append(TerraformInitStep(k8s_tfhelper))
-        plan4.append(
-            DeployMicrok8sApplicationStep(
-                deployment,
-                client,
-                k8s_tfhelper,
-                jhelper,
-                manifest,
-                deployment.openstack_machines_model,
-                accept_defaults=accept_defaults,
-            )
-        )
-        plan4.append(
-            AddMicrok8sUnitsStep(
-                client, fqdn, jhelper, deployment.openstack_machines_model
-            )
-        )
-        plan4.append(
-            StoreMicrok8sConfigStep(
-                client, jhelper, deployment.openstack_machines_model
-            )
-        )
-        plan4.append(AddMicrok8sCloudStep(deployment, jhelper))
+        # Reload deployment with sunbeam-controller {fqdn} user credentials
+        deployment.reload_credentials()
+        deployments.write()
+        deployment.reload_tfhelpers()
+        jhelper = JujuHelper(deployment.get_connected_controller())
 
+        if k8s_provider == "k8s":
+            plan21.append(AddK8SCredentialStep(deployment, jhelper))
+        else:
+            plan21.append(AddMicrok8sCredentialStep(deployment, jhelper))
+
+        run_plan(plan21, console, show_hints)
+
+    plan1: list[BaseStep] = []
     # Deploy Microceph application during bootstrap irrespective of node role.
     microceph_tfhelper = deployment.get_tfhelper("microceph-plan")
-    plan4.append(TerraformInitStep(microceph_tfhelper))
-    plan4.append(
+    plan1.append(TerraformInitStep(microceph_tfhelper))
+    plan1.append(
         DeployMicrocephApplicationStep(
             deployment,
             client,
@@ -601,12 +774,12 @@ def bootstrap(
     )
 
     if is_storage_node:
-        plan4.append(
+        plan1.append(
             AddMicrocephUnitsStep(
                 client, fqdn, jhelper, deployment.openstack_machines_model
             )
         )
-        plan4.append(
+        plan1.append(
             ConfigureMicrocephOSDStep(
                 client,
                 fqdn,
@@ -619,8 +792,8 @@ def bootstrap(
 
     openstack_tfhelper = deployment.get_tfhelper("openstack-plan")
     if is_control_node:
-        plan4.append(TerraformInitStep(openstack_tfhelper))
-        plan4.append(
+        plan1.append(TerraformInitStep(openstack_tfhelper))
+        plan1.append(
             DeployControlPlaneStep(
                 deployment,
                 openstack_tfhelper,
@@ -635,7 +808,7 @@ def bootstrap(
         # Redeploy of Microceph is required to fill terraform vars
         # related to traefik-rgw/keystone-endpoints offers from
         # openstack model
-        plan4.append(
+        plan1.append(
             DeployMicrocephApplicationStep(
                 deployment,
                 client,
@@ -647,19 +820,19 @@ def bootstrap(
             )
         )
 
-    run_plan(plan4, console, show_hints)
+    run_plan(plan1, console, show_hints)
 
-    plan5: list[BaseStep] = []
+    plan2: list[BaseStep] = []
 
     if is_control_node:
-        plan5.append(OpenStackPatchLoadBalancerServicesIPStep(client))
+        plan2.append(OpenStackPatchLoadBalancerServicesIPStep(client))
 
     # NOTE(jamespage):
     # As with MicroCeph, always deploy the openstack-hypervisor charm
     # and add a unit to the bootstrap node if required.
     hypervisor_tfhelper = deployment.get_tfhelper("hypervisor-plan")
-    plan5.append(TerraformInitStep(hypervisor_tfhelper))
-    plan5.append(
+    plan2.append(TerraformInitStep(hypervisor_tfhelper))
+    plan2.append(
         DeployHypervisorApplicationStep(
             deployment,
             client,
@@ -671,14 +844,14 @@ def bootstrap(
         )
     )
     if is_compute_node:
-        plan5.append(
+        plan2.append(
             AddHypervisorUnitsStep(
                 client, fqdn, jhelper, deployment.openstack_machines_model
             )
         )
 
-    plan5.append(SetBootstrapped(client))
-    run_plan(plan5, console, show_hints)
+    plan2.append(SetBootstrapped(client))
+    run_plan(plan2, console, show_hints)
 
     click.echo(f"Node has been bootstrapped with roles: {pretty_roles}")
 
