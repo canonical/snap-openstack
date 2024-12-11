@@ -102,7 +102,6 @@ from sunbeam.provider.maas.steps import (
     MaasDeployInfraMachinesStep,
     MaasDeployK8SApplicationStep,
     MaasDeployMachinesStep,
-    MaasDeployMicrok8sApplicationStep,
     MaasRemoveDeploymentCredentialsStep,
     MaasRemoveMachineFromClusterdStep,
     MaasSaveClusterdCredentialsStep,
@@ -168,20 +167,6 @@ from sunbeam.steps.microceph import (
     DestroyMicrocephApplicationStep,
     RemoveMicrocephUnitsStep,
     SetCephMgrPoolSizeStep,
-)
-from sunbeam.steps.microk8s import (
-    AddMicrok8sCloudStep,
-    AddMicrok8sUnitsStep,
-    CheckMysqlMicroK8SDistributionStep,
-    CheckOvnMicroK8SDistributionStep,
-    CheckRabbitmqMicroK8SDistributionStep,
-    CordonMicroK8SUnitStep,
-    DestroyMicroK8SApplicationStep,
-    DrainMicroK8SUnitStep,
-    MigrateMicroK8SKubeconfigStep,
-    RemoveMicrok8sUnitsStep,
-    StoreMicrok8sConfigStep,
-    UpdateMicroK8SCloudStep,
 )
 from sunbeam.steps.openstack import (
     DeployControlPlaneStep,
@@ -529,8 +514,6 @@ def deploy(
     Deploy the sunbeam cluster.
     """
     deployment: MaasDeployment = ctx.obj
-    snap = Snap()
-    k8s_provider = snap.config.get("k8s.provider")
 
     preflight_checks: list[Check] = []
     preflight_checks.append(JujuSnapCheck())
@@ -580,10 +563,7 @@ def deploy(
     proxy_settings = deployment.get_proxy_settings()
 
     tfhelper_sunbeam_machine = deployment.get_tfhelper("sunbeam-machine-plan")
-    if k8s_provider == "k8s":
-        tfhelper_k8s = deployment.get_tfhelper("k8s-plan")
-    else:
-        tfhelper_k8s = deployment.get_tfhelper("microk8s-plan")
+    tfhelper_k8s = deployment.get_tfhelper("k8s-plan")
     tfhelper_microceph = deployment.get_tfhelper("microceph-plan")
     tfhelper_openstack_deploy = deployment.get_tfhelper("openstack-plan")
     tfhelper_hypervisor_deploy = deployment.get_tfhelper("hypervisor-plan")
@@ -650,52 +630,25 @@ def deploy(
         )
     )
     plan2.append(TerraformInitStep(tfhelper_k8s))
-    if k8s_provider == "k8s":
-        plan2.append(
-            MaasDeployK8SApplicationStep(
-                deployment,
-                client,
-                maas_client,
-                tfhelper_k8s,
-                jhelper,
-                manifest,
-                deployment.openstack_machines_model,
-                accept_defaults,
-            )
+    plan2.append(
+        MaasDeployK8SApplicationStep(
+            deployment,
+            client,
+            maas_client,
+            tfhelper_k8s,
+            jhelper,
+            manifest,
+            deployment.openstack_machines_model,
+            accept_defaults,
         )
-        plan2.append(
-            AddK8SUnitsStep(
-                client, control, jhelper, deployment.openstack_machines_model
-            )
-        )
-        plan2.append(
-            StoreK8SKubeConfigStep(client, jhelper, deployment.openstack_machines_model)
-        )
-        plan2.append(AddK8SCloudStep(deployment, jhelper))
-    else:
-        plan2.append(
-            MaasDeployMicrok8sApplicationStep(
-                deployment,
-                client,
-                maas_client,
-                tfhelper_k8s,
-                jhelper,
-                manifest,
-                deployment.openstack_machines_model,
-                accept_defaults,
-            )
-        )
-        plan2.append(
-            AddMicrok8sUnitsStep(
-                client, control, jhelper, deployment.openstack_machines_model
-            )
-        )
-        plan2.append(
-            StoreMicrok8sConfigStep(
-                client, jhelper, deployment.openstack_machines_model
-            )
-        )
-        plan2.append(AddMicrok8sCloudStep(deployment, jhelper))
+    )
+    plan2.append(
+        AddK8SUnitsStep(client, control, jhelper, deployment.openstack_machines_model)
+    )
+    plan2.append(
+        StoreK8SKubeConfigStep(client, jhelper, deployment.openstack_machines_model)
+    )
+    plan2.append(AddK8SCloudStep(deployment, jhelper))
 
     plan2.append(TerraformInitStep(tfhelper_microceph))
     plan2.append(
@@ -1386,31 +1339,10 @@ def remove_node(ctx: click.Context, name: str, force: bool, show_hints: bool) ->
     client = deployment.get_client()
     jhelper = JujuHelper(deployment.get_connected_controller())
 
-    k8s_provider = Snap().config.get("k8s.provider")
-
     preflight_checks = [
         LocalShareCheck(),
     ]
     run_preflight_checks(preflight_checks, console)
-
-    if k8s_provider == "k8s":
-        check_mysql_k8s_distribution_step = CheckMysqlK8SDistributionStep
-        check_ovn_k8s_distribution_step = CheckOvnK8SDistributionStep
-        check_rabbitmq_k8s_distribution_step = CheckRabbitmqK8SDistributionStep
-        migrate_k8s_kubeconfig_step = MigrateK8SKubeconfigStep
-        update_k8s_cloud_step = UpdateK8SCloudStep
-        cordon_k8s_unit_step = CordonK8SUnitStep
-        drain_k8s_unit_step = DrainK8SUnitStep
-        remove_k8s_unit_step = RemoveK8SUnitsStep
-    else:
-        check_mysql_k8s_distribution_step = CheckMysqlMicroK8SDistributionStep
-        check_ovn_k8s_distribution_step = CheckOvnMicroK8SDistributionStep
-        check_rabbitmq_k8s_distribution_step = CheckRabbitmqMicroK8SDistributionStep
-        migrate_k8s_kubeconfig_step = MigrateMicroK8SKubeconfigStep
-        update_k8s_cloud_step = UpdateMicroK8SCloudStep
-        cordon_k8s_unit_step = CordonMicroK8SUnitStep
-        drain_k8s_unit_step = DrainMicroK8SUnitStep
-        remove_k8s_unit_step = RemoveMicrok8sUnitsStep
 
     check_plan: list[BaseStep] = [
         JujuLoginStep(deployment.juju_account),
@@ -1421,21 +1353,21 @@ def remove_node(ctx: click.Context, name: str, force: bool, show_hints: bool) ->
             deployment.openstack_machines_model,
             force=force,
         ),
-        check_mysql_k8s_distribution_step(
+        CheckMysqlK8SDistributionStep(
             client,
             name,
             jhelper,
             deployment.openstack_machines_model,
             force=force,
         ),
-        check_ovn_k8s_distribution_step(
+        CheckOvnK8SDistributionStep(
             client,
             name,
             jhelper,
             deployment.openstack_machines_model,
             force=force,
         ),
-        check_rabbitmq_k8s_distribution_step(
+        CheckRabbitmqK8SDistributionStep(
             client,
             name,
             jhelper,
@@ -1447,23 +1379,19 @@ def remove_node(ctx: click.Context, name: str, force: bool, show_hints: bool) ->
     run_plan(check_plan, console, show_hints)
 
     plan = [
-        migrate_k8s_kubeconfig_step(
+        MigrateK8SKubeconfigStep(
             client, name, jhelper, deployment.openstack_machines_model
         ),
-        update_k8s_cloud_step(deployment, jhelper),
+        UpdateK8SCloudStep(deployment, jhelper),
         RemoveHypervisorUnitStep(
             client, name, jhelper, deployment.openstack_machines_model, force
         ),
         RemoveMicrocephUnitsStep(
             client, name, jhelper, deployment.openstack_machines_model
         ),
-        cordon_k8s_unit_step(
-            client, name, jhelper, deployment.openstack_machines_model
-        ),
-        drain_k8s_unit_step(client, name, jhelper, deployment.openstack_machines_model),
-        remove_k8s_unit_step(
-            client, name, jhelper, deployment.openstack_machines_model
-        ),
+        CordonK8SUnitStep(client, name, jhelper, deployment.openstack_machines_model),
+        DrainK8SUnitStep(client, name, jhelper, deployment.openstack_machines_model),
+        RemoveK8SUnitsStep(client, name, jhelper, deployment.openstack_machines_model),
         RemoveSunbeamMachineUnitsStep(
             client, name, jhelper, deployment.openstack_machines_model
         ),
@@ -1507,7 +1435,6 @@ def destroy_deployment_cmd(
     """
     if not no_prompt:
         click.confirm("This will destroy the deployment. Are you sure?", abort=True)
-    k8s_provider = Snap().config.get("k8s.provider")
     preflight_checks = [
         JujuSnapCheck(),
         LocalShareCheck(),
@@ -1547,12 +1474,7 @@ def destroy_deployment_cmd(
 
         openstack_tfhelper = deployment.get_tfhelper("openstack-plan")
         microceph_tfhelper = deployment.get_tfhelper("microceph-plan")
-        if k8s_provider == "k8s":
-            k8s_tfhelper = deployment.get_tfhelper("k8s-plan")
-            destroy_k8s_step = DestroyK8SApplicationStep
-        else:
-            k8s_tfhelper = deployment.get_tfhelper("microk8s-plan")
-            destroy_k8s_step = DestroyMicroK8SApplicationStep
+        k8s_tfhelper = deployment.get_tfhelper("k8s-plan")
         if client and clusterd_up:
             # note(gboutry): can't use terraform if no clusterd is up
             plan.extend(
@@ -1580,7 +1502,7 @@ def destroy_deployment_cmd(
                         deployment.openstack_machines_model,
                     ),
                     TerraformInitStep(k8s_tfhelper),
-                    destroy_k8s_step(
+                    DestroyK8SApplicationStep(
                         client,
                         k8s_tfhelper,
                         jhelper,
