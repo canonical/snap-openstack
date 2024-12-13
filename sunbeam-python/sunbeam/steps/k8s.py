@@ -320,10 +320,9 @@ class AddK8SCloudStep(BaseStep, JujuStepHelper):
 class AddK8SCloudInClientStep(BaseStep, JujuStepHelper):
     _KUBECONFIG = K8S_KUBECONFIG_KEY
 
-    def __init__(self, deployment: Deployment, jhelper: JujuHelper):
+    def __init__(self, deployment: Deployment):
         super().__init__("Add K8S cloud in client", "Adding K8S cloud to Juju client")
         self.client = deployment.get_client()
-        self.jhelper = jhelper
         self.cloud_name = f"{deployment.name}{K8S_CLOUD_SUFFIX}"
         self.credential_name = f"{self.cloud_name}{CREDENTIAL_SUFFIX}"
 

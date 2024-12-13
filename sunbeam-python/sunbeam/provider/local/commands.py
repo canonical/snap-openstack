@@ -209,11 +209,10 @@ class LocalProvider(ProviderBase):
 
 
 def get_sunbeam_machine_plans(
-    deployment: Deployment, manifest: Manifest
+    deployment: Deployment, jhelper: JujuHelper, manifest: Manifest
 ) -> list[BaseStep]:
     plans: list[BaseStep] = []
     client = deployment.get_client()
-    jhelper = JujuHelper(deployment.get_connected_controller())
     proxy_settings = deployment.get_proxy_settings()
     fqdn = utils.get_fqdn()
 
@@ -241,11 +240,13 @@ def get_sunbeam_machine_plans(
 
 
 def get_k8s_plans(
-    deployment: Deployment, manifest: Manifest, accept_defaults: bool
+    deployment: Deployment,
+    jhelper: JujuHelper,
+    manifest: Manifest,
+    accept_defaults: bool,
 ) -> list[BaseStep]:
     plans: list[BaseStep] = []
     client = deployment.get_client()
-    jhelper = JujuHelper(deployment.get_connected_controller())
     fqdn = utils.get_fqdn()
 
     k8s_tfhelper = deployment.get_tfhelper("k8s-plan")
@@ -409,7 +410,6 @@ def get_juju_user_plans(
 
 def get_juju_bootstrap_plans(
     deployment: Deployment,
-    jhelper: JujuHelper,
     bootstrap_args: list,
 ):
     """Get Juju Bootstrap related plans."""
@@ -418,7 +418,7 @@ def get_juju_bootstrap_plans(
     bootstrap_args.extend(["--config", "controller-service-type=loadbalancer"])
 
     return [
-        AddK8SCloudInClientStep(deployment, jhelper),
+        AddK8SCloudInClientStep(deployment),
         BootstrapJujuStep(
             client,
             f"{deployment.name}{K8S_CLOUD_SUFFIX}",
@@ -446,6 +446,7 @@ def deploy_and_migrate_juju_controller(
     plan4: list[BaseStep] = []
     plan5: list[BaseStep] = []
     plan6: list[BaseStep] = []
+    plan7: list[BaseStep] = []
 
     client = deployment.get_client()
     fqdn = utils.get_fqdn()
@@ -474,29 +475,35 @@ def deploy_and_migrate_juju_controller(
     run_plan(plan2, console, show_hints)
 
     plan3 = get_juju_spaces_plans(deployment, jhelper, management_cidr)
-    plan3.extend(get_sunbeam_machine_plans(deployment, manifest))
-    plan3.extend(get_k8s_plans(deployment, manifest, accept_defaults))
-    plan3.extend(get_juju_bootstrap_plans(deployment, jhelper, juju_bootstrap_args))
+    plan3.extend(get_sunbeam_machine_plans(deployment, jhelper, manifest))
+    plan3.extend(get_k8s_plans(deployment, jhelper, manifest, accept_defaults))
     run_plan(plan3, console, show_hints)
+    # Disconnect all pylibjuju connections before bootstrapping new controller
+    run_sync(jhelper.disconnect())
+    del jhelper
 
-    plan4 = get_juju_migrate_plans(
+    plan4 = get_juju_bootstrap_plans(deployment, juju_bootstrap_args)
+    run_plan(plan4, console, show_hints)
+
+    plan5 = get_juju_migrate_plans(
         deployment, lxd_controller, deployment.controller, data_location
     )
-    run_plan(plan4, console, show_hints)
+    run_plan(plan5, console, show_hints)
     client.cluster.set_juju_controller_migrated()
 
     # Reload deployment with sunbeam-controller admin user credentials
     deployment.reload_credentials()
     jhelper = JujuHelper(deployment.get_connected_controller())
 
-    plan5 = [
+    plan6 = [
         CreateJujuUserStep(fqdn),
     ]
-    plan5_results = run_plan(plan5, console, show_hints)
-    token = get_step_message(plan5_results, CreateJujuUserStep)
+    plan6_results = run_plan(plan6, console, show_hints)
+    token = get_step_message(plan6_results, CreateJujuUserStep)
 
-    plan6 = get_juju_user_plans(deployment, jhelper, data_location, token)
-    run_plan(plan6, console, show_hints)
+    plan7 = get_juju_user_plans(deployment, jhelper, data_location, token)
+    run_plan(plan7, console, show_hints)
+    run_sync(jhelper.disconnect())
 
 
 @click.command()
@@ -677,8 +684,8 @@ def bootstrap(
         run_plan(plan12, console, show_hints)
 
         plan13 = get_juju_spaces_plans(deployment, jhelper, management_cidr)
-        plan13.extend(get_sunbeam_machine_plans(deployment, manifest))
-        plan13.extend(get_k8s_plans(deployment, manifest, accept_defaults))
+        plan13.extend(get_sunbeam_machine_plans(deployment, jhelper, manifest))
+        plan13.extend(get_k8s_plans(deployment, jhelper, manifest, accept_defaults))
         plan13.append(AddK8SCloudStep(deployment, jhelper))
         run_plan(plan13, console, show_hints)
     else:

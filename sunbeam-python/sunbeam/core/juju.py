@@ -251,6 +251,14 @@ class JujuHelper:
 
     def __init__(self, controller: Controller):
         self.controller = controller
+        self.model_connectors: list[Model] = []
+
+    async def disconnect(self):
+        """Disconnect all connections to juju controller."""
+        LOG.debug("Disconnecting juju controller and model connections")
+        for model in self.model_connectors:
+            await model.disconnect()
+        await self.controller.disconnect()
 
     async def get_clouds(self) -> dict:
         """Return clouds available on controller."""
@@ -268,7 +276,9 @@ class JujuHelper:
         :model: Name of the model
         """
         try:
-            return await self.controller.get_model(model)
+            model_impl = await self.controller.get_model(model)
+            self.model_connectors.append(model_impl)
+            return model_impl
         except Exception as e:
             if "HTTP 400" in str(e) or "HTTP 404" in str(e):
                 raise ModelNotFoundException(f"Model {model!r} not found")
@@ -292,9 +302,11 @@ class JujuHelper:
         old_home = os.environ["HOME"]
         os.environ["HOME"] = os.environ["SNAP_REAL_HOME"]
         try:
-            return await self.controller.add_model(
+            model_impl = await self.controller.add_model(
                 model, cloud_name=cloud, credential_name=credential, config=config
             )
+            self.model_connectors.append(model_impl)
+            return model_impl
         finally:
             os.environ["HOME"] = old_home
 

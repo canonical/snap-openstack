@@ -182,6 +182,7 @@ def jhelper_base(tmp_path: Path) -> juju.JujuHelper:
     jhelper = juju.JujuHelper.__new__(juju.JujuHelper)
     jhelper.data_location = tmp_path
     jhelper.controller = AsyncMock()  # type: ignore
+    jhelper.model_connectors = []
     return jhelper
 
 
