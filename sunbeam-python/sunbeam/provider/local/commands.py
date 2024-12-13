@@ -703,7 +703,7 @@ def bootstrap(
 
         # Reload deployment with sunbeam-controller {fqdn} user credentials
         deployment.reload_credentials()
-        deployments.write()
+        deployments.update_deployment(deployment)
         deployment.reload_tfhelpers()
         jhelper = JujuHelper(deployment.get_connected_controller())
 
