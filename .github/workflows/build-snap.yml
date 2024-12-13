@@ -79,7 +79,7 @@ jobs:
 
           sg snap_daemon "openstack.sunbeam enable orchestration"
           sg snap_daemon "openstack.sunbeam enable loadbalancer"
-          sg snap_daemon "openstack.sunbeam enable dns --nameservers=testing.github."
+          sg snap_daemon "openstack.sunbeam enable dns testing.github."
           sg snap_daemon "openstack.sunbeam disable dns"
           sg snap_daemon "openstack.sunbeam disable loadbalancer"
           sg snap_daemon "openstack.sunbeam disable orchestration"

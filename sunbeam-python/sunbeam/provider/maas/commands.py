@@ -185,7 +185,6 @@ from sunbeam.steps.terraform import CleanTerraformPlansStep
 from sunbeam.utils import (
     CatchGroup,
     DefaultableMappingParameter,
-    argument_with_deprecated_option,
     click_option_show_hints,
 )
 
@@ -865,9 +864,9 @@ def list_nodes(ctx: click.Context, format: str, show_hints: bool) -> None:
 
 
 @click.command("maas")
-@argument_with_deprecated_option("name", type=str, help="Name of the deployment")
-@argument_with_deprecated_option("token", type=str, help="API token")
-@argument_with_deprecated_option("url", type=str, help="API URL")
+@click.argument("name", type=str)
+@click.argument("token", type=str)
+@click.argument("url", type=str)
 @click_option_show_hints
 def add_maas(name: str, token: str, url: str, show_hints: bool) -> None:
     """Add MAAS-backed deployment to registered deployments."""

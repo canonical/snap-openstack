@@ -28,7 +28,6 @@ from sunbeam.core.common import (
     FORMAT_YAML,
 )
 from sunbeam.core.deployment import Deployment
-from sunbeam.utils import argument_with_deprecated_option
 
 LOG = logging.getLogger(__name__)
 console = Console()
@@ -74,9 +73,7 @@ def list_plans(ctx: click.Context, format: str):
 
 
 @plans.command("unlock")
-@argument_with_deprecated_option(
-    "plan", type=str, help="Name of the terraform plan to unlock."
-)
+@click.argument("plan", type=str)
 @click.option("--force", is_flag=True, default=False, help="Force unlock the plan.")
 @click.pass_context
 def unlock_plan(ctx: click.Context, plan: str, force: bool):

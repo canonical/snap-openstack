@@ -42,7 +42,6 @@ from sunbeam.features.interface.v1.openstack import (
     TerraformPlanLocation,
 )
 from sunbeam.utils import (
-    argument_with_deprecated_option,
     click_option_show_hints,
     pass_method_obj,
 )
@@ -190,15 +189,7 @@ class DnsFeature(OpenStackControlPlaneFeature):
         }
 
     @click.command()
-    @argument_with_deprecated_option(
-        "nameservers",
-        type=str,
-        help="""\
-        Space delimited list of nameservers. These are the nameservers that
-        have been provided to the domain registrar in order to delegate
-        the domain to DNS service. e.g. "ns1.example.com. ns2.example.com."
-        """,
-    )
+    @click.argument("nameservers", type=str)
     @click_option_show_hints
     @pass_method_obj
     def enable_cmd(

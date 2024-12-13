@@ -42,7 +42,6 @@ from sunbeam.core.terraform import (
 )
 from sunbeam.features.interface.v1.base import EnableDisableFeature
 from sunbeam.utils import (
-    argument_with_deprecated_option,
     click_option_show_hints,
     pass_method_obj,
 )
@@ -258,9 +257,7 @@ class ProFeature(EnableDisableFeature):
 
     @click.command()
     @pass_method_obj
-    @argument_with_deprecated_option(
-        "token", type=str, short_form="t", help="Ubuntu Pro token"
-    )
+    @click.argument("token", type=str)
     @click_option_show_hints
     def enable_cmd(self, deployment: Deployment, token: str, show_hints: bool) -> None:
         """Enable Ubuntu Pro across deployment.

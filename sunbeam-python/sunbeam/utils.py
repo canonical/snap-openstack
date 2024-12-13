@@ -328,55 +328,6 @@ def first_connected_server(servers: list) -> str | None:
     return None
 
 
-def argument_with_deprecated_option(
-    name: str,
-    type=str,
-    help: str | None = None,
-    short_form: str | None = None,
-    **kwargs,
-):
-    """Decorator to create an argument with a deprecated option."""
-    option_name = name + "_option"
-
-    def callback(ctx: click.Context, param: click.Parameter, argument_value):
-        """Swap option value from option to argument."""
-        option_value = ctx.params.pop(option_name, None)
-        if option_value is not None:
-            if argument_value:
-                raise click.UsageError(
-                    f"{name} cannot be used as both an option and an argument,"
-                    " use argument."
-                )
-            # Set the value of the argument by the option value
-            return option_value
-        return argument_value
-
-    def decorator(func: click.decorators.FC) -> click.decorators.FC:
-        arg_def = click.argument(
-            name,
-            type=type,
-            required=False,
-            callback=callback,
-            **kwargs,
-        )
-        option: tuple[str, str] | tuple[str]
-        if short_form:
-            option = (f"-{short_form}", f"--{name}")
-        else:
-            option = (f"--{name}",)
-        option_def = click.option(
-            *option,
-            option_name,
-            # This is the key to make the option processed before argument
-            is_eager=True,
-            help=(help + ". Deprecated, use argument instead" if help else None),
-            **kwargs,
-        )
-        return arg_def(option_def(func))
-
-    return decorator
-
-
 def click_option_show_hints(func: click.decorators.FC) -> click.decorators.FC:
     """Common decorator to show hints for questions."""
     return click.option(

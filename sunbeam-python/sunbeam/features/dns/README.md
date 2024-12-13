@@ -7,7 +7,7 @@ This feature provides a DNS service for Sunbeam. It's based on [Designate](https
 To enable the DNS service, you need an already bootstraped Sunbeam instance. Then, you can install the feature with:
 
 ```bash
-sunbeam enable dns --nameservers="<ns records>"
+sunbeam enable dns "<ns records>"
 ```
 
 ## Contents
@@ -22,7 +22,7 @@ Services are constituted of charms, i.e. operator code, and ROCKs, the correspon
 
 ## Configuration
 
-The NS records you pass to the `--nameservers` must be a fully qualified domain name ending with a dot.
+The NS records you pass to the `nameservers` must be a fully qualified domain name ending with a dot.
 It must redirect towards the IP address of the bind instance. See [#commands](#commands) to retrieve the address of the bind instance.
 
 ## Commands

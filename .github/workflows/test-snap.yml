@@ -95,7 +95,7 @@ jobs:
           sg snap_daemon "sunbeam launch"
           sg snap_daemon "sunbeam enable orchestration"
           sg snap_daemon "sunbeam enable loadbalancer"
-          sg snap_daemon "sunbeam enable dns --nameservers=testing.github."
+          sg snap_daemon "sunbeam enable dns testing.github."
           sg snap_daemon "sunbeam enable telemetry"
           sg snap_daemon "sunbeam enable observability"
           sg snap_daemon "sunbeam enable vault --dev-mode"

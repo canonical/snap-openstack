@@ -31,7 +31,6 @@ from sunbeam.clusterd.service import (
 from sunbeam.core.common import FORMAT_TABLE, FORMAT_YAML
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.manifest import Manifest, SoftwareConfig
-from sunbeam.utils import argument_with_deprecated_option
 
 if typing.TYPE_CHECKING:
     from sunbeam.features.interface.v1.base import BaseFeature
@@ -138,7 +137,7 @@ def list_manifests(ctx: click.Context, format: str) -> None:
 
 
 @click.command()
-@argument_with_deprecated_option("id", type=str, help="Manifest ID")
+@click.argument("id", type=str)
 @click.pass_context
 def show(ctx: click.Context, id: str) -> None:
     """Show Manifest data.

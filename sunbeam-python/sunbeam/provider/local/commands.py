@@ -158,7 +158,6 @@ from sunbeam.steps.sunbeam_machine import (
 )
 from sunbeam.utils import (
     CatchGroup,
-    argument_with_deprecated_option,
     click_option_show_hints,
 )
 
@@ -677,7 +676,7 @@ def _write_to_file(token: str, output: Path):
 
 
 @click.command()
-@argument_with_deprecated_option("name", type=str, help="Fully qualified node name.")
+@click.argument("name", type=str)
 @click.option(
     "-f",
     "--format",
@@ -752,7 +751,7 @@ def add(
 
 
 @click.command()
-@argument_with_deprecated_option("token", type=str, help="Join token.")
+@click.argument("token", type=str)
 @click.option("-a", "--accept-defaults", help="Accept all defaults.", is_flag=True)
 @click.option(
     "--role",
@@ -956,7 +955,7 @@ def list_nodes(
     help=("Skip safety checks and ignore cleanup errors for some tasks"),
     is_flag=True,
 )
-@argument_with_deprecated_option("name", type=str, help="Fully qualified node name.")
+@click.argument("name", type=str)
 @click_option_show_hints
 @click.pass_context
 def remove(ctx: click.Context, name: str, force: bool, show_hints: bool) -> None:
