@@ -317,6 +317,40 @@ class AddK8SCloudStep(BaseStep, JujuStepHelper):
         return Result(ResultType.COMPLETED)
 
 
+class AddK8SCloudInClientStep(BaseStep, JujuStepHelper):
+    _KUBECONFIG = K8S_KUBECONFIG_KEY
+
+    def __init__(self, deployment: Deployment):
+        super().__init__("Add K8S cloud in client", "Adding K8S cloud to Juju client")
+        self.client = deployment.get_client()
+        self.cloud_name = f"{deployment.name}{K8S_CLOUD_SUFFIX}"
+        self.credential_name = f"{self.cloud_name}{CREDENTIAL_SUFFIX}"
+
+    def is_skip(self, status: Status | None = None) -> Result:
+        """Determines if the step should be skipped or not.
+
+        :return: ResultType.SKIPPED if the Step should be skipped,
+                ResultType.COMPLETED or ResultType.FAILED otherwise
+        """
+        clouds = self.get_clouds("k8s", local=True)
+        LOG.debug(f"Clouds registered in the client: {clouds}")
+        if self.cloud_name in clouds:
+            return Result(ResultType.SKIPPED)
+
+        return Result(ResultType.COMPLETED)
+
+    def run(self, status: Status | None = None) -> Result:
+        """Add microk8s clouds to Juju controller."""
+        try:
+            kubeconfig = read_config(self.client, self._KUBECONFIG)
+            self.add_k8s_cloud_in_client(self.cloud_name, kubeconfig)
+        except (ConfigItemNotFoundException, UnsupportedKubeconfigException) as e:
+            LOG.debug("Failed to add k8s cloud to Juju client", exc_info=True)
+            return Result(ResultType.FAILED, str(e))
+
+        return Result(ResultType.COMPLETED)
+
+
 class UpdateK8SCloudStep(BaseStep, JujuStepHelper):
     _KUBECONFIG = K8S_KUBECONFIG_KEY
 

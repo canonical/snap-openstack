@@ -307,7 +307,7 @@ def first_connected_server(servers: list) -> str | None:
             LOG.debug(f"Server {server} not in <ip>:<port> format")
             continue
 
-        ip = ipaddress.ip_address(ip_port[0])
+        ip = ipaddress.ip_address(ip_port[0].lstrip("[").rstrip("]"))
         port = int(ip_port[1])
 
         try:
