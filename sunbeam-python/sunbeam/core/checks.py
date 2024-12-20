@@ -15,6 +15,7 @@
 
 import base64
 import enum
+import grp
 import json
 import logging
 import os
@@ -33,6 +34,7 @@ from sunbeam.core.common import (
     get_host_total_cores,
     get_host_total_ram,
 )
+from sunbeam.core.juju import JujuStepHelper
 
 LOG = logging.getLogger(__name__)
 
@@ -553,3 +555,63 @@ class JujuControllerRegistrationCheck(Check):
         else:
             self.message = f"Juju controller {self.controller} is not registered."
             return False
+
+
+class LxdGroupCheck(Check):
+    """Check if user is member of lxd group."""
+
+    def __init__(self):
+        self.user = os.environ.get("USER")
+        self.group = "lxd"
+
+        super().__init__(
+            "Check for lxd group membership",
+            f"Checking if user {self.user} is member of group {self.group}",
+        )
+
+    def run(self) -> bool:
+        """Return false if user is not member of group.
+
+        Checks:
+            - User is part of group
+        """
+        if self.user not in grp.getgrnam(self.group).gr_mem:
+            self.message = (
+                f"{self.user!r} not part of lxd group"
+                "Insufficient permissions to run sunbeam commands\n"
+                f"Add the user {self.user!r} to the {self.group!r} group:\n"
+                "\n"
+                f"    sudo usermod -a -G {self.group} {self.user}\n"
+                "\n"
+                "After this, reload the user groups either via a reboot or by"
+                f" running 'newgrp {self.group}'."
+            )
+
+            return False
+
+        return True
+
+
+class LXDJujuControllerRegistrationCheck(Check):
+    """Check if lxd juju controller exists."""
+
+    def __init__(self):
+        super().__init__(
+            "Check existence of LXD Juju Controller",
+            "Checking if lxd juju controller exists",
+        )
+
+    def run(self) -> bool:
+        """Check if lxd juju controller exists."""
+        controllers = JujuStepHelper().get_controllers(clouds=["localhost"])
+        if len(controllers) == 0:
+            self.message = (
+                "Missing Juju controller on LXD"
+                "Bootstrap Juju controller on LXD:"
+                "\n"
+                "    juju bootstrap localhost"
+                "\n"
+            )
+            return False
+
+        return True

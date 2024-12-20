@@ -120,10 +120,7 @@ class LocalDeployment(Deployment):
     @property
     def openstack_machines_model(self) -> str:
         """Return the openstack machines model name."""
-        if self.juju_controller and self.juju_controller.is_external:
-            return "openstack-machines"
-
-        return "controller"
+        return "openstack-machines"
 
     @property
     def controller(self) -> str:

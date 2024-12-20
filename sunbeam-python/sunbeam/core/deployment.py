@@ -314,21 +314,7 @@ class Deployment(pydantic.BaseModel):
         self._manifest = manifest
         return manifest
 
-    def _load_tfhelpers(self):
-        feature_manager = self.get_feature_manager()
-        tfvar_map = copy.deepcopy(MANIFEST_ATTRIBUTES_TFVAR_MAP)
-        tfvar_map_feature = feature_manager.get_all_feature_manifest_tfvar_map()
-        tfvar_map = sunbeam_utils.merge_dict(tfvar_map, tfvar_map_feature)
-
-        manifest = self.get_manifest()
-        if not manifest.core.software.terraform:
-            raise MissingTerraformInfoException("Manifest is missing terraform plans.")
-        terraform_plans = manifest.core.software.terraform.copy()
-        for _, feature in manifest.get_features():
-            if not feature.software.terraform:
-                continue
-            terraform_plans.update(feature.software.terraform.copy())
-
+    def _get_juju_clusterd_env(self) -> dict:
         env = {}
         if self.juju_controller and self.juju_account:
             env.update(
@@ -348,6 +334,25 @@ class Deployment(pydantic.BaseModel):
                     "TF_HTTP_CLIENT_PRIVATE_KEY_PEM": self.clusterd_certpair.private_key,  # noqa E501
                 }
             )
+        return env
+
+    def _load_tfhelpers(self):
+        feature_manager = self.get_feature_manager()
+        tfvar_map = copy.deepcopy(MANIFEST_ATTRIBUTES_TFVAR_MAP)
+        tfvar_map_feature = feature_manager.get_all_feature_manifest_tfvar_map()
+        tfvar_map = sunbeam_utils.merge_dict(tfvar_map, tfvar_map_feature)
+
+        manifest = self.get_manifest()
+        if not manifest.core.software.terraform:
+            raise MissingTerraformInfoException("Manifest is missing terraform plans.")
+        terraform_plans = manifest.core.software.terraform.copy()
+        for _, feature in manifest.get_features():
+            if not feature.software.terraform:
+                continue
+            terraform_plans.update(feature.software.terraform.copy())
+
+        env = {}
+        env.update(self._get_juju_clusterd_env())
         env.update(self.get_proxy_settings())
 
         for tfplan, tf_manifest in terraform_plans.items():
@@ -372,6 +377,12 @@ class Deployment(pydantic.BaseModel):
         # TODO(gboutry): Remove snap instanciation
         snap = Snap()
         return snap.paths.user_common / "etc" / self.name
+
+    def reload_tfhelpers(self):
+        """Reload tfhelpers to update juju environment variables."""
+        env = self._get_juju_clusterd_env()
+        for tfplan, tfhelper in self._tfhelpers.items():
+            tfhelper.reload_env(env)
 
     def get_tfhelper(self, tfplan: str) -> TerraformHelper:
         """Get an instance of TerraformHelper for the given tfplan.

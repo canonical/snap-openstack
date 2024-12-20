@@ -48,6 +48,23 @@ jobs:
           sudo apt remove --purge docker.io containerd runc -y
           sudo rm -rf /run/containerd
 
+          sudo lxd init --auto
+          sudo lxc network create br0
+          sudo lxc profile device remove default eth0
+          sudo lxc profile device add default eth0 nic network=br0 name=eth0
+          sudo lxc network delete lxdbr0
+
+          sudo snap install juju --channel 3.6/stable
+          juju bootstrap localhost lxdcloud
+
+          # Allow lxd controller to reach to k8s controller on loadbalancer ip
+          # sudo nft insert rule ip filter FORWARD tcp dport 17070 accept
+          # sudo nft insert rule ip filter FORWARD tcp sport 17070 accept
+          # With above rules, got the following error:
+          # api.charmhub.io on 10.152.183.182:53: server misbehaving
+          # Accept all packets filtered for forward
+          sudo nft chain ip filter FORWARD '{policy accept;}'
+
           sudo snap install  ${{ needs.build.outputs.snap }} --dangerous
           openstack.sunbeam prepare-node-script | bash -x
           sudo snap connect openstack:juju-bin juju:juju-bin

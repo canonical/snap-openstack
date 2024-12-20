@@ -1,5 +1,9 @@
 core:
   software:
+    juju:
+      bootstrap_args:
+        - --bootstrap-constraints
+        - root-disk=5G
     charms:
       cinder-ceph-k8s:
         channel: 2024.1/edge
