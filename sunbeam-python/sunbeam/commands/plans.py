@@ -55,11 +55,12 @@ def list_plans(ctx: click.Context, format: str):
     client = deployment.get_client()
     plans = client.cluster.list_terraform_plans()
     locks = client.cluster.list_terraform_locks()
+    all_plans = set(plans).union(locks)
     if format == FORMAT_TABLE:
         table = Table()
         table.add_column("Plan", justify="left")
         table.add_column("Locked", justify="center")
-        for plan in plans:
+        for plan in all_plans:
             table.add_row(
                 plan,
                 "x" if plan in locks else "",
@@ -67,7 +68,7 @@ def list_plans(ctx: click.Context, format: str):
         console.print(table)
     elif format == FORMAT_YAML:
         plan_states = {
-            plan: "locked" if plan in locks else "unlocked" for plan in plans
+            plan: "locked" if plan in locks else "unlocked" for plan in all_plans
         }
         console.print(yaml.dump(plan_states))
 
