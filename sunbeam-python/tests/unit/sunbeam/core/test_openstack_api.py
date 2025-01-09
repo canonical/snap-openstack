@@ -75,12 +75,14 @@ class TestOpenStackAPI:
             project_domain_name=FAKE_CREDS.get("OS_PROJECT_DOMAIN_NAME"),
         )
 
-    def test_guests_on_hypervisor(self, get_admin_connection):
+    def test_guests_on_hypervisor(self):
         conn = Mock()
         get_admin_connection.return_value = conn
         conn.compute.servers.return_value = [1]
-        assert sunbeam.core.openstack_api.guests_on_hypervisor("hyper1", None) == [1]
-        conn.compute.servers.assert_called_once_with(all_projects=True, host="hyper1")
+        assert sunbeam.core.openstack_api.guests_on_hypervisor("hyper1", conn) == [1]
+        conn.compute.servers.assert_called_once_with(
+            all_projects=True, hypervisor_hostname="hyper1"
+        )
 
     def test_remove_compute_service(self):
         service1 = Mock(binary="nova-compute", host="hyper1")

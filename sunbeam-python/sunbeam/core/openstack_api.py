@@ -43,7 +43,7 @@ def get_admin_connection(jhelper: JujuHelper) -> openstack.connection.Connection
 
 
 def guests_on_hypervisor(
-    hypervisor_name: str, jhelper: JujuHelper
+    hypervisor_name: str, conn: openstack.connection.Connection
 ) -> list[openstack.compute.v2.server.Server]:
     """Return a list of guests that run on the given hypervisor.
 
@@ -51,8 +51,9 @@ def guests_on_hypervisor(
     :param jhelper: Juju helpers for retrieving admin credentials
     :raises: openstack.exceptions.SDKException
     """
-    conn = get_admin_connection(jhelper)
-    return list(conn.compute.servers(all_projects=True, host=hypervisor_name))
+    return list(
+        conn.compute.servers(all_projects=True, hypervisor_hostname=hypervisor_name)
+    )
 
 
 def remove_compute_service(
