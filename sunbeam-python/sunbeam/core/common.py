@@ -529,3 +529,9 @@ def validate_ip_range(ip_range: str):
         ipaddress.ip_address(ips[1])
     else:
         raise ValueError("Invalid IP range, must be in the form of 'ip-ip'")
+
+
+def validate_nodes(
+    ctx: click.core.Context, param: click.core.Option, value: str
+) -> list[str]:
+    return list(set(value.split(",")))
