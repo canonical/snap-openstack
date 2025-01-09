@@ -117,6 +117,10 @@ from sunbeam.provider.maas.steps import (
     MachineStorageCheck,
     NetworkMappingCompleteCheck,
 )
+from sunbeam.provider.maintenance.maintenance import (
+    disable_maintenance,
+    enable_maintenance,
+)
 from sunbeam.steps import cluster_status
 from sunbeam.steps.bootstrap_state import SetBootstrapped
 from sunbeam.steps.certificates import APPLICATION as CERTIFICATES_APPLICATION
@@ -245,6 +249,8 @@ class MaasProvider(ProviderBase):
         cluster.add_command(resize_cmds.resize)
         cluster.add_command(remove_node)
         cluster.add_command(destroy_deployment_cmd)
+        cluster.add_command(enable_maintenance)
+        cluster.add_command(disable_maintenance)
         configure.add_command(configure_cmd)
         deployment.add_command(machine)
         machine.add_command(list_machines_cmd)
