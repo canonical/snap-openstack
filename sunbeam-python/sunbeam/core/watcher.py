@@ -22,13 +22,17 @@ from watcherclient import v1 as watcher
 from watcherclient.common.apiclient.exceptions import NotFound
 from watcherclient.v1 import client as watcher_client
 
-from sunbeam.core.common import SunbeamException
+from sunbeam.core.common import SunbeamException, read_config
+from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import JujuHelper
 from sunbeam.core.openstack_api import get_admin_connection
+from sunbeam.steps.openstack import REGION_CONFIG_KEY
 
 LOG = logging.getLogger(__name__)
 
+# Timeout while waiting for the watcher resource to reach the target state.
 TIMEOUT = 60 * 3
+# Sleep interval between querying watcher resources.
 SLEEP_INTERVAL = 5
 ENABLE_MAINTENANCE_AUDIT_TEMPLATE_NAME = "Sunbeam Cluster Maintaining Template"
 ENABLE_MAINTENANCE_STRATEGY_NAME = "host_maintenance"
@@ -39,12 +43,15 @@ WORKLOAD_BALANCING_STRATEGY_NAME = "workload_stabilization"
 WORKLOAD_BALANCING_AUDIT_TEMPLATE_NAME = "Sunbeam Cluster Workload Balancing Template"
 
 
-def get_watcher_client(jhelper: JujuHelper) -> watcher_client.Client:
-    conn = get_admin_connection(jhelper=jhelper)
+def get_watcher_client(deployment: Deployment) -> watcher_client.Client:
+    region = read_config(deployment.get_client(), REGION_CONFIG_KEY)["region"]
+    conn = get_admin_connection(
+        jhelper=JujuHelper(deployment.get_connected_controller())
+    )
+
     watcher_endpoint = conn.session.get_endpoint(
         service_type="infra-optim",
-        # TODO: get region
-        region_name="RegionOne",
+        region_name=region,
     )
     return watcher_client.Client(session=conn.session, endpoint=watcher_endpoint)
 

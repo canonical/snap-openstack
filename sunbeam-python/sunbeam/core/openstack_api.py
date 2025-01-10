@@ -48,7 +48,7 @@ def guests_on_hypervisor(
     """Return a list of guests that run on the given hypervisor.
 
     :param hypervisor_name: Name of hypervisor
-    :param jhelper: Juju helpers for retrieving admin credentials
+    :param conn: Admin connection
     :raises: openstack.exceptions.SDKException
     """
     return list(

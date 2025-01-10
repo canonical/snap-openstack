@@ -18,23 +18,38 @@ from watcherclient.common.apiclient.exceptions import NotFound
 
 import sunbeam.core.watcher as watcher_helper
 from sunbeam.core.common import SunbeamException
-from sunbeam.core.juju import JujuHelper
+from sunbeam.core.deployment import Deployment
 
 
+@patch("sunbeam.core.watcher.read_config")
+@patch("sunbeam.core.watcher.JujuHelper")
 @patch("sunbeam.core.watcher.get_admin_connection")
 @patch("sunbeam.core.watcher.watcher_client.Client")
-def test_get_watcher_client(mock_watcher_client, mock_get_admin_connection):
+def test_get_watcher_client(
+    mock_watcher_client,
+    mock_get_admin_connection,
+    mock_jhelper,
+    mock_read_config,
+):
     mock_conn = Mock()
     mock_conn.session.get_endpoint.return_value = "fake_endpoint"
+    mock_read_config.return_value = {"region": "fake_region"}
     mock_get_admin_connection.return_value = mock_conn
-    mock_jhelper = Mock(spec=JujuHelper)
+    mock_deployment = Mock(spec=Deployment)
 
-    client = watcher_helper.get_watcher_client(mock_jhelper)
+    client = watcher_helper.get_watcher_client(mock_deployment)
 
-    mock_get_admin_connection.assert_called_once_with(jhelper=mock_jhelper)
+    mock_read_config.assert_called_once_with(
+        mock_deployment.get_client.return_value, "Region"
+    )
+    mock_jhelper.assert_called_once_with(
+        mock_deployment.get_connected_controller.return_value
+    )
+    mock_get_admin_connection.assert_called_once_with(jhelper=mock_jhelper.return_value)
+
     mock_conn.session.get_endpoint.assert_called_once_with(
         service_type="infra-optim",
-        region_name="RegionOne",
+        region_name="fake_region",
     )
     mock_watcher_client.assert_called_once_with(
         session=mock_conn.session,
