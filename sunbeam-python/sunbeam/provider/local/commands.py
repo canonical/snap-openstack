@@ -90,6 +90,10 @@ from sunbeam.provider.local.steps import (
     LocalClusterStatusStep,
     LocalSetHypervisorUnitsOptionsStep,
 )
+from sunbeam.provider.maintenance.maintenance import (
+    disable_maintenance,
+    enable_maintenance,
+)
 from sunbeam.steps import cluster_status
 from sunbeam.steps.bootstrap_state import SetBootstrapped
 from sunbeam.steps.clusterd import (
@@ -209,6 +213,8 @@ class LocalProvider(ProviderBase):
         cluster.add_command(remove)
         cluster.add_command(resize_cmds.resize)
         cluster.add_command(refresh_cmds.refresh)
+        cluster.add_command(enable_maintenance)
+        cluster.add_command(disable_maintenance)
 
     def deployment_type(self) -> Tuple[str, Type[Deployment]]:
         """Retrieve the deployment type and class."""

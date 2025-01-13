@@ -20,7 +20,7 @@ import click
 import pytest
 
 from sunbeam.clusterd.service import ClusterServiceUnavailableException
-from sunbeam.core.common import Role, validate_roles
+from sunbeam.core.common import Role, validate_nodes, validate_roles
 from sunbeam.core.deployment import Deployment
 
 
@@ -183,3 +183,9 @@ def test_validate_roles():
     multiple_comma_separated_roles = ("control,compute", "storage,compute")
     result = validate_roles(Mock(), Mock(), multiple_comma_separated_roles)
     assert not set(result) ^ all_roles
+
+
+def test_validate_nodes():
+    val = "A,B,C"
+    result = validate_nodes(Mock(), Mock(), val)
+    assert sorted(result) == sorted(["A", "B", "C"])
