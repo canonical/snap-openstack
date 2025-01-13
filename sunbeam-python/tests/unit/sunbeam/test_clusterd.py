@@ -69,6 +69,16 @@ class TestClusterdSteps:
         assert result.result_type == ResultType.COMPLETED
         init_step.client.cluster.bootstrap.assert_called_once()
 
+    def test_init_step_ipv6(self, cclient, mocker):
+        role = "control"
+        init_step = ClusterInitStep(cclient, [role], 0, "fd00::/108")
+        init_step.client = MagicMock()
+        init_step.fqdn = "node1"
+        mocker.patch("sunbeam.utils.get_local_ip_by_cidr", return_value="fd00::2")
+        result = init_step.run()
+        assert result.result_type == ResultType.COMPLETED
+        init_step.client.cluster.bootstrap.assert_called_once()
+
     def test_add_node_step(self, cclient):
         add_node_step = ClusterAddNodeStep(cclient, name="node-1")
         add_node_step.client = MagicMock()

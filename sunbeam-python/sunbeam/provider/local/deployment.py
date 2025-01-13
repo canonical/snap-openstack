@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import ipaddress
 import logging
 
 import petname  # type: ignore [import-untyped]
@@ -154,6 +155,8 @@ class LocalDeployment(Deployment):
     def get_clusterd_http_address(self) -> str:
         """Return the address of the clusterd server."""
         local_ip = utils.get_local_ip_by_cidr(self.get_management_cidr())
+        if ipaddress.ip_address(local_ip).version == 6:
+            local_ip = f"[{local_ip}]"
         address = f"https://{local_ip}:{CLUSTERD_PORT}"
         return address
 
