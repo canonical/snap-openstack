@@ -45,3 +45,6 @@ python-libmaas
 
 # Faillible management
 tenacity
+
+# timeout
+timeout-decorator
