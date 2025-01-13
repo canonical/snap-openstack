@@ -37,7 +37,7 @@ sudo snap alias openstack.sunbeam sunbeam
 Prepare the node:
 
 ```
-sunbeam prepare-node-script | bash -x && newgrp snap_daemon
+sunbeam prepare-node-script --bootstrap | bash -x && newgrp snap_daemon
 ```
 
 Because it's installed in dangerous mode, snap connections aren't added automatically.  This must be done after installing the Juju snap (Juju is installed by running the prepare node script above), and before we begin bootstrapping.  So add the connections now:
