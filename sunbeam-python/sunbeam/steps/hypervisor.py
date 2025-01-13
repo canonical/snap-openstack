@@ -435,3 +435,69 @@ class DestroyHypervisorApplicationStep(DestroyMachineApplicationStep):
     def get_application_timeout(self) -> int:
         """Return application timeout in seconds."""
         return HYPERVISOR_DESTROY_TIMEOUT
+
+
+class EnableHypervisorStep(BaseStep, JujuStepHelper):
+    """Enable hypervisor service."""
+
+    def __init__(
+        self,
+        client: Client,
+        node: str,
+        jhelper: JujuHelper,
+        model: str,
+    ):
+        super().__init__(
+            "Enable hypervisor service",
+            "Enable hypervisor service for unit",
+        )
+        self.client = client
+        self.node = node
+        self.jhelper = jhelper
+        self.model = model
+        self.unit = None
+        self.machine_id = ""
+
+    def is_skip(self, status: Status | None = None) -> Result:
+        """Determines if the step should be skipped or not.
+
+        :return: ResultType.SKIPPED if the Step should be skipped,
+                ResultType.COMPLETED or ResultType.FAILED otherwise
+        """
+        try:
+            node = self.client.cluster.get_node_info(self.node)
+            self.machine_id = str(node.get("machineid"))
+        except NodeNotExistInClusterException:
+            LOG.debug(f"Machine {self.node} does not exist, skipping.")
+            return Result(ResultType.SKIPPED)
+
+        try:
+            application = run_sync(
+                self.jhelper.get_application(APPLICATION, self.model)
+            )
+        except ApplicationNotFoundException as e:
+            LOG.debug(str(e))
+            return Result(
+                ResultType.SKIPPED, "Hypervisor application has not been deployed yet"
+            )
+
+        for unit in application.units:
+            if unit.machine.id == self.machine_id:
+                LOG.debug(f"Unit {unit.name} is deployed on machine: {self.machine_id}")
+                self.unit = unit.name
+                break
+        if not self.unit:
+            LOG.debug(f"Unit is not deployed on machine: {self.machine_id}, skipping.")
+            return Result(ResultType.SKIPPED)
+        return Result(ResultType.COMPLETED)
+
+    def run(self, status: Status | None = None) -> Result:
+        """Enable hypervisor service on node."""
+        if not self.unit:
+            return Result(ResultType.FAILED, "Unit not found on machine")
+        try:
+            run_sync(self.jhelper.run_action(self.unit, self.model, "enable"))
+        except ActionFailedException as e:
+            LOG.debug(str(e))
+            return Result(ResultType.FAILED, "Failed to enable hypervisor unit")
+        return Result(ResultType.COMPLETED)
