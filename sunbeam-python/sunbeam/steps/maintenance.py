@@ -28,9 +28,9 @@ from sunbeam.core.common import BaseStep, Result, ResultType, SunbeamException
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import (
     ActionFailedException,
+    JujuActionHelper,
     JujuHelper,
     UnitNotFoundException,
-    run_sync,
 )
 from sunbeam.core.watcher import WatcherActionFailedException
 from sunbeam.steps.microceph import APPLICATION as _MICROCEPH_APPLICATION
@@ -58,35 +58,21 @@ class MicroCephActionStep(BaseStep):
         self.model = model
         self.action_name = action_name
         self.action_params = action_params
-
-    def _get_unit(self):
-        node_info = self.client.cluster.get_node_info(self.node)
-        machine_id = str(node_info.get("machineid"))
-        unit = run_sync(
-            self.jhelper.get_unit_from_machine(
-                _MICROCEPH_APPLICATION, machine_id, self.model
-            )
-        )
-        return unit
+        self.app = _MICROCEPH_APPLICATION
 
     def run(self, status: Status | None = None) -> Result:
         """Run charm microceph action."""
         failed: bool = False
         message: str = ""
         try:
-            unit = self._get_unit()
-            LOG.debug(f"Running action {self.action_name} on {unit.entity_id}")
-
-            action_result = run_sync(
-                self.jhelper.run_action(
-                    unit.entity_id,
-                    self.model,
-                    self.action_name,
-                    action_params=self.action_params,
-                )
-            )
-            LOG.debug(
-                f"Result after running action {self.action_name}: {action_result}"
+            action_result = JujuActionHelper.run_action(
+                client=self.client,
+                jhelper=self.jhelper,
+                model=self.model,
+                node=self.node,
+                app=self.app,
+                action_name=self.action_name,
+                action_params=self.action_params,
             )
         except UnitNotFoundException as e:
             message = f"Microceph node {self.node} not found: {str(e)}"
@@ -94,7 +80,6 @@ class MicroCephActionStep(BaseStep):
         except ActionFailedException as e:
             message = e.action_result
             failed = True
-
         if failed:
             return Result(ResultType.FAILED, message)
         return Result(ResultType.COMPLETED, action_result)

@@ -90,8 +90,8 @@ class TestCreateWatcherAuditStepABC:
 
 
 class TestMicroCephActionStep:
-    @patch("sunbeam.steps.maintenance.run_sync")
-    def test_get_unit(self, mock_run_sync):
+    @patch("sunbeam.steps.maintenance.JujuActionHelper")
+    def test_run(self, mock_action_helper):
         mock_client = Mock()
         mock_jhelper = Mock()
 
@@ -103,42 +103,22 @@ class TestMicroCephActionStep:
             "fake-action-name",
             {"param1": "val1", "param2": "val2"},
         )
-        mock_client.cluster.get_node_info.return_value = {"machineid": 1001}
-        step._get_unit()
-        mock_client.cluster.get_node_info.assert_called_once_with("fake-node")
-        mock_jhelper.get_unit_from_machine.assert_called_once_with(
-            _MICROCEPH_APPLICATION, "1001", "fake-model"
-        )
-
-    @patch("sunbeam.steps.maintenance.run_sync")
-    def test_run(self, mock_run_sync):
-        mock_client = Mock()
-        mock_jhelper = Mock()
-        mock_unit = Mock()
-
-        step = MicroCephActionStep(
-            mock_client,
-            mock_jhelper,
-            "fake-node",
-            "fake-model",
-            "fake-action-name",
-            {"param1": "val1", "param2": "val2"},
-        )
-        step._get_unit = Mock()
-        step._get_unit.return_value = mock_unit
 
         result = step.run(Mock())
-        mock_jhelper.run_action.assert_called_once_with(
-            mock_unit.entity_id,
-            "fake-model",
-            "fake-action-name",
+        mock_action_helper.run_action.assert_called_once_with(
+            client=mock_client,
+            jhelper=mock_jhelper,
+            model="fake-model",
+            node="fake-node",
+            app=_MICROCEPH_APPLICATION,
+            action_name="fake-action-name",
             action_params={"param1": "val1", "param2": "val2"},
         )
-        mock_run_sync.assert_called_once_with(mock_jhelper.run_action.return_value)
         assert result.result_type == ResultType.COMPLETED
-        assert result.message == mock_run_sync.return_value
+        assert result.message == mock_action_helper.run_action.return_value
 
-    def test_run_unit_not_found_exception(self):
+    @patch("sunbeam.steps.maintenance.JujuActionHelper")
+    def test_run_unit_not_found_exception(self, mock_action_helper):
         mock_client = Mock()
         mock_jhelper = Mock()
 
@@ -150,13 +130,13 @@ class TestMicroCephActionStep:
             "fake-action-name",
             {"param1": "val1", "param2": "val2"},
         )
-        step._get_unit = Mock()
-        step._get_unit.side_effect = UnitNotFoundException
+        mock_action_helper.run_action.side_effect = UnitNotFoundException
 
         result = step.run(Mock())
         assert result.result_type == ResultType.FAILED
 
-    def test_run_action_failed_exception(self):
+    @patch("sunbeam.steps.maintenance.JujuActionHelper")
+    def test_run_action_failed_exception(self, mock_action_helper):
         mock_client = Mock()
         mock_jhelper = Mock()
         mock_action_result = Mock()
@@ -169,8 +149,9 @@ class TestMicroCephActionStep:
             "fake-action-name",
             {"param1": "val1", "param2": "val2"},
         )
-        step._get_unit = Mock()
-        step._get_unit.side_effect = ActionFailedException(mock_action_result)
+        mock_action_helper.run_action.side_effect = ActionFailedException(
+            mock_action_result
+        )
 
         result = step.run(Mock())
         assert result.result_type == ResultType.FAILED

@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from unittest.mock import Mock, call
+from unittest.mock import Mock, call, patch
 
 import pytest
 
@@ -238,3 +238,33 @@ class TestNovaInDisableStatusCheck:
 
         check = checks.NovaInDisableStatusCheck(Mock(), "node1", True)
         assert check.run()
+
+
+class TestMicroCephMaintenancePreflightCheck:
+    @patch("sunbeam.provider.maintenance.checks.JujuActionHelper")
+    def test_run(self, mock_action_helper):
+        mock_client = Mock()
+        mock_jhelper = Mock()
+        check = checks.MicroCephMaintenancePreflightCheck(
+            mock_client,
+            mock_jhelper,
+            "fake-model",
+            "fake-node",
+            {"k1": "v1", "k2": "v2"},
+            True,
+        )
+        check.run()
+        mock_action_helper.run_action.assert_called_once_with(
+            client=mock_client,
+            jhelper=mock_jhelper,
+            model="fake-model",
+            node="fake-node",
+            app="microceph",
+            action_name="enter-maintenance",
+            action_params={
+                "k1": "v1",
+                "k2": "v2",
+                "dry-run": False,
+                "check-only": True,
+            },
+        )

@@ -645,3 +645,83 @@ class TestJujuStepHelper:
         assert not jsh.channel_update_needed("2023.2/stable", "2023.1/stable")
         assert not jsh.channel_update_needed("latest/stable", "latest/stable")
         assert not jsh.channel_update_needed("foo/stable", "ba/stable")
+
+
+class TestJujuActionHelper:
+    @patch("sunbeam.core.juju.run_sync")
+    def test_get_unit(self, mock_run_sync):
+        mock_client = Mock()
+        mock_jhelper = Mock()
+        mock_client.cluster.get_node_info.return_value = {"machineid": "fakeid"}
+
+        juju.JujuActionHelper.get_unit(
+            mock_client,
+            mock_jhelper,
+            "fake-model",
+            "fake-node",
+            "fake-app",
+        )
+        mock_client.cluster.get_node_info.assert_called_once_with("fake-node")
+        mock_jhelper.get_unit_from_machine.assert_called_once_with(
+            "fake-app", "fakeid", "fake-model"
+        )
+        mock_run_sync.assert_called_once_with(
+            mock_jhelper.get_unit_from_machine.return_value
+        )
+
+    @patch("sunbeam.core.juju.JujuActionHelper.get_unit")
+    @patch("sunbeam.core.juju.run_sync")
+    def test_run_action(self, mock_run_sync, mock_get_unit):
+        mock_client = Mock()
+        mock_jhelper = Mock()
+        result = juju.JujuActionHelper.run_action(
+            mock_client,
+            mock_jhelper,
+            "fake-model",
+            "fake-node",
+            "fake-app",
+            "fake-action",
+            {"p1": "v1", "p2": "v2"},
+        )
+        assert result == mock_run_sync.return_value
+        mock_get_unit.assert_called_once_with(
+            mock_client,
+            mock_jhelper,
+            "fake-model",
+            "fake-node",
+            "fake-app",
+        )
+        mock_run_sync.assert_called_once_with(mock_jhelper.run_action.return_value)
+
+    @patch("sunbeam.core.juju.JujuActionHelper.get_unit")
+    def test_run_action_unit_not_found_exception(self, mock_get_unit):
+        mock_client = Mock()
+        mock_jhelper = Mock()
+        mock_get_unit.side_effect = juju.UnitNotFoundException
+        with pytest.raises(juju.UnitNotFoundException):
+            juju.JujuActionHelper.run_action(
+                mock_client,
+                mock_jhelper,
+                "fake-model",
+                "fake-node",
+                "fake-app",
+                "fake-action",
+                {"p1": "v1", "p2": "v2"},
+            )
+
+    @patch("sunbeam.core.juju.JujuActionHelper.get_unit")
+    @patch("sunbeam.core.juju.run_sync")
+    def test_run_action_failed_exception(self, mock_run_sync, mock_get_unit):
+        mock_client = Mock()
+        mock_jhelper = Mock()
+        mock_get_unit.side_effect = juju.ActionFailedException(Mock())
+        with pytest.raises(juju.ActionFailedException):
+            juju.JujuActionHelper.run_action(
+                mock_client,
+                mock_jhelper,
+                "fake-model",
+                "fake-node",
+                "fake-app",
+                "fake-action",
+                {"p1": "v1", "p2": "v2"},
+            )

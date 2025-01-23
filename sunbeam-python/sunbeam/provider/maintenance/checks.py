@@ -14,15 +14,23 @@
 # limitations under the License.
 
 import logging
+from typing import Any
 
 from rich.console import Console
 
+from sunbeam.clusterd.client import Client
 from sunbeam.core.checks import Check
-from sunbeam.core.juju import JujuHelper
+from sunbeam.core.juju import (
+    ActionFailedException,
+    JujuActionHelper,
+    JujuHelper,
+    UnitNotFoundException,
+)
 from sunbeam.core.openstack_api import (
     get_admin_connection,
     guests_on_hypervisor,
 )
+from sunbeam.steps.microceph import APPLICATION as _MICROCEPH_APPLICATION
 
 console = Console()
 LOG = logging.getLogger(__name__)
@@ -165,4 +173,60 @@ class NovaInDisableStatusCheck(Check):
                 return True
             self.message = _msg
             return False
+        return True
+
+
+class MicroCephMaintenancePreflightCheck(Check):
+    def __init__(
+        self,
+        client: Client,
+        jhelper: JujuHelper,
+        model: str,
+        node: str,
+        action_params: dict[str, Any],
+        force: bool,
+    ):
+        super().__init__(
+            "Run MicroCeph enter maintance preflight checks",
+            "Run MicroCeph enter maintance preflight checks",
+        )
+        self.client = client
+        self.node = node
+        self.jhelper = jhelper
+        self.model = model
+        self.action_params = action_params
+        self.action_params["dry-run"] = False
+        self.action_params["check-only"] = True
+        self.force = force
+
+    def run(self) -> bool:
+        """Run the check logic here.
+
+        Return True if check is Ok.
+        Otherwise update self.message and return False.
+        """
+        try:
+            JujuActionHelper.run_action(
+                client=self.client,
+                jhelper=self.jhelper,
+                model=self.model,
+                node=self.node,
+                app=_MICROCEPH_APPLICATION,
+                action_name="enter-maintenance",
+                action_params=self.action_params,
+            )
+        except UnitNotFoundException:
+            self.message = (
+                f"App {_MICROCEPH_APPLICATION} unit not found on node {self.node}"
+            )
+            return False
+        except ActionFailedException as e:
+            for _, action in e.action_result.get("actions", {}).items():
+                if action.get("error"):
+                    msg = action.get("error")
+                    if self.force:
+                        LOG.warning(f"Ignore issue: {msg}")
+                    else:
+                        self.message = msg
+                        return False
         return True

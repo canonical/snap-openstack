@@ -102,9 +102,9 @@ class OperationViewer:
 
     def add_maintenance_action_steps(self, action_result: dict[str, Any]):
         """Append juju maintenance action's actions to operations."""
-        for action in action_result.get("actions", "").split(linesep):
-            self.operations.append(action)
-            self.operation_states[action] = "SKIPPED"
+        for step, action in action_result.get("actions", {}).items():
+            self.operations.append(action["id"])
+            self.operation_states[action["id"]] = "SKIPPED"
 
     def add_step(self, step_name: str):
         """Append BaseStep to operations."""
@@ -119,29 +119,11 @@ class OperationViewer:
 
     def update_maintenance_action_steps_result(self, action_result: dict[str, Any]):
         """Update result of juju maintenance action's actions."""
-        error_msg = action_result.get("error", "")
-
-        for ops in self.operations:
-            if "ok-to-stop" in ops:
-                if "ok-to-stop" in error_msg:
-                    self.operation_states[ops] = "FAILED"
-                    break
-                self.operation_states[ops] = "SUCCEEDED"
-            elif "at least 3 mon, 1 mds, and 1 mgr services" in ops:
-                if "at least 3 mon, 1 mds, and 1 mgr services" in error_msg:
-                    self.operation_states[ops] = "FAILED"
-                    break
-                self.operation_states[ops] = "SUCCEEDED"
-            elif "noout" in ops:
-                if "noout flag" in error_msg:
-                    self.operation_states[ops] = "FAILED"
-                    break
-                self.operation_states[ops] = "SUCCEEDED"
-            elif "osd service" in ops:
-                if "OSD service" in error_msg:
-                    self.operation_states[ops] = "FAILED"
-                    break
-                self.operation_states[ops] = "SUCCEEDED"
+        for _, action in action_result.get("actions", {}).items():
+            status = "SUCCEEDED"
+            if action.get("error"):
+                status = "FAILED"
+            self.operation_states[action["id"]] = status
 
     def update_step_result(self, step_name: str, result: Result):
         """Update BaseStep's result."""
@@ -178,7 +160,7 @@ class OperationViewer:
         for idx, step in enumerate(self.operations):
             msg += f"\t{idx}: {step} {self.operation_states[step]}{linesep}"
         if msg:
-            msg = "Operation result:{linesep}" + msg
+            msg = f"Operation result:{linesep}" + msg
         return msg
 
     def check_operation_succeeded(self, results: dict[str, Result]):
@@ -196,7 +178,6 @@ class OperationViewer:
                     self.update_maintenance_action_steps_result(result.message)
                 elif name == EnableHypervisorStep.__name__:
                     self.update_step_result(name, result)
-            console.print(self._operation_result())
             if failed_result:
                 raise click.ClickException(result.message)
 
@@ -269,10 +250,26 @@ def enable_maintenance(
     # Run preflight_checks
     preflight_checks: list[Check] = []
     # Preflight checks for compute role
-    preflight_checks += [
-        checks.InstancesStatusCheck(jhelper=jhelper, node=node, force=force),
-        checks.NoEphemeralDiskCheck(jhelper=jhelper, node=node, force=force),
-    ]
+    if "compute" in node_status:
+        preflight_checks += [
+            checks.InstancesStatusCheck(jhelper=jhelper, node=node, force=force),
+            checks.NoEphemeralDiskCheck(jhelper=jhelper, node=node, force=force),
+        ]
+    if "storage" in node_status:
+        preflight_checks += [
+            checks.MicroCephMaintenancePreflightCheck(
+                client=deployment.get_client(),
+                jhelper=jhelper,
+                node=node,
+                model=deployment.openstack_machines_model,
+                force=force,
+                action_params={
+                    "name": node,
+                    "set-noout": set_noout,
+                    "stop-osds": stop_osds,
+                },
+            )
+        ]
     run_preflight_checks(preflight_checks, console)
 
     # Generate operations
@@ -294,6 +291,7 @@ def enable_maintenance(
                     "set-noout": set_noout,
                     "stop-osds": stop_osds,
                     "dry-run": True,
+                    "ignore-check": True,
                 },
             )
         )
@@ -346,11 +344,14 @@ def enable_maintenance(
                     "set-noout": set_noout,
                     "stop-osds": stop_osds,
                     "dry-run": False,
+                    "ignore-check": True,
                 },
             )
         )
 
     operation_plan_results = run_plan(operation_plan, console, show_hints, True)
+    for name, result in operation_plan_results.items():
+        console.print(f"{name}: {result.message}")
     ops_viewer.check_operation_succeeded(operation_plan_results)
 
     # Run post checks
@@ -410,6 +411,7 @@ def disable_maintenance(
                 action_params={
                     "name": node,
                     "dry-run": True,
+                    "ignore-check": True,
                 },
             )
         )
@@ -466,6 +468,7 @@ def disable_maintenance(
                 action_params={
                     "name": node,
                     "dry-run": False,
+                    "ignore-check": True,
                 },
             )
         )
