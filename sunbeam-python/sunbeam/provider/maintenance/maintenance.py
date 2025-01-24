@@ -213,7 +213,7 @@ class OperationViewer:
         " entering maintenance mode"
     ),
     is_flag=True,
-    default=True,
+    default=False,
 )
 @click_option_show_hints
 @click.pass_context

@@ -187,8 +187,8 @@ class MicroCephMaintenancePreflightCheck(Check):
         force: bool,
     ):
         super().__init__(
-            "Run MicroCeph enter maintance preflight checks",
-            "Run MicroCeph enter maintance preflight checks",
+            "Run MicroCeph enter maintenance preflight checks",
+            "Run MicroCeph enter maintenance preflight checks",
         )
         self.client = client
         self.node = node
