@@ -15,14 +15,14 @@ jobs:
       snap: ${{ steps.snapcraft.outputs.snap }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Build snap locally
         uses: canonical/action-build@v1.3.0
         id: snapcraft
 
       - name: Upload locally built snap artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: local-${{ steps.snapcraft.outputs.snap }}
           path: ${{ steps.snapcraft.outputs.snap }}
@@ -31,12 +31,16 @@ jobs:
     needs: build
     name: Functional test
     runs-on: [self-hosted, large, noble, x64]
+    strategy:
+      fail-fast: false
+      matrix:
+        flavor: [storage, no-storage]
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
       - name: Download snap artifact
         id: download
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: local-${{ needs.build.outputs.snap }}
       - name: test
@@ -47,6 +51,24 @@ jobs:
           # Check docker, containerd and remove them if exists
           sudo apt remove --purge docker.io containerd runc -y
           sudo rm -rf /run/containerd
+
+          roles="control,compute"
+          if [ "${{ matrix.flavor }}" == "storage" ]; then
+            roles="$roles,storage"
+            sudo mkdir -p /dev/disk/by-id/ || true
+            function loop_device() {
+                sudo dd if=/dev/zero of="$1" bs=1024 count=305175
+                sync
+                local free_device
+                free_device=$(sudo losetup --find)
+                sudo losetup "$free_device" "$1"
+                sudo ln -s "$free_device" /dev/disk/by-id/"$(basename "$free_device")"
+                echo /dev/disk/by-id/"$(basename "$free_device")"
+            }
+            sudo snap install yq
+            lds="$(loop_device /ld1),$(loop_device /ld2),$(loop_device /ld3)"
+            yq e -i ".core.config.microceph_config.\"$(hostname -f)\".osd_devices = \"$lds\"" .github/assets/testing/edge.yml
+          fi
 
           # Allow lxd controller to reach to k8s controller on loadbalancer ip
           # sudo nft insert rule ip filter FORWARD tcp dport 17070 accept
@@ -74,7 +96,7 @@ jobs:
           # have more than 32 GiB of memory where Sunbeam selects the multi mysql
           # mode instead. So we have to override the Sunbeam's decision to be
           # closer to the tutorial scenario.
-          sg snap_daemon "openstack.sunbeam cluster bootstrap --manifest .github/assets/testing/edge.yml --accept-defaults --topology single --database single"
+          sg snap_daemon "openstack.sunbeam cluster bootstrap --role "$roles" --manifest .github/assets/testing/edge.yml --accept-defaults --topology single --database single"
           sg snap_daemon "openstack.sunbeam cluster list"
           # Note: Moving configure before enabling caas just to ensure caas images are not downloaded
           # To download caas image, require ports to open on firewall to access fedora images.
@@ -154,9 +176,9 @@ jobs:
           # if test -f tempest_validation.log; then cp tempest_validation.log logs/; fi
       - name: Upload logs
         if: always()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
-          name: sunbeam_logs
+          name: sunbeam_logs-${{ matrix.flavor}}
           path: logs
           retention-days: 30
       - name: Setup tmate session
