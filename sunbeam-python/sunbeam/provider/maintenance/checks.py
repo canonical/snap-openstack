@@ -22,14 +22,18 @@ from sunbeam.clusterd.client import Client
 from sunbeam.core.checks import Check
 from sunbeam.core.juju import (
     ActionFailedException,
+    ApplicationNotFoundException,
     JujuActionHelper,
     JujuHelper,
     UnitNotFoundException,
+    run_sync,
 )
+from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.core.openstack_api import (
     get_admin_connection,
     guests_on_hypervisor,
 )
+from sunbeam.core.watcher import WATCHER_APPLICATION
 from sunbeam.steps.microceph import APPLICATION as _MICROCEPH_APPLICATION
 
 console = Console()
@@ -229,4 +233,39 @@ class MicroCephMaintenancePreflightCheck(Check):
                     else:
                         self.message = msg
                         return False
+        return True
+
+
+class WatcherApplicationExistsCheck(Check):
+    """Make sure watcher application exists in model."""
+
+    def __init__(
+        self,
+        jhelper: JujuHelper,
+    ):
+        super().__init__(
+            "Check if watcher is deployed.",
+            "Check if watcher is deployed.",
+        )
+        self.jhelper = jhelper
+
+    def run(self) -> bool:
+        """Run the check logic here.
+
+        Return True if check is Ok.
+        Otherwise update self.message and return False.
+        """
+        try:
+            run_sync(
+                self.jhelper.get_application(
+                    name=WATCHER_APPLICATION,
+                    model=OPENSTACK_MODEL,
+                )
+            )
+        except ApplicationNotFoundException:
+            self.message = (
+                "Watcher not found, please deploy watcher with command:"
+                " `sunbeam enable resource-optimization` before continue"
+            )
+            return False
         return True

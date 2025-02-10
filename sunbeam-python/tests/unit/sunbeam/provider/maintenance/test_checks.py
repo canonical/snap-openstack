@@ -15,6 +15,9 @@ from unittest.mock import Mock, call, patch
 
 import pytest
 
+from sunbeam.core.juju import ApplicationNotFoundException
+from sunbeam.core.openstack import OPENSTACK_MODEL
+from sunbeam.core.watcher import WATCHER_APPLICATION
 from sunbeam.provider.maintenance import checks
 
 
@@ -268,3 +271,24 @@ class TestMicroCephMaintenancePreflightCheck:
                 "check-only": True,
             },
         )
+
+
+class TestWatcherApplicationExistsCheck:
+    @patch("sunbeam.provider.maintenance.checks.run_sync")
+    def test_run(self, mock_run_sync):
+        mock_jhelper = Mock()
+        check = checks.WatcherApplicationExistsCheck(mock_jhelper)
+        result = check.run()
+        assert result
+        mock_run_sync.assert_called_once_with(mock_jhelper.get_application.return_value)
+        mock_jhelper.get_application.assert_called_once_with(
+            name=WATCHER_APPLICATION, model=OPENSTACK_MODEL
+        )
+
+    @patch("sunbeam.provider.maintenance.checks.run_sync")
+    def test_run_failed(self, mock_run_sync):
+        mock_jhelper = Mock()
+        mock_run_sync.side_effect = ApplicationNotFoundException
+        check = checks.WatcherApplicationExistsCheck(mock_jhelper)
+        result = check.run()
+        assert result is False

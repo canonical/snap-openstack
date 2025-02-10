@@ -249,9 +249,10 @@ def enable_maintenance(
 
     # Run preflight_checks
     preflight_checks: list[Check] = []
-    # Preflight checks for compute role
+
     if "compute" in node_status:
         preflight_checks += [
+            checks.WatcherApplicationExistsCheck(jhelper=jhelper),
             checks.InstancesStatusCheck(jhelper=jhelper, node=node, force=force),
             checks.NoEphemeralDiskCheck(jhelper=jhelper, node=node, force=force),
         ]
@@ -394,6 +395,15 @@ def disable_maintenance(
         show_hints=show_hints,
         node=node,
     )
+
+    # Run preflight_checks
+    preflight_checks: list[Check] = []
+
+    if "compute" in node_status:
+        preflight_checks += [
+            checks.WatcherApplicationExistsCheck(jhelper=jhelper),
+        ]
+    run_preflight_checks(preflight_checks, console)
 
     generate_operation_plan: list[BaseStep] = []
     if "compute" in node_status:

@@ -30,6 +30,8 @@ from sunbeam.steps.openstack import REGION_CONFIG_KEY
 
 LOG = logging.getLogger(__name__)
 
+WATCHER_APPLICATION = "watcher"
+
 # Timeout of seconds while waiting for the watcher resource to reach the target state.
 WAIT_TIMEOUT = 60 * 3
 # Sleep interval (in seconds) between querying watcher resources.
