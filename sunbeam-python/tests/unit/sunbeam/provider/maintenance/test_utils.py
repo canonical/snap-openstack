@@ -14,14 +14,14 @@
 # limitations under the License.
 from unittest.mock import Mock, patch
 
-from sunbeam.provider.maintenance.maintenance import (
-    _get_node_status,
+from sunbeam.provider.maintenance.utils import (
+    get_node_status,
 )
 
 
-@patch("sunbeam.provider.maintenance.maintenance.LocalClusterStatusStep")
-@patch("sunbeam.provider.maintenance.maintenance.run_plan")
-@patch("sunbeam.provider.maintenance.maintenance.get_step_message")
+@patch("sunbeam.provider.maintenance.utils.LocalClusterStatusStep")
+@patch("sunbeam.provider.maintenance.utils.run_plan")
+@patch("sunbeam.provider.maintenance.utils.get_step_message")
 def test_get_node_status(
     mock_get_step_message,
     mock_run_plan,
@@ -47,7 +47,7 @@ def test_get_node_status(
         }
     }
 
-    result = _get_node_status(
+    result = get_node_status(
         mock_deployment, mock_jhelper, "console", False, "fake-node-a"
     )
 
