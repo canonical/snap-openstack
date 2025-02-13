@@ -15,6 +15,7 @@
 
 import logging
 import subprocess
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -543,6 +544,10 @@ class ValidationFeature(OpenStackControlPlaneFeature):
             self._copy_file_from_tempest_container(
                 deployment, TEMPEST_VALIDATION_RESULT, output
             )
+
+        failed_tests_flag = int(action_result.get("failed-tests", 0))
+        if failed_tests_flag != 0:
+            sys.exit(failed_tests_flag)
 
     @click.command()
     def list_profiles(self) -> None:
