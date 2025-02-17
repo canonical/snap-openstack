@@ -66,10 +66,10 @@ def maintenance(ctx):
     default=False,
 )
 @click.option(
-    "--set-noout",
-    help="prevent CRUSH from automatically rebalancing the ceph cluster",
+    "--enable-ceph-crush-rebalancing",
+    help="Enable CRUSH automatically rebalancing in the ceph cluster",
     is_flag=True,
-    default=True,
+    default=False,
 )
 @click.option(
     "--stop-osds",
@@ -88,7 +88,7 @@ def enable(
     node,
     force,
     dry_run,
-    set_noout,
+    enable_ceph_crush_rebalancing,
     stop_osds,
     show_hints: bool = False,
 ) -> None:
@@ -133,7 +133,7 @@ def enable(
                 force=force,
                 action_params={
                     "name": node,
-                    "set-noout": set_noout,
+                    "set-noout": not enable_ceph_crush_rebalancing,
                     "stop-osds": stop_osds,
                 },
             )
@@ -156,7 +156,7 @@ def enable(
                 action_name="enter-maintenance",
                 action_params={
                     "name": node,
-                    "set-noout": set_noout,
+                    "set-noout": not enable_ceph_crush_rebalancing,
                     "stop-osds": stop_osds,
                     "dry-run": True,
                     "ignore-check": True,
@@ -209,7 +209,7 @@ def enable(
                 action_name="enter-maintenance",
                 action_params={
                     "name": node,
-                    "set-noout": set_noout,
+                    "set-noout": not enable_ceph_crush_rebalancing,
                     "stop-osds": stop_osds,
                     "dry-run": False,
                     "ignore-check": True,
