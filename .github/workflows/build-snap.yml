@@ -15,14 +15,14 @@ jobs:
       snap: ${{ steps.snapcraft.outputs.snap }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Build snap locally
         uses: canonical/action-build@v1.3.0
         id: snapcraft
 
       - name: Upload locally built snap artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: local-${{ steps.snapcraft.outputs.snap }}
           path: ${{ steps.snapcraft.outputs.snap }}
@@ -33,10 +33,10 @@ jobs:
     runs-on: [self-hosted, large, noble, x64]
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
       - name: Download snap artifact
         id: download
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: local-${{ needs.build.outputs.snap }}
       - name: test
@@ -154,7 +154,7 @@ jobs:
           # if test -f tempest_validation.log; then cp tempest_validation.log logs/; fi
       - name: Upload logs
         if: always()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: sunbeam_logs
           path: logs

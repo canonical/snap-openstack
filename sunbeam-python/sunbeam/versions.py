@@ -32,7 +32,7 @@ BIND_CHANNEL = "9/stable"
 VAULT_CHANNEL = "1.16/stable"
 CONSUL_CHANNEL = "1.19/edge"
 TEMPEST_CHANNEL = "2024.1/stable"
-K8S_CHANNEL = "1.32/beta"
+K8S_CHANNEL = "1.32/stable"
 LXD_CHANNEL = "5.21/stable"
 
 # List of charms with default channels

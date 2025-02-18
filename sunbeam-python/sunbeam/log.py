@@ -20,7 +20,7 @@ from typing import Union
 
 from rich.logging import RichHandler
 
-MAX_LOG_FILES = 10
+MAX_LOG_FILES = 100
 
 
 def setup_root_logging(logfile: Path | None = None):

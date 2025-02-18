@@ -48,6 +48,9 @@ OpenStack services are exposed via virtual IP addresses.\
  and must not overlap with external network CIDR.\
  To access APIs from a remote host, the range must reside\
  within the subnet that the primary network interface is on.\
+
+On multi-node deployments, the range must be addressable from\
+ all nodes in the deployment.\
 """
 
 

@@ -29,7 +29,7 @@ from functools import update_wrapper
 from pathlib import Path
 
 import click
-import netifaces  # type: ignore [import-not-found]
+import netifaces  # type: ignore [import-untyped]
 from pyroute2 import NDB  # type: ignore [import-untyped]
 
 from sunbeam.core.common import SunbeamException

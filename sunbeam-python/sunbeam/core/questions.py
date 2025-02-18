@@ -362,7 +362,8 @@ def show_questions(
             default = ""
         lines.append(f"{outer_indent}{comment}{indent}# {question.question}")
         if description := question.description:
-            lines.append(f"{outer_indent}{comment}{indent}# {description}")
+            for line in description.splitlines():
+                lines.append(f"{outer_indent}{comment}{indent}# {line}")
         lines.append(f"{outer_indent}{comment}{indent}{key}: {default}")
 
     return lines

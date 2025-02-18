@@ -13,14 +13,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
 import itertools
 import json
 import logging
 import os
 import re
 import shutil
+import socket
 import subprocess
+import textwrap
 import time
 import typing
 from pathlib import Path
@@ -946,7 +947,7 @@ class AddJujuMachineStep(BaseStep, JujuStepHelper):
             machines = machines.get("machines", {})
 
             for machine, details in machines.items():
-                if self.machine_ip in details.get("ip-addresses"):
+                if self.machine_ip in details.get("ip-addresses", []):
                     LOG.debug("Machine already exists")
                     return Result(ResultType.SKIPPED, machine)
 
@@ -956,6 +957,19 @@ class AddJujuMachineStep(BaseStep, JujuStepHelper):
             return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.COMPLETED)
+
+    @tenacity.retry(
+        wait=tenacity.wait_fixed(5), stop=tenacity.stop_after_attempt(20), reraise=True
+    )
+    def _wait_for_machine(self, machine_ip: str) -> str:
+        """Wait for machine to report it's ip address."""
+        machines = self._juju_cmd("machines", "-m", self.model_with_owner)
+        LOG.debug(f"Found machines: {machines}")
+        machines = machines.get("machines", {})
+        for machine, details in machines.items():
+            if machine_ip in details.get("ip-addresses", []):
+                return machine
+        raise ValueError("Machine not found")
 
     def run(self, status: Status | None = None) -> Result:
         """Run the step to completion.
@@ -998,16 +1012,13 @@ class AddJujuMachineStep(BaseStep, JujuStepHelper):
 
             # TODO(hemanth): Need to wait until machine comes to started state
             # from planned state?
+            try:
+                machine = self._wait_for_machine(self.machine_ip)
+            except ValueError:
+                # respond with machine id as -1 if machine is not reflected in juju
+                machine = "-1"
 
-            machines = self._juju_cmd("machines", "-m", self.model_with_owner)
-            LOG.debug(f"Found machines: {machines}")
-            machines = machines.get("machines", {})
-            for machine, details in machines.items():
-                if self.machine_ip in details.get("ip-addresses"):
-                    return Result(ResultType.COMPLETED, machine)
-
-            # respond with machine id as -1 if machine is not reflected in juju
-            return Result(ResultType.COMPLETED, "-1")
+            return Result(ResultType.COMPLETED, machine)
         except pexpect.TIMEOUT as e:
             LOG.exception("Error adding machine {self.machine_ip} to Juju")
             LOG.warning(e)
@@ -2229,4 +2240,39 @@ class MigrateModelStep(BaseStep, JujuStepHelper):
         except ValueError as e:
             return Result(ResultType.FAILED, str(e))
 
+        return Result(ResultType.COMPLETED)
+
+
+class CheckJujuReachableStep(BaseStep):
+    def __init__(self, juju_controller: JujuController | None):
+        super().__init__("Check Juju Reachable", "Checking if Juju is reachable")
+        self.juju_controller = juju_controller
+
+    def run(self, status: Status | None = None) -> Result:
+        """Check if Juju is reachable."""
+        if self.juju_controller is None:
+            return Result(ResultType.FAILED, "Juju controller not found")
+
+        all_failed = True
+        for address in self.juju_controller.api_endpoints:
+            host, port = address.split(":")
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                sock.settimeout(5)
+                res = sock.connect_ex((host, int(port)))
+                if res == 0:
+                    all_failed = False
+
+        if all_failed:
+            addresses = ", ".join(self.juju_controller.api_endpoints)
+            return Result(
+                ResultType.FAILED,
+                textwrap.dedent(
+                    f"""\
+                    Juju Controller is not reachable, please check the following:
+                    - `OpenStack APIs IP ranges` is reachable from this host.
+                    - Firewall is not blocking the connection.
+
+                    Unreachable API endpoints: {addresses}"""
+                ),
+            )
         return Result(ResultType.COMPLETED)

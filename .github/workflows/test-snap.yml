@@ -58,7 +58,7 @@ jobs:
     runs-on: [self-hosted, large, noble, x64]
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
       - name: test
         run: |
           export COLUMNS=256
@@ -146,7 +146,7 @@ jobs:
           # if test -f tempest_validation.log; then cp tempest_validation.log logs/; fi
       - name: Upload logs
         if: always()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: sunbeam_logs
           path: logs

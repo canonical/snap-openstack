@@ -262,7 +262,7 @@ class DeployGrafanaAgentStep(BaseStep, JujuStepHelper):
 
     def run(self, status: Status | None = None) -> Result:
         """Execute configuration using terraform."""
-        integration_apps = ["k8s", "openstack-hypervisor"]
+        integration_apps = ["openstack-hypervisor"]
         extra_tfvars = {
             "principal-application-model": self.model,
             "grafana-agent-integration-apps": integration_apps,

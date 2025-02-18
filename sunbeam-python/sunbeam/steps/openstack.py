@@ -30,6 +30,7 @@ from sunbeam.core.common import (
     Result,
     ResultType,
     convert_proxy_to_model_configs,
+    get_host_total_cores,
     get_host_total_ram,
     read_config,
     update_config,
@@ -75,6 +76,7 @@ DATABASE_MAX_POOL_SIZE = 2
 DATABASE_ADDITIONAL_BUFFER_SIZE = 600
 DATABASE_OVERSIZE_FACTOR = 1.2
 MB_BYTES_PER_CONNECTION = 12
+MULTI_MYSQL_CORE_THRESHOLD = 16
 
 # Typically the applications will be in active state when feature
 # is enabled. However some applications require manual intervention
@@ -119,7 +121,10 @@ def determine_target_topology(client: Client) -> str:
     compute_nodes = client.cluster.list_nodes_by_role("compute")
     combined = {node["name"] for node in control_nodes + compute_nodes}
     host_total_ram = get_host_total_ram()
-    if len(combined) == 1 and host_total_ram < RAM_32_GB_IN_KB:
+    host_cores = get_host_total_cores()
+    if len(combined) == 1 and (
+        host_cores < MULTI_MYSQL_CORE_THRESHOLD or host_total_ram < RAM_32_GB_IN_KB
+    ):
         topology = "single"
     elif len(combined) < 10:
         topology = "multi"

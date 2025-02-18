@@ -84,7 +84,7 @@ async def list_disks(jhelper: JujuHelper, model: str, unit: str) -> tuple[dict, 
 
 
 def ceph_replica_scale(storage_nodes: int) -> int:
-    return min(storage_nodes, 3)
+    return min(storage_nodes or 1, 3)
 
 
 class DeployMicrocephApplicationStep(DeployMachineApplicationStep):
@@ -120,25 +120,7 @@ class DeployMicrocephApplicationStep(DeployMachineApplicationStep):
 
     def extra_tfvars(self) -> dict:
         """Extra terraform vars to pass to terraform apply."""
-        openstack_tfhelper = self.deployment.get_tfhelper("openstack-plan")
-        openstack_tf_output = openstack_tfhelper.output()
-
-        # Retreiving terraform state for non-existing plan using
-        # data.terraform_remote_state errros out with message "No stored state
-        # was found for the given workspace in the given backend".
-        # It is not possible to try/catch this error, see
-        # https://github.com/hashicorp/terraform-provider-google/issues/11035
-        # The Offer URLs are retrieved by running terraform output on
-        # openstack plan and pass them as variables.
-        keystone_endpoints_offer_url = openstack_tf_output.get(
-            "keystone-endpoints-offer-url"
-        )
-        cert_distributor_offer_url = openstack_tf_output.get(
-            "cert-distributor-offer-url"
-        )
-        traefik_rgw_offer_url = openstack_tf_output.get("ingress-rgw-offer-url")
         storage_nodes = self.client.cluster.list_nodes_by_role("storage")
-
         tfvars: dict[str, Any] = {
             "endpoint_bindings": [
                 {
@@ -180,22 +162,40 @@ class DeployMicrocephApplicationStep(DeployMachineApplicationStep):
                     "space": self.deployment.get_space(Networks.STORAGE),
                 },
             ],
-            "charm_microceph_config": {"enable-rgw": "*", "namespace-projects": True},
+            "charm_microceph_config": {
+                "enable-rgw": "*",
+                "namespace-projects": True,
+                "default-pool-size": ceph_replica_scale(len(storage_nodes)),
+            },
         }
 
-        if keystone_endpoints_offer_url:
-            tfvars["keystone-endpoints-offer-url"] = keystone_endpoints_offer_url
-
-        if cert_distributor_offer_url:
-            tfvars["cert-distributor-offer-url"] = cert_distributor_offer_url
-
-        if traefik_rgw_offer_url:
-            tfvars["ingress-rgw-offer-url"] = traefik_rgw_offer_url
-
         if len(storage_nodes):
-            tfvars["charm_microceph_config"]["default-pool-size"] = ceph_replica_scale(
-                len(storage_nodes)
+            openstack_tfhelper = self.deployment.get_tfhelper("openstack-plan")
+            openstack_tf_output = openstack_tfhelper.output()
+
+            # Retreiving terraform state for non-existing plan using
+            # data.terraform_remote_state errros out with message "No stored state
+            # was found for the given workspace in the given backend".
+            # It is not possible to try/catch this error, see
+            # https://github.com/hashicorp/terraform-provider-google/issues/11035
+            # The Offer URLs are retrieved by running terraform output on
+            # openstack plan and pass them as variables.
+            keystone_endpoints_offer_url = openstack_tf_output.get(
+                "keystone-endpoints-offer-url"
             )
+            cert_distributor_offer_url = openstack_tf_output.get(
+                "cert-distributor-offer-url"
+            )
+            traefik_rgw_offer_url = openstack_tf_output.get("ingress-rgw-offer-url")
+
+            if keystone_endpoints_offer_url:
+                tfvars["keystone-endpoints-offer-url"] = keystone_endpoints_offer_url
+
+            if cert_distributor_offer_url:
+                tfvars["cert-distributor-offer-url"] = cert_distributor_offer_url
+
+            if traefik_rgw_offer_url:
+                tfvars["ingress-rgw-offer-url"] = traefik_rgw_offer_url
 
         return tfvars
 
