@@ -218,8 +218,6 @@ def enable(
         )
 
     operation_plan_results = run_plan(operation_plan, console, show_hints, True)
-    for name, result in operation_plan_results.items():
-        console.print(f"{name}: {result.message}")
     ops_viewer.check_operation_succeeded(operation_plan_results)
 
     # Run post checks

@@ -172,5 +172,6 @@ class OperationViewer:
                     self.update_maintenance_action_steps_result(result.message)
                 elif name == EnableHypervisorStep.__name__:
                     self.update_step_result(name, result)
+            console.print(self._operation_result())
             if failed_result:
                 raise click.ClickException(result.message)
