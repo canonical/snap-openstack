@@ -72,6 +72,30 @@ class OperationViewer:
         self.operation_states: dict[str, str] = {}
 
     @staticmethod
+    def _operation_plan(self) -> str:
+        msg = ""
+        for idx, step in enumerate(self.operations):
+            msg += f"\t{idx}: {step}{linesep}"
+        return msg
+
+    @staticmethod
+    def _operation_result(self) -> str:
+        msg = ""
+        for idx, step in enumerate(self.operations):
+            msg += f"\t{idx}: {step} {self.operation_states[step]}{linesep}"
+        if msg:
+            msg = f"Operation result:{linesep}" + msg
+        return msg
+
+    @staticmethod
+    def dry_run_message(self) -> str:
+        """Return CLI output message for dry-run."""
+        return (
+            f"Required operations to put {self.node} into "
+            f"maintenance mode:{linesep}{self._operation_plan}"
+        )
+
+    @staticmethod
     def _get_watcher_action_key(action: watcher.Action) -> str:
         key: str
         if action.action_type == "change_nova_service_state":
@@ -128,47 +152,33 @@ class OperationViewer:
         else:
             self.operation_states[step_name] = "SKIPPED"
 
-    def _operation_plan(self) -> str:
-        msg = ""
-        for idx, step in enumerate(self.operations):
-            msg += f"\t{idx}: {step}{linesep}"
-        return msg
-
-    def dry_run_message(self) -> str:
-        """Return CLI output message for dry-run."""
-        return (
-            f"Required operations to put {self.node} into "
-            f"maintenance mode:{linesep}{self._operation_plan()}"
-        )
-
     def prompt(self) -> bool:
         """Determines if the operations is confirmed by the user."""
         question: Question = ConfirmQuestion(
             f"Continue to run operations to put {self.node} into"
-            f" maintenance mode:{linesep}{self._operation_plan()}"
+            f" maintenance mode:{linesep}{self._operation_plan}"
         )
         return question.ask() or False
 
-    def _operation_result(self) -> str:
-        msg = ""
-        for idx, step in enumerate(self.operations):
-            msg += f"\t{idx}: {step} {self.operation_states[step]}{linesep}"
-        if msg:
-            msg = f"Operation result:{linesep}" + msg
-        return msg
-
     def check_operation_succeeded(self, results: dict[str, Result]):
         """Check if all the operations are succeeded."""
+        failed_result_name: str | None = None
         failed_result: Result | None = None
         for name, result in results.items():
             if result.result_type == ResultType.FAILED:
                 failed_result = result
+                failed_result_name = name
             if name == RunWatcherAuditStep.__name__:
                 self.update_watcher_actions_result(result.message)
             elif name == MicroCephActionStep.__name__:
                 self.update_maintenance_action_steps_result(result.message)
             elif name == EnableHypervisorStep.__name__:
                 self.update_step_result(name, result)
-        console.print(self._operation_result())
-        if failed_result is not None:
-            raise click.ClickException(result.message)
+        console.print(self._operation_result)
+        if failed_result is not None and failed_result_name is not None:
+            self._raise_exception(failed_result_name, failed_result)
+
+    def _raise_exception(self, name: str, result: Result):
+        if name == MicroCephActionStep.__name__:
+            raise click.ClickException(result.message.get("errors"))
+        raise click.ClickException(result.message)

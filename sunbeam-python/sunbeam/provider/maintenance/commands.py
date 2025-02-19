@@ -184,7 +184,7 @@ def enable(
         )
 
     if dry_run:
-        console.print(ops_viewer.dry_run_message())
+        console.print(ops_viewer.dry_run_message)
         return
 
     confirm = ops_viewer.prompt()
@@ -283,7 +283,8 @@ def disable(
         if not disable_instance_workload_rebalancing:
             generate_operation_plan.append(
                 CreateWatcherWorkloadBalancingAuditStep(
-                    deployment=deployment, node=node)
+                    deployment=deployment, node=node
+                )
             )
     if "storage" in node_status:
         generate_operation_plan.append(
@@ -324,7 +325,7 @@ def disable(
         )
 
     if dry_run:
-        console.print(ops_viewer.dry_run_message())
+        console.print(ops_viewer.dry_run_message)
         return
 
     confirm = ops_viewer.prompt()

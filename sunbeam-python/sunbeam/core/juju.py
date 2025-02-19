@@ -1920,10 +1920,8 @@ class JujuActionHelper:
             )
             return action_result
         except UnitNotFoundException as e:
-            LOG.warning(f"Application {app} not found on node {node}")
+            LOG.debug(f"Application {app} not found on node {node}")
             raise e
         except ActionFailedException as e:
-            LOG.error(
-                "Failed to run action '%s' on node '%s': %s", action_name, node, e
-            )
+            LOG.debug("Action '%s' failed on node '%s': %s", action_name, node, e)
             raise e
