@@ -159,19 +159,16 @@ class OperationViewer:
 
     def check_operation_succeeded(self, results: dict[str, Result]):
         """Check if all the operations are succeeded."""
-        if any(
-            result.result_type == ResultType.FAILED for _, result in results.items()
-        ):
-            failed_result: Result
-            for name, result in results.items():
-                if result.result_type == ResultType.FAILED:
-                    failed_result = result
-                if name == RunWatcherAuditStep.__name__:
-                    self.update_watcher_actions_result(result.message)
-                elif name == MicroCephActionStep.__name__:
-                    self.update_maintenance_action_steps_result(result.message)
-                elif name == EnableHypervisorStep.__name__:
-                    self.update_step_result(name, result)
-            console.print(self._operation_result())
-            if failed_result:
-                raise click.ClickException(result.message)
+        failed_result: Result | None = None
+        for name, result in results.items():
+            if result.result_type == ResultType.FAILED:
+                failed_result = result
+            if name == RunWatcherAuditStep.__name__:
+                self.update_watcher_actions_result(result.message)
+            elif name == MicroCephActionStep.__name__:
+                self.update_maintenance_action_steps_result(result.message)
+            elif name == EnableHypervisorStep.__name__:
+                self.update_step_result(name, result)
+        console.print(self._operation_result())
+        if failed_result is not None:
+            raise click.ClickException(result.message)
