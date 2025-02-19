@@ -238,7 +238,13 @@ def enable(
 )
 @click.option(
     "--dry-run",
-    help="Show required operation steps to put node into maintenance mode",
+    help="Show required operation steps to put node out of maintenance mode",
+    default=False,
+    is_flag=True,
+)
+@click.option(
+    "--disable-instance-workload-rebalancing",
+    help="Disable instance workload rebalancing during exit maintenance mode",
     default=False,
     is_flag=True,
 )
@@ -246,6 +252,7 @@ def enable(
 @click.pass_context
 def disable(
     ctx: click.Context,
+    disable_instance_workload_rebalancing,
     dry_run,
     node,
     show_hints: bool = False,
@@ -273,9 +280,11 @@ def disable(
 
     generate_operation_plan: list[BaseStep] = []
     if "compute" in node_status:
-        generate_operation_plan.append(
-            CreateWatcherWorkloadBalancingAuditStep(deployment=deployment, node=node)
-        )
+        if not disable_instance_workload_rebalancing:
+            generate_operation_plan.append(
+                CreateWatcherWorkloadBalancingAuditStep(
+                    deployment=deployment, node=node)
+            )
     if "storage" in node_status:
         generate_operation_plan.append(
             MicroCephActionStep(
@@ -296,9 +305,10 @@ def disable(
         generate_operation_plan, console, show_hints
     )
 
-    audit_info = get_step_message(
-        generate_operation_plan_results, CreateWatcherWorkloadBalancingAuditStep
-    )
+    if not disable_instance_workload_rebalancing:
+        audit_info = get_step_message(
+            generate_operation_plan_results, CreateWatcherWorkloadBalancingAuditStep
+        )
     microceph_exit_maintenance_dry_run_action_result = get_step_message(
         generate_operation_plan_results, MicroCephActionStep
     )
@@ -306,7 +316,8 @@ def disable(
     ops_viewer = OperationViewer(node)
     if "compute" in node_status:
         ops_viewer.add_step(step_name=EnableHypervisorStep.__name__)
-        ops_viewer.add_watch_actions(actions=audit_info["actions"])
+        if not disable_instance_workload_rebalancing:
+            ops_viewer.add_watch_actions(actions=audit_info["actions"])
     if "storage" in node_status:
         ops_viewer.add_maintenance_action_steps(
             action_result=microceph_exit_maintenance_dry_run_action_result
@@ -329,10 +340,13 @@ def disable(
                 jhelper=jhelper,
                 model=deployment.openstack_machines_model,
             ),
-            RunWatcherAuditStep(
-                deployment=deployment, node=node, audit=audit_info["audit"]
-            ),
         ]
+        if not disable_instance_workload_rebalancing:
+            operation_plan += [
+                RunWatcherAuditStep(
+                    deployment=deployment, node=node, audit=audit_info["audit"]
+                ),
+            ]
     if "storage" in node_status:
         operation_plan.append(
             MicroCephActionStep(
