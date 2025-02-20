@@ -105,6 +105,11 @@ def enable(
         node=node,
     )
 
+    if not node_status:
+        raise click.ClickException(
+            f"Node: {node} does not exist in cluster"
+        )
+
     # This check is to avoid issue which maintenance mode haven't support
     # control role, which should be removed after control role be supported.
     if "control" in node_status:
@@ -268,6 +273,10 @@ def disable(
         show_hints=show_hints,
         node=node,
     )
+    if not node_status:
+        raise click.ClickException(
+            f"Node: {node} does not exist in cluster"
+        )
 
     # Run preflight_checks
     preflight_checks: list[Check] = []
