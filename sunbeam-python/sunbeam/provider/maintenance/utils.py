@@ -71,14 +71,14 @@ class OperationViewer:
         self.operations: list[str] = []
         self.operation_states: dict[str, str] = {}
 
-    @staticmethod
+    @property
     def _operation_plan(self) -> str:
         msg = ""
         for idx, step in enumerate(self.operations):
             msg += f"\t{idx}: {step}{linesep}"
         return msg
 
-    @staticmethod
+    @property
     def _operation_result(self) -> str:
         msg = ""
         for idx, step in enumerate(self.operations):
@@ -87,7 +87,7 @@ class OperationViewer:
             msg = f"Operation result:{linesep}" + msg
         return msg
 
-    @staticmethod
+    @property
     def dry_run_message(self) -> str:
         """Return CLI output message for dry-run."""
         return (
