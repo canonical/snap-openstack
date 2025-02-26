@@ -5,7 +5,9 @@ core:
         - --bootstrap-constraints
         - root-disk=5G
     charms:
-      cinder-ceph-k8s:
+      cinder-volume:
+        channel: 2024.1/edge
+      cinder-volume-ceph:
         channel: 2024.1/edge
       cinder-k8s:
         channel: 2024.1/edge

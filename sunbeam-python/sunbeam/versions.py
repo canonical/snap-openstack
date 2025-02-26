@@ -37,7 +37,6 @@ LXD_CHANNEL = "5.21/stable"
 
 # List of charms with default channels
 OPENSTACK_CHARMS_K8S = {
-    "cinder-ceph-k8s": OPENSTACK_CHANNEL,
     "cinder-k8s": OPENSTACK_CHANNEL,
     "glance-k8s": OPENSTACK_CHANNEL,
     "horizon-k8s": OPENSTACK_CHANNEL,
@@ -66,6 +65,8 @@ MACHINE_CHARMS = {
     "sunbeam-machine": SUNBEAM_MACHINE_CHANNEL,
     "sunbeam-clusterd": SUNBEAM_CLUSTERD_CHANNEL,
     "sunbeam-ssc": SUNBEAM_SSC_CHANNEL,
+    "cinder-volume": OPENSTACK_CHANNEL,
+    "cinder-volume-ceph": OPENSTACK_CHANNEL,
 }
 
 
@@ -85,6 +86,7 @@ TERRAFORM_DIR_NAMES = {
     "sunbeam-machine-plan": "deploy-sunbeam-machine",
     "k8s-plan": "deploy-k8s",
     "microceph-plan": "deploy-microceph",
+    "cinder-volume-plan": "deploy-cinder-volume",
     "openstack-plan": "deploy-openstack",
     "hypervisor-plan": "deploy-openstack-hypervisor",
     "demo-setup": "demo-setup",
@@ -201,6 +203,20 @@ DEPLOY_SUNBEAM_MACHINE_TFVAR_MAP = {
         }
     }
 }
+DEPLOY_CINDER_VOLUME_TFVAR_MAP = {
+    "charms": {
+        "cinder-volume": {
+            "channel": "charm_cinder_volume_channel",
+            "revision": "charm_cinder_volume_revision",
+            "config": "charm_cinder_volume_config",
+        },
+        "cinder-volume-ceph": {
+            "channel": "charm_cinder_volume_ceph_channel",
+            "revision": "charm_cinder_volume_ceph_revision",
+            "config": "charm_cinder_volume_ceph_config",
+        },
+    }
+}
 
 
 MANIFEST_ATTRIBUTES_TFVAR_MAP = {
@@ -209,4 +225,5 @@ MANIFEST_ATTRIBUTES_TFVAR_MAP = {
     "microceph-plan": DEPLOY_MICROCEPH_TFVAR_MAP,
     "openstack-plan": DEPLOY_OPENSTACK_TFVAR_MAP,
     "hypervisor-plan": DEPLOY_OPENSTACK_HYPERVISOR_TFVAR_MAP,
+    "cinder-volume-plan": DEPLOY_CINDER_VOLUME_TFVAR_MAP,
 }

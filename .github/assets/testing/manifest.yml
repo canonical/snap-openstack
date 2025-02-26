@@ -7,7 +7,9 @@ core:
         channel: OS_CHARM
       ceilometer-k8s:
         channel: OS_CHARM
-      cinder-ceph-k8s:
+      cinder-volume:
+        channel: OS_CHARM
+      cinder-volume-ceph:
         channel: OS_CHARM
       cinder-k8s:
         channel: OS_CHARM

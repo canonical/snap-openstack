@@ -1,7 +1,9 @@
 core:
   software:
     charms:
-      cinder-ceph-k8s:
+      cinder-volume:
+        channel: 2024.1/beta
+      cinder-volume-ceph:
         channel: 2024.1/beta
       cinder-k8s:
         channel: 2024.1/beta

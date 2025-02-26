@@ -95,8 +95,8 @@ variable "ceilometer-offer-url" {
   default     = null
 }
 
-variable "cinder-ceph-offer-url" {
-  description = "Offer URL for openstack cinder-ceph"
+variable "cinder-volume-ceph-application-name" {
+  description = "Name for cinder-volume-ceph application"
   type        = string
   default     = null
 }

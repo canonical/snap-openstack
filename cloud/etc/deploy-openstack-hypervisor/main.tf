@@ -128,7 +128,7 @@ resource "juju_integration" "hypervisor-ceilometer" {
 }
 
 resource "juju_integration" "hypervisor-cinder-ceph" {
-  count = (var.cinder-ceph-offer-url != null) ? 1 : 0
+  count = (var.cinder-volume-ceph-application-name != null) ? 1 : 0
   model = var.machine_model
 
   application {
@@ -137,7 +137,8 @@ resource "juju_integration" "hypervisor-cinder-ceph" {
   }
 
   application {
-    offer_url = var.cinder-ceph-offer-url
+    name = var.cinder-volume-ceph-application-name
+    endpoint = "ceph-access"
   }
 }
 

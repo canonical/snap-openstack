@@ -97,3 +97,7 @@ resource "juju_integration" "microceph-cert-distributor" {
     offer_url = var.cert-distributor-offer-url
   }
 }
+
+output "ceph-application-name" {
+  value = juju_application.microceph.name
+}
