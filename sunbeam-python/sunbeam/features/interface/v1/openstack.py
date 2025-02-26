@@ -235,7 +235,7 @@ class OpenStackControlPlaneFeature(EnableDisableFeature, typing.Generic[ConfigTy
         {
             "cinder": {
               "cinder-k8s": 4,
-              "cinder-ceph-k8s": 4,
+              "cinder-volume": 4,
             }
         }
         """

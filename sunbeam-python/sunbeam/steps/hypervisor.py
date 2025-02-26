@@ -90,6 +90,7 @@ class DeployHypervisorApplicationStep(DeployMachineApplicationStep):
         """Extra terraform vars to pass to terraform apply."""
         openstack_tf_output = self.openstack_tfhelper.output()
 
+        storage_nodes = self.client.cluster.list_nodes_by_role("storage")
         # Always pass Offer URLs as extravars instead of terraform backend
         # so that sunbeam has control to remove the CMR integrations by passing
         # null value.
@@ -103,10 +104,17 @@ class DeployHypervisorApplicationStep(DeployMachineApplicationStep):
             "cert-distributor-offer-url",
             "ca-offer-url",
             "ovn-relay-offer-url",
-            "cinder-ceph-offer-url",
             "nova-offer-url",
         }
         extra_tfvars = {offer: openstack_tf_output.get(offer) for offer in juju_offers}
+
+        if len(storage_nodes) > 0:
+            cinder_volume_tfhelper = self.deployment.get_tfhelper("cinder-volume-plan")
+            cinder_volume_tf_output = cinder_volume_tfhelper.output()
+
+            app_name_key = "cinder-volume-ceph-application-name"
+            if app_name := cinder_volume_tf_output.get(app_name_key):
+                extra_tfvars[app_name_key] = app_name
 
         extra_tfvars.update(
             {

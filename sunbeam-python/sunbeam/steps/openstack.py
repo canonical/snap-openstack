@@ -17,6 +17,7 @@ import asyncio
 import copy
 import logging
 import math
+import typing
 
 from rich.console import Console
 from rich.status import Status
@@ -90,7 +91,7 @@ APPS_BLOCKED_WHEN_FEATURE_ENABLED = ["barbican", "vault"]
 # to the number of processes each service needs to the database.
 CONNECTIONS = {
     "cinder": {
-        "cinder-ceph-k8s": 4,
+        "cinder-volume": 4,
         "cinder-k8s": 5,
     },
     "glance": {"glance-k8s": 5},
@@ -198,37 +199,46 @@ def write_database_resource_dict(
     update_config(client, DATABASE_MEMORY_KEY, resource_dict)
 
 
+def _calculate_mysql_tfvars(
+    connections: int, memory: int, scale: int
+) -> dict[str, int]:
+    """Return the mysql-k8s tfvars for given resources."""
+    return {
+        "profile-limit-memory": math.ceil(memory * scale * DATABASE_OVERSIZE_FACTOR)
+        + DATABASE_ADDITIONAL_BUFFER_SIZE,
+        "experimental-max-connections": math.floor(
+            connections * scale * DATABASE_OVERSIZE_FACTOR
+        ),
+    }
+
+
 def get_database_resource_tfvars(
-    many_mysql: bool, resource_dict: dict[str, tuple[int, int]], service_scale: int
+    many_mysql: bool,
+    resource_dict: dict[str, tuple[int, int]],
+    service_scale: typing.Callable[[str], int],
 ) -> dict[str, bool | dict]:
     """Create terraform variables related to database."""
     tfvars: dict[str, bool | dict] = {"many-mysql": many_mysql}
 
     if many_mysql:
         tfvars["mysql-config-map"] = {
-            service: {
-                "profile-limit-memory": (
-                    math.ceil(memory * service_scale * DATABASE_OVERSIZE_FACTOR)
-                )
-                + DATABASE_ADDITIONAL_BUFFER_SIZE,
-                "experimental-max-connections": math.floor(
-                    connections * service_scale * DATABASE_OVERSIZE_FACTOR
-                ),
-            }
+            service: _calculate_mysql_tfvars(
+                connections, memory, service_scale(service)
+            )
             for service, (connections, memory) in resource_dict.items()
         }
     else:
-        connections, memories = list(zip(*resource_dict.values()))
-        total_memory = (
-            math.ceil(sum(memories) * service_scale * DATABASE_OVERSIZE_FACTOR)
-            + DATABASE_ADDITIONAL_BUFFER_SIZE
+        total_memory_needed = 0
+        total_connections_needed = 0
+        for service, (connections, memory) in resource_dict.items():
+            scale_service_factor = service_scale(service)
+            total_memory_needed += memory * scale_service_factor
+            total_connections_needed += connections * scale_service_factor
+        tfvars["mysql-config"] = _calculate_mysql_tfvars(
+            total_connections_needed,
+            total_memory_needed,
+            1,  # Scale already accounted for in total computing
         )
-        tfvars["mysql-config"] = {
-            "profile-limit-memory": (total_memory),
-            "experimental-max-connections": math.floor(
-                sum(connections) * service_scale * DATABASE_OVERSIZE_FACTOR
-            ),
-        }
 
     return tfvars
 
@@ -387,12 +397,17 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
             tfvars["ceph-osd-replication-count"] = microceph.ceph_replica_scale(
                 len(storage_nodes)
             )
+            tfvars["enable-cinder-volume"] = True
+            tfvars["cinder-volume-offer-url"] = f"{model_with_owner}.cinder-volume"
         else:
             tfvars["enable-ceph"] = False
+            tfvars["enable-cinder-volume"] = False
 
         return tfvars
 
-    def _get_database_resource_tfvars(self, service_scale: int) -> dict:
+    def _get_database_resource_tfvars(
+        self, service_scale: typing.Callable[[str], int]
+    ) -> dict:
         """Create terraform variables related to database resources."""
         many_mysql = self.database == "multi"
         resource_dict = get_database_resource_dict(self.client)
@@ -417,7 +432,7 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
         else:
             return {"mysql-storage": {"database": storage_dict.get("mysql")}}
 
-    def get_database_tfvars(self, service_scale: int) -> dict:
+    def get_database_tfvars(self, service_scale: typing.Callable[[str], int]) -> dict:
         """Create terraform variables related to database."""
         database_tfvars = self._get_database_resource_tfvars(service_scale)
         database_tfvars.update(self._get_database_storage_map_tfvars())
@@ -504,6 +519,18 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
 
         return Result(ResultType.COMPLETED)
 
+    def service_scale_function(
+        self, os_api_scale: int, storage_scale: int
+    ) -> typing.Callable[[str], int]:
+        """Return a function that returns the scale for a service."""
+
+        def service_scale(service: str) -> int:
+            if service == "cinder":
+                return os_api_scale + storage_scale
+            return os_api_scale
+
+        return service_scale
+
     def run(self, status: Status | None = None) -> Result:
         """Execute configuration using terraform."""
         # TODO(jamespage):
@@ -522,10 +549,14 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
         self.update_status(status, "computing deployment sizing")
         model_config = convert_proxy_to_model_configs(self.proxy_settings)
         model_config.update({"workload-storage": K8SHelper.get_default_storageclass()})
-        service_scale = compute_os_api_scale(self.topology, len(control_nodes))
+        os_api_scale = compute_os_api_scale(self.topology, len(control_nodes))
         extra_tfvars = self.get_storage_tfvars(storage_nodes)
         extra_tfvars.update(self.get_region_tfvars())
-        extra_tfvars.update(self.get_database_tfvars(service_scale))
+        extra_tfvars.update(
+            self.get_database_tfvars(
+                self.service_scale_function(os_api_scale, len(storage_nodes))
+            )
+        )
         extra_tfvars.update(
             {
                 "model": self.model,
@@ -533,7 +564,7 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
                 "credential": f"{self.cloud}{CREDENTIAL_SUFFIX}",
                 "config": model_config,
                 "ha-scale": compute_ha_scale(self.topology, len(control_nodes)),
-                "os-api-scale": service_scale,
+                "os-api-scale": os_api_scale,
                 "ingress-scale": compute_ingress_scale(
                     self.topology, len(control_nodes)
                 ),
@@ -551,10 +582,10 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
             LOG.exception("Error configuring cloud")
             return Result(ResultType.FAILED, str(e))
 
-        # Remove cinder-ceph from apps to wait on if ceph is not enabled
         apps = run_sync(self.jhelper.get_application_names(self.model))
-        if not extra_tfvars.get("enable-ceph") and "cinder-ceph" in apps:
-            apps.remove("cinder-ceph")
+        if not extra_tfvars.get("enable-cinder-volume"):
+            # Cinder will be blocked in this case
+            apps.remove("cinder")
         apps = list(set(apps) - set(self.remove_blocked_apps_from_features()))
 
         LOG.debug(f"Applications monitored for readiness: {apps}")
@@ -654,10 +685,10 @@ class ReapplyOpenStackTerraformPlanStep(BaseStep, JujuStepHelper):
             return Result(ResultType.FAILED, str(e))
 
         storage_nodes = self.client.cluster.list_nodes_by_role("storage")
-        # Remove cinder-ceph from apps to wait on if ceph is not enabled
+        # Remove cinder from apps to wait on if no storage nodes
         apps = run_sync(self.jhelper.get_application_names(self.model))
-        if not storage_nodes and "cinder-ceph" in apps:
-            apps.remove("cinder-ceph")
+        if not storage_nodes:
+            apps.remove("cinder")
         LOG.debug(f"Application monitored for readiness: {apps}")
         queue: asyncio.queues.Queue[str] = asyncio.queues.Queue(maxsize=len(apps))
         task = run_sync(update_status_background(self, apps, queue, status))

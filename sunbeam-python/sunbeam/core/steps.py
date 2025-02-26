@@ -98,6 +98,10 @@ class DeployMachineApplicationStep(BaseStep):
 
         return Result(ResultType.SKIPPED)
 
+    def get_accepted_application_status(self) -> list[str]:
+        """Accepted status to pass wait_application_ready function."""
+        return ["active", "unknown"]
+
     def run(self, status: Status | None = None) -> Result:
         """Apply terraform configuration to deploy sunbeam machine."""
         machine_ids: list[int] = []
@@ -131,7 +135,7 @@ class DeployMachineApplicationStep(BaseStep):
                 self.jhelper.wait_application_ready(
                     self.application,
                     self.model,
-                    accepted_status=["active", "unknown"],
+                    accepted_status=self.get_accepted_application_status(),
                     timeout=self.get_application_timeout(),
                 )
             )

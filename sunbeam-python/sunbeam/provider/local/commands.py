@@ -93,6 +93,12 @@ from sunbeam.provider.local.steps import (
 )
 from sunbeam.steps import cluster_status
 from sunbeam.steps.bootstrap_state import SetBootstrapped
+from sunbeam.steps.cinder_volume import (
+    AddCinderVolumeUnitsStep,
+    CheckCinderVolumeDistributionStep,
+    DeployCinderVolumeApplicationStep,
+    RemoveCinderVolumeUnitsStep,
+)
 from sunbeam.steps.clusterd import (
     AskManagementCidrStep,
     ClusterAddJujuUserStep,
@@ -729,6 +735,21 @@ def bootstrap(
             deployment.openstack_machines_model,
         )
     )
+    cinder_volume_tfhelper = deployment.get_tfhelper("cinder-volume-plan")
+    plan1.append(TerraformInitStep(cinder_volume_tfhelper))
+    plan1.append(
+        DeployCinderVolumeApplicationStep(
+            deployment,
+            client,
+            cinder_volume_tfhelper,
+            jhelper,
+            manifest,
+            deployment.openstack_machines_model,
+        )
+    )
+
+    openstack_tfhelper = deployment.get_tfhelper("openstack-plan")
+    plan1.append(TerraformInitStep(openstack_tfhelper))
 
     if is_storage_node:
         plan1.append(
@@ -746,10 +767,17 @@ def bootstrap(
                 manifest=manifest,
             )
         )
+        plan1.append(
+            AddCinderVolumeUnitsStep(
+                client,
+                fqdn,
+                jhelper,
+                deployment.openstack_machines_model,
+                openstack_tfhelper,
+            )
+        )
 
-    openstack_tfhelper = deployment.get_tfhelper("openstack-plan")
     if is_control_node:
-        plan1.append(TerraformInitStep(openstack_tfhelper))
         plan1.append(
             DeployControlPlaneStep(
                 deployment,
@@ -770,6 +798,18 @@ def bootstrap(
                 deployment,
                 client,
                 microceph_tfhelper,
+                jhelper,
+                manifest,
+                deployment.openstack_machines_model,
+                refresh=True,
+            )
+        )
+        # Fill AMQP / Keystone / MySQL offers from openstack model
+        plan1.append(
+            DeployCinderVolumeApplicationStep(
+                deployment,
+                client,
+                cinder_volume_tfhelper,
                 jhelper,
                 manifest,
                 deployment.openstack_machines_model,
@@ -1056,12 +1096,21 @@ def join(
                 manifest=manifest,
             )
         )
+        openstack_tfhelper = deployment.get_tfhelper("openstack-plan")
+        plan4.append(TerraformInitStep(openstack_tfhelper))
+        plan4.append(
+            AddCinderVolumeUnitsStep(
+                client,
+                name,
+                jhelper,
+                deployment.openstack_machines_model,
+                openstack_tfhelper,
+            )
+        )
         # Re-deploy control plane if this is the first storage node joining
         # the cluster to enable mandatory storage services
         storage_nodes = client.cluster.list_nodes_by_role(Role.STORAGE.name.lower())
         if len(storage_nodes) == 1:
-            openstack_tfhelper = deployment.get_tfhelper("openstack-plan")
-            plan4.append(TerraformInitStep(openstack_tfhelper))
             plan4.append(
                 DeployControlPlaneStep(
                     deployment,
@@ -1083,6 +1132,20 @@ def join(
                     deployment,
                     client,
                     microceph_tfhelper,
+                    jhelper,
+                    manifest,
+                    deployment.openstack_machines_model,
+                    refresh=True,
+                )
+            )
+            # Fill AMQP / Keystone / MySQL offers from openstack model
+            cinder_volume_tfhelper = deployment.get_tfhelper("cinder-volume-plan")
+            plan4.append(TerraformInitStep(cinder_volume_tfhelper))
+            plan4.append(
+                DeployCinderVolumeApplicationStep(
+                    deployment,
+                    client,
+                    cinder_volume_tfhelper,
                     jhelper,
                     manifest,
                     deployment.openstack_machines_model,
@@ -1161,6 +1224,13 @@ def remove(ctx: click.Context, name: str, force: bool, show_hints: bool) -> None
 
     plan = [
         JujuLoginStep(deployment.juju_account),
+        CheckCinderVolumeDistributionStep(
+            client,
+            name,
+            jhelper,
+            deployment.openstack_machines_model,
+            force=force,
+        ),
         CheckMicrocephDistributionStep(
             client,
             name,
@@ -1195,6 +1265,9 @@ def remove(ctx: click.Context, name: str, force: bool, show_hints: bool) -> None
         UpdateK8SCloudStep(deployment, jhelper),
         RemoveHypervisorUnitStep(
             client, name, jhelper, deployment.openstack_machines_model, force
+        ),
+        RemoveCinderVolumeUnitsStep(
+            client, name, jhelper, deployment.openstack_machines_model
         ),
         RemoveMicrocephUnitsStep(
             client, name, jhelper, deployment.openstack_machines_model

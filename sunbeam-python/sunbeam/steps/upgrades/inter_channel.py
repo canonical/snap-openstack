@@ -37,6 +37,7 @@ from sunbeam.core.juju import (
 )
 from sunbeam.core.manifest import Manifest
 from sunbeam.core.terraform import TerraformException, TerraformHelper
+from sunbeam.steps.cinder_volume import CONFIG_KEY as CINDER_VOLUME_CONFIG_KEY
 from sunbeam.steps.hypervisor import CONFIG_KEY as HYPERVISOR_CONFIG_KEY
 from sunbeam.steps.k8s import K8S_CONFIG_KEY
 from sunbeam.steps.microceph import CONFIG_KEY as MICROCEPH_CONFIG_KEY
@@ -319,6 +320,36 @@ class UpgradeMicrocephCharm(UpgradeMachineCharm):
         )
 
 
+class UpgradeCinderVolumeCharm(UpgradeMachineCharm):
+    def __init__(
+        self,
+        client: Client,
+        tfhelper: TerraformHelper,
+        jhelper: JujuHelper,
+        manifest: Manifest,
+        model: str,
+    ):
+        """Create instance of UpgradeCinderVolumeCharm class.
+
+        :client: Client to connect to clusterdb
+        :jhelper: Helper for interacting with pylibjuju
+        :manifest: Manifest object
+        :model: Name of model containing charms.
+        """
+        super().__init__(
+            "Upgrade Cinder Volume charm",
+            "Upgrading cinder-volume charm",
+            client,
+            tfhelper,
+            jhelper,
+            manifest,
+            model,
+            ["cinder-volume", "cinder-volume-ceph"],
+            CINDER_VOLUME_CONFIG_KEY,
+            1200,
+        )
+
+
 class UpgradeK8SCharm(UpgradeMachineCharm):
     def __init__(
         self,
@@ -424,14 +455,21 @@ class ChannelUpgradeCoordinator(UpgradeCoordinator):
                 get_tf("openstack-plan"),
                 self.jhelper,
                 self.manifest,
-                "openstack",
+                self.deployment.openstack_machines_model,
             ),
             UpgradeMicrocephCharm(
                 self.client,
                 get_tf("microceph-plan"),
                 self.jhelper,
                 self.manifest,
-                "controller",
+                self.deployment.openstack_machines_model,
+            ),
+            UpgradeCinderVolumeCharm(
+                self.client,
+                get_tf("cinder-volume-plan"),
+                self.jhelper,
+                self.manifest,
+                self.deployment.openstack_machines_model,
             ),
         ]
         plan.append(
@@ -440,7 +478,7 @@ class ChannelUpgradeCoordinator(UpgradeCoordinator):
                 get_tf("k8s-plan"),
                 self.jhelper,
                 self.manifest,
-                "controller",
+                self.deployment.openstack_machines_model,
             )
         )
 
@@ -451,14 +489,14 @@ class ChannelUpgradeCoordinator(UpgradeCoordinator):
                     get_tf("hypervisor-plan"),
                     self.jhelper,
                     self.manifest,
-                    "controller",
+                    self.deployment.openstack_machines_model,
                 ),
                 UpgradeSunbeamMachineCharm(
                     self.client,
                     get_tf("sunbeam-machine-plan"),
                     self.jhelper,
                     self.manifest,
-                    "controller",
+                    self.deployment.openstack_machines_model,
                 ),
                 UpgradeFeatures(self.deployment, upgrade_release=True),
             ]

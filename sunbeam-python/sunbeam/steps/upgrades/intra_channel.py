@@ -22,6 +22,7 @@ from sunbeam.core.common import BaseStep, Result, ResultType
 from sunbeam.core.juju import JujuHelper, JujuStepHelper, run_sync
 from sunbeam.core.manifest import Manifest
 from sunbeam.core.terraform import TerraformInitStep
+from sunbeam.steps.cinder_volume import DeployCinderVolumeApplicationStep
 from sunbeam.steps.hypervisor import ReapplyHypervisorTerraformPlanStep
 from sunbeam.steps.k8s import DeployK8SApplicationStep
 from sunbeam.steps.microceph import DeployMicrocephApplicationStep
@@ -172,6 +173,16 @@ class LatestInChannelCoordinator(UpgradeCoordinator):
                     self.deployment,
                     self.client,
                     self.deployment.get_tfhelper("microceph-plan"),
+                    self.jhelper,
+                    self.manifest,
+                    self.deployment.openstack_machines_model,
+                    refresh=True,
+                ),
+                TerraformInitStep(self.deployment.get_tfhelper("cinder-volume-plan")),
+                DeployCinderVolumeApplicationStep(
+                    self.deployment,
+                    self.client,
+                    self.deployment.get_tfhelper("cinder-volume-plan"),
                     self.jhelper,
                     self.manifest,
                     self.deployment.openstack_machines_model,

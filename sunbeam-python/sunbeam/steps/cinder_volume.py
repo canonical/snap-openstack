@@ -1,0 +1,358 @@
+# Copyright (c) 2025 Canonical Ltd.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+# implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+import logging
+from typing import Any
+
+from rich.status import Status
+
+import sunbeam.steps.microceph as microceph
+from sunbeam.clusterd.client import Client
+from sunbeam.clusterd.service import (
+    ConfigItemNotFoundException,
+    NodeNotExistInClusterException,
+)
+from sunbeam.core.common import BaseStep, Result, ResultType, Role, read_config
+from sunbeam.core.deployment import Deployment, Networks
+from sunbeam.core.juju import (
+    ApplicationNotFoundException,
+    JujuHelper,
+    run_sync,
+)
+from sunbeam.core.manifest import Manifest
+from sunbeam.core.steps import (
+    AddMachineUnitsStep,
+    DeployMachineApplicationStep,
+    DestroyMachineApplicationStep,
+    RemoveMachineUnitsStep,
+)
+from sunbeam.core.terraform import TerraformException, TerraformHelper
+
+LOG = logging.getLogger(__name__)
+CONFIG_KEY = "TerraformVarsCinderVolumePlan"
+APPLICATION = "cinder-volume"
+CINDER_VOLUME_APP_TIMEOUT = 1200
+CINDER_VOLUME_UNIT_TIMEOUT = (
+    1200  # 20 minutes, adding / removing units can take a long time
+)
+
+
+def get_mandatory_control_plane_offers(
+    tfhelper: TerraformHelper,
+) -> dict[str, str | None]:
+    """Get mandatory control plane offers."""
+    openstack_tf_output = tfhelper.output()
+
+    tfvars = {
+        "keystone-offer-url": openstack_tf_output.get("keystone-offer-url"),
+        "database-offer-url": openstack_tf_output.get(
+            "cinder-volume-database-offer-url"
+        ),
+        "amqp-offer-url": openstack_tf_output.get("rabbitmq-offer-url"),
+    }
+    return tfvars
+
+
+class DeployCinderVolumeApplicationStep(DeployMachineApplicationStep):
+    """Deploy Cinder Volume application using Terraform."""
+
+    def __init__(
+        self,
+        deployment: Deployment,
+        client: Client,
+        tfhelper: TerraformHelper,
+        jhelper: JujuHelper,
+        manifest: Manifest,
+        model: str,
+        refresh: bool = False,
+    ):
+        super().__init__(
+            deployment,
+            client,
+            tfhelper,
+            jhelper,
+            manifest,
+            CONFIG_KEY,
+            APPLICATION,
+            model,
+            "Deploy Cinder Volume",
+            "Deploying Cinder Volume",
+            refresh,
+        )
+        self._offers: dict[str, str | None] = {}
+
+    def get_application_timeout(self) -> int:
+        """Return application timeout in seconds."""
+        return CINDER_VOLUME_APP_TIMEOUT
+
+    def get_accepted_application_status(self) -> list[str]:
+        """Return accepted application status."""
+        accepted_status = super().get_accepted_application_status()
+        offers = self._get_offers()
+        if not offers or not all(offers.values()):
+            accepted_status.append("blocked")
+        return accepted_status
+
+    def _get_offers(self):
+        if not self._offers:
+            self._offers = get_mandatory_control_plane_offers(
+                self.deployment.get_tfhelper("openstack-plan")
+            )
+        return self._offers
+
+    def extra_tfvars(self) -> dict:
+        """Extra terraform vars to pass to terraform apply."""
+        storage_nodes = self.client.cluster.list_nodes_by_role("storage")
+        tfvars: dict[str, Any] = {
+            "endpoint_bindings": [
+                {
+                    "space": self.deployment.get_space(Networks.MANAGEMENT),
+                },
+                {
+                    "endpoint": "amqp",
+                    "space": self.deployment.get_space(Networks.INTERNAL),
+                },
+                {
+                    "endpoint": "cinder-volume",
+                    "space": self.deployment.get_space(Networks.MANAGEMENT),
+                },
+                {
+                    "endpoint": "identity-credentials",
+                    "space": self.deployment.get_space(Networks.INTERNAL),
+                },
+                {
+                    # relation to cinder-api
+                    "endpoint": "storage-backend",
+                    "space": self.deployment.get_space(Networks.INTERNAL),
+                },
+            ],
+            "cinder_volume_ceph_endpoint_bindings": [
+                {
+                    "space": self.deployment.get_space(Networks.MANAGEMENT),
+                },
+                {
+                    # relation between hypervisor and cinder-volume-ceph
+                    # providing credentials to access Ceph
+                    "space": self.deployment.get_space(Networks.MANAGEMENT),
+                    "endpoint": "ceph-access",
+                },
+                {
+                    "space": self.deployment.get_space(Networks.STORAGE),
+                    "endpoint": "ceph",
+                },
+            ],
+            "charm_cinder_volume_config": {},
+            "charm_cinder_volume_ceph_config": {
+                "ceph-osd-replication-count": microceph.ceph_replica_scale(
+                    len(storage_nodes)
+                ),
+            },
+        }
+
+        if len(storage_nodes):
+            microceph_tfhelper = self.deployment.get_tfhelper("microceph-plan")
+            microceph_tf_output = microceph_tfhelper.output()
+
+            ceph_application_name = microceph_tf_output.get("ceph-application-name")
+
+            if ceph_application_name:
+                tfvars["ceph-application-name"] = ceph_application_name
+            tfvars.update(self._get_offers())
+
+        return tfvars
+
+
+class AddCinderVolumeUnitsStep(AddMachineUnitsStep):
+    """Add Cinder Volume Unit."""
+
+    def __init__(
+        self,
+        client: Client,
+        names: list[str] | str,
+        jhelper: JujuHelper,
+        model: str,
+        openstack_tfhelper: TerraformHelper,
+    ):
+        super().__init__(
+            client,
+            names,
+            jhelper,
+            CONFIG_KEY,
+            APPLICATION,
+            model,
+            "Add Cinder Volume unit",
+            "Adding Cinder Volume unit to machine",
+        )
+        self.os_tfhelper = openstack_tfhelper
+
+    def get_unit_timeout(self) -> int:
+        """Return unit timeout in seconds."""
+        return CINDER_VOLUME_UNIT_TIMEOUT
+
+    def get_accepted_unit_status(self) -> dict[str, list[str]]:
+        """Accepted status to pass wait_units_ready function."""
+        offers = get_mandatory_control_plane_offers(self.os_tfhelper)
+
+        allow_blocked = {"agent": ["idle"], "workload": ["active", "blocked"]}
+        if not offers or not all(offers.values()):
+            return allow_blocked
+
+        try:
+            config = read_config(self.client, CONFIG_KEY)
+        except ConfigItemNotFoundException:
+            config = {}
+
+        # check if values in offers are the same in config
+        for key, value in offers.items():
+            if key not in config or config[key] != value:
+                return allow_blocked
+
+        return super().get_accepted_unit_status()
+
+
+class RemoveCinderVolumeUnitsStep(RemoveMachineUnitsStep):
+    """Remove Cinder Volume Unit."""
+
+    def __init__(
+        self, client: Client, names: list[str] | str, jhelper: JujuHelper, model: str
+    ):
+        super().__init__(
+            client,
+            names,
+            jhelper,
+            CONFIG_KEY,
+            APPLICATION,
+            model,
+            "Remove Cinder Volume unit(s)",
+            "Removing Cinder Volume unit(s) from machine",
+        )
+
+    def get_unit_timeout(self) -> int:
+        """Return unit timeout in seconds."""
+        return CINDER_VOLUME_UNIT_TIMEOUT
+
+
+class CheckCinderVolumeDistributionStep(BaseStep):
+    _APPLICATION = APPLICATION
+
+    def __init__(
+        self,
+        client: Client,
+        name: str,
+        jhelper: JujuHelper,
+        model: str,
+        force: bool = False,
+    ):
+        super().__init__(
+            "Check Cinder Volume distribution",
+            "Check if node is hosting units of Cinder Volume",
+        )
+        self.client = client
+        self.node = name
+        self.jhelper = jhelper
+        self.model = model
+        self.force = force
+
+    def is_skip(self, status: Status | None = None) -> Result:
+        """Determines if the step should be skipped or not.
+
+        :return: ResultType.SKIPPED if the Step should be skipped,
+                ResultType.COMPLETED or ResultType.FAILED otherwise
+        """
+        try:
+            node_info = self.client.cluster.get_node_info(self.node)
+        except NodeNotExistInClusterException:
+            return Result(ResultType.FAILED, f"Node {self.node} not found in cluster")
+        if Role.STORAGE.name.lower() not in node_info.get("role", ""):
+            LOG.debug("Node %s is not a storage node", self.node)
+            return Result(ResultType.SKIPPED)
+        try:
+            app = run_sync(self.jhelper.get_application(self._APPLICATION, self.model))
+        except ApplicationNotFoundException:
+            LOG.debug("Failed to get application", exc_info=True)
+            return Result(
+                ResultType.SKIPPED,
+                f"Application {self._APPLICATION} has not been deployed yet",
+            )
+
+        for unit in app.units:
+            if unit.machine.id == str(node_info.get("machineid")):
+                LOG.debug("Unit %s is running on node %s", unit.name, self.node)
+                break
+        else:
+            LOG.debug("No %s units found on %s", self._APPLICATION, self.node)
+            return Result(ResultType.SKIPPED)
+
+        nb_storage_nodes = len(self.client.cluster.list_nodes_by_role("storage"))
+        if nb_storage_nodes == 1 and not self.force:
+            return Result(
+                ResultType.FAILED,
+                "Cannot remove the last cinder-volume,"
+                "--force to override, volume capabilities"
+                " will be lost.",
+            )
+
+        return Result(ResultType.COMPLETED)
+
+
+class DestroyCinderVolumeApplicationStep(DestroyMachineApplicationStep):
+    """Destroy Cinder Volume application using Terraform."""
+
+    def __init__(
+        self,
+        client: Client,
+        tfhelper: TerraformHelper,
+        jhelper: JujuHelper,
+        manifest: Manifest,
+        model: str,
+    ):
+        super().__init__(
+            client,
+            tfhelper,
+            jhelper,
+            manifest,
+            CONFIG_KEY,
+            [APPLICATION],
+            model,
+            "Destroy Cinder Volume",
+            "Destroying Cinder Volume",
+        )
+
+    def get_application_timeout(self) -> int:
+        """Return application timeout in seconds."""
+        return CINDER_VOLUME_APP_TIMEOUT
+
+    def run(self, status: Status | None = None) -> Result:
+        """Destroy Cinder Volume application."""
+        # note(gboutry):this is a workaround for
+        # https://github.com/juju/terraform-provider-juju/issues/473
+        try:
+            resources = self.tfhelper.state_list()
+        except TerraformException as e:
+            LOG.debug(f"Failed to list terraform state: {str(e)}")
+            return Result(ResultType.FAILED, "Failed to list terraform state")
+
+        for resource in resources:
+            if "integration" in resource:
+                try:
+                    self.tfhelper.state_rm(resource)
+                except TerraformException as e:
+                    LOG.debug(f"Failed to remove resource {resource}: {str(e)}")
+                    return Result(
+                        ResultType.FAILED,
+                        f"Failed to remove resource {resource} from state",
+                    )
+
+        return super().run(status)
