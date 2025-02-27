@@ -70,6 +70,7 @@ class DeployHypervisorApplicationStep(DeployMachineApplicationStep):
         jhelper: JujuHelper,
         manifest: Manifest,
         model: str,
+        refresh: bool = False,
     ):
         super().__init__(
             deployment,
@@ -82,6 +83,7 @@ class DeployHypervisorApplicationStep(DeployMachineApplicationStep):
             model,
             "Deploy OpenStack Hypervisor",
             "Deploying OpenStack Hypervisor",
+            refresh=refresh,
         )
         self.openstack_tfhelper = openstack_tfhelper
         self.openstack_model = OPENSTACK_MODEL

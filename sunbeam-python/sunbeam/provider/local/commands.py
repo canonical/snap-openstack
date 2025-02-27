@@ -1080,6 +1080,8 @@ def join(
         )
         plan4.append(AddK8SCredentialStep(deployment, jhelper))
 
+    openstack_tfhelper = deployment.get_tfhelper("openstack-plan")
+    plan4.append(TerraformInitStep(openstack_tfhelper))
     if is_storage_node:
         plan4.append(
             AddMicrocephUnitsStep(
@@ -1096,8 +1098,6 @@ def join(
                 manifest=manifest,
             )
         )
-        openstack_tfhelper = deployment.get_tfhelper("openstack-plan")
-        plan4.append(TerraformInitStep(openstack_tfhelper))
         plan4.append(
             AddCinderVolumeUnitsStep(
                 client,
@@ -1152,6 +1152,21 @@ def join(
                     refresh=True,
                 )
             )
+
+        hypervisor_tfhelper = deployment.get_tfhelper("hypervisor-plan")
+        plan4.append(TerraformInitStep(hypervisor_tfhelper))
+        plan4.append(
+            DeployHypervisorApplicationStep(
+                deployment,
+                client,
+                hypervisor_tfhelper,
+                openstack_tfhelper,
+                jhelper,
+                manifest,
+                deployment.openstack_machines_model,
+                refresh=True,
+            )
+        )
 
     if is_compute_node:
         plan4.extend(
