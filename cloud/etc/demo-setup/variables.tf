@@ -22,3 +22,11 @@ variable "user" {
   })
   sensitive = true
 }
+
+
+# Image resource
+variable "distro_version" {
+  type = string({
+    distro_version = "noble"
+  })
+}
