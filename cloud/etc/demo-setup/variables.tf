@@ -26,7 +26,6 @@ variable "user" {
 
 # Image resource
 variable "distro_version" {
-  type = string({
-    distro_version = "noble"
-  })
+  type = string
+  default = "noble"
 }
