@@ -384,6 +384,12 @@ def bootstrap(
     )
 
     if not juju_controller:
+        management_space = deployment.get_space(Networks.MANAGEMENT)
+        bootstrap_args = manifest.core.software.juju.bootstrap_args
+        # Set juju-mgmt-space flag so that juju agent communicate over
+        # management space in case of internal juju controller
+        bootstrap_args.extend(["--config", f"juju-mgmt-space={management_space}"])
+
         # Workaround for bug https://bugs.launchpad.net/juju/+bug/2044481
         # Remove the below step and dont pass controller charm as bootstrap
         # arguments once the above bug is fixed
