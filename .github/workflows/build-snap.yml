@@ -66,6 +66,9 @@ jobs:
           sudo snap connect openstack:dot-config-openstack
           sudo snap connect openstack:dot-local-share-openstack
 
+          # Setup loop devices for microceph
+          bash ./.github/scripts/ci_helpers.sh create_loop_devices
+
           # Even though `--topology single --database single` is not used in the
           # single-node tutorial, explicitly speficy it here to force the single
           # mysql mode.
@@ -74,7 +77,7 @@ jobs:
           # have more than 32 GiB of memory where Sunbeam selects the multi mysql
           # mode instead. So we have to override the Sunbeam's decision to be
           # closer to the tutorial scenario.
-          sg snap_daemon "openstack.sunbeam cluster bootstrap --manifest .github/assets/testing/edge.yml --accept-defaults --topology single --database single"
+          sg snap_daemon "openstack.sunbeam cluster bootstrap --role control,compute,storage --manifest .github/assets/testing/edge.yml --accept-defaults --topology single --database single"
           sg snap_daemon "openstack.sunbeam cluster list"
           # Note: Moving configure before enabling caas just to ensure caas images are not downloaded
           # To download caas image, require ports to open on firewall to access fedora images.
