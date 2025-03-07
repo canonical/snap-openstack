@@ -487,8 +487,10 @@ class StoreK8SKubeConfigStep(BaseStep, JujuStepHelper):
         try:
             unit = run_sync(self.jhelper.get_leader_unit(APPLICATION, self.model))
             LOG.debug(unit)
+            leader_unit_management_ip = self._get_management_server_ip(unit)
             result = run_sync(
-                self.jhelper.run_action(unit, self.model, "get-kubeconfig")
+                self.jhelper.run_action(unit, self.model, "get-kubeconfig",
+                                        action_params={"server": leader_unit_management_ip})
             )
             LOG.debug(result)
             if not result.get("kubeconfig"):
@@ -508,6 +510,21 @@ class StoreK8SKubeConfigStep(BaseStep, JujuStepHelper):
 
         return Result(ResultType.COMPLETED)
 
+    def _get_management_server_ip(self, leader_unit):
+        """API server endpoint for the Kubernetes cluster."""
+        host_addresses = run_sync(
+            self.jhelper.run_cmd_on_machine_unit(leader_unit, self.model, 'hostname -I')
+        )
+        parsed_host_ips = host_addresses['stdout'].strip().split()
+
+        spaces = run_sync(self.jhelper.get_spaces(self.model))
+
+        infra_cidr = next((space['subnets'][0]['cidr']
+                           for space in spaces if space['name'] == 'infra'), None)
+        infra_network = ipaddress.ip_network(infra_cidr)
+        management_ip = next((ip for ip in parsed_host_ips
+                              if ipaddress.ip_address(ip) in infra_network), None)
+        return f"{management_ip}:6443" if management_ip else None
 
 class _CommonK8SStepMixin:
     _SUBSTRATE: str = APPLICATION
