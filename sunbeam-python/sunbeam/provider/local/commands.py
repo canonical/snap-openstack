@@ -279,7 +279,7 @@ def get_k8s_plans(
             ),
             AddK8SUnitsStep(client, fqdn, jhelper, deployment.openstack_machines_model),
             StoreK8SKubeConfigStep(
-                client, jhelper, deployment.openstack_machines_model
+                deployment, client, jhelper, deployment.openstack_machines_model
             ),
         ]
     )

@@ -658,7 +658,9 @@ def deploy(
         AddK8SUnitsStep(client, control, jhelper, deployment.openstack_machines_model)
     )
     plan2.append(
-        StoreK8SKubeConfigStep(client, jhelper, deployment.openstack_machines_model)
+        StoreK8SKubeConfigStep(
+            deployment, client, jhelper, deployment.openstack_machines_model
+        )
     )
     plan2.append(AddK8SCloudStep(deployment, jhelper))
 

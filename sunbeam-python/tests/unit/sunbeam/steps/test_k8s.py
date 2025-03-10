@@ -14,7 +14,7 @@
 
 import asyncio
 import unittest
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
@@ -142,9 +142,18 @@ class TestStoreK8SKubeConfigStep(unittest.TestCase):
     def setUp(self):
         self.client = Mock(cluster=Mock(get_config=Mock(return_value="{}")))
         self.jhelper = AsyncMock()
+        self.deployment = Mock()
+        mock_machine = MagicMock()
+        mock_machine.addresses = [
+            {"value": "127.0.0.1:16443", "space-name": "management"}
+        ]
+        self.jhelper.get_machines.return_value = {"0": mock_machine}
+        self.deployment.get_space.return_value = "management"
 
     def test_is_skip(self):
-        step = StoreK8SKubeConfigStep(self.client, self.jhelper, "test-model")
+        step = StoreK8SKubeConfigStep(
+            self.deployment, self.client, self.jhelper, "test-model"
+        )
         result = step.is_skip()
 
         assert result.result_type == ResultType.SKIPPED
@@ -154,7 +163,9 @@ class TestStoreK8SKubeConfigStep(unittest.TestCase):
             "sunbeam.steps.k8s.read_config",
             Mock(side_effect=ConfigItemNotFoundException),
         ):
-            step = StoreK8SKubeConfigStep(self.client, self.jhelper, "test-model")
+            step = StoreK8SKubeConfigStep(
+                self.deployment, self.client, self.jhelper, "test-model"
+            )
             result = step.is_skip()
 
         assert result.result_type == ResultType.COMPLETED
@@ -183,8 +194,11 @@ users:
             "kubeconfig": kubeconfig_content,
         }
         self.jhelper.run_action.return_value = action_result
+        self.jhelper.get_leader_unit.return_value = "k8s/0"
 
-        step = StoreK8SKubeConfigStep(self.client, self.jhelper, "test-model")
+        step = StoreK8SKubeConfigStep(
+            self.deployment, self.client, self.jhelper, "test-model"
+        )
         result = step.run()
 
         self.jhelper.get_leader_unit.assert_called_once()
@@ -196,7 +210,9 @@ users:
             "Application missing..."
         )
 
-        step = StoreK8SKubeConfigStep(self.client, self.jhelper, "test-model")
+        step = StoreK8SKubeConfigStep(
+            self.deployment, self.client, self.jhelper, "test-model"
+        )
         result = step.run()
 
         self.jhelper.get_leader_unit.assert_called_once()
@@ -208,7 +224,9 @@ users:
             "Leader missing..."
         )
 
-        step = StoreK8SKubeConfigStep(self.client, self.jhelper, "test-model")
+        step = StoreK8SKubeConfigStep(
+            self.deployment, self.client, self.jhelper, "test-model"
+        )
         result = step.run()
 
         self.jhelper.get_leader_unit.assert_called_once()
@@ -217,8 +235,11 @@ users:
 
     def test_run_action_failed(self):
         self.jhelper.run_action.side_effect = ActionFailedException("Action failed...")
+        self.jhelper.get_leader_unit.return_value = "k8s/0"
 
-        step = StoreK8SKubeConfigStep(self.client, self.jhelper, "test-model")
+        step = StoreK8SKubeConfigStep(
+            self.deployment, self.client, self.jhelper, "test-model"
+        )
         result = step.run()
 
         self.jhelper.get_leader_unit.assert_called_once()
