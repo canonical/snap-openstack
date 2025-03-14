@@ -25,6 +25,7 @@ import typing
 from datetime import datetime
 from pathlib import Path
 from typing import (
+    TYPE_CHECKING,
     Awaitable,
     Dict,
     Iterable,
@@ -56,6 +57,10 @@ from sunbeam import utils
 from sunbeam.clusterd.client import Client
 from sunbeam.core.common import SunbeamException
 from sunbeam.versions import JUJU_BASE, SUPPORTED_RELEASE
+
+if TYPE_CHECKING:  # pragma: no cover
+    # import private def only for type checking
+    from juju.client import _definitions as juju_def
 
 LOG = logging.getLogger(__name__)
 CONTROLLER_MODEL = "admin/controller"
@@ -1170,16 +1175,23 @@ class JujuHelper:
         model_impl = await self.get_model(model)
         if apps is None:
             apps = list(model_impl.applications.keys())
-        await self.wait_until_desired_status(model, apps, ["active"], timeout, queue)
+        await self.wait_until_desired_status(
+            model, apps, status=["active"], timeout=timeout, queue=queue
+        )
 
     @staticmethod
     async def _wait_until_status_coroutine(
         model: Model,
         app: str,
+        unit_list: list[str] | None = None,
         queue: asyncio.queues.Queue | None = None,
         expected_status: Iterable[str] | None = None,
+        expected_agent_status: Iterable[str] | None = None,
     ):
-        """Worker function to wait for application's units workloads to be active."""
+        """Worker function to wait for application's units workloads to be active.
+
+        Agent status is checked only if provided in input.
+        """
         if expected_status is None:
             expected_status = {"active"}
         else:
@@ -1189,25 +1201,46 @@ class JujuHelper:
                 status = await model.get_status([app])
                 if app not in status.applications:
                     raise ValueError(f"Application {app} not found in status")
-                application = status.applications[app]
+                application = typing.cast(
+                    "juju_def.ApplicationStatus", status.applications[app]
+                )
 
                 units = application.units
+                app_status: set[str] = set()
+                agent_status: set[str] = set()
                 # Application is a subordinate, collect status from app instead of units
                 # as units is empty dictionary.
                 if application.subordinate_to:
-                    app_status = {application.status.status}
+                    if application.status:
+                        app_status = {str(application.status.status)}
                 else:
-                    app_status = {
-                        unit.workload_status.status for unit in units.values()
-                    }
+                    for name, unit in units.items():
+                        unit = typing.cast("juju_def.UnitStatus", unit)
+                        if unit_list is None or name in unit_list:
+                            if wl_status := unit.workload_status:
+                                app_status.add(str(wl_status.status))
+                            if _agent_status := unit.agent_status:
+                                agent_status.add(str(_agent_status.status))
 
-                # int_ is None on machine models
-                unit_count: int | None = application.int_
-                unit_count_cond = unit_count is None or len(units) == unit_count
+                if unit_list is None:
+                    # int_ is None on machine models
+                    expected_unit_count = application.int_
+                    unit_count = len(units)
+                else:
+                    expected_unit_count = len(unit_list)
+                    unit_count = len([unit for unit in units if unit in unit_list])
+
+                unit_count_cond = (
+                    expected_unit_count is None or expected_unit_count == unit_count
+                )
                 if (
                     unit_count_cond
                     and len(app_status) > 0
                     and app_status.issubset(expected_status)
+                    and (
+                        expected_agent_status is None
+                        or agent_status.issubset(expected_agent_status)
+                    )
                 ):
                     LOG.debug("Application %r is active", app)
                     # queue is sized for the number of coroutines,
@@ -1223,7 +1256,9 @@ class JujuHelper:
         self,
         model: str,
         apps: list[str],
+        units: list[str] | None = None,
         status: list[str] | None = None,
+        agent_status: list[str] | None = None,
         timeout: int = 10 * 60,
         queue: asyncio.queues.Queue | None = None,
     ) -> None:
@@ -1231,22 +1266,34 @@ class JujuHelper:
 
         :model: Name of the model to wait for readiness
         :apps: Applications to check the status for
-        :status: Desired status list
+        :unit: Units to check the status for, if None, all units of the app
+        :status: Desired workload status list
+        :agent_status: Desired agent status list
         :timeout: Waiting timeout in seconds
         """
         if status is None:
             wl_status = {"active"}
         else:
             wl_status = set(status)
-        model_impl = await self.get_model(model)
         if queue is not None and queue.maxsize < len(apps):
             raise ValueError("Queue size should be at least the number of applications")
+        model_impl = await self.get_model(model)
+
+        LOG.debug("Waiting for apps %r to be %r", apps, wl_status)
+
         tasks = []
         for app in apps:
+            unit_list = (
+                None if units is None else [unit for unit in units if app in unit]
+            )
+            if unit_list:
+                LOG.debug(
+                    "Waiting for units %r of app %r to be %r", unit_list, app, wl_status
+                )
             tasks.append(
                 asyncio.create_task(
                     self._wait_until_status_coroutine(
-                        model_impl, app, queue, wl_status
+                        model_impl, app, unit_list, queue, wl_status, agent_status
                     ),
                     name=app,
                 )

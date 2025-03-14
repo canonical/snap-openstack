@@ -301,14 +301,14 @@ class TestAddMachineUnitsStep:
         assert result.message == "Application missing..."
 
     def test_run_timeout(self, cclient, jhelper, read_config):
-        jhelper.wait_units_ready.side_effect = TimeoutException("timed out")
+        jhelper.wait_until_desired_status.side_effect = TimeoutException("timed out")
 
         step = AddMachineUnitsStep(
             cclient, "machine1", jhelper, "tfconfig", "app1", "model1"
         )
         result = step.run()
 
-        jhelper.wait_units_ready.assert_called_once()
+        jhelper.wait_until_desired_status.assert_called_once()
         assert result.result_type == ResultType.FAILED
         assert result.message == "timed out"
 

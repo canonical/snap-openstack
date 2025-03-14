@@ -14,6 +14,7 @@
 # limitations under the License.
 
 import abc
+import asyncio
 import logging
 
 from juju import application
@@ -30,11 +31,19 @@ from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import (
     ConfigItemNotFoundException,
 )
-from sunbeam.core.common import BaseStep, Result, ResultType, read_config, update_config
+from sunbeam.core.common import (
+    BaseStep,
+    Result,
+    ResultType,
+    read_config,
+    update_config,
+    update_status_background,
+)
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import (
     ApplicationNotFoundException,
     JujuHelper,
+    JujuWaitException,
     TimeoutException,
     run_sync,
 )
@@ -254,18 +263,32 @@ class AddMachineUnitsStep(BaseStep):
                 )
             )
             self.add_machine_id_to_tfvar()
-            run_sync(
-                self.jhelper.wait_units_ready(
-                    units,
-                    self.model,
-                    accepted_status=self.get_accepted_unit_status(),
-                    timeout=self.get_unit_timeout(),
-                )
-            )
-        except (ApplicationNotFoundException, TimeoutException) as e:
+        except ApplicationNotFoundException as e:
             LOG.warning(str(e))
             return Result(ResultType.FAILED, str(e))
 
+        apps = [self.application]
+        queue: asyncio.queues.Queue[str] = asyncio.queues.Queue(maxsize=len(apps))
+        task = run_sync(update_status_background(self, apps, queue, status))
+        accepted_status = self.get_accepted_unit_status()
+        try:
+            run_sync(
+                self.jhelper.wait_until_desired_status(
+                    self.model,
+                    apps,
+                    units=[unit.name for unit in units],
+                    status=accepted_status["workload"],
+                    agent_status=accepted_status["agent"],
+                    timeout=self.get_unit_timeout(),
+                    queue=queue,
+                )
+            )
+        except (JujuWaitException, TimeoutException) as e:
+            LOG.warning(str(e))
+            return Result(ResultType.FAILED, str(e))
+        finally:
+            if not task.done():
+                task.cancel()
         return Result(ResultType.COMPLETED)
 
 

@@ -498,7 +498,7 @@ class UpgradeOpenStackApplicationStep(BaseStep, JujuStepHelper):
                 self.jhelper.wait_until_desired_status(
                     self.model,
                     apps,
-                    expected_wls,
+                    status=expected_wls,
                     timeout=timeout,
                     queue=queue,
                 )
