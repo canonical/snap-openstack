@@ -962,7 +962,7 @@ class TestMaasDeployMachinesStep:
             {"name": "test_node3"},
             {"name": "test_node4"},
         ]
-        maas_deploy_machines_step.jhelper.get_model.return_value = Mock(
+        maas_deploy_machines_step.jhelper.get_model.return_value = AsyncMock(
             machines={
                 "1": Mock(hostname="test_node3", id=1),
                 "2": Mock(hostname="test_node4", id=2),
@@ -1049,6 +1049,8 @@ class TestMaasConfigureMicrocephOSDStep:
         jhelper = Mock()
         jhelper.get_leader_unit = AsyncMock(return_value="leader_unit")
         jhelper.get_unit_from_machine = AsyncMock(return_value="unit/1")
+        jhelper.get_model = AsyncMock()
+        jhelper.get_model_closing = AsyncMock()
         return jhelper
 
     @pytest.fixture
@@ -1124,12 +1126,16 @@ class TestMaasConfigureMicrocephOSDStep:
             "machine1": Mock(hostname="test_node1"),
             "machine2": Mock(hostname="test_node2"),
         }
-        step.jhelper.get_model.return_value = Mock(
+
+        ctxt_mgr = AsyncMock()
+        ctxt_mgr.__aenter__.return_value = Mock(
             machines={
                 "1": Mock(hostname="test_node1", id=1),
                 "2": Mock(hostname="test_node2", id=2),
             }
         )
+        ctxt_mgr.__aexit__.return_value = None
+        step.jhelper.get_model_closing = Mock(return_value=ctxt_mgr)
 
         # Call the method under test
         result = await step._get_microceph_disks()

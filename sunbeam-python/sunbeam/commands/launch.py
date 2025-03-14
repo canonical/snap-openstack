@@ -24,7 +24,7 @@ from snaphelpers import Snap
 
 from sunbeam.commands.configure import retrieve_admin_credentials
 from sunbeam.core.deployment import Deployment
-from sunbeam.core.juju import JujuHelper, ModelNotFoundException, run_sync
+from sunbeam.core.juju import JujuHelper, run_sync
 from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.core.terraform import TerraformException
 
@@ -61,9 +61,7 @@ def launch(
     deployment: Deployment = ctx.obj
     jhelper = JujuHelper(deployment.get_connected_controller())
     with console.status("Fetching user credentials ... "):
-        try:
-            run_sync(jhelper.get_model(OPENSTACK_MODEL))
-        except ModelNotFoundException:
+        if not run_sync(jhelper.model_exists(OPENSTACK_MODEL)):
             LOG.error(f"Expected model {OPENSTACK_MODEL} missing")
             raise click.ClickException("Please run `sunbeam cluster bootstrap` first")
 

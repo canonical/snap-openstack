@@ -317,13 +317,15 @@ class VaultUnsealStep(BaseStep):
         """
         unseal_status = {}
 
+        model = None
         try:
+            model = run_sync(self.jhelper.get_model(OPENSTACK_MODEL))
             # Run vault unseal on leader unit
             leader_unit = run_sync(
                 self.jhelper.get_leader_unit(VAULT_APPLICATION_NAME, OPENSTACK_MODEL)
             )
             application = run_sync(
-                self.jhelper.get_application(VAULT_APPLICATION_NAME, OPENSTACK_MODEL)
+                self.jhelper.get_application(VAULT_APPLICATION_NAME, model)
             )
             non_leader_units = [
                 unit.name for unit in application.units if unit.name != leader_unit
@@ -385,6 +387,9 @@ class VaultUnsealStep(BaseStep):
         except VaultCommandFailedException as e:
             LOG.debug("Failed to run vault unseal", exc_info=True)
             return Result(ResultType.FAILED, str(e))
+        finally:
+            if model:
+                run_sync(model.disconnect())
 
 
 class AuthorizeVaultCharmStep(BaseStep, JujuStepHelper):
@@ -485,10 +490,11 @@ class VaultStatusStep(BaseStep):
         :return: ResultType.COMPLETED or ResultType.FAILED
         """
         consolidated_status = {}
-
+        model = None
         try:
+            model = run_sync(self.jhelper.get_model(OPENSTACK_MODEL))
             application = run_sync(
-                self.jhelper.get_application(VAULT_APPLICATION_NAME, OPENSTACK_MODEL)
+                self.jhelper.get_application(VAULT_APPLICATION_NAME, model)
             )
             for unit in application.units:
                 vault_status = self.vhelper.get_vault_status(unit.name)
@@ -504,6 +510,9 @@ class VaultStatusStep(BaseStep):
         except JujuException as e:
             LOG.debug("Failed to run vault unseal", exc_info=True)
             return Result(ResultType.FAILED, str(e))
+        finally:
+            if model:
+                run_sync(model.disconnect())
 
 
 class VaultFeature(OpenStackControlPlaneFeature):

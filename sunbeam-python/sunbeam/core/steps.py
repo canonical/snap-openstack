@@ -17,7 +17,7 @@ import abc
 import asyncio
 import logging
 
-from juju import application
+from juju import application, model
 from juju import errors as juju_errors
 from lightkube.config.kubeconfig import KubeConfig
 from lightkube.core import exceptions
@@ -44,6 +44,7 @@ from sunbeam.core.juju import (
     ApplicationNotFoundException,
     JujuHelper,
     JujuWaitException,
+    ModelNotFoundException,
     TimeoutException,
     run_sync,
 )
@@ -101,9 +102,15 @@ class DeployMachineApplicationStep(BaseStep):
             return Result(ResultType.COMPLETED)
 
         try:
-            run_sync(self.jhelper.get_application(self.application, self.model))
+            model = run_sync(self.jhelper.get_model(self.model))
+        except ModelNotFoundException:
+            return Result(ResultType.FAILED, f"Model {self.model} not found")
+        try:
+            run_sync(self.jhelper.get_application(self.application, model))
         except ApplicationNotFoundException:
             return Result(ResultType.COMPLETED)
+        finally:
+            run_sync(model.disconnect())
 
         return Result(ResultType.SKIPPED)
 
@@ -114,11 +121,15 @@ class DeployMachineApplicationStep(BaseStep):
     def run(self, status: Status | None = None) -> Result:
         """Apply terraform configuration to deploy sunbeam machine."""
         machine_ids: list[int] = []
+        model = run_sync(self.jhelper.get_model(self.model))
+
         try:
-            app = run_sync(self.jhelper.get_application(self.application, self.model))
+            app = run_sync(self.jhelper.get_application(self.application, model))
             machine_ids.extend(unit.machine.id for unit in app.units)
         except ApplicationNotFoundException as e:
             LOG.debug(str(e))
+        finally:
+            run_sync(model.disconnect())
 
         try:
             extra_tfvars = self.extra_tfvars()
@@ -218,15 +229,18 @@ class AddMachineUnitsStep(BaseStep):
                 f"Nodes '{','.join(nodes_without_machine_id)}' do not have machine id,"
                 " are they deployed?",
             )
+        model = run_sync(self.jhelper.get_model(self.model))
         try:
-            app = run_sync(self.jhelper.get_application(self.application, self.model))
+            app = run_sync(self.jhelper.get_application(self.application, model))
+            deployed_units_machine_ids = {unit.machine.id for unit in app.units}
         except ApplicationNotFoundException:
             return Result(
                 ResultType.FAILED,
                 f"Application {self.application} has not been deployed",
             )
+        finally:
+            run_sync(model.disconnect())
 
-        deployed_units_machine_ids = {unit.machine.id for unit in app.units}
         self.to_deploy -= deployed_units_machine_ids
         if len(self.to_deploy) == 0:
             return Result(ResultType.SKIPPED, "No new units to deploy")
@@ -257,12 +271,14 @@ class AddMachineUnitsStep(BaseStep):
     def run(self, status: Status | None = None) -> Result:
         """Add unit to machine application on Juju model."""
         try:
-            units = run_sync(
-                self.jhelper.add_unit(
-                    self.application, self.model, sorted(self.to_deploy)
-                )
+            model = run_sync(self.jhelper.get_model(self.model))
+            application = run_sync(
+                self.jhelper.get_application(self.application, model)
             )
+            units = run_sync(self.jhelper.add_unit(application, sorted(self.to_deploy)))
             self.add_machine_id_to_tfvar()
+            run_sync(model.disconnect())
+            unit_names = [unit.name for unit in units]
         except ApplicationNotFoundException as e:
             LOG.warning(str(e))
             return Result(ResultType.FAILED, str(e))
@@ -276,7 +292,7 @@ class AddMachineUnitsStep(BaseStep):
                 self.jhelper.wait_until_desired_status(
                     self.model,
                     apps,
-                    units=[unit.name for unit in units],
+                    units=unit_names,
                     status=accepted_status["workload"],
                     agent_status=accepted_status["agent"],
                     timeout=self.get_unit_timeout(),
@@ -343,10 +359,12 @@ class RemoveMachineUnitsStep(BaseStep):
                 f"Nodes '{','.join(missing_nodes)}' do not exist in cluster database"
             )
 
+        model = run_sync(self.jhelper.get_model(self.model))
         try:
-            app = run_sync(self.jhelper.get_application(self.application, self.model))
+            app = run_sync(self.jhelper.get_application(self.application, model))
         except ApplicationNotFoundException:
             LOG.debug("Failed to get application", exc_info=True)
+            run_sync(model.disconnect())
             return Result(
                 ResultType.SKIPPED,
                 f"Application {self.application} has not been deployed yet",
@@ -358,6 +376,7 @@ class RemoveMachineUnitsStep(BaseStep):
             if unit.machine.id in to_remove_node_ids:
                 LOG.debug(f"Unit {unit.name} is deployed on machine: {self.machine_id}")
                 self.units_to_remove.add(unit.name)
+        run_sync(model.disconnect())
 
         if len(self.units_to_remove) == 0:
             return Result(ResultType.SKIPPED)
@@ -421,12 +440,14 @@ class DestroyMachineApplicationStep(BaseStep):
         """Application timeout in seconds."""
         return 600
 
-    async def _list_applications(self) -> list[application.Application]:
+    async def _list_applications(
+        self, model: model.Model
+    ) -> list[application.Application]:
         """List applications managed by this step."""
         apps = []
         for app in self.applications:
             try:
-                apps.append(await self.jhelper.get_application(app, self.model))
+                apps.append(await self.jhelper.get_application(app, model))
                 LOG.debug("Found application %s", app)
             except ApplicationNotFoundException:
                 continue
@@ -452,7 +473,9 @@ class DestroyMachineApplicationStep(BaseStep):
         except TerraformException:
             LOG.debug("Failed to pull state", exc_info=True)
 
-        _has_juju_resources = len(run_sync(self._list_applications())) > 0
+        model = run_sync(self.jhelper.get_model(self.model))
+        _has_juju_resources = len(run_sync(self._list_applications(model))) > 0
+        run_sync(model.disconnect())
 
         if not self._has_tf_resources and not _has_juju_resources:
             return Result(ResultType.SKIPPED)
@@ -483,14 +506,15 @@ class DestroyMachineApplicationStep(BaseStep):
             )
         except TimeoutException:
             LOG.warning("Failed to destroy applications, trying through provider sdk")
-            apps = run_sync(self._list_applications())
+            model = run_sync(self.jhelper.get_model(self.model))
+            apps = run_sync(self._list_applications(model))
             for app in apps:
                 try:
                     run_sync(app.destroy(destroy_storage=True, force=True))
                 except juju_errors.JujuError:
                     LOG.debug("Failed to destroy application", exc_info=True)
                     continue
-
+            run_sync(model.disconnect())
             try:
                 self._wait_applications_gone(
                     int(self.get_application_timeout() * (1 - timeout_factor))

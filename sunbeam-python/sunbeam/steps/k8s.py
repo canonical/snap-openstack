@@ -526,19 +526,21 @@ class StoreK8SKubeConfigStep(BaseStep, JujuStepHelper):
 
         return Result(ResultType.COMPLETED)
 
-    def _get_management_server_ip(self, machine_id):
+    def _get_management_server_ip(self, machine_id: str) -> str | None:
         """API server endpoint for the Kubernetes cluster."""
-        machines = run_sync(self.jhelper.get_machines(self.model))
-        machine_data = machines.get(machine_id).addresses
+        model = run_sync(self.jhelper.get_model(self.model))
+        machines = run_sync(self.jhelper.get_machines(model))
+        machine_data = machines[machine_id].addresses
         space_name = self.deployment.get_space(Networks.MANAGEMENT)
         management_ip = next(
             (
-                entry["value"]
+                entry["value"]  # type: ignore
                 for entry in machine_data
-                if entry.get("space-name") == space_name
+                if entry.get("space-name") == space_name  # type: ignore
             ),
             None,
         )
+        run_sync(model.disconnect())
 
         return f"{management_ip}:6443" if management_ip else None
 
@@ -570,10 +572,12 @@ class _CommonK8SStepMixin:
         if Role.CONTROL.name.lower() not in node_info.get("role", ""):
             LOG.debug("Node %s is not a control node", self.node)
             return Result(ResultType.SKIPPED)
+        model = run_sync(self.jhelper.get_model(self.model))
         try:
-            app = run_sync(self.jhelper.get_application(self._SUBSTRATE, self.model))
+            app = run_sync(self.jhelper.get_application(self._SUBSTRATE, model))
         except ApplicationNotFoundException:
             LOG.debug("Failed to get application", exc_info=True)
+            run_sync(model.disconnect())
             return Result(
                 ResultType.SKIPPED,
                 f"Application {self._SUBSTRATE} has not been deployed yet",
@@ -586,8 +590,10 @@ class _CommonK8SStepMixin:
                 break
         else:
             LOG.debug("No %s units found on %s", self._SUBSTRATE, self.node)
+            run_sync(model.disconnect())
             return Result(ResultType.SKIPPED)
 
+        run_sync(model.disconnect())
         try:
             kubeconfig = read_config(self.client, K8SHelper.get_kubeconfig_key())
         except ConfigItemNotFoundException:
@@ -689,10 +695,12 @@ class MigrateK8SKubeconfigStep(BaseStep, _CommonK8SStepMixin):
 
     def run(self, status: Status | None = None) -> Result:
         """Migrate kubeconfig to another node."""
+        model = run_sync(self.jhelper.get_model(self.model))
         try:
-            app = run_sync(self.jhelper.get_application(self._SUBSTRATE, self.model))
+            app = run_sync(self.jhelper.get_application(self._SUBSTRATE, model))
         except ApplicationNotFoundException:
             LOG.debug("Failed to get application", exc_info=True)
+            run_sync(model.disconnect())
             return Result(
                 ResultType.SKIPPED,
                 f"Application {self._SUBSTRATE} has not been deployed yet",
@@ -702,6 +710,7 @@ class MigrateK8SKubeconfigStep(BaseStep, _CommonK8SStepMixin):
             if unit.name != self.unit.name:
                 other_k8s = unit.name
                 break
+        run_sync(model.disconnect())
         if other_k8s is None:
             return Result(
                 ResultType.FAILED,
@@ -767,6 +776,8 @@ class CheckApplicationK8SDistributionStep(BaseStep, _CommonK8SStepMixin):
                 continue
             if app.charm_name == self._CHARM:
                 app_names.append(name)
+
+        run_sync(model.disconnect())
 
         return app_names
 

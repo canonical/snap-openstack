@@ -719,12 +719,11 @@ class WaitForApplicationsStep(BaseStep):
         LOG.debug(f"Application monitored for readiness: {self.apps}")
         units = []
         accepted_unit_status = {"agent": ["idle"], "workload": ["active"]}
+        model = run_sync(self.jhelper.get_model(self.model))
         try:
             for app in self.apps:
                 try:
-                    application = run_sync(
-                        self.jhelper.get_application(app, self.model)
-                    )
+                    application = run_sync(self.jhelper.get_application(app, model))
                     units.extend(application.units)
                 except ApplicationNotFoundException:
                     # Ignore if the application is not found
@@ -741,5 +740,7 @@ class WaitForApplicationsStep(BaseStep):
         except (JujuWaitException, TimeoutException) as e:
             LOG.debug(str(e))
             return Result(ResultType.FAILED, str(e))
+        finally:
+            run_sync(model.disconnect())
 
         return Result(ResultType.COMPLETED)

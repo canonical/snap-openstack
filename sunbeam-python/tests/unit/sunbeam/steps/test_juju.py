@@ -67,7 +67,7 @@ class TestWriteJujuStatusStep:
         assert result.result_type == ResultType.COMPLETED
 
     def test_is_skip_when_model_not_present(self, jhelper):
-        jhelper.get_model.side_effect = ModelNotFoundException("not found")
+        jhelper.model_exists.return_value = False
         with tempfile.NamedTemporaryFile() as tmpfile:
             step = juju.WriteJujuStatusStep(jhelper, "openstack", tmpfile)
             result = step.is_skip()

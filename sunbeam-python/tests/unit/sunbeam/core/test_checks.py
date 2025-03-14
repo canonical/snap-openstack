@@ -329,7 +329,7 @@ class TestLxdGroupCheck:
         result = check.run()
 
         assert result is False
-        assert f"{user} not part of lxd group" in check.message
+        assert f"{user!r} not part of lxd group" in check.message
 
 
 class TestLxdControllerRegistrationCheck:
