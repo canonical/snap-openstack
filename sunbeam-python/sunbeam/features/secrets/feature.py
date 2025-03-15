@@ -90,10 +90,12 @@ class SecretsFeature(OpenStackControlPlaneFeature):
 
     def is_vault_application_active(self, jhelper: JujuHelper) -> bool:
         """Check if Vault application is active."""
-        application = run_sync(jhelper.get_application("vault", OPENSTACK_MODEL))
-        if application.status == "active":
+        model = run_sync(jhelper.get_model(OPENSTACK_MODEL))
+        application = run_sync(jhelper.get_application("vault", model))
+        status = application.status
+        run_sync(model.disconnect())
+        if status == "active":
             return True
-
         return False
 
     def pre_enable(

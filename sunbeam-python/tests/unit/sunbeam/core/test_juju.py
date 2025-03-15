@@ -157,6 +157,8 @@ def units() -> dict[str, Unit]:
 @pytest.fixture
 def model(applications, units) -> Model:
     model = AsyncMock()
+    model.__aenter__.return_value = model
+    model.name = "control-plane"
     model.units = units
     model.applications = applications
     model.all_units_idle = Mock()
@@ -269,24 +271,23 @@ async def test_jhelper_get_model_name_with_owner_model_missing(
 
 
 @pytest.mark.asyncio
-async def test_jhelper_get_unit(jhelper: juju.JujuHelper, units):
-    await jhelper.get_unit("k8s/0", "control-plane")
+async def test_jhelper_get_unit(jhelper: juju.JujuHelper, model, units):
+    await jhelper.get_unit("k8s/0", model)
     units.get.assert_called_with("k8s/0")
 
 
 @pytest.mark.asyncio
-async def test_jhelper_get_unit_missing(jhelper: juju.JujuHelper):
+async def test_jhelper_get_unit_missing(jhelper: juju.JujuHelper, model):
     name = "mysql/0"
-    model = "control-plane"
     with pytest.raises(
         juju.UnitNotFoundException,
-        match=f"Unit {name!r} is missing from model {model!r}",
+        match=f"Unit {name!r} is missing from model {model.name!r}",
     ):
         await jhelper.get_unit(name, model)
 
 
 @pytest.mark.asyncio
-async def test_jhelper_get_unit_invalid_name(jhelper: juju.JujuHelper):
+async def test_jhelper_get_unit_invalid_name(jhelper: juju.JujuHelper, model):
     with pytest.raises(
         ValueError,
         match=(
@@ -294,7 +295,7 @@ async def test_jhelper_get_unit_invalid_name(jhelper: juju.JujuHelper):
             "should be a valid unit of format application/id"
         ),
     ):
-        await jhelper.get_unit("k8s", "control-plane")
+        await jhelper.get_unit("k8s", model)
 
 
 @pytest.mark.asyncio
@@ -331,19 +332,18 @@ async def test_jhelper_get_leader_unit_missing(jhelper: juju.JujuHelper):
 
 @pytest.mark.asyncio
 async def test_jhelper_get_application(
-    jhelper: juju.JujuHelper, applications: dict[str, Application]
+    jhelper: juju.JujuHelper, model, applications: dict[str, Application]
 ):
-    app = await jhelper.get_application("k8s", "control-plane")
+    app = await jhelper.get_application("k8s", model)
     assert app is not None
     applications.get.assert_called_with("k8s")
 
 
 @pytest.mark.asyncio
-async def test_jhelper_get_application_missing(jhelper: juju.JujuHelper):
-    model = "control-plane"
+async def test_jhelper_get_application_missing(jhelper: juju.JujuHelper, model):
     with pytest.raises(
         juju.ApplicationNotFoundException,
-        match=f"Application missing from model: {model!r}",
+        match=f"Application missing from model: {model.name!r}",
     ):
         await jhelper.get_application("mysql", model)
 
@@ -352,7 +352,8 @@ async def test_jhelper_get_application_missing(jhelper: juju.JujuHelper):
 async def test_jhelper_add_unit(
     jhelper: juju.JujuHelper, applications: dict[str, Application]
 ):
-    await jhelper.add_unit("k8s", "control-plane")
+    app = applications["k8s"]
+    await jhelper.add_unit(app)
     applications["k8s"].add_unit.assert_called_with(1, None)
 
 
@@ -360,21 +361,9 @@ async def test_jhelper_add_unit(
 async def test_jhelper_add_unit_to_machine(
     jhelper: juju.JujuHelper, applications: dict[str, Application]
 ):
-    await jhelper.add_unit("k8s", "control-plane", machine="0")
+    app = applications["k8s"]
+    await jhelper.add_unit(app, machine="0")
     applications["k8s"].add_unit.assert_called_with(1, "0")
-
-
-@pytest.mark.asyncio
-async def test_jhelper_add_unit_to_missing_application(
-    jhelper: juju.JujuHelper,
-):
-    name = "mysql"
-    model = "control-plane"
-    with pytest.raises(
-        juju.ApplicationNotFoundException,
-        match=f"Application missing from model: {model!r}",
-    ):
-        await jhelper.add_unit(name, model)
 
 
 @pytest.mark.asyncio
@@ -645,3 +634,283 @@ class TestJujuStepHelper:
         assert not jsh.channel_update_needed("2023.2/stable", "2023.1/stable")
         assert not jsh.channel_update_needed("latest/stable", "latest/stable")
         assert not jsh.channel_update_needed("foo/stable", "ba/stable")
+
+
+@pytest.mark.asyncio
+async def test_wait_until_desired_status_for_apps(jhelper: juju.JujuHelper):
+    model = AsyncMock(spec=Model)
+    model.__aenter__.return_value = model
+    model.applications = {
+        "app1": None,
+        "app2": None,
+    }
+
+    _wait_until_status_coroutine = AsyncMock()
+
+    with (
+        patch.object(jhelper, "get_model", return_value=model),
+        patch.object(
+            jhelper, "_wait_until_status_coroutine", _wait_until_status_coroutine
+        ),
+    ):
+        await jhelper.wait_until_desired_status(
+            "control-plane", list(model.applications)
+        )
+
+        assert _wait_until_status_coroutine.call_count == 2
+        assert _wait_until_status_coroutine.call_args_list == [
+            ((model, "app1", None, None, {"active"}, None),),
+            ((model, "app2", None, None, {"active"}, None),),
+        ]
+        _wait_until_status_coroutine.reset_mock()
+
+
+@pytest.mark.asyncio
+async def test_wait_until_desired_status_for_apps_with_units(jhelper: juju.JujuHelper):
+    model = AsyncMock(spec=Model)
+    model.__aenter__.return_value = model
+    model.applications = {
+        "app1": None,
+        "app2": None,
+    }
+
+    _wait_until_status_coroutine = AsyncMock()
+    with (
+        patch.object(jhelper, "get_model", return_value=model),
+        patch.object(
+            jhelper, "_wait_until_status_coroutine", _wait_until_status_coroutine
+        ),
+    ):
+        await jhelper.wait_until_desired_status(
+            "control-plane", ["app1"], units=["app1/2"], status=["blocked"]
+        )
+        assert _wait_until_status_coroutine.call_count == 1
+        assert _wait_until_status_coroutine.call_args_list == [
+            ((model, "app1", ["app1/2"], None, {"blocked"}, None),),
+        ]
+
+
+@pytest.mark.asyncio
+async def test_wait_until_desired_status_invalid_queue(jhelper: juju.JujuHelper):
+    queue: asyncio.Queue[str] = asyncio.Queue(1)
+
+    with (
+        patch.object(jhelper, "get_model", return_value=model),
+    ):
+        with pytest.raises(ValueError):
+            await jhelper.wait_until_desired_status(
+                "control-plane", ["app1", "app2"], queue=queue
+            )
+
+
+@pytest.mark.asyncio
+async def test_wait_until_desired_status_timeout(jhelper: juju.JujuHelper):
+    """Check wait_until_desired_status_for_apps behavior with nullable arguments."""
+    model = AsyncMock(spec=Model)
+    model.__aenter__.return_value = model
+    model.applications = {
+        "app1": None,
+    }
+
+    _wait_until_status_coroutine = AsyncMock()
+
+    with (
+        patch("asyncio.gather", AsyncMock(side_effect=asyncio.TimeoutError)),
+        patch.object(jhelper, "get_model", return_value=model),
+        patch.object(
+            jhelper, "_wait_until_status_coroutine", _wait_until_status_coroutine
+        ),
+    ):
+        with pytest.raises(juju.TimeoutException):
+            await jhelper.wait_until_desired_status(
+                "control-plane", list(model.applications)
+            )
+
+        assert _wait_until_status_coroutine.call_count == 1
+        assert _wait_until_status_coroutine.call_args_list == [
+            ((model, "app1", None, None, {"active"}, None),),
+        ]
+
+
+@pytest.mark.asyncio
+async def test_wait_until_desired_status_task_exception(jhelper: juju.JujuHelper):
+    model = AsyncMock(spec=Model)
+    model.__aenter__.return_value = model
+    model.applications = {
+        "app1": None,
+    }
+
+    _wait_until_status_coroutine = AsyncMock(side_effect=ValueError)
+
+    with (
+        patch.object(jhelper, "get_model", return_value=model),
+        patch.object(
+            jhelper, "_wait_until_status_coroutine", _wait_until_status_coroutine
+        ),
+    ):
+        with pytest.raises(juju.JujuWaitException):
+            await jhelper.wait_until_desired_status(
+                "control-plane", list(model.applications)
+            )
+
+        assert _wait_until_status_coroutine.call_count == 1
+        assert _wait_until_status_coroutine.call_args_list == [
+            ((model, "app1", None, None, {"active"}, None),),
+        ]
+
+
+@pytest.mark.asyncio
+async def test_wait_until_status_coroutine():
+    model = AsyncMock(spec=Model)
+
+    model.get_status.return_value = AsyncMock(
+        applications={
+            "app1": Mock(
+                int_=1,
+                subordinate_to=None,
+                units={
+                    "app1/0": Mock(
+                        workload_status=Mock(status="active"),
+                        agent_status=Mock(status="idle"),
+                    )
+                },
+            )
+        }
+    )
+    queue = asyncio.Queue(1)
+    await juju.JujuHelper._wait_until_status_coroutine(
+        model, "app1", None, queue, {"active"}, None
+    )
+    assert model.get_status.call_count == 1
+    assert "app1" == queue.get_nowait()
+
+
+@pytest.mark.asyncio
+async def test_wait_until_status_coroutine_unit_list():
+    model = AsyncMock(spec=Model)
+    model.get_status.return_value = AsyncMock(
+        applications={
+            "app1": Mock(
+                int_=1,
+                subordinate_to=None,
+                units={
+                    "app1/0": Mock(
+                        workload_status=Mock(status="blocked"),
+                        agent_status=Mock(status="executing"),
+                    ),
+                    "app1/1": Mock(
+                        workload_status=Mock(status="active"),
+                        agent_status=Mock(status="idle"),
+                    ),
+                },
+            )
+        }
+    )
+    await juju.JujuHelper._wait_until_status_coroutine(
+        model, "app1", ["app1/1"], None, None, None
+    )
+    assert model.get_status.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_wait_until_status_coroutine_cancelled():
+    model = AsyncMock(spec=Model)
+
+    model.get_status.return_value = AsyncMock(
+        applications={
+            "app1": Mock(
+                int_=1,
+                subordinate_to=None,
+                units={
+                    "app1/0": Mock(
+                        workload_status=Mock(status="blocked"),
+                        agent_status=Mock(status="idle"),
+                    )
+                },
+            )
+        }
+    )
+    task = asyncio.create_task(
+        juju.JujuHelper._wait_until_status_coroutine(
+            model, "app1", None, None, {"active"}, None
+        )
+    )
+    await asyncio.sleep(0.1)
+    # cancelling the task should not raise an exception
+    task.cancel()
+
+
+@pytest.mark.asyncio
+async def test_wait_until_status_coroutine_expected_workload_status():
+    model = AsyncMock(spec=Model)
+
+    model.get_status.return_value = AsyncMock(
+        applications={
+            "app1": Mock(
+                int_=1,
+                subordinate_to=None,
+                units={
+                    "app1/0": Mock(
+                        workload_status=Mock(status="blocked"),
+                        agent_status=Mock(status="idle"),
+                    )
+                },
+            )
+        }
+    )
+    await juju.JujuHelper._wait_until_status_coroutine(
+        model, "app1", None, None, {"blocked"}, None
+    )
+    assert model.get_status.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_wait_until_status_coroutine_expected_agent_status():
+    model = AsyncMock(spec=Model)
+
+    model.get_status.return_value = AsyncMock(
+        applications={
+            "app1": Mock(
+                int_=1,
+                subordinate_to=None,
+                units={
+                    "app1/0": Mock(
+                        workload_status=Mock(status="active"),
+                        agent_status=Mock(status="executing"),
+                    )
+                },
+            )
+        }
+    )
+    await juju.JujuHelper._wait_until_status_coroutine(
+        model, "app1", None, None, None, {"executing"}
+    )
+    assert model.get_status.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_wait_until_status_coroutine_missing_app():
+    model = AsyncMock(spec=Model)
+
+    model.get_status.return_value = AsyncMock(applications={})
+    with pytest.raises(ValueError):
+        await juju.JujuHelper._wait_until_status_coroutine(model, "app1")
+    assert model.get_status.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_wait_until_status_coroutine_subordinate():
+    model = AsyncMock(spec=Model)
+
+    model.get_status.return_value = AsyncMock(
+        applications={
+            "app1": Mock(
+                int_=None,
+                subordinate_to="app0",
+                status=Mock(status="active"),
+                units={"app1/0": Mock()},
+            )
+        }
+    )
+    await juju.JujuHelper._wait_until_status_coroutine(model, "app1")
+    assert model.get_status.call_count == 1

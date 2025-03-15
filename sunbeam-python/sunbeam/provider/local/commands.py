@@ -78,7 +78,6 @@ from sunbeam.core.deployments import DeploymentsConfig, deployment_path
 from sunbeam.core.juju import (
     JujuHelper,
     JujuStepHelper,
-    ModelNotFoundException,
     run_sync,
 )
 from sunbeam.core.k8s import K8S_CLOUD_SUFFIX
@@ -1356,9 +1355,7 @@ def configure_cmd(
 
     name = utils.get_fqdn(deployment.get_management_cidr())
     jhelper = JujuHelper(deployment.get_connected_controller())
-    try:
-        run_sync(jhelper.get_model(OPENSTACK_MODEL))
-    except ModelNotFoundException:
+    if not run_sync(jhelper.model_exists(OPENSTACK_MODEL)):
         LOG.error(f"Expected model {OPENSTACK_MODEL} missing")
         raise click.ClickException("Please run `sunbeam cluster bootstrap` first")
     admin_credentials = retrieve_admin_credentials(jhelper, OPENSTACK_MODEL)

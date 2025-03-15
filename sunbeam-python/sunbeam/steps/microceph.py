@@ -293,14 +293,14 @@ class ConfigureMicrocephOSDStep(BaseStep):
         try:
             node = self.client.cluster.get_node_info(self.node_name)
             self.machine_id = str(node.get("machineid"))
+            model = run_sync(self.jhelper.get_model(self.model))
             unit = run_sync(
-                self.jhelper.get_unit_from_machine(
-                    APPLICATION, self.machine_id, self.model
-                )
+                self.jhelper.get_unit_from_machine(APPLICATION, self.machine_id, model)
             )
             osd_disks_dict, unpartitioned_disks_dict = run_sync(
                 list_disks(self.jhelper, self.model, unit.entity_id)
             )
+            run_sync(model.disconnect())
             self.unpartitioned_disks = [
                 disk.get("path") for disk in unpartitioned_disks_dict
             ]
@@ -395,10 +395,9 @@ class ConfigureMicrocephOSDStep(BaseStep):
         """Configure local disks on microceph."""
         failed = False
         try:
+            model = run_sync(self.jhelper.get_model(self.model))
             unit = run_sync(
-                self.jhelper.get_unit_from_machine(
-                    APPLICATION, self.machine_id, self.model
-                )
+                self.jhelper.get_unit_from_machine(APPLICATION, self.machine_id, model)
             )
             LOG.debug(f"Running action add-osd on {unit.entity_id}")
             action_result = run_sync(
@@ -411,6 +410,7 @@ class ConfigureMicrocephOSDStep(BaseStep):
                     },
                 )
             )
+            run_sync(model.disconnect())
             LOG.debug(f"Result after running action add-osd: {action_result}")
         except UnitNotFoundException as e:
             message = f"Microceph Adding disks {self.disks} failed: {str(e)}"
@@ -538,10 +538,12 @@ class CheckMicrocephDistributionStep(BaseStep):
         if Role.STORAGE.name.lower() not in node_info.get("role", ""):
             LOG.debug("Node %s is not a storage node", self.node)
             return Result(ResultType.SKIPPED)
+        model = run_sync(self.jhelper.get_model(self.model))
         try:
-            app = run_sync(self.jhelper.get_application(self._APPLICATION, self.model))
+            app = run_sync(self.jhelper.get_application(self._APPLICATION, model))
         except ApplicationNotFoundException:
             LOG.debug("Failed to get application", exc_info=True)
+            run_sync(model.disconnect())
             return Result(
                 ResultType.SKIPPED,
                 f"Application {self._APPLICATION} has not been deployed yet",
@@ -552,9 +554,11 @@ class CheckMicrocephDistributionStep(BaseStep):
                 LOG.debug("Unit %s is running on node %s", unit.name, self.node)
                 break
         else:
+            run_sync(model.disconnect())
             LOG.debug("No %s units found on %s", self._APPLICATION, self.node)
             return Result(ResultType.SKIPPED)
 
+        run_sync(model.disconnect())
         nb_storage_nodes = len(self.client.cluster.list_nodes_by_role("storage"))
         if nb_storage_nodes == 1 and not self.force:
             return Result(

@@ -43,6 +43,7 @@ from sunbeam.core.juju import (
     JujuHelper,
     JujuStepHelper,
     JujuWaitException,
+    ModelNotFoundException,
     TimeoutException,
     run_sync,
 )
@@ -602,16 +603,24 @@ class DeploySunbeamClusterdApplicationStep(BaseStep):
     def is_skip(self, status: Status | None = None) -> Result:
         """Check wheter or not to deploy sunbeam-clusterd."""
         try:
-            run_sync(self.jhelper.get_application(self.app, self.model))
+            model = run_sync(self.jhelper.get_model(self.model))
+        except ModelNotFoundException:
+            return Result(ResultType.FAILED, f"Model {self.model} not found")
+        try:
+            run_sync(self.jhelper.get_application(self.app, model))
         except ApplicationNotFoundException:
             return Result(ResultType.COMPLETED)
+        finally:
+            run_sync(model.disconnect())
         return Result(ResultType.SKIPPED)
 
     def run(self, status: Status | None = None) -> Result:
         """Deploy sunbeam clusterd to infra machines."""
         self.update_status(status, "fetching infra machines")
-        infra_machines = run_sync(self.jhelper.get_machines(self.model))
+        model = run_sync(self.jhelper.get_model(self.model))
+        infra_machines = run_sync(self.jhelper.get_machines(model))
         machines = list(infra_machines.keys())
+        run_sync(model.disconnect())
 
         self.update_status(status, "computing number of units for sunbeam-clusterd")
         num_machines = len(machines)

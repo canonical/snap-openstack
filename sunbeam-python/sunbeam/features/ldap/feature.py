@@ -121,9 +121,9 @@ class DisableLDAPDomainStep(BaseStep, JujuStepHelper):
                 )
             )
             run_sync(
-                self.jhelper.wait_all_units_ready(
-                    "keystone",
+                self.jhelper.wait_until_desired_status(
                     self.model,
+                    ["keystone"],
                     timeout=APPLICATION_REMOVE_TIMEOUT,
                 )
             )

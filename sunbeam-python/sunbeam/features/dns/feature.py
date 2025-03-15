@@ -223,11 +223,11 @@ class DnsFeature(OpenStackControlPlaneFeature):
         model = OPENSTACK_MODEL
         application = "bind"
         jhelper = JujuHelper(deployment.get_connected_controller())
-        model_impl = await jhelper.get_model(model)
-        status = await model_impl.get_status([application])
-        if application not in status["applications"]:
-            return None
-        return status["applications"][application].public_address
+        async with jhelper.controller, await jhelper.get_model(model) as model_impl:
+            status = await model_impl.get_status([application])
+            if application not in status["applications"]:
+                return None
+            return status["applications"][application].public_address
 
     @click.command()
     @pass_method_obj

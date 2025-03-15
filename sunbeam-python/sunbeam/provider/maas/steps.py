@@ -1428,7 +1428,8 @@ class MaasDeployMachinesStep(BaseStep):
         if len(clusterd_nodes) == 0:
             return Result(ResultType.FAILED, "No machines found in clusterd.")
 
-        juju_machines = run_sync(self.jhelper.get_machines(self.model))
+        model = run_sync(self.jhelper.get_model(self.model))
+        juju_machines = run_sync(self.jhelper.get_machines(model))
 
         nodes_to_deploy = clusterd_nodes.copy()
         nodes_to_update = []
@@ -1466,6 +1467,8 @@ class MaasDeployMachinesStep(BaseStep):
                     nodes_to_deploy.remove(node)
                     break
 
+        run_sync(model.disconnect())
+
         self.nodes_to_deploy = sorted(nodes_to_deploy, key=lambda x: x["name"])
         self.nodes_to_update = nodes_to_update
 
@@ -1475,17 +1478,17 @@ class MaasDeployMachinesStep(BaseStep):
 
     def run(self, status: Status | None = None) -> Result:
         """Deploy machines in Juju."""
+        model = run_sync(self.jhelper.get_model(self.model))
         for node in self.nodes_to_deploy:
             self.update_status(status, f"deploying {node['name']}")
             LOG.debug(f"Adding machine {node['name']} to model {self.model}")
             juju_machine = run_sync(
-                self.jhelper.add_machine("system-id=" + node["systemid"], self.model)
+                self.jhelper.add_machine("system-id=" + node["systemid"], model)
             )
             self.client.cluster.update_node_info(
                 node["name"], machineid=int(juju_machine.id)
             )
         self.update_status(status, "waiting for machines to deploy")
-        model = run_sync(self.jhelper.get_model(self.model))
         for node in self.nodes_to_update:
             LOG.debug(f"Updating machine {node['name']} in model {self.model}")
             for juju_machine in model.machines.values():
@@ -1496,6 +1499,7 @@ class MaasDeployMachinesStep(BaseStep):
                         node["name"], machineid=int(juju_machine.id)
                     )
                     break
+        run_sync(model.disconnect())
         try:
             run_sync(self.jhelper.wait_all_machines_deployed(self.model))
         except TimeoutException:
@@ -1532,7 +1536,8 @@ class MaasDeployInfraMachinesStep(BaseStep):
             return Result(ResultType.FAILED, "Maas deployment has no infra machines.")
 
         self.machines_to_deploy = filtered_machines.copy()
-        juju_machines = run_sync(self.jhelper.get_machines(self.model))
+        model = run_sync(self.jhelper.get_model(self.model))
+        juju_machines = run_sync(self.jhelper.get_machines(model))
         LOG.debug(f"Machines already deployed: {juju_machines}")
 
         for filtered_machine in filtered_machines:
@@ -1540,20 +1545,24 @@ class MaasDeployInfraMachinesStep(BaseStep):
                 if filtered_machine["hostname"] == deployed_machine.hostname:
                     self.machines_to_deploy.remove(filtered_machine)
 
+        run_sync(model.disconnect())
+
         if not self.machines_to_deploy:
             return Result(ResultType.SKIPPED)
         return Result(ResultType.COMPLETED)
 
     def run(self, status: Status | None = None) -> Result:
         """Deploy machines in Juju."""
+        model = run_sync(self.jhelper.get_model(self.model))
         for machine in self.machines_to_deploy:
             self.update_status(status, f"deploying {machine['hostname']}")
             LOG.debug(f"Adding machine {machine['hostname']} to model {self.model}")
             run_sync(
                 self.jhelper.add_machine(
-                    "system-id=" + machine["system_id"], self.model, JUJU_BASE
+                    "system-id=" + machine["system_id"], model, JUJU_BASE
                 )
             )
+        run_sync(model.disconnect())
 
         try:
             run_sync(self.jhelper.wait_all_machines_deployed(self.model))
@@ -1626,22 +1635,22 @@ class MaasConfigureMicrocephOSDStep(BaseStep):
             disks.setdefault(location, copy.deepcopy(default_disk))["osds"].append(
                 osd["path"]
             )
-
-        for name in self.names:
-            machine_id = str(self.client.cluster.get_node_info(name)["machineid"])
-            unit = await self.jhelper.get_unit_from_machine(
-                microceph.APPLICATION, machine_id, self.model
-            )
-            if unit is None:
-                raise ValueError(
-                    f"{microceph.APPLICATION}'s unit not found on {name}."
-                    " Is microceph deployed on this machine?"
+        async with self.jhelper.get_model_closing(self.model) as model:
+            for name in self.names:
+                machine_id = str(self.client.cluster.get_node_info(name)["machineid"])
+                unit = await self.jhelper.get_unit_from_machine(
+                    microceph.APPLICATION, machine_id, model
                 )
-            _, unit_unpartitioned_disks = await self._list_disks(unit.entity_id)
-            disks.setdefault(name, copy.deepcopy(default_disk))[
-                "unpartitioned_disks"
-            ].extend(uud["path"] for uud in unit_unpartitioned_disks)
-            disks[name]["unit"] = unit.entity_id
+                if unit is None:
+                    raise ValueError(
+                        f"{microceph.APPLICATION}'s unit not found on {name}."
+                        " Is microceph deployed on this machine?"
+                    )
+                _, unit_unpartitioned_disks = await self._list_disks(unit.entity_id)
+                disks.setdefault(name, copy.deepcopy(default_disk))[
+                    "unpartitioned_disks"
+                ].extend(uud["path"] for uud in unit_unpartitioned_disks)
+                disks[name]["unit"] = unit.entity_id
 
         return disks
 

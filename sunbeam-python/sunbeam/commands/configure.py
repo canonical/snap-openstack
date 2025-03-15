@@ -613,8 +613,9 @@ class SetHypervisorUnitsOptionsStep(BaseStep):
                 continue
             node = self.client.cluster.get_node_info(name)
             self.machine_id = str(node.get("machineid"))
+            model = run_sync(self.jhelper.get_model(self.model))
             unit = run_sync(
-                self.jhelper.get_unit_from_machine(app, self.machine_id, self.model)
+                self.jhelper.get_unit_from_machine(app, self.machine_id, model)
             )
             action_result = run_sync(
                 self.jhelper.run_action(
@@ -626,6 +627,7 @@ class SetHypervisorUnitsOptionsStep(BaseStep):
                     },
                 )
             )
+            run_sync(model.disconnect())
             if action_result.get("return-code", 0) > 1:
                 _message = "Unable to set hypervisor {name!r} configuration"
                 return Result(ResultType.FAILED, _message)

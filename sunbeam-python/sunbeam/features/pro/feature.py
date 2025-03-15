@@ -107,6 +107,7 @@ class EnableUbuntuProApplicationStep(BaseStep, JujuStepHelper):
 
         # Note(gboutry): application is in state unknown when it's deployed
         # without units
+        model = run_sync(self.jhelper.get_model(self.model))
         try:
             run_sync(
                 self.jhelper.wait_application_ready(
@@ -118,12 +119,7 @@ class EnableUbuntuProApplicationStep(BaseStep, JujuStepHelper):
             )
 
             # Check status of pro application for any token issues
-            pro_app = run_sync(
-                self.jhelper.get_application(
-                    APPLICATION,
-                    self.model,
-                )
-            )
+            pro_app = run_sync(self.jhelper.get_application(APPLICATION, model))
             if pro_app.status == "blocked":
                 message = "unknown error"
                 for unit in pro_app.units:
@@ -134,6 +130,8 @@ class EnableUbuntuProApplicationStep(BaseStep, JujuStepHelper):
         except TimeoutException as e:
             LOG.warning(str(e))
             return Result(ResultType.FAILED, str(e))
+        finally:
+            run_sync(model.disconnect())
 
         return Result(ResultType.COMPLETED)
 

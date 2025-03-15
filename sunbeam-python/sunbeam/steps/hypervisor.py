@@ -245,12 +245,12 @@ class RemoveHypervisorUnitStep(BaseStep, JujuStepHelper):
             LOG.debug(f"Machine {self.name} does not exist, skipping.")
             return Result(ResultType.SKIPPED)
 
+        model = run_sync(self.jhelper.get_model(self.model))
         try:
-            application = run_sync(
-                self.jhelper.get_application(APPLICATION, self.model)
-            )
+            application = run_sync(self.jhelper.get_application(APPLICATION, model))
         except ApplicationNotFoundException as e:
             LOG.debug(str(e))
+            run_sync(model.disconnect())
             return Result(
                 ResultType.SKIPPED, "Hypervisor application has not been deployed yet"
             )
@@ -260,6 +260,7 @@ class RemoveHypervisorUnitStep(BaseStep, JujuStepHelper):
                 LOG.debug(f"Unit {unit.name} is deployed on machine: {self.machine_id}")
                 self.unit = unit.name
                 break
+        run_sync(model.disconnect())
         if not self.unit:
             LOG.debug(f"Unit is not deployed on machine: {self.machine_id}, skipping.")
             return Result(ResultType.SKIPPED)

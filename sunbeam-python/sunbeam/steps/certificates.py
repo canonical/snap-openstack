@@ -52,17 +52,22 @@ class DeployCertificatesProviderApplicationStep(BaseStep):
 
     def is_skip(self, status: Status | None = None) -> Result:
         """Check whether or not to deploy tls operator."""
+        model = run_sync(self.jhelper.get_model(self.model))
         try:
-            run_sync(self.jhelper.get_application(self.app, self.model))
+            run_sync(self.jhelper.get_application(self.app, model))
         except ApplicationNotFoundException:
             return Result(ResultType.COMPLETED)
+        finally:
+            run_sync(model.disconnect())
         return Result(ResultType.SKIPPED)
 
     def run(self, status: Status | None = None) -> Result:
         """Deploy sunbeam clusterd to infra machines."""
         self.update_status(status, "fetching infra machines")
-        clusterd_machines = run_sync(self.jhelper.get_machines(self.model))
+        model = run_sync(self.jhelper.get_model(self.model))
+        clusterd_machines = run_sync(self.jhelper.get_machines(model))
         machines = list(clusterd_machines.keys())
+        run_sync(model.disconnect())
 
         if len(machines) == 0:
             return Result(ResultType.FAILED, f"No machines found in {self.model} model")

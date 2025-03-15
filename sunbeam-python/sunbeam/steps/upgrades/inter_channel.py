@@ -143,7 +143,7 @@ class BaseUpgrade(BaseStep, JujuStepHelper):
                 self.jhelper.wait_until_desired_status(
                     model,
                     apps,
-                    expected_wls,
+                    status=expected_wls,
                     timeout=timeout,
                     queue=queue,
                 )

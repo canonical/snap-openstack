@@ -1293,12 +1293,10 @@ class WriteJujuStatusStep(BaseStep, JujuStepHelper):
         :return: ResultType.SKIPPED if the Step should be skipped,
                  ResultType.COMPLETED or ResultType.FAILED otherwise
         """
-        try:
-            run_sync(self.jhelper.get_model(self.model))
+        if run_sync(self.jhelper.model_exists(self.model)):
             return Result(ResultType.COMPLETED)
-        except ModelNotFoundException:
-            LOG.debug(f"Model {self.model} not found")
-            return Result(ResultType.SKIPPED)
+        LOG.debug(f"Model {self.model} not found")
+        return Result(ResultType.SKIPPED)
 
     def run(self, status: Status | None = None) -> Result:
         """Run the step to completion.
@@ -1348,6 +1346,7 @@ class WriteCharmLogStep(BaseStep, JujuStepHelper):
         try:
             model = run_sync(self.jhelper.get_model(self.model))
             self.model_uuid = model.info.uuid
+            run_sync(model.disconnect())
             return Result(ResultType.COMPLETED)
         except ModelNotFoundException:
             LOG.debug(f"Model {self.model} not found")
@@ -1484,18 +1483,16 @@ class AddJujuModelStep(BaseStep):
 
     def is_skip(self, status: Status | None = None) -> Result:
         """Determines if the step should be skipped or not."""
-        try:
-            run_sync(self.jhelper.get_model(self.model))
+        if run_sync(self.jhelper.model_exists(self.model)):
             return Result(ResultType.SKIPPED)
-        except ModelNotFoundException:
-            LOG.debug(f"Model {self.model} not found")
+        LOG.debug(f"Model {self.model} not found")
         return Result(ResultType.COMPLETED)
 
     def run(self, status: Status | None = None) -> Result:
         """Add model with configs."""
         try:
             model_config = convert_proxy_to_model_configs(self.proxy_settings)
-            run_sync(
+            model = run_sync(
                 self.jhelper.add_model(
                     self.model,
                     cloud=self.cloud,
@@ -1503,6 +1500,7 @@ class AddJujuModelStep(BaseStep):
                     config=model_config,
                 )
             )
+            run_sync(model.disconnect())
             return Result(ResultType.COMPLETED)
         except Exception as e:
             return Result(ResultType.FAILED, str(e))
@@ -1522,12 +1520,10 @@ class DestroyJujuModelStep(BaseStep):
 
     def is_skip(self, status: Status | None = None) -> Result:
         """Determines if the step should be skipped or not."""
-        try:
-            run_sync(self.jhelper.get_model(self.model))
-        except ModelNotFoundException:
-            LOG.debug(f"Model {self.model} not found")
-            return Result(ResultType.SKIPPED)
-        return Result(ResultType.COMPLETED)
+        if run_sync(self.jhelper.model_exists(self.model)):
+            return Result(ResultType.COMPLETED)
+        LOG.debug(f"Model {self.model} not found")
+        return Result(ResultType.SKIPPED)
 
     def run(self, status: Status | None = None) -> Result:
         """Add model with configs."""
@@ -1858,7 +1854,8 @@ class UpdateJujuMachineIDStep(BaseStep):
         model_status = run_sync(
             self.jhelper.get_model_status(self.model, [self.application])
         )
-        juju_machines = run_sync(self.jhelper.get_machines(self.model))
+        model = run_sync(self.jhelper.get_model(self.model))
+        juju_machines = run_sync(self.jhelper.get_machines(model))
 
         if self.application not in model_status["applications"]:
             return Result(ResultType.FAILED, "Application not found in model")
@@ -1901,6 +1898,8 @@ class UpdateJujuMachineIDStep(BaseStep):
                     if node_machine_id == -1:
                         nodes_to_update.append(node)
                     break
+
+        run_sync(model.disconnect())
 
         self.hostname_id = hostname_id
         self.nodes_to_update = nodes_to_update
@@ -2145,6 +2144,7 @@ class RemoveSaasApplicationsStep(BaseStep):
         for saas in self._remote_app_to_delete:
             LOG.debug("Removing remote application on %s", saas)
             run_sync(model.remove_saas(saas))
+        run_sync(model.disconnect())
         return Result(ResultType.COMPLETED)
 
 

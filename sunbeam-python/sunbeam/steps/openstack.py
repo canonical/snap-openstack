@@ -43,7 +43,6 @@ from sunbeam.core.juju import (
     JujuHelper,
     JujuStepHelper,
     JujuWaitException,
-    ModelNotFoundException,
     TimeoutException,
     run_sync,
 )
@@ -462,14 +461,16 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
         enabling the feature.
         """
         apps_to_remove = []
+        model = run_sync(self.jhelper.get_model(self.model))
         for app_name in APPS_BLOCKED_WHEN_FEATURE_ENABLED:
             try:
-                app = run_sync(self.jhelper.get_application(app_name, OPENSTACK_MODEL))
+                app = run_sync(self.jhelper.get_application(app_name, model))
                 LOG.debug(f"Application status for {app_name}: {app.status}")
                 if app.status != "active":
                     apps_to_remove.append(app)
             except ApplicationNotFoundException:
                 pass
+        run_sync(model.disconnect())
 
         return apps_to_remove
 
@@ -860,11 +861,7 @@ class DestroyControlPlaneStep(BaseStep):
         except TerraformException:
             LOG.debug("Failed to pull state", exc_info=True)
 
-        try:
-            run_sync(self.jhelper.get_model(self._MODEL))
-            self._has_juju_resources = True
-        except ModelNotFoundException:
-            self._has_juju_resources = False
+        self._has_juju_resources = run_sync(self.jhelper.model_exists(self._MODEL))
 
         if not self._has_tf_resources and not self._has_juju_resources:
             return Result(ResultType.SKIPPED)
@@ -897,9 +894,7 @@ class DestroyControlPlaneStep(BaseStep):
             LOG.debug(
                 "Timeout waiting for model to be removed, trying through provider sdk"
             )
-            try:
-                run_sync(self.jhelper.get_model(self._MODEL))
-            except ModelNotFoundException:
+            if not run_sync(self.jhelper.model_exists(self._MODEL)):
                 return Result(ResultType.COMPLETED)
             run_sync(
                 self.jhelper.destroy_model(

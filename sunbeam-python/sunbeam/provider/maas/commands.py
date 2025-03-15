@@ -69,7 +69,6 @@ from sunbeam.core.juju import (
     CONTROLLER_APPLICATION,
     CONTROLLER_MODEL,
     JujuHelper,
-    ModelNotFoundException,
     run_sync,
 )
 from sunbeam.core.manifest import AddManifestStep
@@ -821,9 +820,7 @@ def configure_cmd(
     LOG.debug(f"Manifest used for deployment - features: {manifest.features}")
 
     jhelper = JujuHelper(deployment.get_connected_controller())
-    try:
-        run_sync(jhelper.get_model(OPENSTACK_MODEL))
-    except ModelNotFoundException:
+    if not run_sync(jhelper.model_exists(OPENSTACK_MODEL)):
         LOG.error(f"Expected model {OPENSTACK_MODEL} missing")
         raise click.ClickException("Please run `sunbeam cluster bootstrap` first")
     admin_credentials = retrieve_admin_credentials(jhelper, OPENSTACK_MODEL)
