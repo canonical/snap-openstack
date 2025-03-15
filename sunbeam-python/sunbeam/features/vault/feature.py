@@ -256,7 +256,6 @@ class VaultInitStep(BaseStep):
             res = self.vhelper.initialize_vault(
                 self.leader_unit, self.key_shares, self.key_threshold
             )
-            LOG.debug(f"Vault init command output: {res}")
             keys: str = json.dumps(res)
         except LeaderNotFoundException as e:
             LOG.debug(f"Failed to get {VAULT_APPLICATION_NAME} leader", exc_info=True)
