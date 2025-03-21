@@ -1153,6 +1153,7 @@ class JujuHelper:
         queue: asyncio.queues.Queue | None = None,
         expected_status: Iterable[str] | None = None,
         expected_agent_status: Iterable[str] | None = None,
+        expected_workload_status_message: Iterable[str] | None = None,
     ):
         """Worker function to wait for application's units workloads to be active.
 
@@ -1174,6 +1175,7 @@ class JujuHelper:
                 units = application.units
                 app_status: set[str] = set()
                 agent_status: set[str] = set()
+                workload_status_message: set[str] = set()
                 # Application is a subordinate, collect status from app instead of units
                 # as units is empty dictionary.
                 if application.subordinate_to:
@@ -1185,6 +1187,8 @@ class JujuHelper:
                         if unit_list is None or name in unit_list:
                             if wl_status := unit.workload_status:
                                 app_status.add(str(wl_status.status))
+                                if _wl_status_message := wl_status.info:
+                                    workload_status_message.add(str(_wl_status_message))
                             if _agent_status := unit.agent_status:
                                 agent_status.add(str(_agent_status.status))
 
@@ -1207,6 +1211,12 @@ class JujuHelper:
                         expected_agent_status is None
                         or agent_status.issubset(expected_agent_status)
                     )
+                    and (
+                        expected_workload_status_message is None
+                        or workload_status_message.issubset(
+                            expected_workload_status_message
+                        )
+                    )
                 ):
                     LOG.debug("Application %r is active", app)
                     # queue is sized for the number of coroutines,
@@ -1225,6 +1235,7 @@ class JujuHelper:
         units: list[str] | None = None,
         status: list[str] | None = None,
         agent_status: list[str] | None = None,
+        workload_status_message: list[str] | None = None,
         timeout: int = 10 * 60,
         queue: asyncio.queues.Queue | None = None,
     ) -> None:
@@ -1261,7 +1272,13 @@ class JujuHelper:
                 tasks.append(
                     asyncio.create_task(
                         self._wait_until_status_coroutine(
-                            model_impl, app, unit_list, queue, wl_status, agent_status
+                            model_impl,
+                            app,
+                            unit_list,
+                            queue,
+                            wl_status,
+                            agent_status,
+                            workload_status_message,
                         ),
                         name=app,
                     )

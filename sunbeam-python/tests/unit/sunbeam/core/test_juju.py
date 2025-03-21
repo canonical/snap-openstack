@@ -659,8 +659,8 @@ async def test_wait_until_desired_status_for_apps(jhelper: juju.JujuHelper):
 
         assert _wait_until_status_coroutine.call_count == 2
         assert _wait_until_status_coroutine.call_args_list == [
-            ((model, "app1", None, None, {"active"}, None),),
-            ((model, "app2", None, None, {"active"}, None),),
+            ((model, "app1", None, None, {"active"}, None, None),),
+            ((model, "app2", None, None, {"active"}, None, None),),
         ]
         _wait_until_status_coroutine.reset_mock()
 
@@ -686,7 +686,7 @@ async def test_wait_until_desired_status_for_apps_with_units(jhelper: juju.JujuH
         )
         assert _wait_until_status_coroutine.call_count == 1
         assert _wait_until_status_coroutine.call_args_list == [
-            ((model, "app1", ["app1/2"], None, {"blocked"}, None),),
+            ((model, "app1", ["app1/2"], None, {"blocked"}, None, None),),
         ]
 
 
@@ -728,7 +728,7 @@ async def test_wait_until_desired_status_timeout(jhelper: juju.JujuHelper):
 
         assert _wait_until_status_coroutine.call_count == 1
         assert _wait_until_status_coroutine.call_args_list == [
-            ((model, "app1", None, None, {"active"}, None),),
+            ((model, "app1", None, None, {"active"}, None, None),),
         ]
 
 
@@ -755,7 +755,7 @@ async def test_wait_until_desired_status_task_exception(jhelper: juju.JujuHelper
 
         assert _wait_until_status_coroutine.call_count == 1
         assert _wait_until_status_coroutine.call_args_list == [
-            ((model, "app1", None, None, {"active"}, None),),
+            ((model, "app1", None, None, {"active"}, None, None),),
         ]
 
 
@@ -884,6 +884,30 @@ async def test_wait_until_status_coroutine_expected_agent_status():
     )
     await juju.JujuHelper._wait_until_status_coroutine(
         model, "app1", None, None, None, {"executing"}
+    )
+    assert model.get_status.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_wait_until_status_coroutine_expected_workload_status_message():
+    model = AsyncMock(spec=Model)
+
+    model.get_status.return_value = AsyncMock(
+        applications={
+            "app1": Mock(
+                int_=1,
+                subordinate_to=None,
+                units={
+                    "app1/0": Mock(
+                        workload_status=Mock(status="active", info="Under maintenance"),
+                        agent_status=Mock(status="executing"),
+                    )
+                },
+            )
+        }
+    )
+    await juju.JujuHelper._wait_until_status_coroutine(
+        model, "app1", ["app1/0"], None, None, {"executing"}, {"Under maintenance"}
     )
     assert model.get_status.call_count == 1
 
