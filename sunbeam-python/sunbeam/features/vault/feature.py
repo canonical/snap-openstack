@@ -77,6 +77,9 @@ from sunbeam.utils import click_option_show_hints, pass_method_obj
 from sunbeam.versions import VAULT_CHANNEL
 
 VAULT_COMMAND_TIMEOUT = 300  # 5 minutes
+VAULT_CHARM_UPDATES_TIMEOUT = (
+    360  # 6 minutes, slightly greater than update-status interval
+)
 VAULT_APPLICATION_NAME = "vault"
 VAULT_CONTAINER_NAME = "vault"
 VAULT_SECRET_FOR_AUTHORIZATION = "vault-tmp-token"
@@ -348,6 +351,24 @@ class VaultUnsealStep(BaseStep):
                     if len(non_leader_units) == 0:
                         message = "Vault unseal operation status: completed"
                     else:
+                        # Wait for leader vault to update non-leader vault units
+                        # One way to do from charm perspective is wait for status
+                        # message to be changed to `Please unseal Vault`. Note the
+                        # charm updates its status on update-status hook trigger.
+                        # Without this change, it will be too soon on some occassions
+                        # for the next unseal command to act on non-leader units.
+                        run_sync(
+                            self.jhelper.wait_until_desired_status(
+                                OPENSTACK_MODEL,
+                                [VAULT_APPLICATION_NAME],
+                                units=non_leader_units,
+                                status=["active, blocked"],
+                                agent_status=["idle"],
+                                workload_status_message=["Please unseal Vault"],
+                                timeout=VAULT_CHARM_UPDATES_TIMEOUT,
+                            )
+                        )
+
                         message = (
                             "Vault unseal operation status: completed for leader unit."
                             "\nRerun `sunbeam vault unseal` command to unseal "
