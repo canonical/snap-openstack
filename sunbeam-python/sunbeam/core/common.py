@@ -237,6 +237,7 @@ def run_plan(
     plan: Sequence[BaseStep],
     console: Console,
     no_hint: bool = True,
+    no_raise: bool = False,
 ) -> dict:
     """Run plans sequentially.
 
@@ -263,6 +264,9 @@ def run_plan(
                 continue
 
             if skip_result.result_type == ResultType.FAILED:
+                if no_raise:
+                    results[step.__class__.__name__] = skip_result
+                    break
                 raise click.ClickException(skip_result.message)
 
             LOG.debug(f"Running step {step.name}")
@@ -273,6 +277,8 @@ def run_plan(
             )
 
         if result.result_type == ResultType.FAILED:
+            if no_raise:
+                break
             raise click.ClickException(result.message)
 
     # Returns results object only when all steps have results of type
