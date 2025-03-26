@@ -142,7 +142,8 @@ class TimeoutException(JujuException):
 class ActionFailedException(JujuException):
     """Raised when Juju run failed."""
 
-    pass
+    def __init__(self, action_result):
+        self.action_result = action_result
 
 
 class CmdFailedException(JujuException):
@@ -1784,3 +1785,80 @@ class JujuStepHelper:
             return True
         except JujuSecretNotFound:
             return False
+
+
+class JujuActionHelper:
+    @staticmethod
+    def get_unit(
+        client: Client, jhelper: JujuHelper, model: str, node: str, app: str
+    ) -> Unit:
+        """Retrieve the unit associated with the given node.
+
+        Args:
+            client: The Juju client instance.
+            jhelper: The JujuHelper instance.
+            model: The model name.
+            node: The node name.
+            app: The application name.
+
+        Returns:
+            Unit: The unit associated with the node.
+        """
+        node_info = client.cluster.get_node_info(node)
+        machine_id = str(node_info.get("machineid"))
+
+        juju_model = run_sync(jhelper.get_model(model))
+        return run_sync(jhelper.get_unit_from_machine(app, machine_id, juju_model))
+
+    @staticmethod
+    def run_action(
+        client: Client,
+        jhelper: JujuHelper,
+        model: str,
+        node: str,
+        app: str,
+        action_name: str,
+        action_params: dict[str, typing.Any],
+    ) -> Dict:
+        """Run the specified action on the unit and return the result.
+
+        Args:
+            client: The Juju client instance.
+            jhelper: The JujuHelper instance.
+            model: The model name.
+            node: The node name.
+            app: The application name.
+            action_name: The name of the action to run.
+            action_params: Parameters to pass to the action.
+
+        Returns:
+            Dict: The result of the action.
+
+        Raises:
+            UnitNotFoundException: If the unit cannot be found.
+            ActionFailedException: If the action execution fails.
+        """
+        try:
+            unit = JujuActionHelper.get_unit(client, jhelper, model, node, app)
+            LOG.debug(
+                "Running action '%s' on unit '%s', params: %s",
+                action_name,
+                unit.entity_id,
+                action_params,
+            )
+
+            action_result = run_sync(
+                jhelper.run_action(
+                    unit.entity_id,
+                    model,
+                    action_name,
+                    action_params=action_params,
+                )
+            )
+            return action_result
+        except UnitNotFoundException as e:
+            LOG.debug(f"Application {app} not found on node {node}")
+            raise e
+        except ActionFailedException as e:
+            LOG.debug("Action '%s' failed on node '%s': %s", action_name, node, e)
+            raise e
