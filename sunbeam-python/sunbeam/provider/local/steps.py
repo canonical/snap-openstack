@@ -83,14 +83,13 @@ class LocalSetHypervisorUnitsOptionsStep(SetHypervisorUnitsOptionsStep):
         name = self.names[0]  # always only one name in local mode
         node = self.client.cluster.get_node_info(name)
         machine_id = str(node.get("machineid"))
-        model = run_sync(self.jhelper.get_model(self.model))
-        unit = await self.jhelper.get_unit_from_machine(
-            "openstack-hypervisor", machine_id, model
-        )
-        action_result = await self.jhelper.run_action(
-            unit.entity_id, self.model, "list-nics"
-        )
-        run_sync(model.disconnect())
+        async with self.jhelper.get_model_closing(self.model) as model:
+            unit = await self.jhelper.get_unit_from_machine(
+                "openstack-hypervisor", machine_id, model
+            )
+            action_result = await self.jhelper.run_action(
+                unit.entity_id, self.model, "list-nics"
+            )
 
         if action_result.get("return-code", 0) > 1:
             _message = f"Unable to fetch hypervisor {name!r} nics"
