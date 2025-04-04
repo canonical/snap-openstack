@@ -234,7 +234,7 @@ class ProFeature(EnableDisableFeature):
 
         click.echo(
             "Please check minimum hardware requirements for support:\n\n"
-            "    https://microstack.run/docs/enterprise-reqs\n"
+            "    https://canonical-openstack.readthedocs-hosted.com/en/latest/reference/enterprise-requirements/\n"
         )
         click.echo("Ubuntu Pro enabled.")
 
@@ -262,7 +262,7 @@ class ProFeature(EnableDisableFeature):
 
         Minimum hardware requirements for support:
 
-        https://microstack.run/docs/enterprise-reqs
+        https://canonical-openstack.readthedocs-hosted.com/en/latest/reference/enterprise-requirements/
         """
         self.enable_feature(deployment, ProFeatureConfig(token=token), show_hints)
 

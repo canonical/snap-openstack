@@ -31,5 +31,5 @@ Please see the [docs](./docs) directory in this repository.
 
 Please report bugs to the [OpenStack Snap][microstack] project on Launchpad.
 
-[microstack-docs]: https://microstack.run/docs/
+[microstack-docs]: https://canonical-openstack.readthedocs-hosted.com/en/latest/
 [microstack]: https://bugs.launchpad.net/snap-openstack

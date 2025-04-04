@@ -254,7 +254,7 @@ class CatchGroup(click.Group):
             LOG.debug(e, exc_info=True)
             message = (
                 "An unexpected error has occurred."
-                " Please see https://canonical.com/microstack/docs/inspect"
+                " Please see https://canonical-openstack.readthedocs-hosted.com/en/latest/how-to/troubleshooting/inspecting-the-cluster/"
                 " for troubleshooting information."
             )
             LOG.warn(message)

@@ -51,7 +51,7 @@ sudo snap connect openstack:dot-config-openstack
 
 ## Continue deployment
 
-Now the snap is configured and ready to go as usual, the same as if it were deployed from the official snap.  From here, you can continue the deployment from the bootstrap step.  See the [Single-node quickstart](https://microstack.run/docs/single-node) for example.
+Now the snap is configured and ready to go as usual, the same as if it were deployed from the official snap.  From here, you can continue the deployment from the bootstrap step.  See the [Get started with OpenStack](https://canonical-openstack.readthedocs-hosted.com/en/latest/tutorial/get-started-with-openstack/) tutorial for an example.
 
 ## Troubleshooting
 
