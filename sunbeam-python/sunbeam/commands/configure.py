@@ -629,7 +629,7 @@ class SetHypervisorUnitsOptionsStep(BaseStep):
             )
             run_sync(model.disconnect())
             if action_result.get("return-code", 0) > 1:
-                _message = "Unable to set hypervisor {name!r} configuration"
+                _message = f"Unable to set hypervisor {name!r} configuration"
                 return Result(ResultType.FAILED, _message)
         return Result(ResultType.COMPLETED)
 
