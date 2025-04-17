@@ -139,6 +139,7 @@ from sunbeam.steps.k8s import (
     DeployK8SApplicationStep,
     DrainK8SUnitStep,
     EnsureDefaultL2AdvertisementMutedStep,
+    EnsureK8SUnitsTaggedStep,
     EnsureL2AdvertisementByHostStep,
     MigrateK8SKubeconfigStep,
     RemoveK8SUnitsStep,
@@ -273,7 +274,9 @@ def get_k8s_plans(
             StoreK8SKubeConfigStep(
                 deployment, client, jhelper, deployment.openstack_machines_model
             ),
-            EnsureDefaultL2AdvertisementMutedStep(deployment, client, jhelper),
+            EnsureK8SUnitsTaggedStep(
+                deployment, client, jhelper, deployment.openstack_machines_model
+            ),
             EnsureL2AdvertisementByHostStep(
                 deployment,
                 client,
@@ -282,6 +285,7 @@ def get_k8s_plans(
                 Networks.MANAGEMENT,
                 deployment.internal_ip_pool,
             ),
+            EnsureDefaultL2AdvertisementMutedStep(deployment, client, jhelper),
         ]
     )
 
@@ -1087,6 +1091,11 @@ def join(
     if is_control_node:
         plan4.append(
             AddK8SUnitsStep(client, name, jhelper, deployment.openstack_machines_model)
+        )
+        plan4.append(
+            EnsureK8SUnitsTaggedStep(
+                deployment, client, jhelper, deployment.openstack_machines_model
+            )
         )
         plan4.append(EnsureDefaultL2AdvertisementMutedStep(deployment, client, jhelper))
         plan4.append(

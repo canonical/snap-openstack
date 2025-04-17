@@ -5,6 +5,8 @@ import asyncio
 import unittest
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
+import lightkube
+import lightkube.core.exceptions
 import pytest
 from lightkube import ApiError
 
@@ -21,8 +23,11 @@ from sunbeam.steps.k8s import (
     AddK8SCloudStep,
     AddK8SCredentialStep,
     EnsureDefaultL2AdvertisementMutedStep,
+    EnsureK8SUnitsTaggedStep,
     EnsureL2AdvertisementByHostStep,
+    KubeClientError,
     StoreK8SKubeConfigStep,
+    _get_kube_client,
 )
 
 
@@ -376,11 +381,17 @@ class TestEnsureL2AdvertisementByHostStep(unittest.TestCase):
             self.step._get_interface({"name": "node1", "machineid": "1"}, self.network)
 
 
-def _to_kube_object(metadata: dict, spec: dict | None) -> object:
+def _to_kube_object(
+    metadata: dict, spec: dict | None = None, status: dict | None = None
+) -> object:
     """Convert a dictionary to a mock object."""
     obj = Mock()
     obj.metadata = Mock(**metadata)
+    if "name" in metadata:
+        obj.metadata.name = metadata["name"]
     obj.spec = spec
+    if status:
+        obj.status = Mock(**status)
     return obj
 
 
@@ -658,3 +669,214 @@ class TestEnsureDefaultL2AdvertisementMutedStep(unittest.TestCase):
         self.kube.apply.assert_called_once()
         assert result.result_type == ResultType.FAILED
         assert "Failed to update L2 default advertisement" in result.message
+
+
+class TestEnsureK8SUnitsTaggedStep(unittest.TestCase):
+    def setUp(self):
+        self.deployment = Mock()
+        self.deployment.name = "test-deployment"
+        self.deployment.get_space.return_value = "management"
+        self.client = Mock()
+        self.jhelper = AsyncMock()
+        self.model = "test-model"
+        self.step = EnsureK8SUnitsTaggedStep(
+            self.deployment, self.client, self.jhelper, self.model
+        )
+        self.kube = Mock()
+        self.step.kube = self.kube
+
+    def test_is_skip_no_nodes_to_update(self):
+        control_nodes = [
+            {"name": "node1", "machineid": "1"},
+            {"name": "node2", "machineid": "2"},
+        ]
+        self.client.cluster.list_nodes_by_role.return_value = control_nodes
+        self.kube.list.return_value = [
+            _to_kube_object(
+                {"name": "node1", "labels": {"sunbeam/hostname": "node1"}},
+                status={"addresses": [Mock(type="InternalIP", address="10.0.0.1")]},
+            ),
+            _to_kube_object(
+                {"name": "node2", "labels": {"sunbeam/hostname": "node2"}},
+                status={"addresses": [Mock(type="InternalIP", address="10.0.0.2")]},
+            ),
+        ]
+        self.jhelper.get_machines_status.return_value = {
+            "1": {
+                "network-interfaces": {
+                    "eth0": {"space": "management", "ip-addresses": ["10.0.0.1"]}
+                }
+            },
+            "2": {
+                "network-interfaces": {
+                    "eth0": {"space": "management", "ip-addresses": ["10.0.0.2"]}
+                }
+            },
+        }
+        with patch("sunbeam.steps.k8s._get_kube_client", return_value=self.kube):
+            result = self.step.is_skip()
+        assert result.result_type == ResultType.SKIPPED
+
+    def test_is_skip_nodes_to_update(self):
+        control_nodes = [
+            {"name": "node1", "machineid": "1"},
+            {"name": "node2", "machineid": "2"},
+        ]
+        self.client.cluster.list_nodes_by_role.return_value = control_nodes
+        self.kube.list.return_value = [
+            _to_kube_object(
+                {"name": "node1", "labels": {"sunbeam/hostname": "node1"}},
+                status={"addresses": [Mock(type="InternalIP", address="10.0.0.1")]},
+            ),
+            _to_kube_object(
+                {"name": "node2", "labels": {}},  # Missing label
+                status={"addresses": [Mock(type="InternalIP", address="10.0.0.2")]},
+            ),
+        ]
+        self.jhelper.get_machines_status.return_value = {
+            "1": {
+                "network-interfaces": {
+                    "eth0": {"space": "management", "ip-addresses": ["10.0.0.1"]}
+                }
+            },
+            "2": {
+                "network-interfaces": {
+                    "eth0": {"space": "management", "ip-addresses": ["10.0.0.2"]}
+                }
+            },
+        }
+        with patch("sunbeam.steps.k8s._get_kube_client", return_value=self.kube):
+            result = self.step.is_skip()
+        assert result.result_type == ResultType.COMPLETED
+        assert "node2" in self.step.to_update
+
+    def test_is_skip_kube_client_error(self):
+        self.client.cluster.list_nodes_by_role.return_value = []
+        with patch(
+            "sunbeam.steps.k8s._get_kube_client", side_effect=KubeClientError("fail")
+        ):
+            result = self.step.is_skip()
+        assert result.result_type == ResultType.FAILED
+
+    def test_is_skip_k8s_api_error(self):
+        self.client.cluster.list_nodes_by_role.return_value = [
+            {"name": "node1", "machineid": "1"}
+        ]
+        api_error = ApiError.__new__(ApiError)
+        api_error.status = Mock(code=500)
+        self.kube.list.side_effect = api_error
+        with patch("sunbeam.steps.k8s._get_kube_client", return_value=self.kube):
+            result = self.step.is_skip()
+        assert result.result_type == ResultType.FAILED
+
+    def test_is_skip_machine_missing(self):
+        control_nodes = [
+            {"name": "node1", "machineid": "1"},
+        ]
+        self.client.cluster.list_nodes_by_role.return_value = control_nodes
+        self.kube.list.return_value = [Mock(metadata=Mock(name="node1", labels={}))]
+        self.jhelper.get_machines_status.return_value = {}
+        with patch("sunbeam.steps.k8s._get_kube_client", return_value=self.kube):
+            result = self.step.is_skip()
+        assert result.result_type == ResultType.FAILED
+
+    def test_run_success(self):
+        self.step.to_update = {"node1": "k8s-node1"}
+        self.kube.apply = Mock()
+        with (
+            patch("sunbeam.steps.k8s.core_v1.Node", Mock()),
+            patch("sunbeam.steps.k8s.meta_v1.ObjectMeta", Mock()),
+        ):
+            result = self.step.run(None)
+        self.kube.apply.assert_called_once()
+        assert result.result_type == ResultType.COMPLETED
+
+    def test_run_apply_failure(self):
+        self.step.to_update = {"node1": "k8s-node1"}
+        api_error = ApiError.__new__(ApiError)
+        api_error.status = Mock(code=500)
+        self.kube.apply = Mock(side_effect=api_error)
+        with (
+            patch("sunbeam.steps.k8s.core_v1.Node", Mock()),
+            patch("sunbeam.steps.k8s.meta_v1.ObjectMeta", Mock()),
+        ):
+            result = self.step.run(None)
+        self.kube.apply.assert_called_once()
+        assert result.result_type == ResultType.FAILED
+
+
+class TestGetKubeClient(unittest.TestCase):
+    def setUp(self):
+        self.client = Mock()
+        self.namespace = "test-namespace"
+
+    @patch("sunbeam.steps.k8s.read_config")
+    @patch(
+        "sunbeam.steps.k8s.K8SHelper.get_kubeconfig_key", return_value="kubeconfig-key"
+    )
+    @patch("sunbeam.steps.k8s.l_kubeconfig.KubeConfig.from_dict")
+    @patch("sunbeam.steps.k8s.l_client.Client")
+    def test_get_kube_client_success(
+        self,
+        mock_client,
+        mock_kubeconfig_from_dict,
+        mock_get_kubeconfig_key,
+        mock_read_config,
+    ):
+        mock_read_config.return_value = {"apiVersion": "v1"}
+        mock_kubeconfig_from_dict.return_value = Mock()
+
+        result = _get_kube_client(self.client, self.namespace)
+
+        mock_read_config.assert_called_once_with(self.client, "kubeconfig-key")
+        mock_kubeconfig_from_dict.assert_called_once_with({"apiVersion": "v1"})
+        mock_client.assert_called_once_with(
+            mock_kubeconfig_from_dict.return_value,
+            self.namespace,
+            trust_env=False,
+        )
+        assert result == mock_client.return_value
+
+    @patch("sunbeam.steps.k8s.read_config", side_effect=ConfigItemNotFoundException)
+    @patch(
+        "sunbeam.steps.k8s.K8SHelper.get_kubeconfig_key", return_value="kubeconfig-key"
+    )
+    def test_get_kube_client_config_not_found(
+        self, mock_get_kubeconfig_key, mock_read_config
+    ):
+        with self.assertRaises(KubeClientError) as context:
+            _get_kube_client(self.client, self.namespace)
+
+        mock_read_config.assert_called_once_with(self.client, "kubeconfig-key")
+        assert "K8S kubeconfig not found" in str(context.exception)
+
+    @patch("sunbeam.steps.k8s.read_config")
+    @patch(
+        "sunbeam.steps.k8s.K8SHelper.get_kubeconfig_key", return_value="kubeconfig-key"
+    )
+    @patch("sunbeam.steps.k8s.l_kubeconfig.KubeConfig.from_dict")
+    @patch(
+        "sunbeam.steps.k8s.l_client.Client",
+        side_effect=lightkube.core.exceptions.ConfigError,
+    )
+    def test_get_kube_client_config_error(
+        self,
+        mock_client,
+        mock_kubeconfig_from_dict,
+        mock_get_kubeconfig_key,
+        mock_read_config,
+    ):
+        mock_read_config.return_value = {"apiVersion": "v1"}
+        mock_kubeconfig_from_dict.return_value = Mock()
+
+        with self.assertRaises(KubeClientError) as context:
+            _get_kube_client(self.client, self.namespace)
+
+        mock_read_config.assert_called_once_with(self.client, "kubeconfig-key")
+        mock_kubeconfig_from_dict.assert_called_once_with({"apiVersion": "v1"})
+        mock_client.assert_called_once_with(
+            mock_kubeconfig_from_dict.return_value,
+            self.namespace,
+            trust_env=False,
+        )
+        assert "Error creating k8s client" in str(context.exception)

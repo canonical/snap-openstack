@@ -1250,6 +1250,7 @@ class TestMaasConfigureMicrocephOSDStep:
 @pytest.fixture()
 def deployment_k8s():
     dep = Mock()
+    dep.name = "test_deployment"
     dep.public_api_label = "public_api"
     dep.internal_api_label = "internal_api"
 
@@ -1282,6 +1283,7 @@ class TestMaasDeployK8SApplicationStep:
                 "load-balancer-cidrs": "10.0.0.0/28",
                 "load-balancer-enabled": True,
                 "load-balancer-l2-mode": True,
+                "node-labels": "sunbeam/deployment=test_deployment",
             },
         }
         assert step.extra_tfvars() == expected_tfvars

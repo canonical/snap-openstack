@@ -41,6 +41,8 @@ from sunbeam.core.juju import (
 )
 from sunbeam.core.k8s import (
     CREDENTIAL_SUFFIX,
+    DEPLOYMENT_LABEL,
+    HOSTNAME_LABEL,
     K8S_CLOUD_SUFFIX,
     K8S_KUBECONFIG_KEY,
     LOADBALANCER_QUESTION_DESCRIPTION,
@@ -75,11 +77,13 @@ if typing.TYPE_CHECKING:
     import lightkube.core.client as l_client
     import lightkube.core.exceptions as l_exceptions
     from lightkube.models import meta_v1
+    from lightkube.resources import core_v1
 else:
     l_kubeconfig = LazyImport("lightkube.config.kubeconfig")
     l_client = LazyImport("lightkube.core.client")
     l_exceptions = LazyImport("lightkube.core.exceptions")
     meta_v1 = LazyImport("lightkube.models.meta_v1")
+    core_v1 = LazyImport("lightkube.resources.core_v1")
 
 
 LOG = logging.getLogger(__name__)
@@ -107,6 +111,29 @@ def k8s_addons_questions():
             description=LOADBALANCER_QUESTION_DESCRIPTION,
         ),
     }
+
+
+class KubeClientError(K8SError):
+    pass
+
+
+def _get_kube_client(client: Client, namespace: str | None = None) -> "l_client.Client":
+    try:
+        kubeconfig_raw = read_config(client, K8SHelper.get_kubeconfig_key())
+    except ConfigItemNotFoundException as e:
+        LOG.debug("K8S kubeconfig not found")
+        raise KubeClientError("K8S kubeconfig not found") from e
+
+    kubeconfig = l_kubeconfig.KubeConfig.from_dict(kubeconfig_raw)
+    try:
+        return l_client.Client(
+            kubeconfig,
+            namespace,  # type: ignore
+            trust_env=False,
+        )
+    except l_exceptions.ConfigError as e:
+        LOG.debug("Error creating k8s client")
+        raise KubeClientError("Error creating k8s client") from e
 
 
 class DeployK8SApplicationStep(DeployMachineApplicationStep):
@@ -211,6 +238,12 @@ class DeployK8SApplicationStep(DeployMachineApplicationStep):
         if lb_range:
             config_tfvars["load-balancer-cidrs"] = lb_range
 
+        node_labels = str(config_tfvars.get("node-labels", "")).split(" ")
+        node_labels.append("=".join((DEPLOYMENT_LABEL, self.deployment.name)))
+        config_tfvars["node-labels"] = " ".join(
+            node_label for node_label in node_labels if node_label
+        )
+
         return config_tfvars
 
     def extra_tfvars(self) -> dict:
@@ -247,6 +280,190 @@ class AddK8SUnitsStep(AddMachineUnitsStep):
     def get_unit_timeout(self) -> int:
         """Return unit timeout in seconds."""
         return K8S_UNIT_TIMEOUT
+
+
+class EnsureK8SUnitsTaggedStep(BaseStep):
+    """Ensure K8S units get properly tagged.
+
+    This step ensures that evey k8s nodes is tagged with the
+    HOSTNAME_LABEL, to ensure sunbeam can query the correct nodes
+    afterwards.
+    Match is done on management ip address. Node IP in k8s is guaranteed by
+    the cluster space binding, which is always bound to the management
+    space.
+    """
+
+    def __init__(
+        self, deployment: Deployment, client: Client, jhelper: JujuHelper, model: str
+    ):
+        super().__init__(
+            "Ensure K8S units tagged", "Ensuring K8S units are properly tagged"
+        )
+        self.deployment = deployment
+        self.client = client
+        self.jhelper = jhelper
+        self.model = model
+        self.to_update: dict[str, str] = {}
+
+    def _get_management_ips(self, juju_machine: dict) -> list[str]:
+        management_ips = []
+        management_space = self.deployment.get_space(Networks.MANAGEMENT)
+        for iface in juju_machine["network-interfaces"].values():
+            if iface.get("space") == management_space:
+                management_ips.extend(iface.get("ip-addresses", []))
+        return management_ips
+
+    def _find_matching_k8s_node(
+        self,
+        k8s_nodes: list["core_v1.Node"],
+        hostname: str,
+        ips: list[str],
+    ) -> "core_v1.Node | None":
+        for k8s_node in k8s_nodes:
+            if k8s_node.metadata is None:
+                LOG.debug("K8S node has no metadata, %s", k8s_node)
+                continue
+
+            if k8s_node.metadata.name == hostname:
+                return k8s_node
+
+            if (
+                k8s_node.metadata.labels
+                and k8s_node.metadata.labels.get(HOSTNAME_LABEL) == hostname
+            ):
+                return k8s_node
+
+            if k8s_node.status is None or k8s_node.status.addresses is None:
+                LOG.debug("K8S node has no status nor addresses, %s", k8s_node)
+                continue
+            for ip in ips:
+                for address in k8s_node.status.addresses:
+                    if address.type == "InternalIP":
+                        if address.address == ip:
+                            return k8s_node
+                    if address.type == "Hostname":
+                        if address.address == hostname:
+                            return k8s_node
+        return None
+
+    def _get_k8s_node_to_update(
+        self, nodes: list[dict], k8s_nodes: list["core_v1.Node"], machines: dict
+    ) -> dict[str, str]:
+        to_update = {}
+        for node in nodes:
+            sunbeam_name = node["name"]
+            machine_id = str(node["machineid"])
+            juju_machine = machines.get(machine_id)
+            if juju_machine is None:
+                LOG.debug("Machine %s not found in Juju", machine_id)
+                raise SunbeamException(
+                    f"{sunbeam_name!r} not found in Juju, expected id {machine_id!r}"
+                )
+            management_ips = self._get_management_ips(juju_machine)
+            if not management_ips:
+                LOG.debug("No management IPs found for machine %s", machine_id)
+                raise SunbeamException(f"{sunbeam_name!r} has no management IPs")
+            k8s_node = self._find_matching_k8s_node(
+                k8s_nodes, sunbeam_name, management_ips
+            )
+            if not k8s_node:
+                LOG.debug(
+                    "No matching k8s node found for %s, management IPs %s",
+                    sunbeam_name,
+                    management_ips,
+                )
+                raise SunbeamException(f"{sunbeam_name} has no matching k8s node")
+            if not k8s_node.metadata:
+                LOG.debug("K8S node %s has no metadata", sunbeam_name)
+                continue
+            if not (
+                k8s_node.metadata.labels
+                and k8s_node.metadata.labels.get(HOSTNAME_LABEL) == sunbeam_name
+            ):
+                LOG.debug("K8S node %s missing tags", sunbeam_name)
+                to_update[sunbeam_name] = str(k8s_node.metadata.name)
+
+        return to_update
+
+    def is_skip(self, status: Status | None = None) -> Result:
+        """Determines if the step should be skipped or not.
+
+        :return: ResultType.SKIPPED if the Step should be skipped,
+                ResultType.COMPLETED or ResultType.FAILED otherwise
+        """
+        control_nodes = self.client.cluster.list_nodes_by_role(
+            Role.CONTROL.name.lower()
+        )
+        try:
+            self.kube = _get_kube_client(
+                self.client,
+            )
+        except KubeClientError as e:
+            LOG.debug("Failed to create k8s client", exc_info=True)
+            return Result(ResultType.FAILED, str(e))
+
+        try:
+            k8s_nodes = list(
+                self.kube.list(
+                    core_v1.Node,
+                    labels={DEPLOYMENT_LABEL: self.deployment.name},
+                )
+            )
+        except l_exceptions.ApiError:
+            LOG.debug("Failed to fetch k8s nodes", exc_info=True)
+            return Result(
+                ResultType.FAILED,
+                "Failed to get nodes",
+            )
+
+        machines = run_sync(self.jhelper.get_machines_status(self.model))
+
+        try:
+            self.to_update = self._get_k8s_node_to_update(
+                control_nodes, k8s_nodes, machines
+            )
+        except SunbeamException:
+            LOG.debug("Failed to get k8s nodes to update", exc_info=True)
+            return Result(
+                ResultType.FAILED,
+                "Failed to get k8s nodes to update",
+            )
+
+        if not self.to_update:
+            LOG.debug("No nodes to update")
+            return Result(ResultType.SKIPPED)
+
+        return Result(ResultType.COMPLETED)
+
+    def run(self, status: Status | None) -> Result:
+        """Run the step to completion.
+
+        Invoked when the step is run and returns a ResultType to indicate
+
+        :return:
+        """
+        for sunbeam_name, k8s_name in self.to_update.items():
+            try:
+                self.kube.apply(
+                    core_v1.Node(
+                        metadata=meta_v1.ObjectMeta(
+                            name=k8s_name,
+                            labels={
+                                HOSTNAME_LABEL: sunbeam_name,
+                            },
+                        )
+                    ),
+                    field_manager=self.deployment.name,
+                    force=True,
+                )
+            except l_exceptions.ApiError:
+                LOG.debug("Failed to update node labels", exc_info=True)
+                return Result(
+                    ResultType.FAILED,
+                    f"Failed to update node labels for {sunbeam_name}",
+                )
+
+        return Result(ResultType.COMPLETED)
 
 
 class RemoveK8SUnitsStep(RemoveMachineUnitsStep):
@@ -966,7 +1183,7 @@ class EnsureL2AdvertisementByHostStep(BaseStep):
                 self.network.value.lower(), name
             ),
             "app.kubernetes.io/name": self._name_label(self.network.value.lower()),
-            "sunbeam/hostname": name,
+            HOSTNAME_LABEL: name,
             "sunbeam/space": space,
             "sunbeam/network": self.network.value.lower(),
         }
@@ -1000,7 +1217,7 @@ class EnsureL2AdvertisementByHostStep(BaseStep):
             if l2_ad.metadata is None or l2_ad.metadata.labels is None:
                 LOG.debug("L2 advertisement has no metadata nor labels")
                 continue
-            hostname = l2_ad.metadata.labels.get("sunbeam/hostname")
+            hostname = l2_ad.metadata.labels.get(HOSTNAME_LABEL)
 
             if hostname is None:
                 LOG.debug(
@@ -1076,18 +1293,12 @@ class EnsureL2AdvertisementByHostStep(BaseStep):
         )
 
         try:
-            kubeconfig = read_config(self.client, K8SHelper.get_kubeconfig_key())
-        except ConfigItemNotFoundException:
-            LOG.debug("K8S kubeconfig not found", exc_info=True)
-            return Result(ResultType.FAILED, "K8S kubeconfig not found")
-
-        self.kubeconfig = l_kubeconfig.KubeConfig.from_dict(kubeconfig)
-        try:
-            self.kube = l_client.Client(
-                self.kubeconfig, self.l2_advertisement_namespace, trust_env=False
+            self.kube = _get_kube_client(
+                self.client,
+                self.l2_advertisement_namespace,
             )
-        except l_exceptions.ConfigError as e:
-            LOG.debug("Error creating k8s client", exc_info=True)
+        except KubeClientError as e:
+            LOG.debug("Failed to create k8s client", exc_info=True)
             return Result(ResultType.FAILED, str(e))
 
         try:
@@ -1135,7 +1346,7 @@ class EnsureL2AdvertisementByHostStep(BaseStep):
                             "nodeSelectors": [
                                 {
                                     "matchLabels": {
-                                        "kubernetes.io/hostname": name,
+                                        HOSTNAME_LABEL: name,
                                     }
                                 }
                             ],
@@ -1203,18 +1414,12 @@ class EnsureDefaultL2AdvertisementMutedStep(BaseStep):
                  ResultType.COMPLETED or ResultType.FAILED otherwise
         """
         try:
-            kubeconfig = read_config(self.client, K8SHelper.get_kubeconfig_key())
-        except ConfigItemNotFoundException:
-            LOG.debug("K8S kubeconfig not found", exc_info=True)
-            return Result(ResultType.FAILED, "K8S kubeconfig not found")
-
-        self.kubeconfig = l_kubeconfig.KubeConfig.from_dict(kubeconfig)
-        try:
-            self.kube = l_client.Client(
-                self.kubeconfig, self.l2_advertisement_namespace, trust_env=False
+            self.kube = _get_kube_client(
+                self.client,
+                self.l2_advertisement_namespace,
             )
-        except l_exceptions.ConfigError as e:
-            LOG.debug("Error creating k8s client", exc_info=True)
+        except KubeClientError as e:
+            LOG.debug("Failed to create k8s client", exc_info=True)
             return Result(ResultType.FAILED, str(e))
 
         try:

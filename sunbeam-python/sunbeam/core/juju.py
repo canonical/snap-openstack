@@ -550,6 +550,11 @@ class JujuHelper:
         """Get juju status for the model."""
         return await self.get_model_status(model)
 
+    async def get_machines_status(self, model: str) -> dict:
+        """Get machine status in given model."""
+        status = await self.get_model_status(model)
+        return status["machines"]
+
     async def get_application_names(self, model: str) -> list[str]:
         """Get Application names in the model.
 
@@ -584,11 +589,11 @@ class JujuHelper:
         :model: Name of the model where the machine is located
         :machine: id of the machine
         """
-        status = await self.get_model_status(model)
-        m_status = status["machines"].get(machine)
-        if machine is None:
+        status = await self.get_machines_status(model)
+        m_status = status.get(machine)
+        if m_status is None:
             raise MachineNotFoundException(
-                f"Machine {machine!r} is missing from model {model.name!r}"
+                f"Machine {machine!r} is missing from model {model!r}"
             )
         return m_status["network-interfaces"]
 

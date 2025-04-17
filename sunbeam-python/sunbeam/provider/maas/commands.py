@@ -152,6 +152,7 @@ from sunbeam.steps.k8s import (
     DestroyK8SApplicationStep,
     DrainK8SUnitStep,
     EnsureDefaultL2AdvertisementMutedStep,
+    EnsureK8SUnitsTaggedStep,
     EnsureL2AdvertisementByHostStep,
     MigrateK8SKubeconfigStep,
     RemoveK8SUnitsStep,
@@ -658,6 +659,11 @@ def deploy(
     )
     plan2.append(
         StoreK8SKubeConfigStep(
+            deployment, client, jhelper, deployment.openstack_machines_model
+        )
+    )
+    plan2.append(
+        EnsureK8SUnitsTaggedStep(
             deployment, client, jhelper, deployment.openstack_machines_model
         )
     )

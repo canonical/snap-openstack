@@ -50,6 +50,8 @@ OpenStack services are exposed via virtual IP addresses.\
 On multi-node deployments, the range must be addressable from\
  all nodes in the deployment.\
 """
+DEPLOYMENT_LABEL = "sunbeam/deployment"
+HOSTNAME_LABEL = "sunbeam/hostname"
 
 
 class K8SError(SunbeamException):
