@@ -73,6 +73,7 @@ resource "openstack_networking_network_v2" "external_network" {
   name           = "external-network"
   admin_state_up = true
   external       = true
+  shared         = true
   segments {
     physical_network = var.external_network.physical_network
     network_type     = var.external_network.network_type
