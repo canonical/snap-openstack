@@ -106,6 +106,7 @@ class DeployConsulClientStep(BaseStep):
             tfvars["enable-consul-management"] = True
             _management_config = {
                 "serf-lan-port": CONSUL_CLIENT_MANAGEMENT_SERF_LAN_PORT,
+                "enable-tcp-check": True,
             }
             _management_config.update(
                 ConsulFeature.get_config_from_manifest(
@@ -127,6 +128,7 @@ class DeployConsulClientStep(BaseStep):
             tfvars["enable-consul-tenant"] = True
             _tenant_config = {
                 "serf-lan-port": CONSUL_CLIENT_TENANT_SERF_LAN_PORT,
+                "enable-tcp-check": True,
             }
             _tenant_config.update(
                 ConsulFeature.get_config_from_manifest(
@@ -148,6 +150,7 @@ class DeployConsulClientStep(BaseStep):
             tfvars["enable-consul-storage"] = True
             _storage_config = {
                 "serf-lan-port": CONSUL_CLIENT_STORAGE_SERF_LAN_PORT,
+                "enable-tcp-check": True,
             }
             _storage_config.update(
                 ConsulFeature.get_config_from_manifest(
