@@ -34,7 +34,7 @@ core:
       sunbeam-machine:
         channel: 2024.1/candidate
       microceph:
-        channel: squid/beta
+        channel: squid/candidate
         config:
           snap-channel: squid/candidate
 features:
