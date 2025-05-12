@@ -4,7 +4,7 @@
 variable "charm_microceph_channel" {
   description = "Operator channel for microceph deployment"
   type        = string
-  default     = "squid/beta"
+  default     = "squid/stable"
 }
 
 variable "charm_microceph_revision" {
