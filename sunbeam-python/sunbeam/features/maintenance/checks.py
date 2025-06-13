@@ -14,7 +14,6 @@ from sunbeam.core.juju import (
     JujuActionHelper,
     JujuHelper,
     UnitNotFoundException,
-    run_sync,
 )
 from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.core.openstack_api import (
@@ -261,12 +260,9 @@ class WatcherApplicationExistsCheck(Check):
         Otherwise update self.message and return False.
         """
         try:
-            model = run_sync(self.jhelper.get_model(OPENSTACK_MODEL))
-            run_sync(
-                self.jhelper.get_application(
-                    name=WATCHER_APPLICATION,
-                    model=model,
-                )
+            self.jhelper.get_application(
+                name=WATCHER_APPLICATION,
+                model=OPENSTACK_MODEL,
             )
         except ApplicationNotFoundException:
             self.message = (

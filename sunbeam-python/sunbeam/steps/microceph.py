@@ -26,7 +26,6 @@ from sunbeam.core.juju import (
     JujuHelper,
     LeaderNotFoundException,
     UnitNotFoundException,
-    run_sync,
 )
 from sunbeam.core.manifest import Manifest
 from sunbeam.core.openstack import DEFAULT_REGION, REGION_CONFIG_KEY
@@ -63,10 +62,10 @@ def microceph_questions():
     }
 
 
-async def list_disks(jhelper: JujuHelper, model: str, unit: str) -> tuple[dict, dict]:
+def list_disks(jhelper: JujuHelper, model: str, unit: str) -> tuple[dict, dict]:
     """Call list-disks action on an unit."""
     LOG.debug("Running list-disks on : %r", unit)
-    action_result = await jhelper.run_action(
+    action_result = jhelper.run_action(
         unit, model, "list-disks", action_params={"host-only": True}
     )
     LOG.debug(
@@ -292,14 +291,12 @@ class ConfigureMicrocephOSDStep(BaseStep):
         try:
             node = self.client.cluster.get_node_info(self.node_name)
             self.machine_id = str(node.get("machineid"))
-            model = run_sync(self.jhelper.get_model(self.model))
-            unit = run_sync(
-                self.jhelper.get_unit_from_machine(APPLICATION, self.machine_id, model)
+            unit = self.jhelper.get_unit_from_machine(
+                APPLICATION, self.machine_id, self.model
             )
-            osd_disks_dict, unpartitioned_disks_dict = run_sync(
-                list_disks(self.jhelper, self.model, unit.entity_id)
+            osd_disks_dict, unpartitioned_disks_dict = list_disks(
+                self.jhelper, self.model, unit
             )
-            run_sync(model.disconnect())
             self.unpartitioned_disks = [
                 disk.get("path") for disk in unpartitioned_disks_dict
             ]
@@ -394,22 +391,18 @@ class ConfigureMicrocephOSDStep(BaseStep):
         """Configure local disks on microceph."""
         failed = False
         try:
-            model = run_sync(self.jhelper.get_model(self.model))
-            unit = run_sync(
-                self.jhelper.get_unit_from_machine(APPLICATION, self.machine_id, model)
+            unit = self.jhelper.get_unit_from_machine(
+                APPLICATION, self.machine_id, self.model
             )
-            LOG.debug(f"Running action add-osd on {unit.entity_id}")
-            action_result = run_sync(
-                self.jhelper.run_action(
-                    unit.entity_id,
-                    self.model,
-                    "add-osd",
-                    action_params={
-                        "device-id": self.disks,
-                    },
-                )
+            LOG.debug(f"Running action add-osd on {unit}")
+            action_result = self.jhelper.run_action(
+                unit,
+                self.model,
+                "add-osd",
+                action_params={
+                    "device-id": self.disks,
+                },
             )
-            run_sync(model.disconnect())
             LOG.debug(f"Result after running action add-osd: {action_result}")
         except UnitNotFoundException as e:
             message = f"Microceph Adding disks {self.disks} failed: {str(e)}"
@@ -474,7 +467,7 @@ class SetCephMgrPoolSizeStep(BaseStep):
                 "default.rgw.control",
                 "default.rgw.meta",
             ]
-            unit = run_sync(self.jhelper.get_leader_unit(APPLICATION, self.model))
+            unit = self.jhelper.get_leader_unit(APPLICATION, self.model)
             action_params = {
                 "pools": ",".join(pools),
                 "size": ceph_replica_scale(len(self.storage_nodes)),
@@ -482,10 +475,8 @@ class SetCephMgrPoolSizeStep(BaseStep):
             LOG.debug(
                 f"Running microceph action set-pool-size with params {action_params}"
             )
-            result = run_sync(
-                self.jhelper.run_action(
-                    unit, self.model, "set-pool-size", action_params
-                )
+            result = self.jhelper.run_action(
+                unit, self.model, "set-pool-size", action_params
             )
             if result.get("status") is None:
                 return Result(
@@ -537,27 +528,23 @@ class CheckMicrocephDistributionStep(BaseStep):
         if Role.STORAGE.name.lower() not in node_info.get("role", ""):
             LOG.debug("Node %s is not a storage node", self.node)
             return Result(ResultType.SKIPPED)
-        model = run_sync(self.jhelper.get_model(self.model))
         try:
-            app = run_sync(self.jhelper.get_application(self._APPLICATION, model))
+            app = self.jhelper.get_application(self._APPLICATION, self.model)
         except ApplicationNotFoundException:
             LOG.debug("Failed to get application", exc_info=True)
-            run_sync(model.disconnect())
             return Result(
                 ResultType.SKIPPED,
                 f"Application {self._APPLICATION} has not been deployed yet",
             )
 
-        for unit in app.units:
-            if unit.machine.id == str(node_info.get("machineid")):
-                LOG.debug("Unit %s is running on node %s", unit.name, self.node)
+        for unit_name, unit in app.units.items():
+            if unit.machine == str(node_info.get("machineid")):
+                LOG.debug("Unit %s is running on node %s", unit_name, self.node)
                 break
         else:
-            run_sync(model.disconnect())
             LOG.debug("No %s units found on %s", self._APPLICATION, self.node)
             return Result(ResultType.SKIPPED)
 
-        run_sync(model.disconnect())
         nb_storage_nodes = len(self.client.cluster.list_nodes_by_role("storage"))
         if nb_storage_nodes == 1 and not self.force:
             return Result(

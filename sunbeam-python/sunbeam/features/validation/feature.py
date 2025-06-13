@@ -26,7 +26,6 @@ from sunbeam.core.juju import (
     JujuHelper,
     LeaderNotFoundException,
     UnitNotFoundException,
-    run_sync,
 )
 from sunbeam.core.manifest import CharmManifest, FeatureConfig, Manifest, SoftwareConfig
 from sunbeam.core.openstack import OPENSTACK_MODEL
@@ -293,26 +292,24 @@ class ValidationFeature(OpenStackControlPlaneFeature):
 
     def _get_tempest_leader_unit(self, deployment: Deployment) -> str:
         """Return the leader unit of tempest application."""
-        jhelper = JujuHelper(deployment.get_connected_controller())
+        jhelper = JujuHelper(deployment.juju_controller)
         with console.status(f"Retrieving {TEMPEST_APP_NAME}'s unit name."):
             app = TEMPEST_APP_NAME
             model = OPENSTACK_MODEL
             try:
-                unit = run_sync(jhelper.get_leader_unit(app, model))
+                unit = jhelper.get_leader_unit(app, model)
             except (ApplicationNotFoundException, LeaderNotFoundException) as e:
                 raise click.ClickException(str(e))
             return unit
 
     def _get_tempest_absolute_model_name(self, deployment: Deployment) -> str:
         """Return the absolute model name where the tempest unit resides."""
-        jhelper = JujuHelper(deployment.get_connected_controller())
+        jhelper = JujuHelper(deployment.juju_controller)
         with console.status(
             f"Retrieving the absolute model name for {TEMPEST_APP_NAME}'s unit."
         ):
             try:
-                model_name = run_sync(
-                    jhelper.get_model_name_with_owner(OPENSTACK_MODEL)
-                )
+                model_name = jhelper.get_model_name_with_owner(OPENSTACK_MODEL)
             except (ApplicationNotFoundException, LeaderNotFoundException) as e:
                 raise click.ClickException(str(e))
             return f"{deployment.controller}:{model_name}"
@@ -326,16 +323,14 @@ class ValidationFeature(OpenStackControlPlaneFeature):
     ) -> dict[str, Any]:
         """Run the charm's action."""
         unit = self._get_tempest_leader_unit(deployment)
-        jhelper = JujuHelper(deployment.get_connected_controller())
+        jhelper = JujuHelper(deployment.juju_controller)
         with console.status(progress_message):
             try:
-                action_result = run_sync(
-                    jhelper.run_action(
-                        unit,
-                        OPENSTACK_MODEL,
-                        action_name,
-                        action_params or {},
-                    )
+                action_result = jhelper.run_action(
+                    unit,
+                    OPENSTACK_MODEL,
+                    action_name,
+                    action_params or {},
                 )
             except (ActionFailedException, UnitNotFoundException) as e:
                 LOG.debug(

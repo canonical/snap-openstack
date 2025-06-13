@@ -70,7 +70,7 @@ def _update_proxy(proxy: dict, deployment: Deployment, show_hints: bool):
     # Update proxy in clusterdb
     update_config(client, PROXY_CONFIG_KEY, proxy)
 
-    jhelper = JujuHelper(deployment.get_connected_controller())
+    jhelper = JujuHelper(deployment.juju_controller)
     manifest = deployment.get_manifest()
     proxy_settings = deployment.get_proxy_settings()
     model_config = convert_proxy_to_model_configs(proxy_settings)
@@ -276,8 +276,8 @@ class PromptForProxyStep(BaseStep):
         LOG.debug(f"Previous answers: {previous_answers}")
         if not (
             previous_answers.get("http_proxy")
-            and previous_answers.get("https_proxy")  # noqa: W503
-            and previous_answers.get("no_proxy")  # noqa: W503
+            and previous_answers.get("https_proxy")
+            and previous_answers.get("no_proxy")
         ):
             # Fill with defaults coming from deployment default_proxy_settings
             default_proxy_settings = self.deployment.get_default_proxy_settings()

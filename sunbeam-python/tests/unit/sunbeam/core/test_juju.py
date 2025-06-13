@@ -1,19 +1,15 @@
 # SPDX-FileCopyrightText: 2023 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
-import asyncio
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, Mock, call, patch
+import json
+import queue
+from unittest.mock import MagicMock, Mock, patch
 
+import jubilant
 import pytest
 import yaml
-from juju.application import Application
-from juju.client import connector as juju_connector
-from juju.model import Model
-from juju.unit import Unit
-from websockets import ConnectionClosedError
 
-import sunbeam.core.juju as juju
+import sunbeam.core.juju as jujulib
 
 kubeconfig_yaml = """
 apiVersion: v1
@@ -81,535 +77,513 @@ users:
 """
 
 
-def _unit_getter(u, m):
-    mock = Mock()
-    mock.name = u
-    return mock
+@pytest.fixture
+def juju():
+    yield Mock()
 
 
 @pytest.fixture
-def applications() -> dict[str, Application]:
-    mock = MagicMock()
-    k8s_unit_mock = AsyncMock(
-        entity_id="k8s/0",
-        agent_status="idle",
-        workload_status="active",
+def status():
+    return jubilant.statustypes.Status._from_dict(
+        {
+            "model": {
+                "name": "test-model",
+                "controller": "test-controller",
+                "cloud": "test-cloud",
+                "region": "test-region",
+                "version": "9723",
+                "type": "k8s",
+                "model_status": {},
+            },
+            "machines": {},
+            "applications": {},
+        }
     )
-    k8s_unit_mock.is_leader_from_status.return_value = True
-
-    mk8s_unit_mock = AsyncMock(
-        entity_id="mk8s/0",
-        agent_status="idle",
-        workload_status="active",
-    )
-    mk8s_unit_mock.is_leader_from_status.return_value = False
-
-    app_dict = {
-        "k8s": AsyncMock(status="active", units=[k8s_unit_mock]),
-        "mk8s": AsyncMock(status="unknown", units=[mk8s_unit_mock]),
-    }
-    mock.get.side_effect = app_dict.get
-    mock.__getitem__.side_effect = app_dict.__getitem__
-    return mock
 
 
 @pytest.fixture
-def units() -> dict[str, Unit]:
-    mock = MagicMock()
-    k8s_0_unit_mock = AsyncMock(
-        entity_id="k8s/0",
-        agent_status="idle",
-        workload_status="active",
+def jhelper(juju, status) -> jujulib.JujuHelper:
+    jhelper = jujulib.JujuHelper.__new__(jujulib.JujuHelper)
+    jhelper.controller = "test"
+    jhelper._juju = juju
+    juju.status.return_value = status
+    jhelper.models = Mock(
+        return_value=[
+            {
+                "short-name": "test-model",
+                "name": "admin/test-model",
+                "model-uuid": "1234",
+            }
+        ]
     )
-    k8s_0_unit_mock.run_action.return_value = AsyncMock(
-        _status="completed",
-        results={"exit_code": 0},
-    )
-
-    k8s_1_unit_mock = AsyncMock(
-        entity_id="k8s/1",
-        agent_status="unknown",
-        workload_status="unknown",
-    )
-    k8s_1_unit_mock.run_action.return_value = AsyncMock(
-        _status="failed",
-        results={"exit_code": 1},
-    )
-
-    unit_dict = {
-        "k8s/0": k8s_0_unit_mock,
-        "k8s/1": k8s_1_unit_mock,
-    }
-    mock.get.side_effect = unit_dict.get
-    mock.__getitem__.side_effect = unit_dict.__getitem__
-    return mock
-
-
-@pytest.fixture
-def model(applications, units) -> Model:
-    model = AsyncMock()
-    model.__aenter__.return_value = model
-    model.name = "control-plane"
-    model.units = units
-    model.applications = applications
-    model.all_units_idle = Mock()
-    model.info = Mock()
-
-    def test_condition(condition, timeout):
-        """False condition raises a timeout"""
-        result = condition()
-        model.block_until.result = result
-        if not result:
-            raise asyncio.TimeoutError(f"Timed out after {timeout} seconds")
-        return result
-
-    model.block_until.side_effect = test_condition
-
-    model.get_action_output.return_value = "action failed..."
-
-    return model
-
-
-@pytest.fixture
-def jhelper_base(tmp_path: Path) -> juju.JujuHelper:
-    jhelper = juju.JujuHelper.__new__(juju.JujuHelper)
-    jhelper.data_location = tmp_path
-    jhelper.controller = AsyncMock()  # type: ignore
-    jhelper.model_connectors = []
     return jhelper
 
 
-@pytest.fixture
-def jhelper_404(jhelper_base: juju.JujuHelper):
-    # pyright: reportGeneralTypeIssues=false
-    jhelper_base.controller.get_model.side_effect = Exception("HTTP 400")
-    yield jhelper_base
-    jhelper_base.controller.get_model.side_effect = None
+def test_init_with_none():
+    with pytest.raises(ValueError):
+        jujulib.JujuHelper(None)
 
 
-@pytest.fixture
-def jhelper_unknown_error(jhelper_base: juju.JujuHelper):
-    # pyright: reportGeneralTypeIssues=false
-    jhelper_base.controller.get_model.side_effect = Exception("Unknown error")
-    yield jhelper_base
-    jhelper_base.controller.get_model.side_effect = None
+def test_cli_json_success(jhelper):
+    jhelper._juju.cli.return_value = json.dumps({"app": "bar"})
+    result = jhelper.cli("status")
+    assert result == {"app": "bar"}
 
 
-@pytest.fixture
-def jhelper(mocker, jhelper_base: juju.JujuHelper, model):
-    jhelper_base.controller.get_model.return_value = model
-    yield jhelper_base
+def test_cli_json_decode_error(jhelper):
+    jhelper._juju.cli.return_value = "{bad json}"
+    with pytest.raises(jujulib.CmdFailedException):
+        jhelper.cli("status")
 
 
-@pytest.mark.asyncio
-async def test_jhelper_get_clouds(jhelper: juju.JujuHelper):
-    await jhelper.get_clouds()
-    jhelper.controller.clouds.assert_called_once()
+def test_get_model_found(jhelper):
+    assert jhelper.get_model("test-model")
 
 
-@pytest.mark.asyncio
-async def test_jhelper_get_model(jhelper: juju.JujuHelper):
-    await jhelper.get_model("control-plane")
-    jhelper.controller.get_model.assert_called_with("control-plane")
+def test_get_model_not_found(jhelper):
+    with pytest.raises(jujulib.ModelNotFoundException):
+        jhelper.get_model("nope")
 
 
-@pytest.mark.asyncio
-async def test_jhelper_get_model_missing(
-    jhelper_404: juju.JujuHelper,
-):
-    with pytest.raises(juju.ModelNotFoundException, match="Model 'missing' not found"):
-        await jhelper_404.get_model("missing")
+def test_model_exists_true(jhelper):
+    assert jhelper.model_exists("test-model")
 
 
-@pytest.mark.asyncio
-async def test_jhelper_get_model_unknown_error(
-    jhelper_unknown_error: juju.JujuHelper,
-):
-    with pytest.raises(Exception, match="Unknown error"):
-        await jhelper_unknown_error.get_model("control-plane")
+def test_model_exists_false(jhelper):
+    assert not jhelper.model_exists("nope")
 
 
-@pytest.mark.asyncio
-async def test_jhelper_get_model_status_full(jhelper: juju.JujuHelper, model):
-    model.get_status.return_value = Mock(to_json=Mock(return_value="{}"))
-    await jhelper.get_model_status_full("control-plane")
-    jhelper.controller.get_model.assert_called_with("control-plane")
-    model.get_status.assert_called_once()
+def test_get_model_name_with_owner(jhelper):
+    assert jhelper.get_model_name_with_owner("test-model") == "admin/test-model"
 
 
-@pytest.mark.asyncio
-async def test_jhelper_get_model_status_full_model_missing(
-    jhelper_404: juju.JujuHelper, model
-):
-    with pytest.raises(juju.ModelNotFoundException, match="Model 'missing' not found"):
-        await jhelper_404.get_model_status_full("missing")
-        model.get_status.assert_not_called()
+def test_get_machines(jhelper, status):
+    assert jhelper.get_machines("test-model") == status.machines
 
 
-@pytest.mark.asyncio
-async def test_jhelper_get_model_name_with_owner(jhelper: juju.JujuHelper, model):
-    await jhelper.get_model_name_with_owner("control-plane")
-    jhelper.controller.get_model.assert_called_with("control-plane")
+def test_get_application_found(jhelper, status):
+    status.apps["app"] = Mock()
+    assert jhelper.get_application("app", "test-model") == status.apps["app"]
 
 
-@pytest.mark.asyncio
-async def test_jhelper_get_model_name_with_owner_model_missing(
-    jhelper_404: juju.JujuHelper, model
-):
-    with pytest.raises(juju.ModelNotFoundException, match="Model 'missing' not found"):
-        await jhelper_404.get_model_name_with_owner("missing")
-        jhelper_404.controller.get_model.assert_called_with("missing")
+def test_get_application_not_found(jhelper):
+    with pytest.raises(jujulib.ApplicationNotFoundException):
+        jhelper.get_application("app", "test-model")
 
 
-@pytest.mark.asyncio
-async def test_jhelper_get_unit(jhelper: juju.JujuHelper, model, units):
-    await jhelper.get_unit("k8s/0", model)
-    units.get.assert_called_with("k8s/0")
+def test_get_application_names(jhelper, status):
+    status.apps.update({"app1": 1, "app2": 1})
+    names = jhelper.get_application_names("test-model")
+    assert names == ["app1", "app2"]
 
 
-@pytest.mark.asyncio
-async def test_jhelper_get_unit_missing(jhelper: juju.JujuHelper, model):
-    name = "mysql/0"
-    with pytest.raises(
-        juju.UnitNotFoundException,
-        match=f"Unit {name!r} is missing from model {model.name!r}",
-    ):
-        await jhelper.get_unit(name, model)
+def test_validate_unit_valid(jhelper):
+    jhelper._validate_unit("app/0")
 
 
-@pytest.mark.asyncio
-async def test_jhelper_get_unit_invalid_name(jhelper: juju.JujuHelper, model):
-    with pytest.raises(
-        ValueError,
-        match=(
-            "Name 'k8s' has invalid format, "
-            "should be a valid unit of format application/id"
-        ),
-    ):
-        await jhelper.get_unit("k8s", model)
+def test_validate_unit_invalid(jhelper):
+    with pytest.raises(ValueError):
+        jhelper._validate_unit("badunit")
 
 
-@pytest.mark.asyncio
-async def test_jhelper_get_leader_unit(
-    jhelper: juju.JujuHelper, applications: dict[str, Application]
-):
-    app = "k8s"
-    unit = await jhelper.get_leader_unit(app, "control-plane")
-    assert unit is not None
-    applications.get.assert_called_with(app)
+def test_add_unit_single(jhelper):
+    jhelper.get_application = Mock(
+        side_effect=[
+            Mock(units={"app/0": Mock(machine="0")}),
+            Mock(units={"app/0": Mock(machine="0"), "app/1": Mock(machine="1")}),
+        ]
+    )
+    result = jhelper.add_unit("test-model", "app", "1")
+    assert "app/1" in result
 
 
-@pytest.mark.asyncio
-async def test_jhelper_get_leader_unit_missing_application(jhelper: juju.JujuHelper):
-    model = "control-plane"
-    app = "mysql"
-    with pytest.raises(
-        juju.ApplicationNotFoundException,
-        match=f"Application missing from model: {model!r}",
-    ):
-        await jhelper.get_leader_unit(app, model)
+def test_remove_unit(jhelper, juju):
+    jhelper.remove_unit("app", "app/0", "test-model")
+    juju.remove_unit.assert_called()
 
 
-@pytest.mark.asyncio
-async def test_jhelper_get_leader_unit_missing(jhelper: juju.JujuHelper):
-    model = "control-plane"
-    app = "mk8s"
-    with pytest.raises(
-        juju.LeaderNotFoundException,
-        match=f"Leader for application {app!r} is missing from model {model!r}",
-    ):
-        await jhelper.get_leader_unit(app, model)
+def test_run_cmd_on_machine_unit_payload_success(jhelper, juju):
+    juju.exec = Mock(return_value=Mock(success=True, results={"result": "ok"}))
+
+    result = jhelper.run_cmd_on_machine_unit_payload("app/0", "test-model", "ls")
+    assert result.results["result"] == "ok"
 
 
-@pytest.mark.asyncio
-async def test_jhelper_get_application(
-    jhelper: juju.JujuHelper, model, applications: dict[str, Application]
-):
-    app = await jhelper.get_application("k8s", model)
-    assert app is not None
-    applications.get.assert_called_with("k8s")
+def test_run_action_success(jhelper, juju):
+    juju.run = Mock(return_value=Mock(success=True, results={"app": "bar"}))
+
+    result = jhelper.run_action("app/0", "test-model", "do-something")
+    assert result["app"] == "bar"
 
 
-@pytest.mark.asyncio
-async def test_jhelper_get_application_missing(jhelper: juju.JujuHelper, model):
-    with pytest.raises(
-        juju.ApplicationNotFoundException,
-        match=f"Application missing from model: {model.name!r}",
-    ):
-        await jhelper.get_application("mysql", model)
+def test_run_action_failure(jhelper, juju):
+    juju.run = MagicMock(return_value=Mock(success=False, results={"app": "bar"}))
+
+    with pytest.raises(jujulib.ActionFailedException):
+        jhelper.run_action("app/0", "test-model", "do-something")
 
 
-@pytest.mark.asyncio
-async def test_jhelper_add_unit(
-    jhelper: juju.JujuHelper, applications: dict[str, Application]
-):
-    app = applications["k8s"]
-    await jhelper.add_unit(app)
-    applications["k8s"].add_unit.assert_called_with(1, None)
+def test_run_cmd_on_unit_payload_success(jhelper, juju):
+    juju._cli = MagicMock(
+        return_value=(json.dumps({"app/0": {"results": {"out": "ok"}}}), "")
+    )
+    result = jhelper.run_cmd_on_unit_payload("app/0", "test-model", "ls", "container")
+    assert result["out"] == "ok"
 
 
-@pytest.mark.asyncio
-async def test_jhelper_add_unit_to_machine(
-    jhelper: juju.JujuHelper, applications: dict[str, Application]
-):
-    app = applications["k8s"]
-    await jhelper.add_unit(app, machine="0")
-    applications["k8s"].add_unit.assert_called_with(1, "0")
+def test_run_cmd_on_unit_payload_cli_error(jhelper, juju):
+    juju._cli.side_effect = jubilant.CLIError(
+        1, "ls container", json.dumps({"app/0": {"results": {"err": "fail"}}})
+    )
+    result = jhelper.run_cmd_on_unit_payload("app/0", "test-model", "ls", "container")
+    assert result["err"] == "fail"
 
 
-@pytest.mark.asyncio
-async def test_jhelper_remove_unit(
-    jhelper: juju.JujuHelper, applications: dict[str, Application]
-):
-    await jhelper.remove_unit("k8s", "k8s/0", "control-plane")
-    applications["k8s"].destroy_unit.assert_called_with("k8s/0")
+def test_set_model_config(jhelper, juju):
+    jhelper.set_model_config("test-model", {"app": "bar"})
+    juju.model_config.assert_called()
 
 
-@pytest.mark.asyncio
-async def test_jhelper_remove_unit_missing_application(
-    jhelper: juju.JujuHelper,
-):
-    name = "mysql"
-    unit = "mysql/0"
-    model = "control-plane"
-    with pytest.raises(
-        juju.ApplicationNotFoundException,
-        match=f"Application {name!r} is missing from model {model!r}",
-    ):
-        await jhelper.remove_unit(name, unit, model)
+def test_remove_application(jhelper, juju):
+    jhelper.remove_application("app", model="test-model")
+    juju.remove_application.assert_called()
 
 
-@pytest.mark.asyncio
-async def test_jhelper_remove_unit_invalid_unit(
-    jhelper: juju.JujuHelper,
-):
-    with pytest.raises(
-        ValueError,
-        match=(
-            "Name 'k8s' has invalid format, "
-            "should be a valid unit of format application/id"
-        ),
-    ):
-        await jhelper.remove_unit("k8s", "k8s", "control-plane")
+def test_add_machine(jhelper, juju):
+    juju._cli.return_value = ("", "machine-1")
+    result = jhelper.add_machine("name", "test-model")
+    assert result == "machine-1"
 
 
-@pytest.mark.asyncio
-async def test_jhelper_run_action(jhelper: juju.JujuHelper, units):
-    unit = "k8s/0"
-    action_name = "get-action"
-    await jhelper.run_action(unit, "control-plane", action_name)
-    units.get(unit).run_action.assert_called_once_with(action_name)
+def test_charm_refresh(jhelper, juju):
+    jhelper.charm_refresh("app", "test-model")
+    juju.refresh.assert_called()
 
 
-@pytest.mark.asyncio
-async def test_jhelper_run_action_failed(jhelper: juju.JujuHelper):
-    with pytest.raises(
-        juju.ActionFailedException,
-        match="action failed...",
-    ):
-        await jhelper.run_action("k8s/1", "control-plane", "get-action")
+def test_get_spaces(jhelper):
+    juju_mock = MagicMock()
+    juju_mock.cli = MagicMock(return_value=json.dumps({"spaces": [{"name": "space1"}]}))
+
+    class DummyContext:
+        def __enter__(self):
+            return juju_mock
+
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            return False
+
+    jhelper._model = MagicMock(return_value=DummyContext())
+    result = jhelper.get_spaces("test-model")
+    assert result == [{"name": "space1"}]
 
 
-@pytest.mark.asyncio
-async def test_jhelper_scp_from(jhelper: juju.JujuHelper, units):
-    unit = "k8s/0"
-    await jhelper.scp_from(unit, "control-plane", "source", "destination")
-    units.get(unit).scp_from.assert_called_once_with("source", "destination")
+def test_add_space_success(jhelper, juju):
+    jhelper.add_space("test-model", "space", ["10.0.0.0/24"])
+    juju.cli.assert_called()
 
 
-@pytest.mark.asyncio
-async def test_jhelper_add_k8s_cloud(jhelper: juju.JujuHelper):
+def test_add_space_fail(jhelper, juju):
+    juju.cli.side_effect = jubilant.CLIError(1, "add-space space 10.0.0.0/24", "fail")
+
+    with pytest.raises(jujulib.JujuException):
+        jhelper.add_space("test-model", "space", ["10.0.0.0/24"])
+
+
+def test_get_space_networks_success(jhelper, juju):
+    juju.cli.return_value = json.dumps(
+        {"space": {"subnets": [{"cidr": "10.0.0.0/24"}]}}
+    )
+
+    result = jhelper.get_space_networks("test-model", "space")
+    import ipaddress
+
+    assert result == [ipaddress.ip_network("10.0.0.0/24")]
+
+
+def test_get_space_networks_not_found(jhelper, juju):
+    juju.cli.side_effect = jubilant.CLIError(1, "get-space space", stderr="not found")
+    with pytest.raises(jujulib.JujuException):
+        jhelper.get_space_networks("test-model", "space")
+
+
+def test_get_space_networks_invalid_cidr(jhelper, juju):
+    juju.cli.return_value = json.dumps({"space": {"subnets": [{"cidr": "badcidr"}]}})
+
+    with pytest.raises(jujulib.JujuException):
+        jhelper.get_space_networks("test-model", "space")
+
+
+def test_remove_saas_success(jhelper, juju):
+    jhelper.remove_saas("test-model", "saas1")
+    juju.cli.assert_called()
+
+
+def test_remove_saas_fail(jhelper, juju):
+    # Patch jubilant.CLIError for this test
+    juju.cli.side_effect = jubilant.CLIError(1, "remove-saas", "fail")
+    with pytest.raises(jujulib.JujuException):
+        jhelper.remove_saas("test-model", "saas1")
+
+
+def test_destroy_model_found(jhelper, juju):
+    jhelper.destroy_model("test-model")
+    juju.destroy_model.assert_called_with(
+        "admin/test-model", destroy_storage=False, force=False
+    )
+
+
+def test_destroy_model_not_found(jhelper, juju):
+    jhelper.destroy_model("model")
+    juju.destroy_model.assert_not_called()
+
+
+def test_integrate_success(jhelper, juju, status):
+    status.apps.update({"foo": 1, "bar": 1})
+    jhelper.integrate("test-model", "foo", "bar", "rel")
+    juju.integrate.assert_called_with("foo:rel", "bar:rel")
+
+
+def test_integrate_missing_requirer(jhelper, status):
+    status.apps["foo"] = 1
+    with pytest.raises(jujulib.ApplicationNotFoundException):
+        jhelper.integrate("test-model", "foo", "bar", "rel")
+
+
+def test_integrate_missing_provider(jhelper, status):
+    status.apps["bar"] = 1
+    with pytest.raises(jujulib.ApplicationNotFoundException):
+        jhelper.integrate("test-model", "foo", "bar", "rel")
+
+
+def test_are_integrated_true(jhelper):
+    app = Mock()
+    rel = Mock()
+    rel.related_app = "bar"
+    app.relations = {"rel": [rel]}
+    jhelper.get_application = Mock(return_value=app)
+    assert jhelper.are_integrated("model", "foo", "bar", "rel") is True
+
+
+def test_are_integrated_false_no_relations(jhelper):
+    app = Mock()
+    app.relations = {"rel": []}
+    jhelper.get_application = Mock(return_value=app)
+    assert jhelper.are_integrated("model", "foo", "bar", "rel") is False
+
+
+def test_are_integrated_false_no_relation_key(jhelper):
+    app = Mock()
+    app.relations = {}
+    jhelper.get_application = Mock(return_value=app)
+    assert jhelper.are_integrated("model", "foo", "bar", "rel") is False
+
+
+def test_are_integrated_false_wrong_related_app(jhelper):
+    app = Mock()
+    rel = Mock()
+    rel.related_app = "baz"
+    app.relations = {"rel": [rel]}
+    jhelper.get_application = Mock(return_value=app)
+    assert jhelper.are_integrated("model", "foo", "bar", "rel") is False
+
+
+def test_get_model_status_success(jhelper, status):
+    assert jhelper.get_model_status("test-model") == status
+
+
+def test_get_model_status_not_found(jhelper, juju):
+    juju.status.side_effect = jubilant.CLIError(1, "status", stderr="not found")
+    with pytest.raises(jujulib.ModelNotFoundException):
+        jhelper.get_model_status("test-model")
+
+
+def test_get_model_status_other_error(jhelper, juju):
+    juju.status.side_effect = jubilant.CLIError(1, "status", stderr="other error")
+    with pytest.raises(jujulib.JujuException):
+        jhelper.get_model_status("test-model")
+
+
+def test_get_machine_interfaces_success(jhelper, status):
+    machine = Mock(network_interfaces=1)
+    status.machines.update({"0": machine})
+    assert jhelper.get_machine_interfaces("test-model", "0") == 1
+
+
+def test_get_machine_interfaces_not_found(jhelper):
+    with pytest.raises(jujulib.MachineNotFoundException):
+        jhelper.get_machine_interfaces("test-model", "1")
+
+
+def test_deploy_simple(jhelper, juju):
+    jhelper.deploy("app", "charm", "test-model")
+    juju.deploy.assert_called_with(
+        "charm",
+        app="app",
+        channel=None,
+        revision=None,
+        config=None,
+        num_units=1,
+        base="ubuntu@24.04",
+        to=None,
+    )
+
+
+def test_deploy_all_args(jhelper, juju):
+    jhelper.deploy(
+        "app",
+        "charm",
+        "test-model",
+        num_units=2,
+        channel="edge",
+        revision=5,
+        to=["0"],
+        config={"foo": "bar"},
+        base="ubuntu@22.04",
+    )
+    juju.deploy.assert_called_with(
+        "charm",
+        app="app",
+        channel="edge",
+        revision=5,
+        config={"foo": "bar"},
+        num_units=2,
+        base="ubuntu@22.04",
+        to=["0"],
+    )
+
+
+def test_get_unit_success(jhelper, status):
+    unit = Mock()
+    status.apps["app"] = Mock(units={"app/0": unit})
+    assert jhelper.get_unit("app/0", "test-model") is unit
+
+
+def test_get_unit_app_not_found(jhelper, status):
+    with pytest.raises(jujulib.ApplicationNotFoundException):
+        jhelper.get_unit("app/0", "test-model")
+
+
+def test_get_unit_unit_not_found(jhelper, status):
+    status.apps["app"] = Mock(units={})
+    with pytest.raises(jujulib.UnitNotFoundException):
+        jhelper.get_unit("app/0", "test-model")
+
+
+def test_get_unit_from_machine_success(jhelper, status):
+    unit = Mock(machine="1")
+    status.apps["app"] = Mock(units={"app/0": unit})
+    assert jhelper.get_unit_from_machine("app", "1", "test-model") == "app/0"
+
+
+def test_get_unit_from_machine_app_not_found(jhelper, status):
+    with pytest.raises(jujulib.ApplicationNotFoundException):
+        jhelper.get_unit_from_machine("app", "1", "test-model")
+
+
+def test_get_unit_from_machine_unit_not_found(jhelper, status):
+    status.apps["app"] = Mock(units={"app/0": Mock(machine="2")})
+    with pytest.raises(jujulib.UnitNotFoundException):
+        jhelper.get_unit_from_machine("app", "1", "test-model")
+
+
+def test__get_leader_unit_success(jhelper, status):
+    leader_unit = Mock(leader=True)
+    non_leader_unit = Mock(leader=False)
+    status.apps["app"] = Mock(units={"app/0": non_leader_unit, "app/1": leader_unit})
+    name, unit = jhelper._get_leader_unit("app", "test-model")
+    assert name == "app/1"
+    assert unit is leader_unit
+
+
+def test__get_leader_unit_no_leader(jhelper, status):
+    status.apps["app"] = Mock(units={"app/0": Mock(leader=False)})
+    with pytest.raises(jujulib.LeaderNotFoundException):
+        jhelper._get_leader_unit("app", "test-model")
+
+
+def test__get_leader_unit_app_not_found(jhelper, status):
+    with pytest.raises(jujulib.ApplicationNotFoundException):
+        jhelper._get_leader_unit("app", "test-model")
+
+
+def test_grant_secret_success(jhelper, juju):
+    jhelper.grant_secret("test-model", "secret-id", "app")
+    juju.cli.assert_called()
+
+
+def test_grant_secret_fail(jhelper, juju):
+    juju.cli.side_effect = jubilant.CLIError(1, "grant-secret", "fail")
+    with pytest.raises(jujulib.JujuException):
+        jhelper.grant_secret("test-model", "secret-id", "app")
+
+
+def test_get_secret_success(jhelper, juju):
+    juju.cli.return_value = json.dumps(
+        {"43434kj": {"content": {"Data": "secret data"}}}
+    )
+    assert jhelper.get_secret("test-model", "secret-id") == "secret data"
+    juju.cli.assert_called()
+
+
+def test_get_secret_fail(jhelper, juju):
+    juju.cli.side_effect = jubilant.CLIError(1, "get-secret", stderr="fail")
+    with pytest.raises(jujulib.JujuException):
+        jhelper.get_secret("test-model", "secret-id")
+
+
+def test_get_secret_not_found(jhelper, juju):
+    juju.cli.side_effect = jubilant.CLIError(1, "get-secret", stderr="not found")
+    with pytest.raises(jujulib.JujuSecretNotFound):
+        jhelper.get_secret("test-model", "secret-id")
+
+
+def test_jhelper_add_k8s_cloud(jhelper: jujulib.JujuHelper):
     kubeconfig = yaml.safe_load(kubeconfig_yaml)
-    await jhelper.add_k8s_cloud("k8s", "k8s-creds", kubeconfig)
+    jhelper.add_k8s_cloud("k8s", "k8s-creds", kubeconfig)
 
 
-@pytest.mark.asyncio
-async def test_jhelper_add_k8s_cloud_with_client_certificate(jhelper: juju.JujuHelper):
+def test_jhelper_add_k8s_cloud_with_client_certificate(jhelper: jujulib.JujuHelper):
     kubeconfig = yaml.safe_load(kubeconfig_clientcertificate_yaml)
-    await jhelper.add_k8s_cloud("k8s", "k8s-creds", kubeconfig)
+    jhelper.add_k8s_cloud("k8s", "k8s-creds", kubeconfig)
 
 
-@pytest.mark.asyncio
-async def test_jhelper_add_k8s_cloud_unsupported_kubeconfig(jhelper: juju.JujuHelper):
+def test_jhelper_add_k8s_cloud_unsupported_kubeconfig(jhelper: jujulib.JujuHelper):
     kubeconfig = yaml.safe_load(kubeconfig_unsupported_yaml)
     with pytest.raises(
-        juju.UnsupportedKubeconfigException,
+        jujulib.UnsupportedKubeconfigException,
         match=(
             "Unsupported user credentials, only OAuth token and ClientCertificate are "
             "supported"
         ),
     ):
-        await jhelper.add_k8s_cloud("k8s", "k8s-creds", kubeconfig)
+        jhelper.add_k8s_cloud("k8s", "k8s-creds", kubeconfig)
 
 
-test_data_k8s = [
-    ("wait_application_ready", "k8s", "application 'k8s'", [["blocked"]]),
-]
-
-test_data_custom_status = [
-    ("wait_application_ready", "mk8s", ["unknown"]),
-]
-
-test_data_missing = [
-    ("wait_application_ready", "mysql"),
-]
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("method,entity,error,args", test_data_k8s)
-async def test_jhelper_wait_ready(
-    jhelper: juju.JujuHelper, model: Model, method: str, entity: str, error: str, args
-):
-    with patch.object(jhelper, "get_unit", side_effect=_unit_getter):
-        await getattr(jhelper, method)(entity, "control-plane")
-    assert model.block_until.call_count == 1
-    assert model.block_until.result is True
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("method,entity,error,args", test_data_k8s)
-async def test_jhelper_wait_application_ready_timeout(
-    jhelper: juju.JujuHelper, model: Model, method: str, entity: str, error: str, args
-):
-    with (
-        pytest.raises(
-            juju.TimeoutException,
-            match=f"Timed out while waiting for {error} to be ready",
-        ),
-        patch.object(jhelper, "get_unit", side_effect=_unit_getter),
-    ):
-        await getattr(jhelper, method)(entity, "control-plane", *args)
-    assert model.block_until.call_count == 1
-    assert model.block_until.result is False
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("method,entity,status", test_data_custom_status)
-async def test_jhelper_wait_ready_custom_status(
-    jhelper: juju.JujuHelper,
-    model: Model,
-    method: str,
-    entity: str,
-    status: list | dict,
-):
-    with patch.object(jhelper, "get_unit", side_effect=_unit_getter):
-        await getattr(jhelper, method)(entity, "control-plane", accepted_status=status)
-    assert model.block_until.call_count == 1
-    assert model.block_until.result is True
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("method,entity", test_data_missing)
-async def test_jhelper_wait_ready_missing_application(
-    jhelper: juju.JujuHelper, model: Model, method: str, entity: str
-):
-    await getattr(jhelper, method)(entity, "control-plane")
-    assert model.block_until.call_count == 0
-
-
-@pytest.mark.asyncio
-async def test_jhelper_wait_until_active(mocker, jhelper: juju.JujuHelper, model):
-    gather = AsyncMock()
-    mocker.patch("asyncio.gather", gather)
-    await jhelper.wait_until_active("control-plane")
-    assert gather.call_count == 1
-
-
-@pytest.mark.asyncio
-async def test_jhelper_wait_until_active_unit_in_error_state(
-    jhelper: juju.JujuHelper, model
-):
-    jhelper._wait_until_status_coroutine = AsyncMock(
-        side_effect=juju.JujuWaitException("Unit is in error state")
-    )
-
-    model.applications = {"keystone": (), "nova": ()}
-    with pytest.raises(
-        juju.JujuWaitException,
-        match="Unit is in error state",
-    ):
-        await jhelper.wait_until_active("control-plane")
-    assert jhelper._wait_until_status_coroutine.call_count == 2
-
-
-@pytest.mark.asyncio
-async def test_jhelper_wait_until_active_timed_out(
-    mocker, jhelper: juju.JujuHelper, model
-):
-    gather = AsyncMock()
-    gather.side_effect = asyncio.TimeoutError("timed out...")
-    mocker.patch("asyncio.gather", gather)
-
-    jhelper._wait_until_status_coroutine = AsyncMock()
-
-    model.applications = {"keystone": (), "nova": ()}
-    with pytest.raises(
-        juju.TimeoutException,
-        match="Timed out while waiting for model",
-    ):
-        await jhelper.wait_until_active("control-plane")
-    assert jhelper._wait_until_status_coroutine.call_count == 2
-
-
-@pytest.mark.asyncio
-async def test_get_available_charm_revision(jhelper: juju.JujuHelper, model):
-    cmd_out = {"channel-map": {"legacy/edge": {"revision": {"version": "121"}}}}
-    with patch.object(juju.juju_charmhub, "CharmHub") as p:
-        charmhub = AsyncMock()
-        charmhub.info.return_value = cmd_out
-        p.return_value = charmhub
-        revno = await jhelper.get_available_charm_revision(
-            "openstack", "k8s", "legacy/edge"
-        )
-        assert revno == 121
+def test_get_available_charm_revision(jhelper: jujulib.JujuHelper, juju):
+    cmd_out = {
+        "channels": {
+            "legacy": {
+                "edge": [
+                    {
+                        "revision": 121,
+                        "bases": [{"name": "ubuntu", "channel": "24.04"}],
+                    }
+                ]
+            }
+        }
+    }
+    juju.cli.return_value = json.dumps(cmd_out)
+    revno = jhelper.get_available_charm_revision("k8s", "legacy/edge")
+    assert revno == 121
 
 
 class TestJujuStepHelper:
-    def test_revision_update_needed(self, jhelper):
-        jsh = juju.JujuStepHelper()
-        jsh.jhelper = jhelper
-        CHARMREV = {"nova-k8s": 31, "cinder-k8s": 51, "another-k8s": 70}
-
-        def _get_available_charm_revision(model, charm_name, deployed_channel):
-            return CHARMREV[charm_name]
-
-        _status = {
-            "applications": {
-                "nova": {
-                    "charm": "ch:amd64/jammy/nova-k8s-30",
-                    "charm-channel": "2023.2/edge/gnuoy",
-                },
-                "cinder": {
-                    "charm": "ch:amd64/jammy/cinder-k8s-50",
-                    "charm-channel": "2023.2/edge",
-                },
-                "another": {
-                    "charm": "ch:amd64/jammy/another-k8s-70",
-                    "charm-channel": "edge",
-                },
-            }
-        }
-        jhelper.get_available_charm_revision = AsyncMock()
-        jhelper.get_available_charm_revision.side_effect = _get_available_charm_revision
-        assert jsh.revision_update_needed("cinder", "openstack", _status)
-        assert not jsh.revision_update_needed("nova", "openstack", _status)
-        assert not jsh.revision_update_needed("another", "openstack", _status)
-
     def test_normalise_channel(self):
-        jsh = juju.JujuStepHelper()
+        jsh = jujulib.JujuStepHelper()
         assert jsh.normalise_channel("2023.2/edge") == "2023.2/edge"
         assert jsh.normalise_channel("edge") == "latest/edge"
 
-    def test_extract_charm_name(self):
-        jsh = juju.JujuStepHelper()
-        assert jsh._extract_charm_name("ch:amd64/jammy/cinder-k8s-50") == "cinder-k8s"
-
-    def test_extract_charm_revision(self):
-        jsh = juju.JujuStepHelper()
-        assert jsh._extract_charm_revision("ch:amd64/jammy/cinder-k8s-50") == "50"
-
     def test_channel_update_needed(self):
-        jsh = juju.JujuStepHelper()
+        jsh = jujulib.JujuStepHelper()
         assert jsh.channel_update_needed("2023.1/stable", "2023.2/stable")
         assert jsh.channel_update_needed("2023.1/stable", "2023.1/edge")
         assert jsh.channel_update_needed("latest/stable", "latest/edge")
@@ -620,40 +594,30 @@ class TestJujuStepHelper:
 
 
 class TestJujuActionHelper:
-    @patch("sunbeam.core.juju.run_sync")
-    def test_get_unit(self, mock_run_sync):
+    def test_get_unit(self):
         mock_client = Mock()
-        mock_jhelper = Mock()
         mock_client.cluster.get_node_info.return_value = {"machineid": "fakeid"}
-        side_effect = [Mock(), Mock()]
-        mock_run_sync.side_effect = side_effect
+        jhelper = Mock()
 
-        juju.JujuActionHelper.get_unit(
+        jujulib.JujuActionHelper.get_unit(
             mock_client,
-            mock_jhelper,
-            "fake-model",
+            jhelper,
+            "test-model",
             "fake-node",
             "fake-app",
         )
         mock_client.cluster.get_node_info.assert_called_once_with("fake-node")
-        mock_jhelper.get_unit_from_machine.assert_called_once_with(
+        jhelper.get_unit_from_machine.assert_called_once_with(
             "fake-app",
             "fakeid",
-            side_effect[0],
-        )
-        mock_run_sync.assert_has_calls(
-            [
-                call(mock_jhelper.get_model.return_value),
-                call(mock_jhelper.get_unit_from_machine.return_value),
-            ]
+            "test-model",
         )
 
     @patch("sunbeam.core.juju.JujuActionHelper.get_unit")
-    @patch("sunbeam.core.juju.run_sync")
-    def test_run_action(self, mock_run_sync, mock_get_unit):
+    def test_run_action(self, mock_get_unit):
         mock_client = Mock()
         mock_jhelper = Mock()
-        result = juju.JujuActionHelper.run_action(
+        jujulib.JujuActionHelper.run_action(
             mock_client,
             mock_jhelper,
             "fake-model",
@@ -662,7 +626,6 @@ class TestJujuActionHelper:
             "fake-action",
             {"p1": "v1", "p2": "v2"},
         )
-        assert result == mock_run_sync.return_value
         mock_get_unit.assert_called_once_with(
             mock_client,
             mock_jhelper,
@@ -670,15 +633,14 @@ class TestJujuActionHelper:
             "fake-node",
             "fake-app",
         )
-        mock_run_sync.assert_called_once_with(mock_jhelper.run_action.return_value)
 
     @patch("sunbeam.core.juju.JujuActionHelper.get_unit")
     def test_run_action_unit_not_found_exception(self, mock_get_unit):
         mock_client = Mock()
         mock_jhelper = Mock()
-        mock_get_unit.side_effect = juju.UnitNotFoundException
-        with pytest.raises(juju.UnitNotFoundException):
-            juju.JujuActionHelper.run_action(
+        mock_get_unit.side_effect = jujulib.UnitNotFoundException
+        with pytest.raises(jujulib.UnitNotFoundException):
+            jujulib.JujuActionHelper.run_action(
                 mock_client,
                 mock_jhelper,
                 "fake-model",
@@ -689,13 +651,12 @@ class TestJujuActionHelper:
             )
 
     @patch("sunbeam.core.juju.JujuActionHelper.get_unit")
-    @patch("sunbeam.core.juju.run_sync")
-    def test_run_action_failed_exception(self, mock_run_sync, mock_get_unit):
+    def test_run_action_failed_exception(self, mock_get_unit):
         mock_client = Mock()
         mock_jhelper = Mock()
-        mock_get_unit.side_effect = juju.ActionFailedException(Mock())
-        with pytest.raises(juju.ActionFailedException):
-            juju.JujuActionHelper.run_action(
+        mock_get_unit.side_effect = jujulib.ActionFailedException(Mock())
+        with pytest.raises(jujulib.ActionFailedException):
+            jujulib.JujuActionHelper.run_action(
                 mock_client,
                 mock_jhelper,
                 "fake-model",
@@ -706,163 +667,23 @@ class TestJujuActionHelper:
             )
 
 
-@pytest.mark.asyncio
-async def test_wait_until_desired_status_for_apps(jhelper: juju.JujuHelper):
-    model = AsyncMock(spec=Model)
-    model.__aenter__.return_value = model
-    model.applications = {
-        "app1": None,
-        "app2": None,
-    }
+def test_wait_until_desired_status_invalid_queue(jhelper: jujulib.JujuHelper):
+    status_queue: queue.Queue[str] = queue.Queue(1)
 
-
-@pytest.fixture
-def shared_updater():
-    _SharedStatusUpdater_class = Mock()
-    shared_updater = AsyncMock(spec=juju._SharedStatusUpdater)
-    _SharedStatusUpdater_class.return_value = shared_updater
-    with patch("sunbeam.core.juju._SharedStatusUpdater", _SharedStatusUpdater_class):
-        yield shared_updater
-
-
-@pytest.mark.asyncio
-async def test_wait_until_desired_status_for_apps_with_units(
-    jhelper: juju.JujuHelper, shared_updater: juju._SharedStatusUpdater
-):
-    _wait_until_status_coroutine = AsyncMock()
-    with (
-        patch.object(
-            jhelper, "_wait_until_status_coroutine", _wait_until_status_coroutine
-        ),
-    ):
-        await jhelper.wait_until_desired_status(
-            "control-plane", ["app1"], units=["app1/2"], status=["blocked"]
-        )
-        assert _wait_until_status_coroutine.call_count == 1
-        assert _wait_until_status_coroutine.call_args_list == [
-            ((shared_updater, "app1", ["app1/2"], None, {"blocked"}, None, None),),
-        ]
-
-
-@pytest.mark.asyncio
-async def test_wait_until_desired_status_invalid_queue(jhelper: juju.JujuHelper):
-    queue: asyncio.Queue[str] = asyncio.Queue(1)
-
-    with (
-        patch.object(jhelper, "get_model", return_value=model),
-    ):
-        with pytest.raises(ValueError):
-            await jhelper.wait_until_desired_status(
-                "control-plane", ["app1", "app2"], queue=queue
-            )
-
-
-@pytest.mark.asyncio
-async def test_wait_until_desired_status_timeout(
-    jhelper: juju.JujuHelper, shared_updater: juju._SharedStatusUpdater
-):
-    """Check wait_until_desired_status_for_apps behavior with nullable arguments."""
-    _wait_until_status_coroutine = AsyncMock()
-
-    with (
-        patch("asyncio.gather", AsyncMock(side_effect=asyncio.TimeoutError)),
-        patch.object(
-            jhelper, "_wait_until_status_coroutine", _wait_until_status_coroutine
-        ),
-    ):
-        with pytest.raises(juju.TimeoutException):
-            await jhelper.wait_until_desired_status("control-plane", ["app1"])
-
-        assert _wait_until_status_coroutine.call_count == 1
-        assert _wait_until_status_coroutine.call_args_list == [
-            ((shared_updater, "app1", None, None, {"active"}, None, None),),
-        ]
-
-
-@pytest.mark.asyncio
-async def test_wait_until_desired_status_task_exception(
-    jhelper: juju.JujuHelper, shared_updater: juju._SharedStatusUpdater
-):
-    _wait_until_status_coroutine = AsyncMock(side_effect=ValueError)
-
-    with (
-        patch.object(
-            jhelper, "_wait_until_status_coroutine", _wait_until_status_coroutine
-        ),
-    ):
-        with pytest.raises(juju.JujuWaitException):
-            await jhelper.wait_until_desired_status("control-plane", ["app1"])
-
-        assert _wait_until_status_coroutine.call_count == 1
-        assert _wait_until_status_coroutine.call_args_list == [
-            ((shared_updater, "app1", None, None, {"active"}, None, None),),
-        ]
-
-
-async def async_gen(items):
-    for item in items:
-        yield item
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "queue,expected_queue,desired_status",
-    [
-        (None, None, True),
-        (asyncio.Queue(1), "app1", True),
-        (asyncio.Queue(1), "app1", False),
-    ],
-)
-async def test_wait_until_status_coroutine(
-    shared_updater: juju._SharedStatusUpdater, queue, expected_queue, desired_status
-):
-    shared_updater.tick_status.return_value = async_gen(
-        [Mock(applications={"app1": Mock(status="active")})]
-    )
-    with patch.object(
-        juju.JujuHelper,
-        "_is_desired_status_achieved",
-        Mock(return_value=desired_status),
-    ):
-        await juju.JujuHelper._wait_until_status_coroutine(
-            shared_updater, "app1", None, queue, {"active"}, None
-        )
-    assert shared_updater.tick_status.call_count == 1
-    if queue:
-        if desired_status:
-            assert queue.get_nowait() == expected_queue
-        else:
-            with pytest.raises(asyncio.QueueEmpty):
-                queue.get_nowait()
-
-
-@pytest.mark.asyncio
-async def test_wait_until_status_coroutine_cancelled(
-    shared_updater: juju._SharedStatusUpdater,
-):
-    async def _tick_status():
-        yield await asyncio.sleep(10)
-
-    shared_updater.tick_status.return_value = _tick_status()
-    task = asyncio.create_task(
-        juju.JujuHelper._wait_until_status_coroutine(
-            shared_updater, "app1", None, None, {"active"}, None
-        )
-    )
-    await asyncio.sleep(0.01)
-    # cancelling the task should not raise an exception
-    task.cancel()
-
-
-@pytest.mark.asyncio
-async def test_wait_until_status_coroutine_missing_app(
-    shared_updater: juju._SharedStatusUpdater,
-):
-    status = AsyncMock(applications={})
-    shared_updater.tick_status.return_value = async_gen([status])
     with pytest.raises(ValueError):
-        await juju.JujuHelper._wait_until_status_coroutine(shared_updater, "app1")
-    assert shared_updater.tick_status.call_count == 1
+        jhelper.wait_until_desired_status(
+            "test-model", ["app1", "app2"], queue=status_queue
+        )
+
+
+def test_wait_until_desired_status_timeout(jhelper: jujulib.JujuHelper, juju):
+    """Check wait_until_desired_status_for_apps behavior with nullable arguments."""
+    juju.wait.side_effect = TimeoutError
+
+    with pytest.raises(TimeoutError):
+        jhelper.wait_until_desired_status("test-model", ["app1"])
+
+    juju.wait.assert_called_once()
 
 
 @pytest.mark.parametrize(
@@ -873,17 +694,17 @@ async def test_wait_until_status_coroutine_missing_app(
             Mock(
                 units={
                     "app1/0": Mock(
-                        workload_status=Mock(status="active"),
-                        agent_status=Mock(status="idle"),
+                        workload_status=Mock(current="active"),
+                        juju_status=Mock(current="idle"),
                     ),
                     "app1/1": Mock(
-                        workload_status=Mock(status="active"),
-                        agent_status=Mock(status="idle"),
+                        workload_status=Mock(current="active"),
+                        juju_status=Mock(current="idle"),
                     ),
                 },
-                subordinate_to=None,
-                status=None,
-                int_=2,
+                subordinate_to=[],
+                app_status=None,
+                scale=2,
             ),
             [],
             {"active"},
@@ -896,13 +717,13 @@ async def test_wait_until_status_coroutine_missing_app(
             Mock(
                 units={
                     "app1/0": Mock(
-                        workload_status=Mock(status="blocked"),
-                        agent_status=Mock(status="idle"),
+                        workload_status=Mock(current="blocked"),
+                        juju_status=Mock(current="idle"),
                     ),
                 },
-                subordinate_to=None,
-                status=None,
-                int_=1,
+                subordinate_to=[],
+                app_status=None,
+                scale=1,
             ),
             [],
             {"active"},
@@ -915,13 +736,13 @@ async def test_wait_until_status_coroutine_missing_app(
             Mock(
                 units={
                     "app1/0": Mock(
-                        workload_status=Mock(status="active"),
-                        agent_status=Mock(status="executing"),
+                        workload_status=Mock(current="active"),
+                        juju_status=Mock(status="executing"),
                     ),
                 },
-                subordinate_to=None,
-                status=None,
-                int_=1,
+                subordinate_to=[],
+                app_status=None,
+                scale=1,
             ),
             [],
             {"active"},
@@ -934,13 +755,13 @@ async def test_wait_until_status_coroutine_missing_app(
             Mock(
                 units={
                     "app1/0": Mock(
-                        workload_status=Mock(status="active", info="Error"),
-                        agent_status=Mock(status="idle"),
+                        workload_status=Mock(current="active", message="Error"),
+                        juju_status=Mock(current="idle"),
                     ),
                 },
-                subordinate_to=None,
-                status=None,
-                int_=1,
+                subordinate_to=[],
+                app_status=None,
+                scale=1,
             ),
             [],
             {"active"},
@@ -951,9 +772,9 @@ async def test_wait_until_status_coroutine_missing_app(
         (
             Mock(
                 units={},
-                subordinate_to="app0",
-                status=Mock(status="active"),
-                int_=None,
+                subordinate_to=["app0"],
+                app_status=Mock(current="active"),
+                scale=0,
             ),
             [],
             {"active"},
@@ -966,17 +787,17 @@ async def test_wait_until_status_coroutine_missing_app(
             Mock(
                 units={
                     "app1/0": Mock(
-                        workload_status=Mock(status="active"),
-                        agent_status=Mock(status="idle"),
+                        workload_status=Mock(current="active"),
+                        juju_status=Mock(current="idle"),
                     ),
                     "app1/1": Mock(
-                        workload_status=Mock(status="blocked"),
-                        agent_status=Mock(status="idle"),
+                        workload_status=Mock(current="blocked"),
+                        juju_status=Mock(current="idle"),
                     ),
                 },
-                subordinate_to=None,
-                status=None,
-                int_=2,
+                subordinate_to=[],
+                app_status=None,
+                scale=2,
             ),
             ["app1/0"],
             {"active"},
@@ -994,7 +815,7 @@ def test_is_desired_status_achieved(
     expected_workload_status_message,
     expected_result,
 ):
-    result = juju.JujuHelper._is_desired_status_achieved(
+    result = jujulib.JujuHelper._is_desired_status_achieved(
         application_status,
         unit_list,
         expected_status,
@@ -1002,265 +823,3 @@ def test_is_desired_status_achieved(
         expected_workload_status_message,
     )
     assert result == expected_result
-
-
-@pytest.mark.asyncio
-async def test_model_ticker_runs_until_cancelled(jhelper: juju.JujuHelper):
-    shared_updater = Mock()
-    shared_updater.reconnect_model_and_notify_awaiters.return_value = asyncio.sleep(10)
-
-    ticker_task = asyncio.create_task(jhelper._model_ticker(shared_updater))
-
-    await asyncio.sleep(0.01)
-    ticker_task.cancel()
-
-    await ticker_task
-    assert ticker_task.done()
-
-
-@pytest.mark.asyncio
-async def test_model_ticker_silences_exceptions(jhelper: juju.JujuHelper):
-    shared_updater = AsyncMock()
-    shared_updater.reconnect_model_and_notify_awaiters.side_effect = Exception(
-        "Test exception"
-    )
-    ticker_task = asyncio.create_task(jhelper._model_ticker(shared_updater))
-    await asyncio.sleep(0.01)
-
-    ticker_task.cancel()
-    assert shared_updater.reconnect_model_and_notify_awaiters.call_count > 0
-    await ticker_task
-
-
-@pytest.mark.asyncio
-async def test_tick_status_yields_status(jhelper: juju.JujuHelper):
-    status_mock = Mock()
-    shared_updater = juju._SharedStatusUpdater(jhelper, "control-plane")
-    shared_updater._model_impl = AsyncMock()
-    shared_updater._model_impl.get_status.return_value = status_mock
-
-    with patch.object(shared_updater, "is_connected", Mock(return_value=True)):
-
-        async def unlock():
-            await asyncio.sleep(0.01)
-            async with shared_updater._condition:
-                shared_updater._condition.notify_all()
-
-        gen = shared_updater.tick_status()
-        asyncio.create_task(unlock())
-        result = await gen.__anext__()
-
-    assert result == status_mock
-    shared_updater._model_impl.get_status.assert_called_once()
-
-
-@pytest.mark.asyncio
-async def test_tick_status_retries_on_connection_closed_error(
-    jhelper: juju.JujuHelper,
-):
-    status_mock = Mock()
-    shared_updater = juju._SharedStatusUpdater(jhelper, "control-plane")
-    shared_updater._model_impl = AsyncMock()
-    shared_updater._model_impl.get_status.side_effect = [
-        ConnectionClosedError("Test error", None),
-        status_mock,
-    ]
-
-    with patch.object(shared_updater, "is_connected", Mock(return_value=True)):
-
-        async def unlock():
-            for i in range(2):
-                await asyncio.sleep(0.01)
-                async with shared_updater._condition:
-                    shared_updater._condition.notify_all()
-
-        gen = shared_updater.tick_status()
-        asyncio.create_task(unlock())
-        result = await gen.__anext__()
-
-    assert result == status_mock
-    assert shared_updater._model_impl.get_status.call_count == 2
-
-
-@pytest.mark.asyncio
-async def test_tick_status_handles_cancelled_error(
-    jhelper: juju.JujuHelper,
-):
-    shared_updater = juju._SharedStatusUpdater(jhelper, "control-plane")
-    shared_updater._model_impl = Mock()
-    task = asyncio.create_task(asyncio.sleep(10))
-    await asyncio.sleep(0.01)
-    task.cancel()
-    shared_updater._model_impl.get_status.return_value = task
-
-    with patch.object(shared_updater, "is_connected", Mock(return_value=True)):
-
-        async def unlock():
-            for i in range(2):
-                await asyncio.sleep(0.01)
-                async with shared_updater._condition:
-                    shared_updater._condition.notify_all()
-
-        gen = shared_updater.tick_status()
-        asyncio.create_task(unlock())
-        await asyncio.sleep(0.01)
-        with pytest.raises(StopAsyncIteration):
-            await gen.__anext__()
-
-    shared_updater._model_impl.get_status.assert_called_once()
-
-
-@pytest.mark.asyncio
-async def test_tick_status_skips_when_not_connected(
-    jhelper: juju.JujuHelper,
-):
-    shared_updater = juju._SharedStatusUpdater(jhelper, "control-plane")
-    shared_updater._model_impl = AsyncMock()
-    shared_updater._model_impl.get_status.return_value = None
-
-    with patch.object(shared_updater, "is_connected", Mock(side_effect=[False, True])):
-
-        async def unlock():
-            for i in range(2):
-                await asyncio.sleep(0.01)
-                async with shared_updater._condition:
-                    shared_updater._condition.notify_all()
-
-        gen = shared_updater.tick_status()
-        asyncio.create_task(unlock())
-        await asyncio.sleep(0.01)
-        await gen.__anext__()
-
-    shared_updater._model_impl.get_status.assert_called_once()
-
-
-@pytest.mark.asyncio
-async def test_reconnect_model_and_notify_awaiters_connected():
-    jhelper = Mock()
-    shared_updater = juju._SharedStatusUpdater(jhelper, "control-plane")
-    shared_updater._condition = AsyncMock()
-    shared_updater._model_impl = AsyncMock()
-    with patch.object(shared_updater, "is_connected", Mock(return_value=True)):
-        await shared_updater.reconnect_model_and_notify_awaiters()
-    shared_updater._condition.notify_all.assert_called_once()
-
-
-@pytest.mark.asyncio
-async def test_reconnect_model_and_notify_awaiters_reconnect_controller():
-    jhelper = AsyncMock()
-    jhelper.controller.is_connected = Mock(return_value=False)
-    jhelper.get_model.return_value = AsyncMock()
-    shared_updater = juju._SharedStatusUpdater(jhelper, "control-plane")
-    shared_updater._condition = AsyncMock()
-    is_connected_mock = Mock(side_effect=[False, True])
-    mocker = patch.object(shared_updater, "is_connected", is_connected_mock)
-    mocker.start()
-    await shared_updater.reconnect_model_and_notify_awaiters()
-    mocker.stop()
-    assert is_connected_mock.call_count == 2
-
-    jhelper.reconnect.assert_called_once()
-    shared_updater._condition.notify_all.assert_called_once()
-
-
-@pytest.mark.asyncio
-async def test_reconnect_model_and_notify_awaiters_inner_connection_gone():
-    jhelper = AsyncMock()
-    jhelper.controller.is_connected = Mock(return_value=True)
-    shared_updater = juju._SharedStatusUpdater(jhelper, "control-plane")
-    shared_updater._condition = AsyncMock()
-    shared_updater._model_impl = AsyncMock()
-    shared_updater._model_impl.is_connected = Mock(return_value=False)
-    with patch.object(shared_updater, "is_connected", Mock(side_effect=[False, True])):
-        await shared_updater.reconnect_model_and_notify_awaiters()
-    shared_updater._model_impl.disconnect.assert_not_called()
-    jhelper.get_model.assert_called_once_with("control-plane")
-    shared_updater._condition.notify_all.assert_called_once()
-
-
-@pytest.mark.asyncio
-async def test_reconnect_model_and_notify_awaiters_inner_socket_gone():
-    jhelper = AsyncMock()
-    jhelper.controller.is_connected = Mock(return_value=True)
-    shared_updater = juju._SharedStatusUpdater(jhelper, "control-plane")
-    shared_updater._condition = AsyncMock()
-    shared_updater._model_impl = AsyncMock()
-    shared_updater._model_impl.is_connected = Mock(return_value=True)
-    shared_updater._model_impl.connection = Mock(
-        return_value=Mock(monitor=Mock(status="closed"))
-    )
-    disconnect_mock = AsyncMock()
-    shared_updater._model_impl.disconnect = disconnect_mock
-    with patch.object(shared_updater, "is_connected", Mock(side_effect=[False, True])):
-        await shared_updater.reconnect_model_and_notify_awaiters()
-    disconnect_mock.assert_called_once()
-    jhelper.get_model.assert_called_once_with("control-plane")
-    shared_updater._condition.notify_all.assert_called_once()
-
-
-@pytest.mark.asyncio
-async def test_reconnect_model_and_notify_awaiters_reconnects_on_no_connection():
-    jhelper = AsyncMock()
-    shared_updater = juju._SharedStatusUpdater(jhelper, "control-plane")
-    shared_updater._condition = AsyncMock()
-    shared_updater._model_impl = None
-    jhelper.get_model.side_effect = juju_connector.NoConnectionException
-    with patch.object(shared_updater, "is_connected", Mock(return_value=False)):
-        await shared_updater.reconnect_model_and_notify_awaiters()
-    jhelper.reconnect.assert_called_once()
-    shared_updater._condition.notify_all.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_reconnect_model_and_notify_awaiters_silences_unknown_exceptions():
-    jhelper = AsyncMock()
-    jhelper.controller.is_connected = Mock(side_effect=ValueError)
-    shared_updater = juju._SharedStatusUpdater(jhelper, "control-plane")
-    shared_updater._condition = AsyncMock()
-    shared_updater._model_impl = None
-    with patch.object(shared_updater, "is_connected", Mock(return_value=False)):
-        await shared_updater.reconnect_model_and_notify_awaiters()
-    jhelper.reconnect.assert_not_called()
-    shared_updater._condition.notify_all.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_get_model_success(jhelper: juju.JujuHelper, model):
-    result = await jhelper.get_model("control-plane")
-    assert result == model
-    jhelper.controller.get_model.assert_called_with("control-plane")
-
-
-@pytest.mark.asyncio
-async def test_get_model_not_found(jhelper: juju.JujuHelper):
-    jhelper.controller.get_model.side_effect = Exception("HTTP 404")
-    with pytest.raises(juju.ModelNotFoundException, match="Model 'missing' not found"):
-        await jhelper.get_model("missing")
-
-
-@pytest.mark.asyncio
-async def test_get_model_connection_closed_error(jhelper: juju.JujuHelper):
-    jhelper.reconnect = AsyncMock()
-    jhelper.controller.get_model.side_effect = ConnectionClosedError(None, None)
-    with pytest.raises(juju.JujuException, match="Failed to get model 'control-plane'"):
-        await jhelper.get_model("control-plane")
-
-
-@pytest.mark.asyncio
-async def test_get_model_retry_on_connection_error(mocker, jhelper: juju.JujuHelper):
-    jhelper.reconnect = AsyncMock()
-    jhelper.controller.get_model.side_effect = [
-        ConnectionClosedError(None, None),
-        AsyncMock(),
-    ]
-    result = await jhelper.get_model("control-plane")
-    assert result is not None
-    assert jhelper.controller.get_model.call_count == 2
-
-
-@pytest.mark.asyncio
-async def test_get_model_retry_exceeded(jhelper: juju.JujuHelper):
-    jhelper.reconnect = AsyncMock()
-    jhelper.controller.get_model.side_effect = ConnectionClosedError(None, None)
-    with pytest.raises(juju.JujuException, match="Failed to get model 'control-plane'"):
-        await jhelper.get_model("control-plane")

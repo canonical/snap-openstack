@@ -26,7 +26,7 @@ def openrc(ctx: click.Context) -> None:
     preflight_checks.append(VerifyBootstrappedCheck(client))
     run_preflight_checks(preflight_checks, console)
 
-    jhelper = juju.JujuHelper(deployment.get_connected_controller())
+    jhelper = juju.JujuHelper(deployment.juju_controller)
 
     with console.status("Retrieving openrc from Keystone service ... "):
         creds = retrieve_admin_credentials(jhelper, OPENSTACK_MODEL)

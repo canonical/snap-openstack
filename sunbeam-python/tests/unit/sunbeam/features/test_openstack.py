@@ -1,36 +1,19 @@
 # SPDX-FileCopyrightText: 2023 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
-import asyncio
 from pathlib import Path
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import Mock, patch
 
 import pytest
 
 import sunbeam.features.interface.v1.openstack as openstack
 from sunbeam.core.common import ResultType
-from sunbeam.core.juju import TimeoutException
 from sunbeam.core.terraform import TerraformException
-
-
-@pytest.fixture(autouse=True)
-def mock_run_sync(mocker):
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-
-    def run_sync(coro):
-        return loop.run_until_complete(coro)
-
-    mocker.patch("sunbeam.features.interface.v1.openstack.run_sync", run_sync)
-    yield
-    loop.close()
 
 
 @pytest.fixture()
 def jhelper():
-    yield AsyncMock()
+    yield Mock()
 
 
 @pytest.fixture()
@@ -83,7 +66,7 @@ class TestEnableOpenStackApplicationStep:
         assert result.message == "apply failed..."
 
     def test_run_waiting_timed_out(self, deployment, jhelper, tfhelper, osfeature):
-        jhelper.wait_until_desired_status.side_effect = TimeoutException("timed out")
+        jhelper.wait_until_desired_status.side_effect = TimeoutError("timed out")
 
         step = openstack.EnableOpenStackApplicationStep(
             deployment, Mock(), tfhelper, jhelper, osfeature
@@ -121,7 +104,7 @@ class TestDisableOpenStackApplicationStep:
         assert result.message == "apply failed..."
 
     def test_run_waiting_timed_out(self, deployment, tfhelper, jhelper, osfeature):
-        jhelper.wait_application_gone.side_effect = TimeoutException("timed out")
+        jhelper.wait_application_gone.side_effect = TimeoutError("timed out")
 
         step = openstack.DisableOpenStackApplicationStep(
             deployment, tfhelper, jhelper, osfeature
@@ -142,14 +125,14 @@ class TestUpgradeOpenStackApplicationStep:
         jhelper,
         osfeature,
     ):
-        jhelper.get_model_status_full.return_value = {
-            "applications": {
-                "keystone": {
-                    "charm": "ch:amd64/jammy/keystone-k8s-148",
-                    "charm-channel": "2023.2/stable",
-                }
+        jhelper.get_model_status.return_value = Mock(
+            apps={
+                "keystone": Mock(
+                    charm="keystone-k8s",
+                    charm_channel="2023.2/stable",
+                )
             }
-        }
+        )
 
         step = openstack.UpgradeOpenStackApplicationStep(
             deployment, tfhelper, jhelper, osfeature
@@ -165,14 +148,14 @@ class TestUpgradeOpenStackApplicationStep:
             "apply failed..."
         )
 
-        jhelper.get_model_status_full.return_value = {
-            "applications": {
-                "keystone": {
-                    "charm": "ch:amd64/jammy/keystone-k8s-148",
-                    "charm-channel": "2023.2/stable",
-                }
+        jhelper.get_model_status.return_value = Mock(
+            apps={
+                "keystone": Mock(
+                    charm="keystone-k8s",
+                    charm_channel="2023.2/stable",
+                )
             }
-        }
+        )
 
         step = openstack.UpgradeOpenStackApplicationStep(
             deployment, tfhelper, jhelper, osfeature
@@ -185,17 +168,16 @@ class TestUpgradeOpenStackApplicationStep:
         assert result.message == "apply failed..."
 
     def test_run_waiting_timed_out(self, deployment, tfhelper, jhelper, osfeature):
-        jhelper.wait_until_desired_status.side_effect = TimeoutException("timed out")
+        jhelper.wait_until_desired_status.side_effect = TimeoutError("timed out")
 
-        jhelper.get_model_status_full.return_value = {
-            "applications": {
-                "keystone": {
-                    "charm": "ch:amd64/jammy/keystone-k8s-148",
-                    "charm-channel": "2023.2/stable",
-                }
+        jhelper.get_model_status.return_value = Mock(
+            apps={
+                "keystone": Mock(
+                    charm="keystone-k8s",
+                    charm_channel="2023.2/stable",
+                )
             }
-        }
-
+        )
         step = openstack.UpgradeOpenStackApplicationStep(
             deployment, tfhelper, jhelper, osfeature
         )

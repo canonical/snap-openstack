@@ -10,7 +10,7 @@ from rich.console import Console
 
 from sunbeam.core.common import BaseStep, run_plan
 from sunbeam.core.deployment import Deployment
-from sunbeam.core.juju import JujuHelper, run_sync
+from sunbeam.core.juju import JujuHelper
 from sunbeam.core.manifest import (
     AddManifestStep,
     CharmManifest,
@@ -115,7 +115,7 @@ class DnsFeature(OpenStackControlPlaneFeature):
         self, deployment: Deployment, config: DnsFeatureConfig, show_hints: bool
     ):
         """Run plans to enable feature."""
-        jhelper = JujuHelper(deployment.get_connected_controller())
+        jhelper = JujuHelper(deployment.juju_controller)
 
         plan: list[BaseStep] = []
         if self.user_manifest:
@@ -206,23 +206,24 @@ class DnsFeature(OpenStackControlPlaneFeature):
     def dns_groups(self):
         """Manage dns."""
 
-    async def bind_address(self, deployment: Deployment) -> str | None:
+    def bind_address(self, deployment: Deployment) -> str | None:
         """Fetch bind address from juju."""
         model = OPENSTACK_MODEL
         application = "bind"
-        jhelper = JujuHelper(deployment.get_connected_controller())
-        async with jhelper.controller, await jhelper.get_model(model) as model_impl:
-            status = await model_impl.get_status([application])
-            if application not in status["applications"]:
-                return None
-            return status["applications"][application].public_address
+        jhelper = JujuHelper(deployment.juju_controller)
+        status = jhelper.get_model_status(model)
+        if app_status := status.apps.get(application):
+            # TODO(gboutry): the address does not return the public address
+            # since we don't modify the load balancer service anymore.
+            return app_status.address
+        return None
 
     @click.command()
     @pass_method_obj
     def dns_address(self, deployment: Deployment) -> None:
         """Retrieve DNS service address."""
         with console.status("Retrieving IP address from DNS service ... "):
-            bind_address = run_sync(self.bind_address(deployment))
+            bind_address = self.bind_address(deployment)
 
             if bind_address:
                 console.print(bind_address)

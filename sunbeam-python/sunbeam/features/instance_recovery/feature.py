@@ -54,9 +54,7 @@ class InstanceRecoveryFeature(OpenStackControlPlaneFeature):
             },
             terraform={
                 self.tf_plan_consul_client: TerraformManifest(
-                    source=Path(__file__).parent
-                    / "etc"  # noqa: W503
-                    / "deploy-consul-client"  # noqa: W503
+                    source=Path(__file__).parent / "etc" / "deploy-consul-client"
                 ),
             },
         )
@@ -108,7 +106,7 @@ class InstanceRecoveryFeature(OpenStackControlPlaneFeature):
         tfhelper_openstack = deployment.get_tfhelper("openstack-plan")
         tfhelper_hypervisor = deployment.get_tfhelper("hypervisor-plan")
         tfhelper_consul_client = deployment.get_tfhelper(self.tf_plan_consul_client)
-        jhelper = JujuHelper(deployment.get_connected_controller())
+        jhelper = JujuHelper(deployment.juju_controller)
         plan1: list[BaseStep] = []
         if self.user_manifest:
             plan1.append(AddManifestStep(deployment.get_client(), self.user_manifest))
@@ -157,7 +155,7 @@ class InstanceRecoveryFeature(OpenStackControlPlaneFeature):
         tfhelper = deployment.get_tfhelper(self.tfplan)
         tfhelper_hypervisor = deployment.get_tfhelper("hypervisor-plan")
         tfhelper_consul_client = deployment.get_tfhelper(self.tf_plan_consul_client)
-        jhelper = JujuHelper(deployment.get_connected_controller())
+        jhelper = JujuHelper(deployment.juju_controller)
         extra_tfvars = {"masakari-offer-url": None}
         plan = [
             TerraformInitStep(tfhelper_hypervisor),

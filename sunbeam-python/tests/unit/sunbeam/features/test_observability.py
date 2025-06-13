@@ -1,30 +1,13 @@
 # SPDX-FileCopyrightText: 2023 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
-import asyncio
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import Mock, patch
 
 import pytest
 
 from sunbeam.core.common import ResultType
-from sunbeam.core.juju import TimeoutException
 from sunbeam.core.terraform import TerraformException
 from sunbeam.features.observability import feature as observability_feature
-
-
-@pytest.fixture(autouse=True)
-def mock_run_sync(mocker):
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-
-    def run_sync(coro):
-        return loop.run_until_complete(coro)
-
-    mocker.patch("sunbeam.features.observability.feature.run_sync", run_sync)
-    yield
-    loop.close()
 
 
 @pytest.fixture()
@@ -34,7 +17,7 @@ def tfhelper():
 
 @pytest.fixture()
 def jhelper():
-    yield AsyncMock()
+    yield Mock()
 
 
 @pytest.fixture()
@@ -64,6 +47,7 @@ class TestDeployObservabilityStackStep:
     def test_run(self, deployment, tfhelper, jhelper, observabilityfeature, ssnap):
         ssnap().config.get.return_value = "k8s"
         observabilityfeature.deployment.proxy_settings.return_value = {}
+        jhelper.get_application_names.return_value = [1, 2, 3]
         step = observability_feature.DeployObservabilityStackStep(
             deployment, observabilityfeature, tfhelper, jhelper
         )
@@ -97,7 +81,8 @@ class TestDeployObservabilityStackStep:
     ):
         ssnap().config.get.return_value = "k8s"
         observabilityfeature.deployment.proxy_settings.return_value = {}
-        jhelper.wait_until_active.side_effect = TimeoutException("timed out")
+        jhelper.get_application_names.return_value = [1, 2, 3]
+        jhelper.wait_until_active.side_effect = TimeoutError("timed out")
 
         step = observability_feature.DeployObservabilityStackStep(
             deployment, observabilityfeature, tfhelper, jhelper
@@ -142,7 +127,7 @@ class TestRemoveObservabilityStackStep:
         self, deployment, tfhelper, jhelper, observabilityfeature, ssnap
     ):
         ssnap().config.get.return_value = "k8s"
-        jhelper.wait_model_gone.side_effect = TimeoutException("timed out")
+        jhelper.wait_model_gone.side_effect = TimeoutError("timed out")
 
         step = observability_feature.RemoveObservabilityStackStep(
             deployment, observabilityfeature, tfhelper, jhelper
@@ -186,7 +171,7 @@ class TestDeployGrafanaAgentStep:
     def test_run_waiting_timed_out(
         self, deployment, tfhelper, jhelper, observabilityfeature
     ):
-        jhelper.wait_application_ready.side_effect = TimeoutException("timed out")
+        jhelper.wait_application_ready.side_effect = TimeoutError("timed out")
 
         step = observability_feature.DeployGrafanaAgentStep(
             deployment, Mock(), observabilityfeature, tfhelper, jhelper
@@ -230,7 +215,7 @@ class TestRemoveGrafanaAgentStep:
     def test_run_waiting_timed_out(
         self, deployment, tfhelper, jhelper, observabilityfeature
     ):
-        jhelper.wait_application_gone.side_effect = TimeoutException("timed out")
+        jhelper.wait_application_gone.side_effect = TimeoutError("timed out")
 
         step = observability_feature.RemoveGrafanaAgentStep(
             deployment, observabilityfeature, tfhelper, jhelper
@@ -260,7 +245,7 @@ class TestIntegrateRemoteCosOffersStep:
     def test_run_waiting_timedout(
         self, deployment, jhelper, observabilityfeature, snap, run
     ):
-        jhelper.wait_application_ready.side_effect = TimeoutException("timed out")
+        jhelper.wait_application_ready.side_effect = TimeoutError("timed out")
 
         observabilityfeature.grafana_offer_url = "remotecos:admin/grafana"
         observabilityfeature.prometheus_offer_url = "remotecos:admin/prometheus"
@@ -280,18 +265,20 @@ class TestRemoveRemoteCosOffersStep:
     def test_run(self, deployment, jhelper, observabilityfeature, snap, run):
         observabilityfeature.deployment.openstack_machines_model = "test-model"
         jhelper.get_model_status.side_effect = [
-            {
-                "relations": [
-                    {"key": "grafana-agent:logging-consumer loki:loki_push_api"}
-                ]
-            },
-            {
-                "relations": [
-                    {
-                        "key": "openstack-hypervisor:identity-service keystone:identity_service"
-                    }
-                ]
-            },
+            Mock(
+                apps={
+                    "grafana-agent": Mock(
+                        relations={"logging-consumer": "loki:loki_push_api"}
+                    )
+                }
+            ),
+            Mock(
+                apps={
+                    "openstack-hypervisor": Mock(
+                        relations={"identity-service": "keystone:identity_service"}
+                    )
+                }
+            ),
         ]
         step = observability_feature.RemoveRemoteCosOffersStep(
             deployment, observabilityfeature, jhelper
@@ -306,7 +293,7 @@ class TestRemoveRemoteCosOffersStep:
         self, deployment, jhelper, observabilityfeature, snap, run
     ):
         observabilityfeature.deployment.openstack_machines_model = "test-model"
-        jhelper.get_model_status.side_effect = [{}, {}]
+        jhelper.get_model_status.side_effect = [Mock(apps={}), Mock(apps={})]
         step = observability_feature.RemoveRemoteCosOffersStep(
             deployment, observabilityfeature, jhelper
         )
@@ -321,20 +308,22 @@ class TestRemoveRemoteCosOffersStep:
     ):
         observabilityfeature.deployment.openstack_machines_model = "test-model"
         jhelper.get_model_status.side_effect = [
-            {
-                "relations": [
-                    {"key": "grafana-agent:logging-consumer loki:loki_push_api"}
-                ]
-            },
-            {
-                "relations": [
-                    {
-                        "key": "openstack-hypervisor:identity-service keystone:identity_service"
-                    }
-                ]
-            },
+            Mock(
+                apps={
+                    "grafana-agent": Mock(
+                        relations={"logging-consumer": "loki:loki_push_api"}
+                    )
+                }
+            ),
+            Mock(
+                apps={
+                    "openstack-hypervisor": Mock(
+                        relations={"identity-service": "keystone:identity_service"}
+                    )
+                }
+            ),
         ]
-        jhelper.wait_application_ready.side_effect = TimeoutException("timed out")
+        jhelper.wait_application_ready.side_effect = TimeoutError("timed out")
         step = observability_feature.RemoveRemoteCosOffersStep(
             deployment, observabilityfeature, jhelper
         )

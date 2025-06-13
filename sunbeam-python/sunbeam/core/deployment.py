@@ -10,7 +10,6 @@ from typing import TYPE_CHECKING, Type
 from urllib.request import proxy_bypass
 
 import pydantic
-import websockets
 import yaml
 from snaphelpers import Snap
 
@@ -38,8 +37,6 @@ from sunbeam.core.terraform import TerraformHelper
 from sunbeam.versions import MANIFEST_ATTRIBUTES_TFVAR_MAP, TERRAFORM_DIR_NAMES
 
 if TYPE_CHECKING:
-    from juju.controller import Controller
-
     from sunbeam.feature_manager import FeatureManager
     from sunbeam.features.interface.v1.base import BaseFeature
 else:
@@ -138,22 +135,6 @@ class Deployment(pydantic.BaseModel):
     def get_clusterd_http_address(self) -> str:
         """Return the address of the clusterd server."""
         raise NotImplementedError
-
-    def get_connected_controller(self) -> "Controller":
-        """Return connected controller."""
-        if self.juju_account is None:
-            raise ValueError(f"No juju account configured for deployment {self.name}.")
-        if self.juju_controller is None:
-            raise ValueError(
-                f"No juju controller configured for deployment {self.name}."
-            )
-        try:
-            return self.juju_controller.to_controller(self.juju_account)
-        except websockets.exceptions.InvalidProxyStatus:
-            LOG.debug("Failed to connect to juju controller because of proxy.")
-            LOG.debug("Try to add controller to proxy settings.")
-            self._ensure_juju_controller_in_no_proxy(self.juju_controller)
-            return self.juju_controller.to_controller(self.juju_account)
 
     def generate_core_config(self, console) -> str:
         """Generate preseed for deployment."""

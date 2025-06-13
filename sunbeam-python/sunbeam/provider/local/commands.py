@@ -67,7 +67,6 @@ from sunbeam.core.deployments import DeploymentsConfig, deployment_path
 from sunbeam.core.juju import (
     JujuHelper,
     JujuStepHelper,
-    run_sync,
 )
 from sunbeam.core.k8s import K8S_CLOUD_SUFFIX
 from sunbeam.core.manifest import AddManifestStep, Manifest
@@ -512,7 +511,7 @@ def deploy_and_migrate_juju_controller(
 
     # Reload deployment with lxd controller admin user credentials
     deployment.reload_credentials()
-    jhelper = JujuHelper(deployment.get_connected_controller())
+    jhelper = JujuHelper(deployment.juju_controller)
 
     plan2 = get_juju_model_machine_plans(
         deployment, jhelper, local_management_ip, "empty-creds", manifest
@@ -524,8 +523,6 @@ def deploy_and_migrate_juju_controller(
     plan3.extend(get_k8s_plans(deployment, jhelper, manifest, accept_defaults))
     run_plan(plan3, console, show_hints)
     # Disconnect all pylibjuju connections before bootstrapping new controller
-    run_sync(jhelper.disconnect())
-    del jhelper
 
     plan4 = get_juju_bootstrap_plans(deployment, juju_bootstrap_args)
     run_plan(plan4, console, show_hints)
@@ -538,7 +535,7 @@ def deploy_and_migrate_juju_controller(
 
     # Reload deployment with sunbeam-controller admin user credentials
     deployment.reload_credentials()
-    jhelper = JujuHelper(deployment.get_connected_controller())
+    jhelper = JujuHelper(deployment.juju_controller)
 
     plan6 = [
         CreateJujuUserStep(fqdn),
@@ -548,7 +545,6 @@ def deploy_and_migrate_juju_controller(
 
     plan7 = get_juju_user_plans(deployment, jhelper, data_location, token)
     run_plan(plan7, console, show_hints)
-    run_sync(jhelper.disconnect())
 
 
 @click.command()
@@ -713,7 +709,7 @@ def bootstrap(
         run_plan(plan11, console, show_hints)
 
         deployment.reload_credentials()
-        jhelper = JujuHelper(deployment.get_connected_controller())
+        jhelper = JujuHelper(deployment.juju_controller)
 
         plan12 = get_juju_model_machine_plans(
             deployment, jhelper, local_management_ip, None, manifest
@@ -742,7 +738,7 @@ def bootstrap(
         deployment.reload_credentials()
         deployments.update_deployment(deployment)
         deployment.reload_tfhelpers()
-        jhelper = JujuHelper(deployment.get_connected_controller())
+        jhelper = JujuHelper(deployment.juju_controller)
 
         plan21.append(AddK8SCredentialStep(deployment, jhelper))
         run_plan(plan21, console, show_hints)
@@ -939,7 +935,7 @@ def add(
 
     deployment: LocalDeployment = ctx.obj
     client = deployment.get_client()
-    jhelper = JujuHelper(deployment.get_connected_controller())
+    jhelper = JujuHelper(deployment.juju_controller)
 
     plan1: list[BaseStep] = [
         JujuLoginStep(deployment.juju_account),
@@ -1079,7 +1075,7 @@ def join(
     # Loads juju account
     deployment.reload_credentials()
     deployments.write()
-    jhelper = JujuHelper(deployment.get_connected_controller())
+    jhelper = JujuHelper(deployment.juju_controller)
     plan3 = [AddJujuMachineStep(ip, deployment.openstack_machines_model, jhelper)]
     plan3_results = run_plan(plan3, console, show_hints)
 
@@ -1256,7 +1252,7 @@ def list_nodes(
     preflight_checks = [DaemonGroupCheck()]
     run_preflight_checks(preflight_checks, console)
     deployment: LocalDeployment = ctx.obj
-    jhelper = JujuHelper(deployment.get_connected_controller())
+    jhelper = JujuHelper(deployment.juju_controller)
     step = LocalClusterStatusStep(deployment, jhelper)
     results = run_plan([step], console, show_hints)
     msg = get_step_message(results, LocalClusterStatusStep)
@@ -1279,7 +1275,7 @@ def remove(ctx: click.Context, name: str, force: bool, show_hints: bool) -> None
     """Remove a node from the cluster."""
     deployment: LocalDeployment = ctx.obj
     client = deployment.get_client()
-    jhelper = JujuHelper(deployment.get_connected_controller())
+    jhelper = JujuHelper(deployment.juju_controller)
 
     preflight_checks = [DaemonGroupCheck()]
     run_preflight_checks(preflight_checks, console)
@@ -1408,8 +1404,8 @@ def configure_cmd(
     LOG.debug(f"Manifest used for deployment - features: {manifest.features}")
 
     name = utils.get_fqdn(deployment.get_management_cidr())
-    jhelper = JujuHelper(deployment.get_connected_controller())
-    if not run_sync(jhelper.model_exists(OPENSTACK_MODEL)):
+    jhelper = JujuHelper(deployment.juju_controller)
+    if not jhelper.model_exists(OPENSTACK_MODEL):
         LOG.error(f"Expected model {OPENSTACK_MODEL} missing")
         raise click.ClickException("Please run `sunbeam cluster bootstrap` first")
     admin_credentials = retrieve_admin_credentials(jhelper, OPENSTACK_MODEL)

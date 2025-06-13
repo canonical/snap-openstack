@@ -32,24 +32,25 @@ classifiers = [
 dependencies = [
     "snap-helpers @ git+https://github.com/albertodonato/snap-helpers@46803aa9d52cc0bb24f76df878dd1010fc08e6a0",
     "click",
-    "croniter",  # For feature validation
+    "croniter", # For feature validation
     "jinja2",
-    "juju>=3.6,<3.7",  # Set upper bound to match Juju 3.6.x series target
     "lightkube",
     "lightkube-models",
-    "macaroonbakery!=1.3.3",  # Regression introduced in 1.3.3
-    "netifaces",  # Used for getting local ip address
-    "petname",  # Used in the launch command to launch an instance
-    "pexpect",  # Interactive subprocess execution
+    "macaroonbakery!=1.3.3", # Regression introduced in 1.3.3
+    "netifaces", # Used for getting local ip address
+    "petname", # Used in the launch command to launch an instance
+    "pexpect", # Interactive subprocess execution
     "pwgen",
-    "pydantic",  # For Manifest dataclasses
+    "pydantic", # For Manifest dataclasses
     "pyroute2",
     "python-libmaas",
     "pyyaml>=6.0",
     "requests",
-    "requests-unixsocket",  # Used for communication with snapd socket
+    "requests-unixsocket", # Used for communication with snapd socket
     "rich",
     "tenacity",
+    "jubilant>=1.2.0",
+    "packaging>=23.2",
 ]
 
 [project.optional-dependencies]
@@ -103,7 +104,6 @@ dev= [
     "openstacksdk", # Apache-2.0
     "pytest",
     "pytest-mock",
-    "pytest-asyncio",
     # Type stubs
     "types-croniter",
     "types-requests",

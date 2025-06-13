@@ -1,11 +1,10 @@
 # SPDX-FileCopyrightText: 2024 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
-import asyncio
 import ipaddress
 import json
 import unittest
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 import httpx
 import lightkube
@@ -38,21 +37,6 @@ from sunbeam.steps.k8s import (
 )
 
 
-@pytest.fixture(autouse=True)
-def mock_run_sync(mocker):
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-
-    def run_sync(coro):
-        return loop.run_until_complete(coro)
-
-    mocker.patch("sunbeam.steps.k8s.run_sync", run_sync)
-    yield
-    loop.close()
-
-
 class TestAddK8SCloudStep(unittest.TestCase):
     def __init__(self, methodName: str = "runTest") -> None:
         super().__init__(methodName)
@@ -61,7 +45,7 @@ class TestAddK8SCloudStep(unittest.TestCase):
         self.deployment = Mock()
         self.cloud_name = f"{self.deployment.name}{K8S_CLOUD_SUFFIX}"
         self.deployment.get_client().cluster.get_config.return_value = "{}"
-        self.jhelper = AsyncMock()
+        self.jhelper = Mock()
 
     def test_is_skip(self):
         clouds = {}
@@ -104,7 +88,7 @@ class TestAddK8SCredentialStep(unittest.TestCase):
         self.cloud_name = f"{self.deployment.name}{K8S_CLOUD_SUFFIX}"
         self.credential_name = f"{self.cloud_name}{CREDENTIAL_SUFFIX}"
         self.deployment.get_client().cluster.get_config.return_value = "{}"
-        self.jhelper = AsyncMock()
+        self.jhelper = Mock()
 
     def test_is_skip(self):
         credentials = {}
@@ -145,7 +129,7 @@ class TestStoreK8SKubeConfigStep(unittest.TestCase):
 
     def setUp(self):
         self.client = Mock(cluster=Mock(get_config=Mock(return_value="{}")))
-        self.jhelper = AsyncMock()
+        self.jhelper = Mock()
         self.deployment = Mock()
         mock_machine = MagicMock()
         mock_machine.addresses = [
@@ -199,11 +183,12 @@ users:
         }
         self.jhelper.run_action.return_value = action_result
         self.jhelper.get_leader_unit_machine.return_value = "0"
+        self.jhelper.get_space_networks.return_value = {}
         self.jhelper.get_machine_interfaces.return_value = {
-            "enp0s8": {
-                "ip-addresses": ["127.0.0.1"],
-                "space": "management",
-            }
+            "enp0s8": Mock(
+                ip_addresses=["127.0.0.1"],
+                space="management",
+            )
         }
 
         step = StoreK8SKubeConfigStep(
@@ -247,11 +232,12 @@ users:
         self.jhelper.run_action.side_effect = ActionFailedException("Action failed...")
         self.jhelper.get_leader_unit.return_value = "k8s/0"
         self.jhelper.get_leader_unit_machine.return_value = "0"
+        self.jhelper.get_space_networks.return_value = {}
         self.jhelper.get_machine_interfaces.return_value = {
-            "enp0s8": {
-                "ip-addresses": ["127.0.0.1"],
-                "space": "management",
-            }
+            "enp0s8": Mock(
+                ip_addresses=["127.0.0.1"],
+                space="management",
+            )
         }
         step = StoreK8SKubeConfigStep(
             self.deployment, self.client, self.jhelper, "test-model"
@@ -280,7 +266,7 @@ class TestEnsureL2AdvertisementByHostStep(unittest.TestCase):
                 get_config=Mock(return_value="{}"),
             )
         )
-        self.jhelper = AsyncMock()
+        self.jhelper = Mock()
         self.model = "test-model"
         self.network = Mock()
         self.pool = "test-pool"
@@ -368,8 +354,8 @@ class TestEnsureL2AdvertisementByHostStep(unittest.TestCase):
 
     def test_get_interface_found(self):
         self.jhelper.get_machine_interfaces.return_value = {
-            "eth0": {"space": "management"},
-            "eth1": {"space": "other-space"},
+            "eth0": Mock(space="management"),
+            "eth1": Mock(space="other-space"),
         }
         self.deployment.get_space.return_value = "management"
         result = self.step._get_interface(
@@ -380,8 +366,8 @@ class TestEnsureL2AdvertisementByHostStep(unittest.TestCase):
 
     def test_get_interface_not_found(self):
         self.jhelper.get_machine_interfaces.return_value = {
-            "eth0": {"space": "other-space"},
-            "eth1": {"space": "another-space"},
+            "eth0": Mock(space="other-space"),
+            "eth1": Mock(space="another-space"),
         }
         self.deployment.get_space.return_value = "management"
         with self.assertRaises(EnsureL2AdvertisementByHostStep._L2AdvertisementError):
@@ -701,7 +687,7 @@ class TestEnsureK8SUnitsTaggedStep(unittest.TestCase):
         self.deployment.name = "test-deployment"
         self.deployment.get_space.return_value = "management"
         self.client = Mock()
-        self.jhelper = AsyncMock()
+        self.jhelper = Mock()
         self.jhelper.get_space_networks.return_value = [
             ipaddress.ip_network("10.0.0.0/8")
         ]
@@ -728,17 +714,17 @@ class TestEnsureK8SUnitsTaggedStep(unittest.TestCase):
                 status={"addresses": [Mock(type="InternalIP", address="10.0.0.2")]},
             ),
         ]
-        self.jhelper.get_machines_status.return_value = {
-            "1": {
-                "network-interfaces": {
-                    "eth0": {"space": "management", "ip-addresses": ["10.0.0.1"]}
+        self.jhelper.get_machines.return_value = {
+            "1": Mock(
+                network_interfaces={
+                    "eth0": Mock(space="management", ip_addresses=["10.0.0.1"])
                 }
-            },
-            "2": {
-                "network-interfaces": {
-                    "eth0": {"space": "management", "ip-addresses": ["10.0.0.2"]}
+            ),
+            "2": Mock(
+                network_interfaces={
+                    "eth0": Mock(space="management", ip_addresses=["10.0.0.2"])
                 }
-            },
+            ),
         }
         with patch("sunbeam.steps.k8s._get_kube_client", return_value=self.kube):
             result = self.step.is_skip()
@@ -760,17 +746,17 @@ class TestEnsureK8SUnitsTaggedStep(unittest.TestCase):
                 status={"addresses": [Mock(type="InternalIP", address="10.0.0.2")]},
             ),
         ]
-        self.jhelper.get_machines_status.return_value = {
-            "1": {
-                "network-interfaces": {
-                    "eth0": {"space": "management", "ip-addresses": ["10.0.0.1"]}
+        self.jhelper.get_machines.return_value = {
+            "1": Mock(
+                network_interfaces={
+                    "eth0": Mock(space="management", ip_addresses=["10.0.0.1"])
                 }
-            },
-            "2": {
-                "network-interfaces": {
-                    "eth0": {"space": "management", "ip-addresses": ["10.0.0.2"]}
+            ),
+            "2": Mock(
+                network_interfaces={
+                    "eth0": Mock(space="management", ip_addresses=["10.0.0.2"])
                 }
-            },
+            ),
         }
         with patch("sunbeam.steps.k8s._get_kube_client", return_value=self.kube):
             result = self.step.is_skip()
@@ -802,7 +788,7 @@ class TestEnsureK8SUnitsTaggedStep(unittest.TestCase):
         ]
         self.client.cluster.list_nodes_by_role.return_value = control_nodes
         self.kube.list.return_value = [Mock(metadata=Mock(name="node1", labels={}))]
-        self.jhelper.get_machines_status.return_value = {}
+        self.jhelper.get_machines.return_value = {}
         with patch("sunbeam.steps.k8s._get_kube_client", return_value=self.kube):
             result = self.step.is_skip()
         assert result.result_type == ResultType.FAILED
@@ -922,36 +908,36 @@ class TestGetKubeClient(unittest.TestCase):
 _get_machines_space_ips_tests_cases = {
     "match_ip_in_space_and_network": (
         {
-            "eth0": {"space": "mgmt", "ip-addresses": ["10.0.0.5", "192.168.1.2"]},
-            "eth1": {"space": "data", "ip-addresses": ["172.16.0.1"]},
+            "eth0": Mock(space="mgmt", ip_addresses=["10.0.0.5", "192.168.1.2"]),
+            "eth1": Mock(space="data", ip_addresses=["172.16.0.1"]),
         },
         "mgmt",
         [ipaddress.ip_network("10.0.0.0/24"), ipaddress.ip_network("192.168.1.0/24")],
         {"10.0.0.5", "192.168.1.2"},
     ),
     "no_matching_space": (
-        {"eth0": {"space": "data", "ip-addresses": ["10.0.0.5"]}},
+        {"eth0": Mock(space="data", ip_addresses=["10.0.0.5"])},
         "mgmt",
         [ipaddress.ip_network("10.0.0.0/24")],
         set(),
     ),
     "no_matching_network": (
-        {"eth0": {"space": "mgmt", "ip-addresses": ["172.16.0.1"]}},
+        {"eth0": Mock(space="mgmt", ip_addresses=["172.16.0.1"])},
         "mgmt",
         [ipaddress.ip_network("10.0.0.0/24")],
         set(),
     ),
     "invalid_ip_address": (
-        {"eth0": {"space": "mgmt", "ip-addresses": ["not-an-ip", "10.0.0.5"]}},
+        {"eth0": Mock(space="mgmt", ip_addresses=["not-an-ip", "10.0.0.5"])},
         "mgmt",
         [ipaddress.ip_network("10.0.0.0/24")],
         {"10.0.0.5"},
     ),
     "multiple_interfaces_and_networks": (
         {
-            "eth0": {"space": "mgmt", "ip-addresses": ["10.0.0.5", "192.168.1.2"]},
-            "eth1": {"space": "mgmt", "ip-addresses": ["172.16.0.1", "10.0.0.6"]},
-            "eth2": {"space": "data", "ip-addresses": ["10.1.0.1"]},
+            "eth0": Mock(space="mgmt", ip_addresses=["10.0.0.5", "192.168.1.2"]),
+            "eth1": Mock(space="mgmt", ip_addresses=["172.16.0.1", "10.0.0.6"]),
+            "eth2": Mock(space="data", ip_addresses=["10.1.0.1"]),
         },
         "mgmt",
         [ipaddress.ip_network("10.0.0.0/24"), ipaddress.ip_network("172.16.0.0/16")],
@@ -974,7 +960,7 @@ class TestPatchCoreDNSStep(unittest.TestCase):
     def setUp(self):
         self.deployment = Mock()
         self.client = Mock()
-        self.jhelper = AsyncMock()
+        self.jhelper = Mock()
         self.step = PatchCoreDNSStep(self.deployment, self.jhelper)
         self.kube = Mock()
 
@@ -1065,14 +1051,14 @@ class TestPatchCoreDNSStep(unittest.TestCase):
         assert self.step.replica_count == 1
 
     def test_run(self):
-        self.jhelper.run_cmd_on_machine_unit_payload.return_value = {"return-code": 0}
+        self.jhelper.run_cmd_on_machine_unit_payload.return_value = Mock(return_code=0)
         result = self.step.run(None)
         assert result.result_type == ResultType.COMPLETED
         self.jhelper.get_leader_unit.assert_called_once()
         self.jhelper.run_cmd_on_machine_unit_payload.assert_called_once()
 
     def test_run_helm_upgrade_failed(self):
-        self.jhelper.run_cmd_on_machine_unit_payload.return_value = {"return-code": 1}
+        self.jhelper.run_cmd_on_machine_unit_payload.return_value = Mock(return_code=1)
         result = self.step.run(None)
         assert result.result_type == ResultType.FAILED
         self.jhelper.get_leader_unit.assert_called_once()

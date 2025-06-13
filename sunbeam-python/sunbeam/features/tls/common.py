@@ -23,7 +23,6 @@ from sunbeam.core.juju import (
     ActionFailedException,
     JujuHelper,
     LeaderNotFoundException,
-    run_sync,
 )
 from sunbeam.core.manifest import FeatureConfig
 from sunbeam.core.openstack import OPENSTACK_MODEL
@@ -107,7 +106,7 @@ class TlsFeature(OpenStackControlPlaneFeature):
         self, deployment: Deployment, config: TlsFeatureConfig, show_hints: bool
     ) -> None:
         """Handler to perform tasks after the feature is enabled."""
-        jhelper = JujuHelper(deployment.get_connected_controller())
+        jhelper = JujuHelper(deployment.juju_controller)
         plan = [
             AddCACertsToKeystoneStep(
                 jhelper,
@@ -131,7 +130,7 @@ class TlsFeature(OpenStackControlPlaneFeature):
         super().post_disable(deployment, show_hints)
 
         client = deployment.get_client()
-        jhelper = JujuHelper(deployment.get_connected_controller())
+        jhelper = JujuHelper(deployment.juju_controller)
 
         model = OPENSTACK_MODEL
         apps_to_monitor = ["traefik", "traefik-public", "keystone"]
@@ -178,26 +177,19 @@ class AddCACertsToKeystoneStep(BaseStep):
         """
         action_cmd = "list-ca-certs"
         try:
-            unit = run_sync(self.jhelper.get_leader_unit(self.app, self.model))
+            unit = self.jhelper.get_leader_unit(self.app, self.model)
         except LeaderNotFoundException as e:
             LOG.debug(f"Unable to get {self.app} leader")
             return Result(ResultType.FAILED, str(e))
 
         try:
-            action_result = run_sync(
-                self.jhelper.run_action(unit, self.model, action_cmd)
-            )
+            action_result = self.jhelper.run_action(unit, self.model, action_cmd)
         except ActionFailedException as e:
             LOG.debug(f"Running action {action_cmd} on {unit} failed")
             return Result(ResultType.FAILED, str(e))
 
         LOG.debug(f"Result from action {action_cmd}: {action_result}")
-        if action_result.get("return-code", 0) > 1:
-            return Result(
-                ResultType.FAILED, f"Action {action_cmd} on {unit} returned error"
-            )
 
-        action_result.pop("return-code")
         ca_list = action_result
         if self.cert_name in ca_list:
             return Result(ResultType.SKIPPED)
@@ -208,7 +200,7 @@ class AddCACertsToKeystoneStep(BaseStep):
         """Run keystone add-ca-certs action."""
         action_cmd = "add-ca-certs"
         try:
-            unit = run_sync(self.jhelper.get_leader_unit(self.app, self.model))
+            unit = self.jhelper.get_leader_unit(self.app, self.model)
         except LeaderNotFoundException as e:
             LOG.debug(f"Unable to get {self.app} leader")
             return Result(ResultType.FAILED, str(e))
@@ -221,18 +213,10 @@ class AddCACertsToKeystoneStep(BaseStep):
 
         try:
             LOG.debug(f"Running action {action_cmd} with params {action_params}")
-            action_result = run_sync(
-                self.jhelper.run_action(unit, self.model, action_cmd, action_params)
-            )
+            self.jhelper.run_action(unit, self.model, action_cmd, action_params)
         except ActionFailedException as e:
             LOG.debug(f"Running action {action_cmd} on {unit} failed")
             return Result(ResultType.FAILED, str(e))
-
-        LOG.debug(f"Result from action {action_cmd}: {action_result}")
-        if action_result.get("return-code", 0) > 1:
-            return Result(
-                ResultType.FAILED, f"Action {action_cmd} on {unit} returned error"
-            )
 
         return Result(ResultType.COMPLETED)
 
@@ -263,26 +247,19 @@ class RemoveCACertsFromKeystoneStep(BaseStep):
         """
         action_cmd = "list-ca-certs"
         try:
-            unit = run_sync(self.jhelper.get_leader_unit(self.app, self.model))
+            unit = self.jhelper.get_leader_unit(self.app, self.model)
         except LeaderNotFoundException as e:
             LOG.debug(f"Unable to get {self.app} leader")
             return Result(ResultType.FAILED, str(e))
 
         try:
-            action_result = run_sync(
-                self.jhelper.run_action(unit, self.model, action_cmd)
-            )
+            action_result = self.jhelper.run_action(unit, self.model, action_cmd)
         except ActionFailedException as e:
             LOG.debug(f"Running action {action_cmd} on {unit} failed")
             return Result(ResultType.FAILED, str(e))
 
         LOG.debug(f"Result from action {action_cmd}: {action_result}")
-        if action_result.get("return-code", 0) > 1:
-            return Result(
-                ResultType.FAILED, f"Action {action_cmd} on {unit} returned error"
-            )
 
-        action_result.pop("return-code")
         ca_list = action_result
         # Replace any dot with hyphen in ca cert name.
         # self.cert_name is ensured not to have dot, however to maintain backward
@@ -296,7 +273,7 @@ class RemoveCACertsFromKeystoneStep(BaseStep):
         """Run keystone add-ca-certs action."""
         action_cmd = "remove-ca-certs"
         try:
-            unit = run_sync(self.jhelper.get_leader_unit(self.app, self.model))
+            unit = self.jhelper.get_leader_unit(self.app, self.model)
         except LeaderNotFoundException as e:
             LOG.debug(f"Unable to get {self.app} leader")
             return Result(ResultType.FAILED, str(e))
@@ -305,8 +282,8 @@ class RemoveCACertsFromKeystoneStep(BaseStep):
         action_params = {"name": self.cert_name}
         LOG.debug(f"Running action {action_cmd} with params {action_params}")
         try:
-            action_result = run_sync(
-                self.jhelper.run_action(unit, self.model, action_cmd, action_params)
+            action_result = self.jhelper.run_action(
+                unit, self.model, action_cmd, action_params
             )
         except ActionFailedException as e:
             LOG.debug(f"Running action {action_cmd} on {unit} failed: {str(e)}")
@@ -318,17 +295,13 @@ class RemoveCACertsFromKeystoneStep(BaseStep):
             action_params = {"name": self.feature_key}
             LOG.debug(f"Running action {action_cmd} with params {action_params}")
             try:
-                action_result = run_sync(
-                    self.jhelper.run_action(unit, self.model, action_cmd, action_params)
+                action_result = self.jhelper.run_action(
+                    unit, self.model, action_cmd, action_params
                 )
             except ActionFailedException as e:
                 LOG.debug(f"Running action {action_cmd} on {unit} failed")
                 return Result(ResultType.FAILED, str(e))
 
         LOG.debug(f"Result from action {action_cmd}: {action_result}")
-        if action_result.get("return-code", 0) > 1:
-            return Result(
-                ResultType.FAILED, f"Action {action_cmd} on {unit} returned error"
-            )
 
         return Result(ResultType.COMPLETED)
