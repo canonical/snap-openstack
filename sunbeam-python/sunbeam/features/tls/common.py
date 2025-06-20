@@ -10,6 +10,7 @@ from rich.console import Console
 from rich.status import Status
 
 from sunbeam.clusterd.service import ConfigItemNotFoundException
+from sunbeam.core import questions
 from sunbeam.core.common import (
     BaseStep,
     Result,
@@ -24,7 +25,11 @@ from sunbeam.core.juju import (
     JujuHelper,
     LeaderNotFoundException,
 )
-from sunbeam.core.manifest import FeatureConfig
+from sunbeam.core.manifest import (
+    CharmManifest,
+    FeatureConfig,
+    SoftwareConfig,
+)
 from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.features.interface.v1.base import BaseFeatureGroup
 from sunbeam.features.interface.v1.openstack import (
@@ -79,6 +84,34 @@ class TlsFeature(OpenStackControlPlaneFeature):
     @click.group()
     def disable_tls(self) -> None:
         """Disable TLS group."""
+
+    @click.group()
+    def tls_group(self):
+        """Manage TLS."""
+
+    def default_software_overrides(self) -> SoftwareConfig:
+        """Feature software configuration."""
+        return SoftwareConfig(
+            charms={
+                "manual-tls-certificates": CharmManifest(
+                    channel="latest/stable",
+                )
+            }
+        )
+
+    def manifest_attributes_tfvar_map(self) -> dict:
+        """Manifest attributes terraformvars map."""
+        return {
+            self.tfplan: {
+                "charms": {
+                    "manual-tls-certificates": {
+                        "channel": "manual-tls-certificates-channel",
+                        "revision": "manual-tls-certificates-revision",
+                        "config": "manual-tls-certificates-config",
+                    }
+                }
+            }
+        }
 
     def provider_config(self, deployment: Deployment) -> dict:
         """Return stored provider configuration."""
@@ -305,3 +338,25 @@ class RemoveCACertsFromKeystoneStep(BaseStep):
         LOG.debug(f"Result from action {action_cmd}: {action_result}")
 
         return Result(ResultType.COMPLETED)
+
+
+def certificate_questions(unit: str, subject: str):
+    return {
+        "certificate": questions.PromptQuestion(
+            f"Base64 encoded Certificate for {unit} CSR Unique ID: {subject}",
+        ),
+    }
+
+
+def get_outstanding_certificate_requests(
+    app: str, model: str, jhelper: JujuHelper
+) -> dict:
+    """Get outstanding certificate requests from manual-tls-certificate operator.
+
+    Returns the result from the action get-outstanding-certificate-requests.
+    Raises LeaderNotFoundException, ActionFailedException.
+    """
+    action_cmd = "get-outstanding-certificate-requests"
+    unit = run_sync(jhelper.get_leader_unit(app, model))
+    action_result = run_sync(jhelper.run_action(unit, model, action_cmd))
+    return action_result
