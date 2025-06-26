@@ -16,6 +16,7 @@ import typing
 from collections.abc import Collection, Generator
 from pathlib import Path
 from typing import (
+    Callable,
     TypedDict,
     TypeVar,
 )
@@ -951,6 +952,43 @@ class JujuHelper:
                 json_format=False,
             )
 
+    def _wait(
+        self,
+        ready: Callable[["jubilant.statustypes.Status"], bool],
+        juju: "jubilant.Juju",
+        *,
+        error: Callable[["jubilant.statustypes.Status"], bool] | None = None,
+        delay: float = 1.0,
+        timeout: float | None = None,
+        successes: int = 3,
+    ):
+        """Retry status until ready or timeout.
+
+        Juju CLI can lose connection to the controller, especially in local mode
+        embedded controller, while joining multiple nodes at the same time.
+        """
+        if timeout is None:
+            timeout = 300
+        start = time.monotonic()
+
+        while (time.monotonic() - start) < timeout:
+            time_elapsed = time.monotonic() - start
+            try:
+                juju.wait(
+                    ready,
+                    error=error,
+                    delay=delay,
+                    timeout=timeout - time_elapsed,
+                    successes=successes,
+                )
+                break
+            except jubilant.CLIError as e:
+                LOG.error(f"Error occurred while waiting: {e}")
+        else:
+            raise TimeoutError(
+                f"Timed out after {timeout} seconds while waiting for status"
+            )
+
     def wait_application_ready(
         self,
         name: str,
@@ -985,7 +1023,7 @@ class JujuHelper:
                     app.app_status.current, accepted_status
                 )
             )
-            juju.wait(_ready_callback, delay=MODEL_DELAY, timeout=timeout)
+            self._wait(_ready_callback, juju, delay=MODEL_DELAY, timeout=timeout)
 
     def wait_application_gone(
         self,
@@ -1006,7 +1044,7 @@ class JujuHelper:
             return len(name_set.intersection(status.apps)) == 0
 
         with self._model(model) as juju:
-            juju.wait(_gone, delay=MODEL_DELAY, timeout=timeout)
+            self._wait(_gone, juju, delay=MODEL_DELAY, timeout=timeout)
 
     def wait_model_gone(
         self,
@@ -1058,7 +1096,7 @@ class JujuHelper:
             return True
 
         with self._model(model) as juju:
-            juju.wait(_unit_gones, delay=MODEL_DELAY, timeout=timeout)
+            self._wait(_unit_gones, juju, delay=MODEL_DELAY, timeout=timeout)
 
     def wait_all_machines_deployed(self, model: str, timeout: int | None = None):
         """Block execution until all machines in model are deployed.
@@ -1075,8 +1113,9 @@ class JujuHelper:
             return True
 
         with self._model(model) as juju:
-            juju.wait(
+            self._wait(
                 _machines_deployed,
+                juju,
                 delay=MODEL_DELAY,
                 timeout=timeout,
             )
@@ -1247,8 +1286,9 @@ class JujuHelper:
             return ready
 
         with self._model(model) as juju:
-            juju.wait(
+            self._wait(
                 _wait_until_status,
+                juju,
                 delay=MODEL_DELAY,
                 timeout=timeout,
             )
