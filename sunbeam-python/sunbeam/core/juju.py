@@ -1,67 +1,38 @@
 # SPDX-FileCopyrightText: 2023 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
-import asyncio
-import asyncio.queues
 import base64
 import contextlib
+import functools
 import ipaddress
 import json
 import logging
 import os
+import queue
 import subprocess
 import tempfile
+import time
 import typing
-from collections.abc import Collection
+from collections.abc import Collection, Generator
 from pathlib import Path
 from typing import (
-    TYPE_CHECKING,
-    AsyncGenerator,
-    Awaitable,
-    Dict,
+    Callable,
     TypedDict,
     TypeVar,
-    cast,
 )
 
+import jubilant
+import jubilant.statustypes
 import pydantic
 import tenacity
 import yaml
 from packaging import version
 from snaphelpers import Snap
-from websockets import ConnectionClosedError
 
 from sunbeam import utils
 from sunbeam.clusterd.client import Client
 from sunbeam.core.common import SunbeamException
-from sunbeam.lazy import LazyImport
-from sunbeam.versions import JUJU_BASE, SUPPORTED_RELEASE
-
-if TYPE_CHECKING:  # pragma: no cover
-    import juju.charmhub as juju_charmhub
-    import juju.controller as juju_controller
-    import juju.errors as juju_errors
-    from juju import utils as juju_utils
-    from juju.application import Application
-
-    # import private def only for type checking
-    from juju.client import _definitions as juju_def
-    from juju.client import client as juju_client
-    from juju.client import connection as juju_connection
-    from juju.client import connector as juju_connector
-    from juju.machine import Machine
-    from juju.model import Model
-    from juju.unit import Unit
-else:
-    # Lazy loaded attributes
-    juju_utils = LazyImport("juju.utils")
-    juju_client = LazyImport("juju.client.client")
-    juju_connection = LazyImport("juju.client.connection")
-    juju_connector = LazyImport("juju.client.connector")
-    juju_controller = LazyImport("juju.controller")
-    juju_errors = LazyImport("juju.errors")
-    juju_charmhub = LazyImport("juju.charmhub")
-
+from sunbeam.versions import JUJU_BASE
 
 LOG = logging.getLogger(__name__)
 CONTROLLER_MODEL = "admin/controller"
@@ -71,14 +42,9 @@ JUJU_CONTROLLER_KEY = "JujuController"
 ACCOUNT_FILE = "account.yaml"
 OWNER_TAG_PREFIX = "user-"
 
+MODEL_DELAY = 5
 
 T = TypeVar("T")
-
-
-def run_sync(coro: Awaitable[T]) -> T:
-    """Helper to run coroutines synchronously."""
-    result = asyncio.get_event_loop().run_until_complete(coro)
-    return cast(T, result)
 
 
 class JujuException(SunbeamException):
@@ -135,17 +101,15 @@ class LeaderNotFoundException(JujuException):
     pass
 
 
-class TimeoutException(JujuException):
-    """Raised when a query timed out."""
-
-    pass
-
-
 class ActionFailedException(JujuException):
     """Raised when Juju run failed."""
 
     def __init__(self, action_result):
         self.action_result = action_result
+
+
+class ExecFailedException(JujuException):
+    """Raised when Juju exec failed."""
 
 
 class CmdFailedException(JujuException):
@@ -239,229 +203,94 @@ class JujuController(pydantic.BaseModel):
         """Dump self to clusterd."""
         client.cluster.update_config(JUJU_CONTROLLER_KEY, json.dumps(self.to_dict()))
 
-    def to_controller(self, juju_account: JujuAccount) -> "juju_controller.Controller":
-        """Return connected controller."""
-        controller = juju_controller.Controller()
-        run_sync(
-            controller.connect(
-                endpoint=self.api_endpoints,
-                cacert=self.ca_cert,
-                username=juju_account.user,
-                password=juju_account.password,
-            )
-        )
-        return controller
-
-
-class _SharedStatusUpdater:
-    def __init__(self, jhelper: "JujuHelper", model: str):
-        self._jhelper = jhelper
-        self._condition = asyncio.Condition()
-        self._model = model
-        self._model_impl: "Model | None" = None
-
-    async def tick_status(
-        self, filter: list[str] | None = None
-    ) -> AsyncGenerator["juju_def.FullStatus", None]:
-        """Asynchronously yields the status of the Juju model when notified.
-
-        This coroutine continuously waits for the model to be ready and then
-        retrieves the status of the Juju model. It yields the status as an
-        asynchronous generator.
-
-        :filter: An Optional list of strings to filter the
-                status results.
-        :yield: Filtered full status of the Juju model.
-        """
-        while True:
-            async with self._condition:
-                await self._condition.wait()
-                # Coroutine is guaranteed to be notified when model is not None
-                model = typing.cast("Model", self._model_impl)
-                if not self.is_connected():
-                    continue
-                try:
-                    yield await model.get_status(filter)
-                except ConnectionClosedError:
-                    LOG.debug(
-                        "Connection to model %r lost, reconnecting later.",
-                        self._model,
-                    )
-                except asyncio.CancelledError:
-                    break
-
-    async def reconnect_model_and_notify_awaiters(self):
-        """Ensure the Juju model is ready for use and notify waiting tasks.
-
-        This method checks the connection status of the Juju controller and model,
-        attempting to reconnect if necessary. It handles various connection errors
-        and ensures that the model is connected before notifying all waiting tasks.
-        """
-        name = task.get_name() if (task := asyncio.current_task()) else "unknown"
-        async with self._condition:
-            if not self.is_connected():
-                try:
-                    if not self._jhelper.controller.is_connected():
-                        self._model_impl = None
-                        LOG.debug("%r: controller gone", name)
-                        await self._jhelper.reconnect()
-                        LOG.debug("%r: controller reconnected", name)
-                    if self._model_impl is not None:
-                        if not self._model_impl.is_connected():
-                            LOG.debug("%r: inner connection gone", name)
-                        else:
-                            LOG.debug(
-                                "%r: inner socket gone, connection status -> %r",
-                                name,
-                                self._model_impl.connection().monitor.status,
-                            )
-                            await self._model_impl.disconnect()
-                        self._model_impl = None
-                    if self._model_impl is None:
-                        self._model_impl = await self._jhelper.get_model(self._model)
-                        LOG.debug("%r: model connected", name)
-                except (
-                    juju_connector.NoConnectionException,
-                    juju_errors.JujuConnectionError,
-                    ConnectionClosedError,
-                    PermissionError,
-                ):
-                    LOG.debug(
-                        "%r: controller gone while trying to get model, reconnecting",
-                        name,
-                    )
-                    await self._jhelper.reconnect()
-                    LOG.debug("%r: controller reconnected", name)
-                except Exception:
-                    LOG.debug(
-                        "%r: error while ensuring connection, retrying later.",
-                        name,
-                        exc_info=True,
-                    )
-            if self._model_impl is not None and self.is_connected():
-                self._condition.notify_all()
-
-    def is_connected(self) -> bool:
-        """Check if model is connected."""
-        return (
-            self._model_impl is not None
-            and self._model_impl.is_connected()
-            and self._model_impl.connection().monitor.status
-            == juju_connection.Monitor.CONNECTED
-        )
-
-    async def disconnect(self):
-        """Disconnect model."""
-        if self._model_impl:
-            await self._model_impl.disconnect()
-            self._jhelper.model_connectors.remove(self._model_impl)
-            self._model_impl = None
-
 
 class JujuHelper:
     """Helper function to manage Juju apis through pylibjuju."""
 
-    def __init__(self, controller: "juju_controller.Controller"):
-        self.controller = controller
-        self._controller_params = controller.connection().connect_params()
-        self.model_connectors: list["Model"] = []
+    def __init__(self, controller: JujuController | None):
+        if controller is None:
+            raise ValueError("Controller cannot be None")
+        self.controller: str = controller.name
+        self._juju = jubilant.Juju()
 
-    async def reconnect(self, **kwargs):
-        """Force reconnection to the controller."""
-        await self.disconnect()
-        del self.controller
-        self.controller = juju_controller.Controller()
-        await self.controller.connect(**kwargs, **self._controller_params)
+    def cli(
+        self,
+        *args: str,
+        include_controller: bool = True,
+        json_format: bool = True,
+        juju: "jubilant.Juju | None" = None,
+        **kwargs,
+    ):
+        """Run juju cli command."""
+        control_args: list[str] = []
 
-    async def disconnect(self):
-        """Disconnect all connections to juju controller."""
-        LOG.debug("Disconnecting juju controller and model connections")
-        for model in self.model_connectors:
-            await model.disconnect()
-        self.model_connectors.clear()
-        await self.controller.disconnect()
+        juju = juju or self._juju
 
-    async def get_clouds(self) -> dict:
-        """Return clouds available on controller."""
-        clouds = await self.controller.clouds()
-        return clouds.clouds
-
-    async def list_models(self) -> list:
-        """List models."""
-        models = await self.controller.list_models()
-        return models
-
-    async def get_model(self, model: str) -> "Model":
-        """Fetch model.
-
-        :model: Name of the model
-        """
-        attempts = 3
-
-        @tenacity.retry(
-            stop=tenacity.stop_after_attempt(attempts),
-            wait=tenacity.wait_fixed(5),
-            retry=tenacity.retry_if_exception_type(tenacity.TryAgain),
-            reraise=True,
-        )
-        async def _get_model() -> "Model":
+        if include_controller:
+            control_args.extend(("--controller", self.controller))
+        if json_format:
+            control_args.extend(("--format", "json"))
+        args = (args[0],) + tuple(control_args) + args[1:]
+        ret = juju.cli(*args, **kwargs)
+        if json_format:
             try:
-                model_impl = await self.controller.get_model(model)
-                self.model_connectors.append(model_impl)
-                return model_impl
-            except ConnectionClosedError:
-                LOG.debug("Connection to model %r lost, reconnecting.", model)
-                await self.reconnect()
-                raise tenacity.TryAgain(
-                    "Reconnected to controller, trying to get model again"
-                )
-            except Exception as e:
-                if "HTTP 400" in str(e) or "HTTP 404" in str(e):
-                    raise ModelNotFoundException(f"Model {model!r} not found")
-                raise e
+                return json.loads(ret)
+            except json.JSONDecodeError as e:
+                raise CmdFailedException(f"Failed to parse JSON output: {e}") from e
+        return ret
 
+    @contextlib.contextmanager
+    def _model(self, model: str) -> Generator["jubilant.Juju"]:
+        """Context manager to set model for juju commands."""
+        _model = self.get_model(model)["name"]  # ensure model is long name
+        old_model = self._juju.model
+        self._juju.model = _model
         try:
-            return await _get_model()
-        except tenacity.TryAgain:
-            raise JujuException(
-                f"Failed to get model {model!r} after {attempts} attempts"
-            )
+            yield self._juju
+        finally:
+            self._juju.model = old_model
 
-    @contextlib.asynccontextmanager
-    async def get_model_closing(self, model: str) -> AsyncGenerator["Model", None]:
+    def get_clouds(self) -> dict:
+        """Return clouds available on controller."""
+        return typing.cast(dict, self.cli("clouds", include_model=False))
+
+    def models(self) -> list[dict]:
+        """Return list of models on controller."""
+        try:
+            models: dict = self.cli("models", "--all", include_model=False)
+        except jubilant.CLIError as e:
+            raise JujuException(e.stderr)
+        return models.get("models", [])
+
+    @functools.cache
+    def get_model(self, model: str) -> "dict":
         """Fetch model.
-
-        Allow closing a model after usage.
-
-        Do not use the async context manager from the juju.model.Model
-        object. It will try to read current model from the filesystem.
 
         :model: Name of the model
         """
-        model_impl = await self.get_model(model)
-        try:
-            yield model_impl
-        finally:
-            await model_impl.disconnect()
+        for m in self.models():
+            if model in (m["short-name"], m["name"], m["model-uuid"]):
+                return m
+        raise ModelNotFoundException(f"Model {model!r} not found")
 
-    async def model_exists(self, model: str) -> bool:
+    def model_exists(self, model: str) -> bool:
         """Check if model exists.
 
         :model: Name of the model
         """
         try:
-            async with self.get_model_closing(model):
-                return True
-        except ModelNotFoundException:
+            self.get_model(model)
+        except JujuException:
             return False
+        return True
 
-    async def add_model(
+    def add_model(
         self,
         model: str,
         cloud: str | None = None,
         credential: str | None = None,
         config: dict | None = None,
-    ) -> "Model":
+    ):
         """Add a model.
 
         :model: Name of the model
@@ -469,30 +298,26 @@ class JujuHelper:
         :credential: Name of the credential
         :config: model configuration
         """
-        # TODO(gboutry): workaround until we manage public ssh keys properly
-        old_home = os.environ["HOME"]
-        os.environ["HOME"] = os.environ["SNAP_REAL_HOME"]
-        try:
-            model_impl = await self.controller.add_model(
-                model, cloud_name=cloud, credential_name=credential, config=config
-            )
-            self.model_connectors.append(model_impl)
-            return model_impl
-        finally:
-            os.environ["HOME"] = old_home
+        self._juju.add_model(model, cloud=cloud, credential=credential, config=config)
 
-    async def destroy_model(
+    def destroy_model(
         self, model: str, destroy_storage: bool = False, force: bool = False
     ):
         """Destroy model.
 
         :model: Name of the model
+        :destroy_storage: Whether to destroy storage
+        :force: Whether to force destroy the model
         """
-        await self.controller.destroy_models(
-            model, destroy_storage=destroy_storage, force=force
-        )
+        try:
+            _model = self.get_model(model)
+            self._juju.destroy_model(
+                _model["name"], destroy_storage=destroy_storage, force=force
+            )
+        except ModelNotFoundException:
+            LOG.debug("Model %s not found", model)
 
-    async def integrate(
+    def integrate(
         self,
         model: str,
         provider: str,
@@ -508,125 +333,116 @@ class JujuHelper:
         :requirer: Name of the application requiring the relation
         :relation: Name of the relation
         """
-        async with self.get_model_closing(model) as model_impl:
-            if requirer not in model_impl.applications:
+        with self._model(model) as juju:
+            status = juju.status()
+            if requirer not in status.apps:
                 raise ApplicationNotFoundException(
                     f"Application {requirer!r} is missing from model {model!r}"
                 )
-            if provider not in model_impl.applications:
+            if provider not in status.apps:
                 raise ApplicationNotFoundException(
                     f"Application {provider!r} is missing from model {model!r}"
                 )
-            endpoint_fmt = "{app}:{relation}"
-            provider_relation = endpoint_fmt.format(app=provider, relation=relation)
-            requirer_relation = endpoint_fmt.format(app=requirer, relation=relation)
-            await model_impl.integrate(provider_relation, requirer_relation)
+            juju.integrate(provider + ":" + relation, requirer + ":" + relation)
 
-    async def are_integrated(
+    def are_integrated(
         self, model: str, provider: str, requirer: str, relation: str
     ) -> bool:
         """Check if two applications are integrated.
 
-        Does not support different relation names on provider and requirer.
+        Only check using the relation name on the provider side.
 
         :model: Name of the model of the providing app
         :provider: Name of the application providing the relation
         :requirer: Name of the application requiring the relation
         :relation: Name of the relation
         """
-        async with self.get_model_closing(model) as model_impl:
-            app = await self.get_application(provider, model_impl)
-            apps = (provider, requirer)
-            for rel in app.relations:
-                if len(rel.endpoints) != 2:
-                    # skip peer relationship
-                    continue
-                left_ep, right_ep = rel.endpoints
-                if (
-                    left_ep.application_name not in apps
-                    or right_ep.application_name not in apps
-                ):
-                    continue
-                if left_ep.name == relation and right_ep.name == relation:
-                    return True
+        app = self.get_application(provider, model)
+        relations = app.relations.get(relation)
+        if not relations:
             return False
+        for rel in relations:
+            if rel.related_app == requirer:
+                return True
 
-    async def get_model_name_with_owner(self, model: str) -> str:
+        return False
+
+    def get_model_name_with_owner(self, model: str) -> str:
         """Get juju model full name along with owner."""
-        try:
-            async with self.get_model_closing(model) as model_impl:
-                owner = model_impl.info.owner_tag.removeprefix(OWNER_TAG_PREFIX)
-                return f"{owner}/{model_impl.info.name}"
-        except Exception as e:
-            if "HTTP 400" in str(e) or "HTTP 404" in str(e):
-                raise ModelNotFoundException(f"Model {model!r} not found")
-            raise e
+        return self.get_model(model)["name"]
 
-    async def get_model_status(
-        self, model: str, filter: list[str] | None = None
-    ) -> dict:
+    @tenacity.retry(
+        retry=tenacity.retry_if_exception_type(ControllerNotReachableException),
+        wait=tenacity.wait_exponential(multiplier=1, min=4, max=10),
+        stop=tenacity.stop_after_attempt(8),
+    )
+    def get_model_status(self, model: str) -> "jubilant.Status":
         """Get juju filtered status."""
-        async with self.get_model_closing(model) as model_impl:
-            status = await model_impl.get_status(filter)
-            return json.loads(status.to_json())
+        with self._model(model) as juju:
+            try:
+                return juju.status()
+            except jubilant.CLIError as e:
+                if "not found" in e.stderr:
+                    raise ModelNotFoundException(f"Model {model!r} not found")
+                if "connection is shut down" in e.stderr:
+                    raise ControllerNotReachableException(
+                        f"Controller {self.controller!r} is not reachable, "
+                    ) from e
+                raise JujuException(e.stderr)
 
-    async def get_model_status_full(self, model: str) -> dict:
-        """Get juju status for the model."""
-        return await self.get_model_status(model)
-
-    async def get_machines_status(self, model: str) -> dict:
-        """Get machine status in given model."""
-        status = await self.get_model_status(model)
-        return status["machines"]
-
-    async def get_application_names(self, model: str) -> list[str]:
+    def get_application_names(self, model: str) -> list[str]:
         """Get Application names in the model.
 
         :model: Name of the model
         """
-        async with self.get_model_closing(model) as model_impl:
-            return list(model_impl.applications.keys())
+        return list(self.get_model_status(model).apps.keys())
 
-    async def get_application(self, name: str, model: "Model") -> "Application":
+    def get_application(
+        self, name: str, model: str
+    ) -> "jubilant.statustypes.AppStatus":
         """Fetch application in model.
 
         :name: Application name
         :model: Name of the model where the application is located
         """
-        application = model.applications.get(name)
+        application = self.get_model_status(model).apps.get(name)
         if application is None:
             raise ApplicationNotFoundException(
-                f"Application missing from model: {model.name!r}"
+                f"Application missing from model: {model!r}"
             )
         return application
 
-    async def get_machines(self, model: "Model") -> dict[str, "Machine"]:
+    def get_machines(
+        self, model: str
+    ) -> "dict[str, jubilant.statustypes.MachineStatus]":
         """Fetch machines in model.
 
         :model: Name of the model where the machines are located
         """
-        return model.machines
+        return self.get_model_status(model).machines
 
-    async def get_machine_interfaces(self, model: str, machine: str) -> dict[str, dict]:
+    def get_machine_interfaces(
+        self, model: str, machine: str
+    ) -> dict[str, "jubilant.statustypes.NetworkInterface"]:
         """Fetch machine interfaces.
 
         :model: Name of the model where the machine is located
         :machine: id of the machine
         """
-        status = await self.get_machines_status(model)
-        m_status = status.get(machine)
-        if m_status is None:
+        machines = self.get_machines(model)
+        machine_status = machines.get(machine)
+        if machine_status is None:
             raise MachineNotFoundException(
                 f"Machine {machine!r} is missing from model {model!r}"
             )
-        return m_status["network-interfaces"]
+        return machine_status.network_interfaces
 
-    async def set_model_config(self, model: str, config: dict) -> None:
+    def set_model_config(self, model: str, config: dict) -> None:
         """Set model config for the given model."""
-        async with self.get_model_closing(model) as model_impl:
-            await model_impl.set_config(config)
+        with self._model(model) as juju:
+            juju.model_config(config)
 
-    async def deploy(
+    def deploy(
         self,
         name: str,
         charm: str,
@@ -637,88 +453,77 @@ class JujuHelper:
         to: list[str] | None = None,
         config: dict | None = None,
         base: str = JUJU_BASE,
-        series: str = SUPPORTED_RELEASE,
     ):
         """Deploy an application."""
-        options: dict = {}
-        if to:
-            options["to"] = to
-        if channel:
-            options["channel"] = channel
-        if revision:
-            options["revision"] = revision
-        if config:
-            options["config"] = config
-
-        async with self.get_model_closing(model) as model_impl:
-            await model_impl.deploy(
+        with self._model(model) as juju:
+            juju.deploy(
                 charm,
-                application_name=name,
+                app=name,
+                channel=channel,
+                revision=revision,
+                config=config,
                 num_units=num_units,
                 base=base,
-                series=series,
-                **options,
+                to=to,
             )
 
-    async def add_machine(
-        self, name: str, model: "Model", base: str = JUJU_BASE
-    ) -> "Machine":
+    def remove_application(
+        self, *name: str, model: str, destroy_storage: bool = False, force: bool = False
+    ) -> None:
+        """Destroy application in model."""
+        with self._model(model) as juju:
+            juju.remove_application(*name, destroy_storage=destroy_storage, force=force)
+
+    def add_machine(self, name: str, model: str, base: str = JUJU_BASE) -> str:
         """Add machine to model.
 
         Workaround for https://github.com/juju/python-libjuju/issues/1229
         """
-        base_name, base_channel = base.split("@")
-        params = juju_client.AddMachineParams(
-            placement=juju_client.Placement(scope=model.uuid, directive=name),
-            jobs=["JobHostUnits"],
-            base=juju_client.Base(channel=base_channel, name=base_name),
-        )
+        with self._model(model) as juju:
+            output, stderr = juju._cli("add-machine", "--base", base, name)
+            machine_id = stderr.strip().split(" ")[-1]
+            LOG.debug("Added new machine %s", machine_id)
+            return machine_id
 
-        client_facade = juju_client.MachineManagerFacade.from_connection(
-            model.connection()
-        )
-        results = await client_facade.AddMachines(params=[params])
-        error = results.machines[0].error
-        if error:
-            raise juju_errors.JujuError("Error adding machine: %s" % error.message)
-        machine_id = results.machines[0].machine
-
-        LOG.debug("Added new machine %s", machine_id)
-        return await model._wait_for_new("machine", machine_id)  # type: ignore
-
-    async def get_unit(self, name: str, model: "Model") -> "Unit":
+    def get_unit(self, name: str, model: str) -> "jubilant.statustypes.UnitStatus":
         """Fetch an application's unit in model.
 
         :name: Name of the unit to wait for, name format is application/id
         :model: Name of the model where the unit is located
         """
         self._validate_unit(name)
-        unit = model.units.get(name)
+        status = self.get_model_status(model)  # Ensure model exists
+        app = status.apps.get(name.split("/")[0])
+        if app is None:
+            raise ApplicationNotFoundException(
+                f"Application {name!r} is missing from model {model!r}"
+            )
+        unit = app.units.get(name)
 
         if unit is None:
             raise UnitNotFoundException(
-                f"Unit {name!r} is missing from model {model.name!r}"
+                f"Unit {name!r} is missing from model {model!r}"
             )
         return unit
 
-    async def get_unit_from_machine(
-        self, application: str, machine_id: str, model: "Model"
-    ) -> "Unit":
+    def get_unit_from_machine(
+        self, application: str, machine_id: str, model: str
+    ) -> str:
         """Fetch a application's unit in model on a specific machine.
 
         :application: application name of the unit to look for
         :machine_id: Id of machine unit is on
-        :model: Model object
+        :model: Name of the model where the unit is located
         """
-        app = await self.get_application(application, model)
-        unit: "Unit | None" = None
-        for u in app.units:
-            if machine_id == u.machine.entity_id:
-                unit = u
+        app = self.get_application(application, model)
+        unit = None
+        for name, u in app.units.items():
+            if machine_id == u.machine:
+                unit = name
         if unit is None:
             raise UnitNotFoundException(
                 f"Unit for application {application!r} on machine {machine_id!r} "
-                f"is missing from model {model.name!r}"
+                f"is missing from model {model!r}"
             )
         return unit
 
@@ -731,27 +536,51 @@ class JujuHelper:
                 "should be a valid unit of format application/id"
             )
 
-    async def add_unit(
+    def add_unit(
         self,
-        application: "Application",
-        machine: list[str] | str | None = None,
-    ) -> list["Unit"]:
-        """Add unit to application, can be optionnally placed on a machine.
+        model: str,
+        application: str,
+        machines: list[str],
+    ) -> list[str]:
+        """Add unit to application placed on a machine.
 
+        :model: Name of the model where the application is located
         :name: Application name
-        :machine: Machine ID to place the unit on, optional
+        :machines: Machine ID to place the unit on
         """
-        if machine is None or isinstance(machine, str):
-            count = 1
-        else:
-            # machine is a list
-            count = len(machine)
+        if not machines:
+            raise ValueError("Machine cannot be empty")
+        num_units = len(machines)
 
-        # Note(gboutry): add_unit waits for unit to be added to model,
-        # but does not check status
-        return await application.add_unit(count, machine)
+        old_app = self.get_application(application, model)
+        with self._model(model) as juju:
+            juju.add_unit(application, num_units=num_units, to=machines)
+        new_app = self.get_application(application, model)
 
-    async def remove_unit(self, name: str, unit: str, model: str):
+        # note(gboutry): Since Jubilant, we don't know which unit was added
+        # by the call
+        # Diff the previous application units status
+        # Also match on the machine ID in case of multiple nodes
+        # joining in local mode
+        new_units = []
+        for unit, unit_stat in new_app.units.items():
+            if unit not in old_app.units and unit_stat.machine in machines:
+                LOG.debug(
+                    "Added new unit %s for application %s on machine %s",
+                    unit,
+                    application,
+                    unit_stat.machine,
+                )
+                new_units.append(unit)
+        if len(new_units) != num_units:
+            raise JujuException(
+                f"Failed to add {num_units} units "
+                f"to application {application!r} in model "
+                f"{model!r}, only {len(new_units)} were added"
+            )
+        return new_units
+
+    def remove_unit(self, name: str, unit: str, model: str):
         """Remove unit from application.
 
         :name: Application name
@@ -759,64 +588,54 @@ class JujuHelper:
         :model: Name of the model where the application is located
         """
         self._validate_unit(unit)
-        async with self.get_model_closing(model) as model_impl:
-            application = model_impl.applications.get(name)
+        with self._model(model) as juju:
+            juju.remove_unit(unit)
 
-            if application is None:
-                raise ApplicationNotFoundException(
-                    f"Application {name!r} is missing from model {model!r}"
-                )
-
-            await application.destroy_unit(unit)
-
-    async def _get_leader_unit(self, name: str, model: "Model") -> "Unit":
+    def _get_leader_unit(
+        self, name: str, model: str
+    ) -> tuple[str, "jubilant.statustypes.UnitStatus"]:
         """Get leader unit.
 
         :name: Application name
         :model: Model object
-        :returns: Leader Unit object
+        :returns: Leader Unit name and object
         :raises: LeaderNotFoundException if no leader is found
         """
-        application = await self.get_application(name, model)
+        application = self.get_application(name, model)
 
-        for unit in application.units:
-            is_leader = await unit.is_leader_from_status()
-            if is_leader:
-                return unit
+        for unit, status in application.units.items():
+            if status.leader:
+                return unit, status
 
         raise LeaderNotFoundException(
-            f"Leader for application {name!r} is missing from model {model.name!r}"
+            f"Leader for application {name!r} is missing from model {model!r}"
         )
 
-    async def get_leader_unit(self, name: str, model: str) -> str:
+    def get_leader_unit(self, name: str, model: str) -> str:
         """Get leader unit.
 
         :name: Application name
         :model: Name of the model where the application is located
         :returns: Unit name
         """
-        async with self.get_model_closing(model) as model_impl:
-            unit = await self._get_leader_unit(name, model_impl)
-            return unit.entity_id
+        return self._get_leader_unit(name, model)[0]
 
-    async def get_leader_unit_machine(self, name: str, model: str) -> str:
+    def get_leader_unit_machine(self, name: str, model: str) -> str:
         """Get leader unit machine id.
 
         :name: Application name
         :model: Name of the model where the application is located
         :returns: Machine entity id
         """
-        async with self.get_model_closing(model) as model_impl:
-            unit = await self._get_leader_unit(name, model_impl)
-            return unit.machine.entity_id
+        return self._get_leader_unit(name, model)[1].machine
 
-    async def run_cmd_on_machine_unit_payload(
+    def run_cmd_on_machine_unit_payload(
         self,
         name: str,
         model: str,
         cmd: str,
         timeout: int | None = None,
-    ) -> dict:
+    ) -> "jubilant.Task":
         """Run a shell command on a machine unit.
 
         Returns action results irrespective of the return-code
@@ -831,16 +650,17 @@ class JujuHelper:
         Command execution failures are part of the results with
         return-code, stdout, stderr.
         """
-        async with self.get_model_closing(model) as model_impl:
-            unit = await self.get_unit(name, model_impl)
+        with self._model(model) as juju:
             try:
-                action = await unit.run(cmd, timeout=timeout, block=True)
-            except asyncio.TimeoutError as e:
-                raise TimeoutException(f"Timeout while running command: {cmd}") from e
+                task = juju.exec(cmd, unit=name, wait=timeout)
+            except jubilant.TaskError as e:
+                raise ExecFailedException(
+                    f"Failed to run command {cmd!r} on unit"
+                    f" {name!r} in model {model!r}: {e}"
+                ) from e
+        return task
 
-            return action.results
-
-    async def run_cmd_on_unit_payload(
+    def run_cmd_on_unit_payload(
         self,
         name: str,
         model: str,
@@ -858,146 +678,141 @@ class JujuHelper:
         :model: Name of the model where the application is located
         :cmd: Command to run
         :env: Environment variables to set for the pebble command
-        :container_name: Name of the payload container to run on
+        :container: Name of the payload container to run on
         :timeout: Timeout in seconds
         :returns: Command results
 
         Command execution failures are part of the results with
         return-code, stdout, stderr.
         """
-        async with self.get_model_closing(model) as model_impl:
-            unit = await self.get_unit(name, model_impl)
-            pebble_cmd = [
-                f"PEBBLE_SOCKET=/charm/containers/{container}/pebble.socket",
-                "/charm/bin/pebble",
-                "exec",
-            ]
+        self._validate_unit(name)
+        args: list[str] = []
 
-            if env:
-                env_str = ",".join(f"{k}={v}" for k, v in env.items())
-                pebble_cmd.extend(["--env", env_str])
-            pebble_cmd.append("--")
-            pebble = " ".join(pebble_cmd)
+        args.extend(("exec", "--format", "json", "--unit", name))
 
+        if timeout:
+            args.extend(("--wait", f"{timeout}s"))
+        args.append("--")
+        pebble_socket = f"PEBBLE_SOCKET=/charm/containers/{container}/pebble.socket"
+        pebble_path = "/charm/bin/pebble"
+        args.extend(("env", pebble_socket, pebble_path, "exec"))
+        if env:
+            args.extend(f"--env={k}={v}" for k, v in env.items())
+
+        with self._model(model) as juju:
             try:
-                action = await unit.run(pebble + " " + cmd, timeout=timeout, block=True)
-            except asyncio.TimeoutError as e:
-                raise TimeoutException(f"Timeout while running command: {cmd}") from e
-            return action.results
+                stdout, _ = juju._cli(*args, "--", *(cmd.split()), log=False)
+            except jubilant.CLIError as e:
+                stdout = e.stdout
+        return json.loads(stdout)[name]["results"]
 
-    async def run_action(
-        self, name: str, model: str, action_name: str, action_params={}
-    ) -> Dict:
+    def run_action(
+        self,
+        name: str,
+        model: str,
+        action_name: str,
+        action_params: dict | None = None,
+        timeout: int | None = None,
+    ) -> dict:
         """Run action and return the response.
 
         :name: Unit name
         :model: Name of the model where the application is located
         :action: Action name
-        :kwargs: Arguments to action
-        :returns: dict of action results
+        :action_params: Arguments to action
+        :timeout: Timeout in seconds
+        :returns: Action results
         :raises: UnitNotFoundException, ActionFailedException,
                  Exception when action not defined
         """
-        async with self.get_model_closing(model) as model_impl:
-            unit = await self.get_unit(name, model_impl)
-            action_obj = await unit.run_action(action_name, **action_params)
-            await action_obj.wait()
-            if action_obj._status != "completed":
-                output = await model_impl.get_action_output(action_obj.id)
-                raise ActionFailedException(output)
+        if timeout is None:
+            timeout = 1800
+        with self._model(model) as juju:
+            task = juju.run(name, action_name, action_params, wait=timeout)
+        if not task.success:
+            raise ActionFailedException(str(task))
+        return task.results
 
-            return action_obj.results
-
-    async def add_secret(self, model: str, name: str, data: dict, info: str) -> str:
+    def add_secret(self, model: str, name: str, data: dict, info: str) -> str:
         """Add secret to the model.
 
         :model: Name of the model.
         :name: Name of the secret.
         :data: Content to save in the secret.
+        ":info: Information about the secret, e.g. "password for db".
         """
-        data_args = [f"{k}={v}" for k, v in data.items()]
-        async with self.get_model_closing(model) as model_impl:
-            secret = await model_impl.add_secret(name, data_args, info=info)
-            return secret
+        with self._model(model) as juju:
+            return juju.add_secret(name, data, info=info).unique_identifier
 
-    async def grant_secret(self, model: str, name: str, application: str):
+    def grant_secret(self, model: str, name: str, application: str):
         """Grant secret access to application.
 
         :model: Name of the model.
         :name: Name of the secret.
         :application: Name of the application.
         """
-        async with self.get_model_closing(model) as model_impl:
-            await model_impl.grant_secret(name, application)
+        with self._model(model) as juju:
+            try:
+                juju.cli("grant-secret", name, application)
+            except jubilant.CLIError as e:
+                raise JujuException(
+                    f"Failed to grant secret {name!r} to application {application!r} "
+                    f"in model {model!r}: {e.stderr}"
+                ) from e
 
-    async def get_secret(self, model: str, secret_id: str) -> dict:
+    def get_secret(self, model: str, secret_id: str) -> dict:
         """Get secret from model.
 
         :model: Name of the model
         :secret_id: Secret ID
         """
-        async with self.get_model_closing(model) as model_impl:
-            secrets = await model_impl.list_secrets(
-                filter={"uri": secret_id}, show_secrets=True
-            )
-            if len(secrets) != 1:
-                raise JujuSecretNotFound(f"Secret {secret_id!r}")
-            return secrets[0].serialize()
+        with self._model(model) as juju:
+            try:
+                secrets: dict = json.loads(
+                    juju.cli("show-secret", "--format", "json", "--reveal", secret_id)
+                )
+            except jubilant.CLIError as e:
+                if "not found" in e.stderr:
+                    raise JujuSecretNotFound(f"Secret {secret_id!r} not found") from e
+                raise JujuException(
+                    f"Failed to get secret {secret_id!r} from model {model!r}"
+                ) from e
+        return list(secrets.values())[0]["content"]["Data"]
 
-    async def get_secret_by_name(self, model: str, secret_name: str) -> dict:
+    def get_secret_by_name(self, model: str, secret_name: str) -> dict:
         """Get secret from model.
 
         :model: Name of the model
         :secret_id: Secret Name
         """
-        async with self.get_model_closing(model) as model_impl:
-            secrets = await model_impl.list_secrets(
-                filter={"name": secret_name}, show_secrets=True
-            )
-            if len(secrets) != 1:
-                raise JujuSecretNotFound(f"Secret {secret_name!r}")
-            return secrets[0].serialize()
+        return self.get_secret(model, secret_name)
 
-    async def remove_secret(self, model: str, name: str):
+    def remove_secret(self, model: str, name: str):
         """Remove secret in the model.
 
         :model: Name of the model.
         :name: Name of the secret.
         """
-        async with self.get_model_closing(model) as model_impl:
-            await model_impl.remove_secret(name)
+        with self._model(model) as juju:
+            juju.cli("remove-secret", name)
 
-    async def scp_from(self, name: str, model: str, source: str, destination: str):
-        """Scp files from unit to local.
-
-        :name: Unit name
-        :model: Name of the model where the application is located
-        :source: source file path in the unit
-        :destination: destination file path on local
-        """
-        async with self.get_model_closing(model) as model_impl:
-            unit = await self.get_unit(name, model_impl)
-            # NOTE: User, proxy, scp_options left to defaults
-            await unit.scp_from(source, destination)
-
-    def _generate_juju_credential(self, user: dict) -> "juju_client.CloudCredential":
-        """Geenrate juju crdential object from kubeconfig user."""
+    def _generate_juju_credential(self, user: dict) -> dict:
+        """Generate juju credential object from kubeconfig user."""
         if "token" in user:
-            cred = juju_client.CloudCredential(
-                auth_type="oauth2", attrs={"Token": user["token"]}
-            )
+            cred = {
+                "auth-type": "oauth2",
+                "Token": user["token"],
+            }
         elif "client-certificate-data" in user and "client-key-data" in user:
             client_certificate_data = base64.b64decode(
                 user["client-certificate-data"]
             ).decode("utf-8")
             client_key_data = base64.b64decode(user["client-key-data"]).decode("utf-8")
-            cred = juju_client.CloudCredential(
-                auth_type="clientcertificate",
-                attrs={
-                    "ClientCertificateData": client_certificate_data,
-                    "ClientKeyData": client_key_data,
-                },
-            )
+            cred = {
+                "auth-type": "clientcertificate",
+                "ClientCertificateData": client_certificate_data,
+                "ClientKeyData": client_key_data,
+            }
         else:
             LOG.error("No credentials found for user in config")
             raise UnsupportedKubeconfigException(
@@ -1007,9 +822,7 @@ class JujuHelper:
 
         return cred
 
-    async def add_k8s_cloud(
-        self, cloud_name: str, credential_name: str, kubeconfig: dict
-    ):
+    def add_k8s_cloud(self, cloud_name: str, credential_name: str, kubeconfig: dict):
         """Add k8s cloud to controller."""
         contexts = {v["name"]: v["context"] for v in kubeconfig["contexts"]}
         clusters = {v["name"]: v["cluster"] for v in kubeconfig["clusters"]}
@@ -1030,26 +843,47 @@ class JujuHelper:
             "utf-8"
         )
 
-        try:
-            cloud = juju_client.Cloud(
-                auth_types=["oauth2", "clientcertificate"],
-                ca_certificates=[ca_cert],
-                endpoint=ep,
-                host_cloud_region="k8s/localhost",
-                regions=[juju_client.CloudRegion(endpoint=ep, name="localhost")],
-                type_="kubernetes",
+        cloud = {
+            "auth-types": ["oauth2", "clientcertificate"],
+            "ca-certificates": [ca_cert],
+            "endpoint": ep,
+            "host-cloud-region": "k8s/localhost",
+            "regions": {
+                "localhost": {
+                    "endpoint": ep,
+                }
+            },
+            "type": "kubernetes",
+        }
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml") as cloud_file:
+            cloud_file.write(yaml.safe_dump({"clouds": {cloud_name: cloud}}))
+            cloud_file.flush()
+            self.cli(
+                "add-cloud",
+                cloud_name,
+                "-f",
+                cloud_file.name,
+                include_model=False,
+                json_format=False,
             )
-            cloud = await self.controller.add_cloud(cloud_name, cloud)
-        except juju_errors.JujuAPIError as e:
-            if "already exists" not in str(e):
-                raise e
 
         cred = self._generate_juju_credential(user)
-        await self.controller.add_credential(
-            credential_name, credential=cred, cloud=cloud_name
-        )
 
-    async def update_k8s_cloud(self, cloud_name: str, kubeconfig: dict):
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml") as cred_file:
+            cred_file.write(
+                yaml.safe_dump({"credentials": {cloud_name: {credential_name: cred}}})
+            )
+            cred_file.flush()
+            self.cli(
+                "add-credential",
+                cloud_name,
+                "-f",
+                cred_file.name,
+                include_model=False,
+                json_format=False,
+            )
+
+    def update_k8s_cloud(self, cloud_name: str, kubeconfig: dict):
         """Update K8S cloud endpoint."""
         contexts = {v["name"]: v["context"] for v in kubeconfig["contexts"]}
         clusters = {v["name"]: v["cluster"] for v in kubeconfig["clusters"]}
@@ -1061,28 +895,35 @@ class JujuHelper:
         ca_cert = base64.b64decode(cluster["certificate-authority-data"]).decode(
             "utf-8"
         )
-        cloud_facade = juju_client.CloudFacade.from_connection(
-            self.controller.connection()
-        )
-        await cloud_facade.UpdateCloud(
-            [
-                {
-                    "cloud": juju_client.Cloud(
-                        auth_types=["oauth2", "clientcertificate"],
-                        ca_certificates=[ca_cert],
-                        endpoint=ep,
-                        host_cloud_region="k8s/localhost",
-                        regions=[
-                            juju_client.CloudRegion(endpoint=ep, name="localhost")
-                        ],
-                        type_="kubernetes",
-                    ),
-                    "name": cloud_name,
-                }
-            ]
-        )
 
-    async def add_k8s_credential(
+        clouds = {
+            cloud_name: {
+                "type": "kubernetes",
+                "auth_types": ["oauth2", "clientcertificate"],
+                "ca_certificates": [ca_cert],
+                "endpoint": ep,
+                "host_cloud_region": "k8s/localhost",
+                "regions": [
+                    {
+                        "endpoint": ep,
+                        "name": "localhost",
+                    }
+                ],
+            }
+        }
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml") as cloud_file:
+            cloud_file.write(yaml.safe_dump(clouds))
+            cloud_file.flush()
+            self.cli(
+                "update-cloud",
+                cloud_name,
+                "-f",
+                cloud_file.name,
+                include_model=False,
+                json_format=False,
+            )
+
+    def add_k8s_credential(
         self, cloud_name: str, credential_name: str, kubeconfig: dict
     ):
         """Add K8S Credential to controller."""
@@ -1096,11 +937,59 @@ class JujuHelper:
                 "No user found in current kubeconfig context, cannot add credential"
             )
         cred = self._generate_juju_credential(user)
-        await self.controller.add_credential(
-            credential_name, credential=cred, cloud=cloud_name
-        )
 
-    async def wait_application_ready(
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml") as cred_file:
+            cred_file.write(
+                yaml.safe_dump({"credentials": {cloud_name: {credential_name: cred}}})
+            )
+            cred_file.flush()
+            self.cli(
+                "add-credential",
+                cloud_name,
+                "-f",
+                cred_file.name,
+                include_model=False,
+                json_format=False,
+            )
+
+    def _wait(
+        self,
+        ready: Callable[["jubilant.statustypes.Status"], bool],
+        juju: "jubilant.Juju",
+        *,
+        error: Callable[["jubilant.statustypes.Status"], bool] | None = None,
+        delay: float = 1.0,
+        timeout: float | None = None,
+        successes: int = 3,
+    ):
+        """Retry status until ready or timeout.
+
+        Juju CLI can lose connection to the controller, especially in local mode
+        embedded controller, while joining multiple nodes at the same time.
+        """
+        if timeout is None:
+            timeout = 300
+        start = time.monotonic()
+
+        while (time.monotonic() - start) < timeout:
+            time_elapsed = time.monotonic() - start
+            try:
+                juju.wait(
+                    ready,
+                    error=error,
+                    delay=delay,
+                    timeout=timeout - time_elapsed,
+                    successes=successes,
+                )
+                break
+            except jubilant.CLIError as e:
+                LOG.error(f"Error occurred while waiting: {e}")
+        else:
+            raise TimeoutError(
+                f"Timed out after {timeout} seconds while waiting for status"
+            )
+
+    def wait_application_ready(
         self,
         name: str,
         model: str,
@@ -1120,31 +1009,23 @@ class JujuHelper:
         if accepted_status is None:
             accepted_status = ["active"]
 
-        async with self.get_model_closing(model) as model_impl:
-            application = typing.cast(
-                "Application | None", model_impl.applications.get(name)
-            )
-            if application is None:
+        def _ready_callback(status: "jubilant.statustypes.Status") -> bool:
+            app = status.apps[name]
+            return app.app_status.current in accepted_status
+
+        with self._model(model) as juju:
+            app = juju.status().apps.get(name)
+            if not app:
                 return
-
-            LOG.debug(f"Application {name!r} is in status: {application.status!r}")
-
-            try:
-                LOG.debug(
-                    "Waiting for app status to be: {} {}".format(
-                        application.status, accepted_status
-                    )
+            LOG.debug(f"Application {name!r} is in status: {app.app_status.current!r}")
+            LOG.debug(
+                "Waiting for app status to be: {} {}".format(
+                    app.app_status.current, accepted_status
                 )
-                await model_impl.block_until(
-                    lambda: application.status in accepted_status,
-                    timeout=timeout,
-                )
-            except asyncio.TimeoutError as e:
-                raise TimeoutException(
-                    f"Timed out while waiting for application {name!r} to be ready"
-                ) from e
+            )
+            self._wait(_ready_callback, juju, delay=MODEL_DELAY, timeout=timeout)
 
-    async def wait_application_gone(
+    def wait_application_gone(
         self,
         names: list[str],
         model: str,
@@ -1156,21 +1037,16 @@ class JujuHelper:
         :model: Name of the model where the application is located
         :timeout: Waiting timeout in seconds
         """
-        async with self.get_model_closing(model) as model_impl:
-            name_set = set(names)
-            empty_set: set[str] = set()
-            try:
-                await model_impl.block_until(
-                    lambda: name_set.intersection(model_impl.applications) == empty_set,
-                    timeout=timeout,
-                )
-            except asyncio.TimeoutError as e:
-                raise TimeoutException(
-                    "Timed out while waiting for applications "
-                    f"{', '.join(name_set)} to be gone"
-                ) from e
+        name_set = set(names)
 
-    async def wait_model_gone(
+        def _gone(status: "jubilant.statustypes.Status") -> bool:
+            """Check if applications are gone."""
+            return len(name_set.intersection(status.apps)) == 0
+
+        with self._model(model) as juju:
+            self._wait(_gone, juju, delay=MODEL_DELAY, timeout=timeout)
+
+    def wait_model_gone(
         self,
         model: str,
         timeout: int | None = None,
@@ -1180,19 +1056,18 @@ class JujuHelper:
         :model: Name of the model
         :timeout: Waiting timeout in seconds
         """
+        if timeout is None:
+            timeout = 60 * 15
 
-        async def condition():
-            models = await self.controller.list_models()
-            return model not in models
+        start = time.monotonic()
+        while self.model_exists(model):
+            if time.monotonic() - start > timeout:
+                raise TimeoutError(
+                    f"Timed out while waiting for model {model!r} to be gone"
+                )
+            time.sleep(MODEL_DELAY)
 
-        try:
-            await juju_utils.block_until_with_coroutine(condition, timeout=timeout)
-        except asyncio.TimeoutError as e:
-            raise TimeoutException(
-                f"Timed out while waiting for model {model} to be gone"
-            ) from e
-
-    async def wait_units_gone(
+    def wait_units_gone(
         self,
         names: typing.Sequence[str],
         model: str,
@@ -1204,52 +1079,53 @@ class JujuHelper:
         :model: Name of the model where the units are located
         :timeout: Waiting timeout in seconds
         """
-        async with self.get_model_closing(model) as model_impl:
-            name_set = set(names)
-            empty_set: set[str] = set()
-            try:
-                await model_impl.block_until(
-                    lambda: name_set.intersection(model_impl.units) == empty_set,
-                    timeout=timeout,
-                )
-            except asyncio.TimeoutError as e:
-                raise TimeoutException(
-                    "Timed out while waiting for units"
-                    f" {', '.join(name_set)} to be gone"
-                ) from e
+        app_units: dict[str, list[str]] = {}
+        for name in names:
+            app_units.setdefault(name.split("/")[0], []).append(name)
 
-    async def wait_all_machines_deployed(self, model: str, timeout: int | None = None):
+        def _unit_gones(
+            status: "jubilant.statustypes.Status",
+        ) -> bool:
+            """Check if units are gone."""
+            for app, units in app_units.items():
+                if app not in status.apps:
+                    continue
+                name_set = set(units)
+                if len(name_set.intersection(status.apps[app].units)) > 0:
+                    return False
+            return True
+
+        with self._model(model) as juju:
+            self._wait(_unit_gones, juju, delay=MODEL_DELAY, timeout=timeout)
+
+    def wait_all_machines_deployed(self, model: str, timeout: int | None = None):
         """Block execution until all machines in model are deployed.
 
         :model: Name of the model to wait for readiness
         :timeout: Waiting timeout in seconds
         """
-        async with self.get_model_closing(model) as model_impl:
 
-            def condition() -> bool:
-                """Computes readiness for machine."""
-                machines = model_impl.machines
-                for machine in machines.values():
-                    if machine is None or machine.status_message != "Deployed":
-                        return False
-                return True
+        def _machines_deployed(status: "jubilant.statustypes.Status") -> bool:
+            """Computes readiness for machine."""
+            for machine in status.machines.values():
+                if machine.machine_status.message != "Deployed":
+                    return False
+            return True
 
-            try:
-                await model_impl.block_until(
-                    condition,
-                    timeout=timeout,
-                )
-            except asyncio.TimeoutError as e:
-                raise TimeoutException(
-                    "Timed out while waiting for machines to be deployed"
-                ) from e
+        with self._model(model) as juju:
+            self._wait(
+                _machines_deployed,
+                juju,
+                delay=MODEL_DELAY,
+                timeout=timeout,
+            )
 
-    async def wait_until_active(
+    def wait_until_active(
         self,
         model: str,
         apps: list[str] | None = None,
         timeout: int = 10 * 60,
-        queue: asyncio.queues.Queue | None = None,
+        queue: queue.Queue | None = None,
     ) -> None:
         """Wait for all agents in model to reach idle status.
 
@@ -1259,43 +1135,16 @@ class JujuHelper:
         :queue: Queue to put application names in when they are ready, optional, must
             be sized for the number of applications
         """
-        async with self.get_model_closing(model) as model_impl:
+        with self._model(model) as juju:
             if apps is None:
-                apps = list(model_impl.applications.keys())
-            await self.wait_until_desired_status(
+                apps = list(juju.status().apps.keys())
+            self.wait_until_desired_status(
                 model, apps, status=["active"], timeout=timeout, queue=queue
             )
 
-    async def _model_ticker(self, shared_updater: _SharedStatusUpdater):
-        """Update model every 15 seconds.
-
-        This coroutine continuously updates the model by calling the
-        `shared_updater.reconnect_model_and_notify_awaiters` method every 15 seconds.
-        It runs indefinitely until cancelled.
-
-        :shared_updater: An instance of
-                _SharedStatusUpdater used to ensure the model is ready
-                and notify relevant parties.
-        """
-        try:
-            while True:
-                try:
-                    await shared_updater.reconnect_model_and_notify_awaiters()
-                except asyncio.CancelledError:
-                    # Prevent silencing CancelledError
-                    raise
-                except Exception:
-                    # silence exception to have the ticker retry
-                    LOG.debug(
-                        "Model ticker failed to reconnect, retrying.", exc_info=True
-                    )
-                await asyncio.sleep(15)
-        except asyncio.CancelledError:
-            LOG.debug("Model ticker cancelled")
-
     @staticmethod
     def _is_desired_status_achieved(
-        application_status: "juju_def.ApplicationStatus",
+        application_status: "jubilant.statustypes.AppStatus",
         unit_list: Collection[str],
         expected_status: Collection[str],
         expected_agent_status: Collection[str] | None = None,
@@ -1316,29 +1165,27 @@ class JujuHelper:
         # Application is a subordinate, collect status from app instead of units
         # as units is empty dictionary.
         if application_status.subordinate_to:
-            if application_status.status:
-                app_status = {str(application_status.status.status)}
+            app_status = {str(application_status.app_status.current)}
         else:
             for name, unit in units.items():
-                unit = typing.cast("juju_def.UnitStatus", unit)
                 if len(unit_list) == 0 or name in unit_list:
-                    if wl_status := unit.workload_status:
-                        app_status.add(str(wl_status.status))
-                        if _wl_status_message := wl_status.info:
-                            workload_status_message.add(str(_wl_status_message))
-                    if _agent_status := unit.agent_status:
-                        agent_status.add(str(_agent_status.status))
+                    if unit.workload_status.current:
+                        app_status.add(unit.workload_status.current)
+                    if unit.workload_status.message:
+                        workload_status_message.add(unit.workload_status.message)
+                    if unit.juju_status.current:
+                        agent_status.add(unit.juju_status.current)
 
         if len(unit_list) == 0:
-            # int_ is None on machine models
-            expected_unit_count = application_status.int_
+            # scale is 0 on machine models
+            expected_unit_count = application_status.scale
             unit_count = len(units)
         else:
             expected_unit_count = len(unit_list)
             unit_count = len([unit for unit in units if unit in unit_list])
 
         has_expected_unit_count = (
-            expected_unit_count is None or expected_unit_count == unit_count
+            expected_unit_count == 0 or expected_unit_count == unit_count
         )
         has_expected_app_status = len(app_status) > 0 and app_status.issubset(
             expected_status
@@ -1359,57 +1206,7 @@ class JujuHelper:
             and has_expected_workload_status_message
         )
 
-    @staticmethod
-    async def _wait_until_status_coroutine(
-        shared_updater: _SharedStatusUpdater,
-        app: str,
-        unit_list: list[str] | None = None,
-        queue: asyncio.queues.Queue | None = None,
-        expected_status: Collection[str] | None = None,
-        expected_agent_status: Collection[str] | None = None,
-        expected_workload_status_message: Collection[str] | None = None,
-    ):
-        """Worker function to wait for application's units workloads to be active.
-
-        This coroutine periodically checks the status of the specified application and
-        its units, waiting until the desired status conditions are met.
-
-        :shared_updater: An instance of _SharedStatusUpdater to fetch status updates.
-        :app: The name of the application to monitor.
-        :unit_list: Optional list of specific units to check within the application.
-        :queue: Optional asyncio queue to notify when the application reaches
-                the desired status.
-        :expected_status: Optional collection of desired application statuses.
-        :expected_agent_status: Optional collection of desired agent statuses.
-        :expected_workload_status_message: Optional collection of desired workload
-                                           status messages.
-        """
-        expected_status = expected_status or {"active"}
-        try:
-            async for status in shared_updater.tick_status([app]):
-                if app not in status.applications:
-                    raise ValueError(f"Application {app} not found in status")
-                application_status = typing.cast(
-                    "juju_def.ApplicationStatus", status.applications[app]
-                )
-
-                if JujuHelper._is_desired_status_achieved(
-                    application_status,
-                    unit_list or [],
-                    expected_status,
-                    expected_agent_status,
-                    expected_workload_status_message,
-                ):
-                    LOG.debug("Application %r is active", app)
-                    # queue is sized for the number of coroutines,
-                    # it should never throw QueueFull
-                    if queue is not None:
-                        queue.put_nowait(app)
-                    break
-        except asyncio.CancelledError:
-            LOG.debug("Waiting for %r cancelled", app)
-
-    async def wait_until_desired_status(
+    def wait_until_desired_status(
         self,
         model: str,
         apps: list[str],
@@ -1418,7 +1215,7 @@ class JujuHelper:
         agent_status: list[str] | None = None,
         workload_status_message: list[str] | None = None,
         timeout: int = 10 * 60,
-        queue: asyncio.queues.Queue | None = None,
+        queue: queue.Queue | None = None,
     ) -> None:
         """Wait for all workloads in the specified model to reach the desired status.
 
@@ -1430,7 +1227,7 @@ class JujuHelper:
         :agent_status: Desired agent status list.
         :workload_status_message: List of desired workload status messages.
         :timeout: Waiting timeout in seconds.
-        :queue: An asyncio queue to use for status updates. If provided,
+        :queue: An queue to use for status updates. If provided,
                 its maxsize should be at least the number of applications.
         """
         if status is None:
@@ -1440,8 +1237,7 @@ class JujuHelper:
         if queue is not None and queue.maxsize < len(apps):
             raise ValueError("Queue size should be at least the number of applications")
         LOG.debug("Waiting for apps %r to be %r", apps, wl_status)
-        shared_updater = _SharedStatusUpdater(self, model)
-        tasks: list[asyncio.Task] = []
+        app_params = {}
         for app in apps:
             unit_list = (
                 None if units is None else [unit for unit in units if app in unit]
@@ -1453,92 +1249,91 @@ class JujuHelper:
                     app,
                     wl_status,
                 )
-            tasks.append(
-                asyncio.create_task(
-                    self._wait_until_status_coroutine(
-                        shared_updater,
+
+            app_params[app] = (
+                unit_list or [],
+                wl_status,
+                agent_status,
+                workload_status_message,
+            )
+
+        def _wait_until_status(status: "jubilant.statustypes.Status"):
+            """Check if all applications are in the desired status."""
+            ready = True
+            for app, (
+                unit_list,
+                expected_status,
+                expected_agent_status,
+                expected_workload_status_message,
+            ) in app_params.copy().items():
+                if JujuHelper._is_desired_status_achieved(
+                    status.apps[app],
+                    unit_list,
+                    expected_status,
+                    expected_agent_status,
+                    expected_workload_status_message,
+                ):
+                    LOG.debug(
+                        "Application %r is in expected status %r",
                         app,
-                        unit_list,
-                        queue,
-                        wl_status,
-                        agent_status,
-                        workload_status_message,
-                    ),
-                    name=app,
-                )
-            )
-        updater_task = asyncio.create_task(
-            self._model_ticker(shared_updater), name="model-ticker"
-        )
-        excs = []
-        try:
-            await asyncio.wait_for(
-                asyncio.gather(*tasks, return_exceptions=True), timeout=timeout
-            )
-        except asyncio.TimeoutError as e:
-            raise TimeoutException(
-                f"Timed out while waiting for model {model!r} to be ready"
-            ) from e
-        finally:
-            for task in tasks:
-                task.cancel()
-                if task.done() and not task.cancelled() and (ex := task.exception()):
-                    LOG.debug("coroutine %r exception: %s", task.get_name(), str(ex))
-                    excs.append(ex)
-            updater_task.cancel()
-            await shared_updater.disconnect()
+                        expected_status,
+                    )
+                    if queue is not None:
+                        queue.put_nowait(app)
+                    app_params.pop(app, None)
+                else:
+                    ready = False
+            return ready
 
-        if excs:
-            # python 3.11 use ExceptionGroup
-            raise JujuWaitException(
-                f"Error while waiting for model {model!r} to be ready", excs
+        with self._model(model) as juju:
+            self._wait(
+                _wait_until_status,
+                juju,
+                delay=MODEL_DELAY,
+                timeout=timeout,
             )
 
-    async def set_application_config(self, model: str, app: str, config: dict):
-        """Update application configuration.
-
-        :model: Name of the model to wait for readiness
-        :application: Application to update
-        :config: Config to be set
-        """
-        async with self.get_model_closing(model) as model_impl:
-            await model_impl.applications[app].set_config(config)
-
-    async def get_charm_channel(self, application_name: str, model: str) -> str:
-        """Get the charm-channel from a deployed application.
-
-        :param application_list: Name of application
-        :param model: Name of model
-        """
-        status = await self.get_model_status_full(model)
-        return status["applications"].get(application_name, {}).get("charm-channel")
-
-    async def charm_refresh(self, application_name: str, model: "Model"):
+    def charm_refresh(self, application_name: str, model: str):
         """Update application to latest charm revision in current channel.
 
         :param application_list: Name of application
         :param model: Model object
         """
-        app = await self.get_application(application_name, model)
-        await app.refresh()
+        with self._model(model) as juju:
+            juju.refresh(application_name)
 
-    async def get_available_charm_revision(
-        self, model: str, charm_name: str, channel: str
+    def get_available_charm_revision(
+        self, charm_name: str, channel: str, base: str = JUJU_BASE
     ) -> int:
         """Find the latest available revision of a charm in a given channel.
 
-        :param model: Name of model
         :param charm_name: Name of charm to look up
         :param channel: Channel to lookup charm in
+        :param base: Base to lookup charm in, default is JUJU_BASE
         """
-        async with self.get_model_closing(model) as model_impl:
-            available_charm_data = await juju_charmhub.CharmHub(model_impl).info(
-                charm_name, channel
+        track, risk = channel.split("/")
+        base_name, base_channel = base.split("@")
+        output = json.loads(
+            self._juju.cli(
+                "info",
+                "--format",
+                "json",
+                "--channel",
+                channel,
+                charm_name,
+                include_model=False,
             )
-            version = available_charm_data["channel-map"][channel]["revision"][
-                "version"
-            ]
-            return int(version)
+        )
+
+        for risk_info in output["channels"][track][risk]:
+            for base_info in risk_info["bases"]:
+                if base_info["channel"] == base_channel:
+                    return risk_info["revision"]
+
+        raise JujuException(
+            f"Could not find charm {charm_name!r} in channel {channel!r} "
+            f"with base {base!r}"
+        )
 
     @staticmethod
     def manual_cloud(cloud_name: str, ip_address: str) -> dict[str, dict]:
@@ -1585,90 +1380,54 @@ class JujuHelper:
         }
         return credentials
 
-    async def get_spaces(self, model: str) -> list[dict]:
+    def get_spaces(self, model: str) -> list[dict]:
         """Get spaces in model."""
-        async with self.get_model_closing(model) as model_impl:
-            spaces = await model_impl.get_spaces()
-            return [json.loads(space.to_json()) for space in spaces]
+        with self._model(model) as juju:
+            return json.loads(juju.cli("spaces", "--format", "json"))["spaces"]
 
-    async def add_space(self, model: str, space: str, subnets: list[str]):
+    def add_space(self, model: str, space: str, subnets: list[str]):
         """Add a space to the model."""
-        async with self.get_model_closing(model) as model_impl:
+        with self._model(model) as juju:
             try:
-                await model_impl.add_space(space, subnets)
-            except juju_errors.JujuAPIError as e:
+                juju.cli("add-space", space, *subnets)
+            except jubilant.CLIError as e:
                 raise JujuException(f"Failed to add space {space!r}: {str(e)}") from e
 
-    async def get_application_bindings(self, model: str, application: str) -> dict:
-        """Get endpoint bindings for an application."""
-        async with self.get_model_closing(model) as model_impl:
-            app = await self.get_application(application, model_impl)
-            facade = app._facade()
-            try:
-                app_config = await facade.Get(application=app.name)
-            except juju_errors.JujuError as e:
-                raise JujuException(
-                    f"Failed to get bindings for application {app.name!r}: {str(e)}"
-                ) from e
-            return app_config.endpoint_bindings
-
-    async def merge_bindings(
-        self, model: str, application: str, bindings: dict[str, str]
-    ):
-        """Update endpoint bindings for an application."""
-        async with self.get_model_closing(model) as model_impl:
-            app = await self.get_application(application, model_impl)
-            app_bindings = await self.get_application_bindings(model, application)
-
-            # Check bindings provided are valid
-            charm_endpoints = set(app_bindings.keys())
-            unknown_endpoints = set(bindings.keys()) - charm_endpoints
-            if unknown_endpoints:
-                raise JujuException(
-                    "Bindings contain unknown endpoints:"
-                    f" {', '.join(unknown_endpoints)}"
-                )
-            # Check spaces are valid
-            spaces = await self.get_spaces(model)
-            unknown_spaces = set(bindings.values()) - {
-                space["name"] for space in spaces
-            }
-            if unknown_spaces:
-                raise JujuException(
-                    f"Bindings contain unknown spaces: {', '.join(unknown_spaces)}"
-                )
-
-            request = [
-                {
-                    "application-tag": app.tag,
-                    "bindings": bindings,
-                }
-            ]
-            facade = app._facade()
-            try:
-                await facade.MergeBindings(request)
-            except juju_errors.JujuError as e:
-                raise JujuException(f"Failed to merge bindings: {str(e)}") from e
-
-    async def get_space_networks(
+    def get_space_networks(
         self, model: str, space: str
     ) -> list[ipaddress.IPv4Network | ipaddress.IPv6Network]:
         """Get networks in a space."""
-        networks = []
-        async with self.get_model_closing(model) as model_impl:
-            spaces = await model_impl.get_spaces()
-            for s in spaces:
-                if s.name != space:
-                    continue
-                for network in s.subnets:
-                    try:
-                        networks.append(ipaddress.ip_network(network.cidr))
-                    except ValueError as e:
-                        raise JujuException(
-                            f"Invalid network {network!r} in space {space!r}: {str(e)}"
-                        ) from e
-                return networks
-            raise JujuException(f"Space {space!r} not found in model {model!r}")
+        with self._model(model) as juju:
+            try:
+                space_def: dict = json.loads(
+                    juju.cli("show-space", "--format", "json", space)
+                )
+            except jubilant.CLIError as e:
+                if "not found" in e.stderr:
+                    raise JujuException(f"Space {space!r} not found in model {model!r}")
+                raise JujuException(f"Failed to get space {space!r}: {str(e)}") from e
+
+        cidrs = []
+
+        for subnet in space_def["space"]["subnets"]:
+            try:
+                cidrs.append(ipaddress.ip_network(subnet["cidr"]))
+            except ValueError as e:
+                raise JujuException(
+                    f"Invalid network {subnet['cidr']!r} in space {space!r}: {str(e)}"
+                ) from e
+
+        return cidrs
+
+    def remove_saas(self, model: str, *saas_name: str):
+        """Remove a SaaS application from the model."""
+        with self._model(model) as juju:
+            try:
+                juju.cli("remove-saas", *saas_name)
+            except jubilant.CLIError as e:
+                raise JujuException(
+                    f"Failed to remove SaaS {saas_name!r}: {str(e)}"
+                ) from e
 
 
 class JujuStepHelper:
@@ -1925,34 +1684,6 @@ class JujuStepHelper:
         process = subprocess.run(cmd, capture_output=True, text=True, check=True)
         LOG.debug(f"Command finished. stdout={process.stdout}, stderr={process.stderr}")
 
-    def revision_update_needed(
-        self, application_name: str, model: str, status: dict | None = None
-    ) -> bool:
-        """Check if a revision update is available for an applicaton.
-
-        :param application_name: Name of application to check for updates for
-        :param model: Model application is in
-        :param status: Dictionay of model status
-        """
-        if not status:
-            status = run_sync(self.jhelper.get_model_status_full(model))
-        app_status = status["applications"].get(application_name, {})
-        if not app_status:
-            LOG.debug(f"{application_name} not present in model")
-            return False
-        deployed_revision = int(self._extract_charm_revision(app_status["charm"]))
-        charm_name = self._extract_charm_name(app_status["charm"])
-        deployed_channel = self.normalise_channel(app_status["charm-channel"])
-        if len(deployed_channel.split("/")) > 2:
-            LOG.debug(f"Cannot calculate upgrade for {application_name}, branch in use")
-            return False
-        available_revision = run_sync(
-            self.jhelper.get_available_charm_revision(
-                model, charm_name, deployed_channel
-            )
-        )
-        return bool(available_revision > deployed_revision)
-
     def get_charm_deployed_versions(self, model: str) -> dict:
         """Return charm deployed info for all the applications in model.
 
@@ -1960,13 +1691,13 @@ class JujuStepHelper:
         Example output:
         {"keystone": ("keystone-k8s", "2023.2/stable", 234)}
         """
-        status = run_sync(self.jhelper.get_model_status_full(model))
+        status = self.jhelper.get_model_status(model)
 
         apps = {}
-        for app_name, app_status in status.get("applications", {}).items():
-            charm_name = self._extract_charm_name(app_status["charm"])
-            deployed_channel = self.normalise_channel(app_status["charm-channel"])
-            deployed_revision = int(self._extract_charm_revision(app_status["charm"]))
+        for app_name, app_status in status.apps.items():
+            charm_name = app_status.charm_name
+            deployed_channel = self.normalise_channel(app_status.charm_channel)
+            deployed_revision = app_status.charm_rev
             apps[app_name] = (charm_name, deployed_channel, deployed_revision)
 
         return apps
@@ -1994,21 +1725,6 @@ class JujuStepHelper:
         if channel in ["stable", "candidate", "beta", "edge"]:
             channel = f"latest/{channel}"
         return channel
-
-    def _extract_charm_name(self, charm_url: str) -> str:
-        """Extract charm name from charm url.
-
-        :param charm_url: Url to examine
-        """
-        # XXX There must be a better way. ch:amd64/jammy/cinder-k8s-50 -> cinder-k8s
-        return charm_url.split("/")[-1].rsplit("-", maxsplit=1)[0]
-
-    def _extract_charm_revision(self, charm_url: str) -> str:
-        """Extract charm revision from charm url.
-
-        :param charm_url: Url to examine
-        """
-        return charm_url.split("-")[-1]
 
     def channel_update_needed(self, channel: str, new_channel: str) -> bool:
         """Compare two channels and see if the second is 'newer'.
@@ -2038,7 +1754,7 @@ class JujuStepHelper:
 
         Raises ModelNotFoundException if model does not exist.
         """
-        model_with_owner = run_sync(self.jhelper.get_model_name_with_owner(model))
+        model_with_owner = self.jhelper.get_model_name_with_owner(model)
 
         return model_with_owner
 
@@ -2048,7 +1764,7 @@ class JujuStepHelper:
         :return: True if secret exists in the model, False otherwise
         """
         try:
-            run_sync(self.jhelper.get_secret_by_name(model_name, secret_name))
+            self.jhelper.get_secret_by_name(model_name, secret_name)
             return True
         except JujuSecretNotFound:
             return False
@@ -2058,7 +1774,7 @@ class JujuActionHelper:
     @staticmethod
     def get_unit(
         client: Client, jhelper: JujuHelper, model: str, node: str, app: str
-    ) -> "Unit":
+    ) -> "str":
         """Retrieve the unit associated with the given node.
 
         Args:
@@ -2074,8 +1790,7 @@ class JujuActionHelper:
         node_info = client.cluster.get_node_info(node)
         machine_id = str(node_info.get("machineid"))
 
-        juju_model = run_sync(jhelper.get_model(model))
-        return run_sync(jhelper.get_unit_from_machine(app, machine_id, juju_model))
+        return jhelper.get_unit_from_machine(app, machine_id, model)
 
     @staticmethod
     def run_action(
@@ -2086,7 +1801,7 @@ class JujuActionHelper:
         app: str,
         action_name: str,
         action_params: dict[str, typing.Any],
-    ) -> Dict:
+    ) -> dict:
         """Run the specified action on the unit and return the result.
 
         Args:
@@ -2099,7 +1814,7 @@ class JujuActionHelper:
             action_params: Parameters to pass to the action.
 
         Returns:
-            Dict: The result of the action.
+            dict: The result of the action.
 
         Raises:
             UnitNotFoundException: If the unit cannot be found.
@@ -2110,17 +1825,15 @@ class JujuActionHelper:
             LOG.debug(
                 "Running action '%s' on unit '%s', params: %s",
                 action_name,
-                unit.entity_id,
+                unit,
                 action_params,
             )
 
-            action_result = run_sync(
-                jhelper.run_action(
-                    unit.entity_id,
-                    model,
-                    action_name,
-                    action_params=action_params,
-                )
+            action_result = jhelper.run_action(
+                unit,
+                model,
+                action_name,
+                action_params=action_params,
             )
             return action_result
         except UnitNotFoundException as e:

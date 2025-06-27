@@ -8,7 +8,6 @@ from typing import Sequence
 
 import rich.console
 import rich.table
-import rich.text
 import yaml
 from rich.status import Status
 
@@ -21,7 +20,7 @@ from sunbeam.core.common import (
     SunbeamException,
 )
 from sunbeam.core.deployment import Deployment
-from sunbeam.core.juju import JujuHelper, ModelNotFoundException, run_sync
+from sunbeam.core.juju import JujuHelper, ModelNotFoundException
 from sunbeam.core.steps import BaseStep
 from sunbeam.steps import clusterd, hypervisor, k8s, microceph
 from sunbeam.utils import merge_dict
@@ -158,15 +157,15 @@ class ClusterStatusStep(abc.ABC, BaseStep):
                     status: <status>
         """
         machine_status: dict = {}
-        status = run_sync(self.jhelper.get_model_status(model))
-        for app, app_status in status["applications"].items():
-            for unit, unit_status in app_status["units"].items():
+        status = self.jhelper.get_model_status(model)
+        for app, app_status in status.apps.items():
+            for unit, unit_status in app_status.units.items():
                 _machine_pointer = machine_status.setdefault(
-                    unit_status["machine"], {"applications": {}}
+                    unit_status.machine, {"applications": {}}
                 )
                 _machine_pointer["applications"][app] = {
                     "name": unit,
-                    "status": unit_status["workload-status"]["status"],
+                    "status": unit_status.workload_status.current,
                 }
         return machine_status
 
@@ -178,14 +177,14 @@ class ClusterStatusStep(abc.ABC, BaseStep):
             status: <status>
         """
         machines_status = {}
-        status = run_sync(self.jhelper.get_model_status(model))
-        for machine, machine_status in status["machines"].items():
-            machine_name = machine_status.get("hostname")
+        status = self.jhelper.get_model_status(model)
+        for machine, machine_status in status.machines.items():
+            machine_name = machine_status.hostname
             if not machine_name:
-                machine_name = machine_status.get("dns-name")
+                machine_name = machine_status.dns_name
             machines_status[machine] = {
                 "name": machine_name,
-                "status": machine_status["instance-status"]["status"],
+                "status": machine_status.machine_status.current,
             }
         return machines_status
 

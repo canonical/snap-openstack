@@ -17,7 +17,6 @@ from sunbeam.core.deployment import Deployment, Networks
 from sunbeam.core.juju import (
     ApplicationNotFoundException,
     JujuHelper,
-    run_sync,
 )
 from sunbeam.core.manifest import Manifest
 from sunbeam.core.steps import (
@@ -270,26 +269,22 @@ class CheckCinderVolumeDistributionStep(BaseStep):
         if Role.STORAGE.name.lower() not in node_info.get("role", ""):
             LOG.debug("Node %s is not a storage node", self.node)
             return Result(ResultType.SKIPPED)
-        model = run_sync(self.jhelper.get_model(self.model))
         try:
-            app = run_sync(self.jhelper.get_application(self._APPLICATION, model))
+            app = self.jhelper.get_application(self._APPLICATION, self.model)
         except ApplicationNotFoundException:
             LOG.debug("Failed to get application", exc_info=True)
-            run_sync(model.disconnect())
             return Result(
                 ResultType.SKIPPED,
                 f"Application {self._APPLICATION} has not been deployed yet",
             )
 
-        for unit in app.units:
-            if unit.machine.id == str(node_info.get("machineid")):
-                LOG.debug("Unit %s is running on node %s", unit.name, self.node)
+        for unit_name, unit in app.units.items():
+            if unit.machine == str(node_info.get("machineid")):
+                LOG.debug("Unit %s is running on node %s", unit_name, self.node)
                 break
         else:
             LOG.debug("No %s units found on %s", self._APPLICATION, self.node)
-            run_sync(model.disconnect())
             return Result(ResultType.SKIPPED)
-        run_sync(model.disconnect())
         nb_storage_nodes = len(self.client.cluster.list_nodes_by_role("storage"))
         if nb_storage_nodes == 1 and not self.force:
             return Result(

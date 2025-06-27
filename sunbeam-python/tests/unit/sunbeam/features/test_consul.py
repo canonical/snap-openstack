@@ -1,13 +1,12 @@
 # SPDX-FileCopyrightText: 2024 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
 from sunbeam.core.common import ResultType
 from sunbeam.core.deployment import Networks
-from sunbeam.core.juju import TimeoutException
 from sunbeam.core.terraform import TerraformException
 from sunbeam.features.instance_recovery import consul as consul_feature
 
@@ -19,7 +18,7 @@ def tfhelper():
 
 @pytest.fixture()
 def jhelper():
-    yield AsyncMock()
+    yield Mock()
 
 
 @pytest.fixture()
@@ -70,7 +69,7 @@ class TestDeployConsulClientStep:
         assert result.message == "apply failed..."
 
     def test_run_waiting_timed_out(self, deployment, tfhelper, jhelper, consulfeature):
-        jhelper.wait_until_desired_status.side_effect = TimeoutException("timed out")
+        jhelper.wait_until_desired_status.side_effect = TimeoutError("timed out")
 
         step = consul_feature.DeployConsulClientStep(
             deployment, tfhelper, tfhelper, jhelper, manifest
@@ -104,7 +103,7 @@ class TestRemoveConsulClientStep:
         assert result.message == "destroy failed..."
 
     def test_run_waiting_timed_out(self, deployment, tfhelper, jhelper, update_config):
-        jhelper.wait_application_gone.side_effect = TimeoutException("timed out")
+        jhelper.wait_application_gone.side_effect = TimeoutError("timed out")
 
         step = consul_feature.RemoveConsulClientStep(deployment, tfhelper, jhelper)
         result = step.run()

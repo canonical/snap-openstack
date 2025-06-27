@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: 2023 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
-import asyncio
 import json
 import logging
+import queue
 from pathlib import Path
 
 import click
@@ -29,8 +29,6 @@ from sunbeam.core.juju import (
     JujuHelper,
     JujuStepHelper,
     JujuWaitException,
-    TimeoutException,
-    run_sync,
 )
 from sunbeam.core.manifest import CharmManifest, FeatureConfig, SoftwareConfig
 from sunbeam.core.openstack import OPENSTACK_MODEL
@@ -101,21 +99,17 @@ class DisableLDAPDomainStep(BaseStep, JujuStepHelper):
             return Result(ResultType.FAILED, str(e))
 
         try:
-            run_sync(
-                self.jhelper.wait_application_gone(
-                    [f"keystone-ldap-{self.domain_name}"],
-                    self.model,
-                    timeout=APPLICATION_REMOVE_TIMEOUT,
-                )
+            self.jhelper.wait_application_gone(
+                [f"keystone-ldap-{self.domain_name}"],
+                self.model,
+                timeout=APPLICATION_REMOVE_TIMEOUT,
             )
-            run_sync(
-                self.jhelper.wait_until_desired_status(
-                    self.model,
-                    ["keystone"],
-                    timeout=APPLICATION_REMOVE_TIMEOUT,
-                )
+            self.jhelper.wait_until_desired_status(
+                self.model,
+                ["keystone"],
+                timeout=APPLICATION_REMOVE_TIMEOUT,
             )
-        except (JujuWaitException, TimeoutException) as e:
+        except (JujuWaitException, TimeoutError) as e:
             LOG.warning(str(e))
             return Result(ResultType.FAILED, str(e))
 
@@ -174,23 +168,20 @@ class UpdateLDAPDomainStep(BaseStep, JujuStepHelper):
         charm_name = "keystone-ldap-{}".format(self.charm_config["domain-name"])
         apps = ["keystone", charm_name]
         LOG.debug(f"Application monitored for readiness: {apps}")
-        queue: asyncio.queues.Queue[str] = asyncio.queues.Queue(maxsize=len(apps))
-        task = run_sync(update_status_background(self, apps, queue, status))
+        status_queue: queue.Queue[str] = queue.Queue(maxsize=len(apps))
+        task = update_status_background(self, apps, status_queue, status)
         try:
-            run_sync(
-                self.jhelper.wait_until_active(
-                    self.model,
-                    apps,
-                    timeout=APPLICATION_DEPLOY_TIMEOUT,
-                    queue=queue,
-                )
+            self.jhelper.wait_until_active(
+                self.model,
+                apps,
+                timeout=APPLICATION_DEPLOY_TIMEOUT,
+                queue=status_queue,
             )
-        except (JujuWaitException, TimeoutException) as e:
+        except (JujuWaitException, TimeoutError) as e:
             LOG.warning(str(e))
             return Result(ResultType.FAILED, str(e))
         finally:
-            if not task.done():
-                task.cancel()
+            task.stop()
         return Result(ResultType.COMPLETED)
 
 
@@ -247,23 +238,20 @@ class AddLDAPDomainStep(BaseStep, JujuStepHelper):
         charm_name = "keystone-ldap-{}".format(self.charm_config["domain-name"])
         apps = ["keystone", charm_name]
         LOG.debug(f"Application monitored for readiness: {apps}")
-        queue: asyncio.queues.Queue[str] = asyncio.queues.Queue(maxsize=len(apps))
-        task = run_sync(update_status_background(self, apps, queue, status))
+        status_queue: queue.Queue[str] = queue.Queue(maxsize=len(apps))
+        task = update_status_background(self, apps, status_queue, status)
         try:
-            run_sync(
-                self.jhelper.wait_until_active(
-                    self.model,
-                    apps,
-                    timeout=APPLICATION_DEPLOY_TIMEOUT,
-                    queue=queue,
-                )
+            self.jhelper.wait_until_active(
+                self.model,
+                apps,
+                timeout=APPLICATION_DEPLOY_TIMEOUT,
+                queue=status_queue,
             )
-        except (JujuWaitException, TimeoutException) as e:
+        except (JujuWaitException, TimeoutError) as e:
             LOG.warning(str(e))
             return Result(ResultType.FAILED, str(e))
         finally:
-            if not task.done():
-                task.cancel()
+            task.stop()
 
         return Result(ResultType.COMPLETED)
 
@@ -382,7 +370,7 @@ class LDAPFeature(OpenStackControlPlaneFeature):
             "domain-name": domain_name,
             "tls-ca-ldap": ca,
         }
-        jhelper = JujuHelper(deployment.get_connected_controller())
+        jhelper = JujuHelper(deployment.juju_controller)
         plan = [
             TerraformInitStep(deployment.get_tfhelper(self.tfplan)),
             AddLDAPDomainStep(deployment, FeatureConfig(), jhelper, self, charm_config),
@@ -427,7 +415,7 @@ class LDAPFeature(OpenStackControlPlaneFeature):
             with Path(ca_cert_file).open(mode="r") as f:
                 ca = f.read()
             charm_config["tls-ca-ldap"] = ca
-        jhelper = JujuHelper(deployment.get_connected_controller())
+        jhelper = JujuHelper(deployment.juju_controller)
         plan = [
             TerraformInitStep(deployment.get_tfhelper(self.tfplan)),
             UpdateLDAPDomainStep(deployment, jhelper, self, charm_config),
@@ -443,7 +431,7 @@ class LDAPFeature(OpenStackControlPlaneFeature):
         self, deployment: Deployment, domain_name: str, show_hints: bool
     ) -> None:
         """Remove LDAP backed domain."""
-        jhelper = JujuHelper(deployment.get_connected_controller())
+        jhelper = JujuHelper(deployment.juju_controller)
         plan = [
             TerraformInitStep(deployment.get_tfhelper(self.tfplan)),
             DisableLDAPDomainStep(

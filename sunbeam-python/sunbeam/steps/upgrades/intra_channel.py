@@ -7,7 +7,7 @@ from rich.console import Console
 from rich.status import Status
 
 from sunbeam.core.common import BaseStep, Result, ResultType
-from sunbeam.core.juju import JujuHelper, JujuStepHelper, run_sync
+from sunbeam.core.juju import JujuHelper, JujuStepHelper
 from sunbeam.core.manifest import Manifest
 from sunbeam.core.terraform import TerraformInitStep
 from sunbeam.steps.cinder_volume import DeployCinderVolumeApplicationStep
@@ -71,7 +71,6 @@ class LatestInChannel(BaseStep, JujuStepHelper):
         and the deployed app is same, run juju refresh.
         Otherwise ignore so that terraform plan apply will take care of charm upgrade.
         """
-        model_impl = run_sync(self.jhelper.get_model(model))
         for app_name, (charm, channel, _) in apps.items():
             manifest_charm = self.manifest.core.software.charms.get(charm)
             if not manifest_charm:
@@ -83,11 +82,9 @@ class LatestInChannel(BaseStep, JujuStepHelper):
                 continue
 
             if not manifest_charm.revision and manifest_charm.channel == channel:
-                app = run_sync(self.jhelper.get_application(app_name, model_impl))
                 LOG.debug(f"Running refresh for app {app_name}")
                 # refresh() checks for any new revision and updates if available
-                run_sync(app.refresh())
-        run_sync(model_impl.disconnect())
+                self.jhelper.charm_refresh(app_name, model)
 
     def run(self, status: Status | None = None) -> Result:
         """Refresh all charms identified as needing a refresh.

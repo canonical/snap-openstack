@@ -8,6 +8,7 @@ import logging
 import subprocess
 import typing
 
+import jubilant
 import tenacity
 import yaml
 from rich.console import Console
@@ -39,7 +40,6 @@ from sunbeam.core.juju import (
     MachineNotFoundException,
     ModelNotFoundException,
     UnsupportedKubeconfigException,
-    run_sync,
 )
 from sunbeam.core.k8s import (
     CREDENTIAL_SUFFIX,
@@ -314,14 +314,14 @@ class AddK8SUnitsStep(AddMachineUnitsStep):
 
 
 def _get_machines_space_ips(
-    interfaces: dict[str, dict],
+    interfaces: dict[str, "jubilant.statustypes.NetworkInterface"],
     space: str,
     networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network],
 ) -> list[str]:
     ips = []
     for iface in interfaces.values():
-        if (spaces := iface.get("space")) and space in spaces.split():
-            for ip in iface.get("ip-addresses", []):
+        if (spaces := iface.space) and space in spaces.split():
+            for ip in iface.ip_addresses:
                 try:
                     ip_parsed = ipaddress.ip_address(ip)
                 except ValueError:
@@ -362,13 +362,16 @@ class EnsureK8SUnitsTaggedStep(BaseStep):
         self.fqdn = fqdn
         self.to_update: dict[str, str] = {}
 
-    def _get_management_ips(self, juju_machine: dict) -> list[str]:
+    def _get_management_ips(
+        self, juju_machine: "jubilant.statustypes.MachineStatus"
+    ) -> list[str]:
         management_space = self.deployment.get_space(Networks.MANAGEMENT)
-        management_networks = run_sync(
-            self.jhelper.get_space_networks(self.model, management_space)
+        management_networks = self.jhelper.get_space_networks(
+            self.model, management_space
         )
+
         return _get_machines_space_ips(
-            juju_machine["network-interfaces"],
+            juju_machine.network_interfaces,
             management_space,
             management_networks,
         )
@@ -407,7 +410,10 @@ class EnsureK8SUnitsTaggedStep(BaseStep):
         return None
 
     def _get_k8s_node_to_update(
-        self, nodes: list[dict], k8s_nodes: list["core_v1.Node"], machines: dict
+        self,
+        nodes: list[dict],
+        k8s_nodes: list["core_v1.Node"],
+        machines: dict[str, "jubilant.statustypes.MachineStatus"],
     ) -> dict[str, str]:
         to_update = {}
         for node in nodes:
@@ -481,7 +487,7 @@ class EnsureK8SUnitsTaggedStep(BaseStep):
                 "Failed to get nodes",
             )
 
-        machines = run_sync(self.jhelper.get_machines_status(self.model))
+        machines = self.jhelper.get_machines(self.model)
 
         try:
             self.to_update = self._get_k8s_node_to_update(
@@ -577,7 +583,7 @@ class AddK8SCloudStep(BaseStep, JujuStepHelper):
         :return: ResultType.SKIPPED if the Step should be skipped,
                 ResultType.COMPLETED or ResultType.FAILED otherwise
         """
-        clouds = run_sync(self.jhelper.get_clouds())
+        clouds = self.jhelper.get_clouds()
         LOG.debug(f"Clouds registered in the controller: {clouds}")
         # TODO(hemanth): Need to check if cloud credentials are also created?
         if f"cloud-{self.cloud_name}" in clouds.keys():
@@ -589,10 +595,8 @@ class AddK8SCloudStep(BaseStep, JujuStepHelper):
         """Add k8s cloud to Juju controller."""
         try:
             kubeconfig = read_config(self.client, self._KUBECONFIG)
-            run_sync(
-                self.jhelper.add_k8s_cloud(
-                    self.cloud_name, self.credential_name, kubeconfig
-                )
+            self.jhelper.add_k8s_cloud(
+                self.cloud_name, self.credential_name, kubeconfig
             )
         except (ConfigItemNotFoundException, UnsupportedKubeconfigException) as e:
             LOG.debug("Failed to add k8s cloud to Juju controller", exc_info=True)
@@ -651,7 +655,7 @@ class UpdateK8SCloudStep(BaseStep, JujuStepHelper):
         :return: ResultType.SKIPPED if the Step should be skipped,
                 ResultType.COMPLETED or ResultType.FAILED otherwise
         """
-        clouds = run_sync(self.jhelper.get_clouds())
+        clouds = self.jhelper.get_clouds()
         LOG.debug(f"Clouds registered in the controller: {clouds}")
         if f"cloud-{self.cloud_name}" not in clouds.keys():
             return Result(
@@ -664,7 +668,7 @@ class UpdateK8SCloudStep(BaseStep, JujuStepHelper):
         """Add k8s cloud to Juju controller."""
         try:
             kubeconfig = read_config(self.client, self._KUBECONFIG)
-            run_sync(self.jhelper.update_k8s_cloud(self.cloud_name, kubeconfig))
+            self.jhelper.update_k8s_cloud(self.cloud_name, kubeconfig)
         except (ConfigItemNotFoundException, UnsupportedKubeconfigException) as e:
             LOG.debug("Failed to add k8s cloud to Juju controller", exc_info=True)
             return Result(ResultType.FAILED, str(e))
@@ -709,10 +713,8 @@ class AddK8SCredentialStep(BaseStep, JujuStepHelper):
         """Add k8s credential to Juju controller."""
         try:
             kubeconfig = read_config(self.client, self._KUBECONFIG)
-            run_sync(
-                self.jhelper.add_k8s_credential(
-                    self.cloud_name, self.credential_name, kubeconfig
-                )
+            self.jhelper.add_k8s_credential(
+                self.cloud_name, self.credential_name, kubeconfig
             )
         except (ConfigItemNotFoundException, UnsupportedKubeconfigException) as e:
             LOG.debug("Failed to add k8s cloud to Juju controller", exc_info=True)
@@ -752,25 +754,22 @@ class StoreK8SKubeConfigStep(BaseStep, JujuStepHelper):
     def run(self, status: Status | None = None) -> Result:
         """Store K8S config in clusterd."""
         try:
-            unit = run_sync(self.jhelper.get_leader_unit(APPLICATION, self.model))
-            machine = run_sync(
-                self.jhelper.get_leader_unit_machine(APPLICATION, self.model)
-            )
+            unit = self.jhelper.get_leader_unit(APPLICATION, self.model)
+            machine = self.jhelper.get_leader_unit_machine(APPLICATION, self.model)
+
             LOG.debug(unit)
             leader_unit_management_ip = self._get_management_server_ip(machine)
             LOG.debug("Leader unit management IP: %s", leader_unit_management_ip)
             run_action_kwargs = (
-                {"action_params": {"server": leader_unit_management_ip}}
+                {"server": leader_unit_management_ip}
                 if leader_unit_management_ip
                 else {}
             )
-            result = run_sync(
-                self.jhelper.run_action(
-                    unit,
-                    self.model,
-                    "get-kubeconfig",
-                    **run_action_kwargs,
-                )
+            result = self.jhelper.run_action(
+                unit,
+                self.model,
+                "get-kubeconfig",
+                run_action_kwargs,
             )
 
             LOG.debug(result)
@@ -794,14 +793,14 @@ class StoreK8SKubeConfigStep(BaseStep, JujuStepHelper):
 
     def _get_management_server_ip(self, machine_id: str) -> str | None:
         """API server endpoint for the Kubernetes cluster."""
-        machine_interfaces = run_sync(
-            self.jhelper.get_machine_interfaces(self.model, machine_id)
-        )
+        machine_interfaces = self.jhelper.get_machine_interfaces(self.model, machine_id)
+
         LOG.debug("Machine %r interfaces: %r", machine_id, machine_interfaces)
         management_space = self.deployment.get_space(Networks.MANAGEMENT)
-        management_networks = run_sync(
-            self.jhelper.get_space_networks(self.model, management_space)
+        management_networks = self.jhelper.get_space_networks(
+            self.model, management_space
         )
+
         for ip in _get_machines_space_ips(
             machine_interfaces, management_space, management_networks
         ):
@@ -836,28 +835,24 @@ class _CommonK8SStepMixin:
         if Role.CONTROL.name.lower() not in node_info.get("role", ""):
             LOG.debug("Node %s is not a control node", self.node)
             return Result(ResultType.SKIPPED)
-        model = run_sync(self.jhelper.get_model(self.model))
         try:
-            app = run_sync(self.jhelper.get_application(self._SUBSTRATE, model))
+            app = self.jhelper.get_application(self._SUBSTRATE, self.model)
         except ApplicationNotFoundException:
             LOG.debug("Failed to get application", exc_info=True)
-            run_sync(model.disconnect())
             return Result(
                 ResultType.SKIPPED,
                 f"Application {self._SUBSTRATE} has not been deployed yet",
             )
 
-        for unit in app.units:
-            if unit.machine.id == str(node_info.get("machineid")):
-                LOG.debug("Unit %s is running on node %s", unit.name, self.node)
-                self.unit = unit
+        for unit_name, unit in app.units.items():
+            if unit.machine == str(node_info.get("machineid")):
+                LOG.debug("Unit %s is running on node %s", unit_name, self.node)
+                self.unit = unit_name
                 break
         else:
             LOG.debug("No %s units found on %s", self._SUBSTRATE, self.node)
-            run_sync(model.disconnect())
             return Result(ResultType.SKIPPED)
 
-        run_sync(model.disconnect())
         try:
             kubeconfig = read_config(self.client, K8SHelper.get_kubeconfig_key())
         except ConfigItemNotFoundException:
@@ -938,9 +933,8 @@ class MigrateK8SKubeconfigStep(BaseStep, _CommonK8SStepMixin):
         except K8SError as e:
             return Result(ResultType.FAILED, str(e))
 
-        action_result = run_sync(
-            self.jhelper.run_action(self.unit.name, self.model, self._ACTION)
-        )
+        action_result = self.jhelper.run_action(self.unit, self.model, self._ACTION)
+
         kubeconfig = self._extract_action_result(action_result)
         if not kubeconfig:
             return Result(
@@ -963,31 +957,26 @@ class MigrateK8SKubeconfigStep(BaseStep, _CommonK8SStepMixin):
 
     def run(self, status: Status | None = None) -> Result:
         """Migrate kubeconfig to another node."""
-        model = run_sync(self.jhelper.get_model(self.model))
         try:
-            app = run_sync(self.jhelper.get_application(self._SUBSTRATE, model))
+            app = self.jhelper.get_application(self._SUBSTRATE, self.model)
         except ApplicationNotFoundException:
             LOG.debug("Failed to get application", exc_info=True)
-            run_sync(model.disconnect())
             return Result(
                 ResultType.SKIPPED,
                 f"Application {self._SUBSTRATE} has not been deployed yet",
             )
         other_k8s = None
         for unit in app.units:
-            if unit.name != self.unit.name:
-                other_k8s = unit.name
+            if unit != self.unit:
+                other_k8s = unit
                 break
-        run_sync(model.disconnect())
         if other_k8s is None:
             return Result(
                 ResultType.FAILED,
                 "No other k8s unit found to migrate kubeconfig",
             )
         try:
-            action_result = run_sync(
-                self.jhelper.run_action(other_k8s, self.model, self._ACTION)
-            )
+            action_result = self.jhelper.run_action(other_k8s, self.model, self._ACTION)
             kubeconfig = self._extract_action_result(action_result)
             if not kubeconfig:
                 return Result(
@@ -1029,7 +1018,7 @@ class CheckApplicationK8SDistributionStep(BaseStep, _CommonK8SStepMixin):
 
     def _fetch_apps(self) -> list[str]:
         try:
-            model = run_sync(self.jhelper.get_model(OPENSTACK_MODEL))
+            model = self.jhelper.get_model_status(OPENSTACK_MODEL)
         except ModelNotFoundException:
             LOG.debug("Model not found, skipping")
             return []
@@ -1039,13 +1028,11 @@ class CheckApplicationK8SDistributionStep(BaseStep, _CommonK8SStepMixin):
 
         app_names = []
 
-        for name, app in model.applications.items():
+        for name, app in model.apps.items():
             if not app:
                 continue
             if app.charm_name == self._CHARM:
                 app_names.append(name)
-
-        run_sync(model.disconnect())
 
         return app_names
 
@@ -1342,13 +1329,11 @@ class EnsureL2AdvertisementByHostStep(BaseStep):
         if name in self._ifnames:
             return self._ifnames[name]
         machine_id = str(node["machineid"])
-        machine_interfaces = run_sync(
-            self.jhelper.get_machine_interfaces(self.model, machine_id)
-        )
+        machine_interfaces = self.jhelper.get_machine_interfaces(self.model, machine_id)
         LOG.debug("Machine %r interfaces: %r", machine_id, machine_interfaces)
         network_space = self.deployment.get_space(network)
         for ifname, iface in machine_interfaces.items():
-            if (spaces := iface.get("space")) and network_space in spaces.split():
+            if (spaces := iface.space) and network_space in spaces.split():
                 self._ifnames[name] = ifname
                 return ifname
         raise self._L2AdvertisementError(
@@ -1640,10 +1625,8 @@ class PatchCoreDNSStep(BaseStep):
         :return:
         """
         try:
-            leader = run_sync(
-                self.jhelper.get_leader_unit(
-                    self.juju_app_name, self.deployment.openstack_machines_model
-                )
+            leader = self.jhelper.get_leader_unit(
+                self.juju_app_name, self.deployment.openstack_machines_model
             )
         except JujuException as e:
             LOG.debug(f"Failed to get {self.juju_app_name} leader", exc_info=True)
@@ -1663,20 +1646,18 @@ class PatchCoreDNSStep(BaseStep):
             )
             LOG.debug(f"Running cmd in unit {leader}: {cmd_str}")
 
-            result = run_sync(
-                self.jhelper.run_cmd_on_machine_unit_payload(
-                    leader,
-                    self.deployment.openstack_machines_model,
-                    cmd_str,
-                    self.timeout,
-                )
+            result = self.jhelper.run_cmd_on_machine_unit_payload(
+                leader,
+                self.deployment.openstack_machines_model,
+                cmd_str,
+                self.timeout,
             )
             LOG.debug(f"Result: {result}")
 
-            if result.get("return-code") != 0:
+            if result.return_code != 0:
                 return Result(
                     ResultType.FAILED,
-                    f"Error in setting coredns hpa: {result.get('stderr')}",
+                    f"Error in setting coredns hpa: {result.stderr}",
                 )
         except JujuException as e:
             LOG.info(

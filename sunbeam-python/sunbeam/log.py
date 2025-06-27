@@ -42,16 +42,12 @@ def setup_root_logging(logfile: Path | None = None):
     # noisy. Let's reduce the logging output from these dependencies.
     # TODO(wolsen) determine if we need to support a -vvv type option
     for namespace in [
-        "websockets",
         "kubernetes.client",
         "pyroute2",
         "lightkube",
         "httpx",
     ]:
         logging.getLogger(namespace).setLevel(logging.WARNING)
-    # Mute juju logging to avoid missing facade warning messages
-    for namespace in ["juju"]:
-        logging.getLogger(namespace).setLevel(logging.ERROR)
 
     # If the console is enabled, then enable the RichHandler as it will
     # put the log messages to the line and still honor current console

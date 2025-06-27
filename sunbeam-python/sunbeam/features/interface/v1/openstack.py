@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: 2023 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
-import asyncio
 import logging
+import queue
 import typing
 from abc import abstractmethod
 from enum import Enum
@@ -31,8 +31,6 @@ from sunbeam.core.juju import (
     JujuHelper,
     JujuStepHelper,
     JujuWaitException,
-    TimeoutException,
-    run_sync,
 )
 from sunbeam.core.manifest import AddManifestStep, Manifest
 from sunbeam.core.openstack import OPENSTACK_MODEL
@@ -154,7 +152,7 @@ class OpenStackControlPlaneFeature(EnableDisableFeature, typing.Generic[ConfigTy
     ) -> None:
         """Run plans to enable feature."""
         tfhelper = deployment.get_tfhelper(self.tfplan)
-        jhelper = JujuHelper(deployment.get_connected_controller())
+        jhelper = JujuHelper(deployment.juju_controller)
 
         plan: list[BaseStep] = []
         if self.user_manifest:
@@ -179,7 +177,7 @@ class OpenStackControlPlaneFeature(EnableDisableFeature, typing.Generic[ConfigTy
     def run_disable_plans(self, deployment: Deployment, show_hints: bool) -> None:
         """Run plans to disable the feature."""
         tfhelper = deployment.get_tfhelper(self.tfplan)
-        jhelper = JujuHelper(deployment.get_connected_controller())
+        jhelper = JujuHelper(deployment.juju_controller)
         plan = [
             TerraformInitStep(tfhelper),
             DisableOpenStackApplicationStep(deployment, tfhelper, jhelper, self),
@@ -421,7 +419,7 @@ class OpenStackControlPlaneFeature(EnableDisableFeature, typing.Generic[ConfigTy
             return
 
         tfhelper = deployment.get_tfhelper(self.tfplan)
-        jhelper = JujuHelper(deployment.get_connected_controller())
+        jhelper = JujuHelper(deployment.juju_controller)
         plan = [
             UpgradeOpenStackApplicationStep(
                 deployment, tfhelper, jhelper, self, upgrade_release
@@ -477,24 +475,21 @@ class UpgradeOpenStackApplicationStep(BaseStep, JujuStepHelper):
         except TerraformException as e:
             LOG.exception(f"Error upgrading feature {self.feature.name}")
             return Result(ResultType.FAILED, str(e))
-        queue: asyncio.queues.Queue[str] = asyncio.queues.Queue(maxsize=len(apps))
-        task = run_sync(update_status_background(self, apps, queue, status))
+        status_queue: queue.Queue[str] = queue.Queue(maxsize=len(apps))
+        task = update_status_background(self, apps, status_queue, status)
         try:
-            run_sync(
-                self.jhelper.wait_until_desired_status(
-                    self.model,
-                    apps,
-                    status=expected_wls,
-                    timeout=timeout,
-                    queue=queue,
-                )
+            self.jhelper.wait_until_desired_status(
+                self.model,
+                apps,
+                status=expected_wls,
+                timeout=timeout,
+                queue=status_queue,
             )
-        except (JujuWaitException, TimeoutException) as e:
+        except (JujuWaitException, TimeoutError) as e:
             LOG.debug(str(e))
             return Result(ResultType.FAILED, str(e))
         finally:
-            if not task.done():
-                task.cancel()
+            task.stop()
 
         return Result(ResultType.COMPLETED)
 
@@ -574,24 +569,21 @@ class EnableOpenStackApplicationStep(
 
         apps = self.feature.set_application_names(self.deployment)
         LOG.debug(f"Application monitored for readiness: {apps}")
-        queue: asyncio.queues.Queue[str] = asyncio.queues.Queue(maxsize=len(apps))
-        task = run_sync(update_status_background(self, apps, queue, status))
+        status_queue: queue.Queue[str] = queue.Queue(maxsize=len(apps))
+        task = update_status_background(self, apps, status_queue, status)
         try:
-            run_sync(
-                self.jhelper.wait_until_desired_status(
-                    self.model,
-                    apps,
-                    status=self.app_desired_status,
-                    timeout=self.feature.set_application_timeout_on_enable(),
-                    queue=queue,
-                )
+            self.jhelper.wait_until_desired_status(
+                self.model,
+                apps,
+                status=self.app_desired_status,
+                timeout=self.feature.set_application_timeout_on_enable(),
+                queue=status_queue,
             )
-        except (JujuWaitException, TimeoutException) as e:
+        except (JujuWaitException, TimeoutError) as e:
             LOG.warning(str(e))
             return Result(ResultType.FAILED, str(e))
         finally:
-            if not task.done():
-                task.cancel()
+            task.stop()
 
         return Result(ResultType.COMPLETED)
 
@@ -674,14 +666,12 @@ class DisableOpenStackApplicationStep(
         apps = self.feature.set_application_names(self.deployment)
         LOG.debug(f"Application monitored for removal: {apps}")
         try:
-            run_sync(
-                self.jhelper.wait_application_gone(
-                    apps,
-                    self.model,
-                    timeout=self.feature.set_application_timeout_on_disable(),
-                )
+            self.jhelper.wait_application_gone(
+                apps,
+                self.model,
+                timeout=self.feature.set_application_timeout_on_disable(),
             )
-        except TimeoutException as e:
+        except TimeoutError as e:
             LOG.debug(f"Failed to destroy {apps}", exc_info=True)
             return Result(ResultType.FAILED, str(e))
 
@@ -703,23 +693,20 @@ class WaitForApplicationsStep(BaseStep):
     def run(self, status: Status | None = None) -> Result:
         """Wait for applications to be idle."""
         LOG.debug(f"Application monitored for readiness: {self.apps}")
-        queue: asyncio.queues.Queue[str] = asyncio.queues.Queue(maxsize=len(self.apps))
-        task = run_sync(update_status_background(self, self.apps, queue, status))
+        status_queue: queue.Queue[str] = queue.Queue(maxsize=len(self.apps))
+        task = update_status_background(self, self.apps, status_queue, status)
         try:
-            run_sync(
-                self.jhelper.wait_until_desired_status(
-                    self.model,
-                    self.apps,
-                    status=["active"],
-                    agent_status=["idle"],
-                    timeout=self.timeout,
-                    queue=queue,
-                )
+            self.jhelper.wait_until_desired_status(
+                self.model,
+                self.apps,
+                status=["active"],
+                agent_status=["idle"],
+                timeout=self.timeout,
+                queue=status_queue,
             )
-        except (JujuWaitException, TimeoutException) as e:
+        except (JujuWaitException, TimeoutError) as e:
             LOG.debug("Failed to wait for apps to settle", exc_info=True)
             return Result(ResultType.FAILED, str(e))
         finally:
-            if not task.done():
-                task.cancel()
+            task.stop()
         return Result(ResultType.COMPLETED)

@@ -29,8 +29,6 @@ from sunbeam.core.juju import (
     ApplicationNotFoundException,
     JujuHelper,
     JujuStepHelper,
-    TimeoutException,
-    run_sync,
 )
 from sunbeam.core.manifest import Manifest
 from sunbeam.core.openstack import OPENSTACK_MODEL
@@ -257,7 +255,7 @@ class RemoveHypervisorUnitStep(BaseStep, JujuStepHelper):
         self.jhelper = jhelper
         self.model = model
         self.force = force
-        self.unit = None
+        self.unit: str | None = None
         self.machine_id = ""
 
     def is_skip(self, status: Status | None = None) -> Result:
@@ -273,36 +271,27 @@ class RemoveHypervisorUnitStep(BaseStep, JujuStepHelper):
             LOG.debug(f"Machine {self.name} does not exist, skipping.")
             return Result(ResultType.SKIPPED)
 
-        model = run_sync(self.jhelper.get_model(self.model))
         try:
-            application = run_sync(self.jhelper.get_application(APPLICATION, model))
+            application = self.jhelper.get_application(APPLICATION, self.model)
         except ApplicationNotFoundException as e:
             LOG.debug(str(e))
-            run_sync(model.disconnect())
             return Result(
                 ResultType.SKIPPED, "Hypervisor application has not been deployed yet"
             )
 
-        for unit in application.units:
-            if unit.machine.id == self.machine_id:
-                LOG.debug(f"Unit {unit.name} is deployed on machine: {self.machine_id}")
-                self.unit = unit.name
+        for unit_name, unit in application.units.items():
+            if unit.machine == self.machine_id:
+                LOG.debug(f"Unit {unit_name} is deployed on machine: {self.machine_id}")
+                self.unit = unit_name
                 break
-        run_sync(model.disconnect())
         if not self.unit:
             LOG.debug(f"Unit is not deployed on machine: {self.machine_id}, skipping.")
             return Result(ResultType.SKIPPED)
         try:
-            results = run_sync(
-                self.jhelper.run_action(self.unit, self.model, "running-guests")
-            )
+            results = self.jhelper.run_action(self.unit, self.model, "running-guests")
         except ActionFailedException:
             LOG.debug("Failed to run action on hypervisor unit", exc_info=True)
             return Result(ResultType.FAILED, "Failed to run action on hypervisor unit")
-
-        if results.get("return-code", 0) > 1:
-            _message = "Failed to run action on hypervisor unit"
-            return Result(ResultType.FAILED, _message)
 
         if result := results.get("result"):
             guests = json.loads(result)
@@ -332,29 +321,25 @@ class RemoveHypervisorUnitStep(BaseStep, JujuStepHelper):
         if not self.unit:
             return Result(ResultType.FAILED, "Unit not found on machine")
         try:
-            run_sync(self.jhelper.run_action(self.unit, self.model, "disable"))
+            self.jhelper.run_action(self.unit, self.model, "disable")
         except ActionFailedException as e:
             LOG.debug(str(e))
             return Result(ResultType.FAILED, "Failed to disable hypervisor unit")
         try:
-            run_sync(self.jhelper.remove_unit(APPLICATION, self.unit, self.model))
+            self.jhelper.remove_unit(APPLICATION, self.unit, self.model)
             self.remove_machine_id_from_tfvar()
-            run_sync(
-                self.jhelper.wait_units_gone(
-                    [self.unit],
-                    self.model,
-                    timeout=HYPERVISOR_UNIT_TIMEOUT,
-                )
+            self.jhelper.wait_units_gone(
+                [self.unit],
+                self.model,
+                timeout=HYPERVISOR_UNIT_TIMEOUT,
             )
-            run_sync(
-                self.jhelper.wait_application_ready(
-                    APPLICATION,
-                    self.model,
-                    accepted_status=["active", "unknown"],
-                    timeout=HYPERVISOR_UNIT_TIMEOUT,
-                )
+            self.jhelper.wait_application_ready(
+                APPLICATION,
+                self.model,
+                accepted_status=["active", "unknown"],
+                timeout=HYPERVISOR_UNIT_TIMEOUT,
             )
-        except (ApplicationNotFoundException, TimeoutException) as e:
+        except (ApplicationNotFoundException, TimeoutError) as e:
             LOG.warning(str(e))
             return Result(ResultType.FAILED, str(e))
         try:
@@ -440,15 +425,13 @@ class ReapplyHypervisorTerraformPlanStep(BaseStep):
             return Result(ResultType.FAILED, str(e))
 
         try:
-            run_sync(
-                self.jhelper.wait_application_ready(
-                    APPLICATION,
-                    self.model,
-                    accepted_status=statuses,
-                    timeout=HYPERVISOR_APP_TIMEOUT,
-                )
+            self.jhelper.wait_application_ready(
+                APPLICATION,
+                self.model,
+                accepted_status=statuses,
+                timeout=HYPERVISOR_APP_TIMEOUT,
             )
-        except TimeoutException as e:
+        except TimeoutError as e:
             LOG.warning(str(e))
             return Result(ResultType.FAILED, str(e))
 
@@ -501,7 +484,7 @@ class EnableHypervisorStep(BaseStep, JujuStepHelper):
         self.node = node
         self.jhelper = jhelper
         self.model = model
-        self.unit = None
+        self.unit: str | None = None
         self.machine_id = ""
 
     def is_skip(self, status: Status | None = None) -> Result:
@@ -518,18 +501,17 @@ class EnableHypervisorStep(BaseStep, JujuStepHelper):
             return Result(ResultType.SKIPPED)
 
         try:
-            model = run_sync(self.jhelper.get_model(self.model))
-            application = run_sync(self.jhelper.get_application(APPLICATION, model))
+            application = self.jhelper.get_application(APPLICATION, self.model)
         except ApplicationNotFoundException as e:
             LOG.debug(str(e))
             return Result(
                 ResultType.SKIPPED, "Hypervisor application has not been deployed yet"
             )
 
-        for unit in application.units:
-            if unit.machine.id == self.machine_id:
-                LOG.debug(f"Unit {unit.name} is deployed on machine: {self.machine_id}")
-                self.unit = unit.name
+        for unit_name, unit in application.units.items():
+            if unit.machine == self.machine_id:
+                LOG.debug(f"Unit {unit_name} is deployed on machine: {self.machine_id}")
+                self.unit = unit_name
                 break
         if not self.unit:
             LOG.debug(f"Unit is not deployed on machine: {self.machine_id}, skipping.")
@@ -541,7 +523,7 @@ class EnableHypervisorStep(BaseStep, JujuStepHelper):
         if not self.unit:
             return Result(ResultType.FAILED, "Unit not found on machine")
         try:
-            run_sync(self.jhelper.run_action(self.unit, self.model, "enable"))
+            self.jhelper.run_action(self.unit, self.model, "enable")
         except ActionFailedException as e:
             LOG.debug(str(e))
             return Result(

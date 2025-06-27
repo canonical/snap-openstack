@@ -8,9 +8,9 @@ This feature have options to deploy a COS Lite stack internally
 or point to an external COS Lite.
 """
 
-import asyncio
 import enum
 import logging
+import queue
 from pathlib import Path
 
 import click
@@ -39,11 +39,10 @@ from sunbeam.core.common import (
 )
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import (
+    ActionFailedException,
     JujuHelper,
     JujuStepHelper,
     JujuWaitException,
-    TimeoutException,
-    run_sync,
 )
 from sunbeam.core.k8s import K8SHelper
 from sunbeam.core.manifest import (
@@ -160,25 +159,22 @@ class DeployObservabilityStackStep(BaseStep, JujuStepHelper):
             LOG.exception("Error deploying Observability Stack")
             return Result(ResultType.FAILED, str(e))
 
-        apps = run_sync(self.jhelper.get_application_names(self.model))
+        apps = self.jhelper.get_application_names(self.model)
         LOG.debug(f"Application monitored for readiness: {apps}")
-        queue: asyncio.queues.Queue[str] = asyncio.queues.Queue(maxsize=len(apps))
-        task = run_sync(update_status_background(self, apps, queue, status))
+        status_queue: queue.Queue[str] = queue.Queue(maxsize=len(apps))
+        task = update_status_background(self, apps, status_queue, status)
         try:
-            run_sync(
-                self.jhelper.wait_until_active(
-                    self.model,
-                    apps,
-                    timeout=OBSERVABILITY_DEPLOY_TIMEOUT,
-                    queue=queue,
-                )
+            self.jhelper.wait_until_active(
+                self.model,
+                apps,
+                timeout=OBSERVABILITY_DEPLOY_TIMEOUT,
+                queue=status_queue,
             )
-        except (JujuWaitException, TimeoutException) as e:
+        except (JujuWaitException, TimeoutError) as e:
             LOG.debug("Failed to deploy Observability Stack", exc_info=True)
             return Result(ResultType.FAILED, str(e))
         finally:
-            if not task.done():
-                task.cancel()
+            task.stop()
 
         return Result(ResultType.COMPLETED)
 
@@ -285,15 +281,13 @@ class DeployGrafanaAgentStep(BaseStep, JujuStepHelper):
         app = "grafana-agent"
         LOG.debug(f"Application monitored for readiness: {app}")
         try:
-            run_sync(
-                self.jhelper.wait_application_ready(
-                    app,
-                    self.model,
-                    accepted_status=self.accepted_app_status,
-                    timeout=OBSERVABILITY_DEPLOY_TIMEOUT,
-                )
+            self.jhelper.wait_application_ready(
+                app,
+                self.model,
+                accepted_status=self.accepted_app_status,
+                timeout=OBSERVABILITY_DEPLOY_TIMEOUT,
             )
-        except (JujuWaitException, TimeoutException) as e:
+        except (JujuWaitException, TimeoutError) as e:
             LOG.debug("Failed to deploy grafana agent", exc_info=True)
             return Result(ResultType.FAILED, str(e))
 
@@ -328,13 +322,11 @@ class RemoveObservabilityStackStep(BaseStep, JujuStepHelper):
             return Result(ResultType.FAILED, str(e))
 
         try:
-            run_sync(
-                self.jhelper.wait_model_gone(
-                    self.model,
-                    timeout=OBSERVABILITY_DEPLOY_TIMEOUT,
-                )
+            self.jhelper.wait_model_gone(
+                self.model,
+                timeout=OBSERVABILITY_DEPLOY_TIMEOUT,
             )
-        except TimeoutException as e:
+        except TimeoutError as e:
             LOG.debug("Failed to destroy Observability Stack", exc_info=True)
             return Result(ResultType.FAILED, str(e))
 
@@ -372,14 +364,12 @@ class RemoveGrafanaAgentStep(BaseStep, JujuStepHelper):
 
         apps = ["grafana-agent"]
         try:
-            run_sync(
-                self.jhelper.wait_application_gone(
-                    apps,
-                    self.model,
-                    timeout=OBSERVABILITY_DEPLOY_TIMEOUT,
-                )
+            self.jhelper.wait_application_gone(
+                apps,
+                self.model,
+                timeout=OBSERVABILITY_DEPLOY_TIMEOUT,
             )
-        except TimeoutException as e:
+        except TimeoutError as e:
             LOG.debug("Failed to destroy grafana agent", exc_info=True)
             return Result(ResultType.FAILED, str(e))
 
@@ -464,14 +454,12 @@ class IntegrateRemoteCosOffersStep(BaseStep, JujuStepHelper):
             app = "grafana-agent"
             LOG.debug(f"Application monitored for readiness: {app}")
             try:
-                run_sync(
-                    self.jhelper.wait_application_ready(
-                        app,
-                        model,
-                        timeout=OBSERVABILITY_DEPLOY_TIMEOUT,
-                    )
+                self.jhelper.wait_application_ready(
+                    app,
+                    model,
+                    timeout=OBSERVABILITY_DEPLOY_TIMEOUT,
                 )
-            except (JujuWaitException, TimeoutException) as e:
+            except (JujuWaitException, TimeoutError) as e:
                 LOG.debug("Failed to deploy grafana agent", exc_info=True)
                 return Result(ResultType.FAILED, str(e))
 
@@ -506,13 +494,15 @@ class RemoveRemoteCosOffersStep(BaseStep, JujuStepHelper):
     def _get_relations(self, model: str, endpoints: list[str]) -> list[tuple]:
         """Return model relations for the provided endpoints."""
         relations = []
-        model_status = run_sync(self.jhelper.get_model_status(model))
-        model_relations = [r.get("key") for r in model_status.get("relations", {})]
+        model_status = self.jhelper.get_model_status(model)
         for endpoint in endpoints:
-            for relation in model_relations:
-                if endpoint in relation:
-                    relations.append(tuple(relation.split(" ")))
-                    break
+            app, relation = endpoint.split(":")
+            if app not in model_status.apps:
+                continue
+            app_status = model_status.apps[app]
+            if relation in app_status.relations:
+                relations.append((endpoint, app_status.relations[relation]))
+                continue
 
         return relations
 
@@ -538,15 +528,13 @@ class RemoveRemoteCosOffersStep(BaseStep, JujuStepHelper):
             app = "grafana-agent"
             LOG.debug(f"Application monitored for readiness: {app}")
             try:
-                run_sync(
-                    self.jhelper.wait_application_ready(
-                        app,
-                        model,
-                        accepted_status=["blocked"],
-                        timeout=OBSERVABILITY_DEPLOY_TIMEOUT,
-                    )
+                self.jhelper.wait_application_ready(
+                    app,
+                    model,
+                    accepted_status=["blocked"],
+                    timeout=OBSERVABILITY_DEPLOY_TIMEOUT,
                 )
-            except (JujuWaitException, TimeoutException) as e:
+            except (JujuWaitException, TimeoutError) as e:
                 LOG.debug("Failed to deploy grafana agent", exc_info=True)
                 return Result(ResultType.FAILED, str(e))
 
@@ -616,9 +604,7 @@ class ObservabilityFeature(OpenStackControlPlaneFeature):
                     source=Path(__file__).parent / "etc" / self.tfplan_cos_dir
                 ),
                 self.tfplan_grafana_agent: TerraformManifest(
-                    source=Path(__file__).parent
-                    / "etc"  # noqa: W503
-                    / self.tfplan_grafana_agent_dir  # noqa: W503
+                    source=Path(__file__).parent / "etc" / self.tfplan_grafana_agent_dir
                 ),
             },
         )
@@ -828,7 +814,7 @@ class EmbeddedObservabilityFeature(ObservabilityFeature):
         self, deployment: Deployment, config: FeatureConfig, show_hints: bool
     ):
         """Run the enablement plans for embedded."""
-        jhelper = JujuHelper(deployment.get_connected_controller())
+        jhelper = JujuHelper(deployment.juju_controller)
 
         tfhelper = deployment.get_tfhelper(self.tfplan)
         tfhelper_cos = deployment.get_tfhelper(self.tfplan_cos)
@@ -870,7 +856,7 @@ class EmbeddedObservabilityFeature(ObservabilityFeature):
 
     def run_disable_plans(self, deployment: Deployment, show_hints: bool):
         """Run the disablement plans for embedded."""
-        jhelper = JujuHelper(deployment.get_connected_controller())
+        jhelper = JujuHelper(deployment.juju_controller)
         tfhelper = deployment.get_tfhelper(self.tfplan)
         tfhelper_cos = deployment.get_tfhelper(self.tfplan_cos)
         tfhelper_grafana_agent = deployment.get_tfhelper(self.tfplan_grafana_agent)
@@ -908,21 +894,21 @@ class EmbeddedObservabilityFeature(ObservabilityFeature):
     @pass_method_obj
     def dashboard_url(self, deployment: Deployment) -> None:
         """Retrieve COS Dashboard URL."""
-        jhelper = JujuHelper(deployment.get_connected_controller())
+        jhelper = JujuHelper(deployment.juju_controller)
 
         with console.status("Retrieving dashboard URL from Grafana service ... "):
             # Retrieve config from juju actions
             model = OBSERVABILITY_MODEL
             app = "grafana"
             action_cmd = "get-admin-password"
-            unit = run_sync(jhelper.get_leader_unit(app, model))
+            unit = jhelper.get_leader_unit(app, model)
             if not unit:
                 _message = f"Unable to get {app} leader"
                 raise click.ClickException(_message)
 
-            action_result = run_sync(jhelper.run_action(unit, model, action_cmd))
-
-            if action_result.get("return-code", 0) > 1:
+            try:
+                action_result = jhelper.run_action(unit, model, action_cmd)
+            except ActionFailedException:
                 _message = "Unable to retrieve URL from Grafana service"
                 raise click.ClickException(_message)
 
@@ -983,7 +969,7 @@ class ExternalObservabilityFeature(ObservabilityFeature):
         self, deployment: Deployment, config: FeatureConfig, show_hints: bool
     ):
         """Run the enablement plans for external."""
-        jhelper = JujuHelper(deployment.get_connected_controller())
+        jhelper = JujuHelper(deployment.juju_controller)
 
         tfhelper = deployment.get_tfhelper(self.tfplan)
         tfhelper_grafana_agent = deployment.get_tfhelper(self.tfplan_grafana_agent)
@@ -1032,7 +1018,7 @@ class ExternalObservabilityFeature(ObservabilityFeature):
 
     def run_disable_plans(self, deployment: Deployment, show_hints: bool):
         """Run the disablement plans for external."""
-        jhelper = JujuHelper(deployment.get_connected_controller())
+        jhelper = JujuHelper(deployment.juju_controller)
         tfhelper = deployment.get_tfhelper(self.tfplan)
         tfhelper_grafana_agent = deployment.get_tfhelper(self.tfplan_grafana_agent)
 

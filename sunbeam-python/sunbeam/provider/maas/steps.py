@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ast
-import base64
 import builtins
 import copy
 import ipaddress
@@ -47,9 +46,7 @@ from sunbeam.core.juju import (
     JujuSecretNotFound,
     JujuStepHelper,
     LeaderNotFoundException,
-    TimeoutException,
     UnitNotFoundException,
-    run_sync,
 )
 from sunbeam.core.manifest import Manifest
 from sunbeam.core.steps import CreateLoadBalancerIPPoolsStep
@@ -80,6 +77,7 @@ Available roles are: {maas_deployment.RoleTags.values()}.
 Roles can be assigned to a machine by applying tags in MAAS.
 More on assigning tags: https://maas.io/docs/how-to-use-machine-tags
 """
+MACHINE_DEPLOY_TIMEOUT = 3600
 
 
 class AddMaasDeployment(BaseStep):
@@ -180,7 +178,7 @@ class AddMaasDeployment(BaseStep):
 
         if (
             self.deployment.juju_controller is None
-            and self.deployment.juju_account is not None  # noqa: W503
+            and self.deployment.juju_account is not None
         ):
             return Result(
                 ResultType.FAILED,
@@ -189,7 +187,7 @@ class AddMaasDeployment(BaseStep):
 
         if (
             self.deployment.juju_controller is not None
-            and self.deployment.juju_account is None  # noqa: W503
+            and self.deployment.juju_account is None
         ):
             return Result(
                 ResultType.FAILED,
@@ -198,11 +196,11 @@ class AddMaasDeployment(BaseStep):
 
         if (
             self.deployment.juju_account is not None
-            and self.deployment.juju_controller is not None  # noqa: W503
+            and self.deployment.juju_controller is not None
         ):
-            controller = self.deployment.get_connected_controller()
+            jhelper = JujuHelper(self.deployment.juju_controller)
             try:
-                run_sync(controller.list_models())
+                jhelper.models()
             except Exception as e:
                 LOG.debug("Failed to list models", exc_info=True)
                 return Result(ResultType.FAILED, str(e))
@@ -1218,21 +1216,14 @@ class MaasSaveClusterdCredentialsStep(BaseStep):
 
     def run(self, status: Status | None) -> Result:
         """Save clusterd address to deployment information."""
-
-        async def _get_credentials() -> dict:
-            leader_unit = await self.jhelper.get_leader_unit(
+        try:
+            leader_unit = self.jhelper.get_leader_unit(
                 CLUSTERD_APPLICATION,
                 self.model,
             )
-            result = await self.jhelper.run_action(
+            credentials = self.jhelper.run_action(
                 leader_unit, self.model, "get-credentials"
             )
-            if result.get("return-code", 0) > 1:
-                raise ValueError("Failed to retrieve credentials")
-            return result
-
-        try:
-            credentials = run_sync(_get_credentials())
         except (LeaderNotFoundException, ValueError, ActionFailedException) as e:
             return Result(ResultType.FAILED, str(e))
 
@@ -1245,14 +1236,10 @@ class MaasSaveClusterdCredentialsStep(BaseStep):
         private_key = None
         if private_key_secret := credentials.get("private-key-secret"):
             try:
-                secret = run_sync(
-                    self.jhelper.get_secret(self.model, private_key_secret)
-                )
+                secret = self.jhelper.get_secret(self.model, private_key_secret)
             except JujuSecretNotFound as e:
                 return Result(ResultType.FAILED, str(e))
-            private_key = base64.b64decode(
-                secret["value"]["data"]["private-key"]
-            ).decode()
+            private_key = secret["private-key"]
 
         if not certificate_authority or not certificate or not private_key:
             return Result(ResultType.FAILED, "Failed to retrieve clusterd credentials")
@@ -1422,8 +1409,7 @@ class MaasDeployMachinesStep(BaseStep):
         if len(clusterd_nodes) == 0:
             return Result(ResultType.FAILED, "No machines found in clusterd.")
 
-        model = run_sync(self.jhelper.get_model(self.model))
-        juju_machines = run_sync(self.jhelper.get_machines(model))
+        juju_machines = self.jhelper.get_machines(self.model)
 
         nodes_to_deploy = clusterd_nodes.copy()
         nodes_to_update = []
@@ -1448,7 +1434,7 @@ class MaasDeployMachinesStep(BaseStep):
                         )
                     if (
                         node["systemid"] != machine.instance_id
-                        and node["systemid"] != ""  # noqa: W503
+                        and node["systemid"] != ""
                     ):
                         return Result(
                             ResultType.FAILED,
@@ -1461,8 +1447,6 @@ class MaasDeployMachinesStep(BaseStep):
                     nodes_to_deploy.remove(node)
                     break
 
-        run_sync(model.disconnect())
-
         self.nodes_to_deploy = sorted(nodes_to_deploy, key=lambda x: x["name"])
         self.nodes_to_update = nodes_to_update
 
@@ -1472,31 +1456,28 @@ class MaasDeployMachinesStep(BaseStep):
 
     def run(self, status: Status | None = None) -> Result:
         """Deploy machines in Juju."""
-        model = run_sync(self.jhelper.get_model(self.model))
         for node in self.nodes_to_deploy:
             self.update_status(status, f"deploying {node['name']}")
             LOG.debug(f"Adding machine {node['name']} to model {self.model}")
-            juju_machine = run_sync(
-                self.jhelper.add_machine("system-id=" + node["systemid"], model)
+            juju_machine = self.jhelper.add_machine(
+                "system-id=" + node["systemid"], self.model
             )
             self.client.cluster.update_node_info(
-                node["name"], machineid=int(juju_machine.id)
+                node["name"], machineid=int(juju_machine)
             )
         self.update_status(status, "waiting for machines to deploy")
+        machines = self.jhelper.get_machines(self.model)
         for node in self.nodes_to_update:
             LOG.debug(f"Updating machine {node['name']} in model {self.model}")
-            for juju_machine in model.machines.values():
-                if juju_machine is None:
-                    continue
-                if juju_machine.hostname == node["name"]:
+            for machine_id, machine in machines.items():
+                if machine.hostname == node["name"]:
                     self.client.cluster.update_node_info(
-                        node["name"], machineid=int(juju_machine.id)
+                        node["name"], machineid=int(machine_id)
                     )
                     break
-        run_sync(model.disconnect())
         try:
-            run_sync(self.jhelper.wait_all_machines_deployed(self.model))
-        except TimeoutException:
+            self.jhelper.wait_all_machines_deployed(self.model, MACHINE_DEPLOY_TIMEOUT)
+        except TimeoutError:
             LOG.debug("Timeout waiting for machines to deploy", exc_info=True)
             return Result(ResultType.FAILED, "Timeout waiting for machines to deploy.")
         return Result(ResultType.COMPLETED)
@@ -1530,8 +1511,7 @@ class MaasDeployInfraMachinesStep(BaseStep):
             return Result(ResultType.FAILED, "Maas deployment has no infra machines.")
 
         self.machines_to_deploy = filtered_machines.copy()
-        model = run_sync(self.jhelper.get_model(self.model))
-        juju_machines = run_sync(self.jhelper.get_machines(model))
+        juju_machines = self.jhelper.get_machines(self.model)
         LOG.debug(f"Machines already deployed: {juju_machines}")
 
         for filtered_machine in filtered_machines:
@@ -1539,28 +1519,21 @@ class MaasDeployInfraMachinesStep(BaseStep):
                 if filtered_machine["hostname"] == deployed_machine.hostname:
                     self.machines_to_deploy.remove(filtered_machine)
 
-        run_sync(model.disconnect())
-
         if not self.machines_to_deploy:
             return Result(ResultType.SKIPPED)
         return Result(ResultType.COMPLETED)
 
     def run(self, status: Status | None = None) -> Result:
         """Deploy machines in Juju."""
-        model = run_sync(self.jhelper.get_model(self.model))
         for machine in self.machines_to_deploy:
             self.update_status(status, f"deploying {machine['hostname']}")
             LOG.debug(f"Adding machine {machine['hostname']} to model {self.model}")
-            run_sync(
-                self.jhelper.add_machine(
-                    "system-id=" + machine["system_id"], model, JUJU_BASE
-                )
+            self.jhelper.add_machine(
+                "system-id=" + machine["system_id"], self.model, JUJU_BASE
             )
-        run_sync(model.disconnect())
-
         try:
-            run_sync(self.jhelper.wait_all_machines_deployed(self.model))
-        except TimeoutException:
+            self.jhelper.wait_all_machines_deployed(self.model, MACHINE_DEPLOY_TIMEOUT)
+        except TimeoutError:
             LOG.debug("Timeout waiting for machines to deploy", exc_info=True)
             return Result(ResultType.FAILED, "Timeout waiting for machines to deploy.")
         return Result(ResultType.COMPLETED)
@@ -1585,10 +1558,10 @@ class MaasConfigureMicrocephOSDStep(BaseStep):
         self.model = model
         self.disks_to_configure: dict[str, list[str]] = {}
 
-    async def _list_disks(self, unit: str) -> tuple[dict, dict]:
+    def _list_disks(self, unit: str) -> tuple[dict, dict]:
         """Call list-disks action on an unit."""
         LOG.debug("Running list-disks on : %r", unit)
-        action_result = await self.jhelper.run_action(
+        action_result = self.jhelper.run_action(
             unit, self.model, "list-disks", action_params={"host-only": True}
         )
         LOG.debug(
@@ -1602,7 +1575,7 @@ class MaasConfigureMicrocephOSDStep(BaseStep):
         )
         return osds, unpartitioned_disks
 
-    async def _get_microceph_disks(self) -> dict:
+    def _get_microceph_disks(self) -> dict:
         """Retrieve all disks added to microceph.
 
         Return a dict of format:
@@ -1616,27 +1589,24 @@ class MaasConfigureMicrocephOSDStep(BaseStep):
         """
         disks: dict[str, dict] = {}
         default_disk: dict[str, list[str]] = {"osds": [], "unpartitioned_disks": []}
-        async with self.jhelper.get_model_closing(self.model) as model:
-            for name in self.names:
-                machine_id = str(self.client.cluster.get_node_info(name)["machineid"])
-                unit = await self.jhelper.get_unit_from_machine(
-                    microceph.APPLICATION, machine_id, model
+        for name in self.names:
+            machine_id = str(self.client.cluster.get_node_info(name)["machineid"])
+            unit = self.jhelper.get_unit_from_machine(
+                microceph.APPLICATION, machine_id, self.model
+            )
+            if unit is None:
+                raise ValueError(
+                    f"{microceph.APPLICATION}'s unit not found on {name}."
+                    " Is microceph deployed on this machine?"
                 )
-                if unit is None:
-                    raise ValueError(
-                        f"{microceph.APPLICATION}'s unit not found on {name}."
-                        " Is microceph deployed on this machine?"
-                    )
-                osd_disks, unit_unpartitioned_disks = await self._list_disks(
-                    unit.entity_id
-                )
-                disks.setdefault(name, copy.deepcopy(default_disk))["osds"].extend(
-                    osd["path"] for osd in osd_disks
-                )
-                disks[name]["unpartitioned_disks"].extend(
-                    uud["path"] for uud in unit_unpartitioned_disks
-                )
-                disks[name]["unit"] = unit.entity_id
+            osd_disks, unit_unpartitioned_disks = self._list_disks(unit)
+            disks.setdefault(name, copy.deepcopy(default_disk))["osds"].extend(
+                osd["path"] for osd in osd_disks
+            )
+            disks[name]["unpartitioned_disks"].extend(
+                uud["path"] for uud in unit_unpartitioned_disks
+            )
+            disks[name]["unit"] = unit
 
         return disks
 
@@ -1699,7 +1669,7 @@ class MaasConfigureMicrocephOSDStep(BaseStep):
     def is_skip(self, status: Status | None = None) -> Result:
         """Determines if the step should be skipped or not."""
         try:
-            microceph_disks = run_sync(self._get_microceph_disks())
+            microceph_disks = self._get_microceph_disks()
             LOG.debug("Computing disk mapping: %r", microceph_disks)
         except ValueError as e:
             LOG.debug("Failed to list microceph disks from units", exc_info=True)
@@ -1743,15 +1713,13 @@ class MaasConfigureMicrocephOSDStep(BaseStep):
         for unit, disks in self.disks_to_configure.items():
             try:
                 LOG.debug("Running action add-osd on %r", unit)
-                action_result = run_sync(
-                    self.jhelper.run_action(
-                        unit,
-                        self.model,
-                        "add-osd",
-                        action_params={
-                            "device-id": ",".join(disks),
-                        },
-                    )
+                action_result = self.jhelper.run_action(
+                    unit,
+                    self.model,
+                    "add-osd",
+                    action_params={
+                        "device-id": ",".join(disks),
+                    },
                 )
                 LOG.debug(
                     "Result after running action add-osd on %r: %r", unit, action_result
@@ -2078,9 +2046,7 @@ class MaasClusterStatusStep(ClusterStatusStep):
     def models(self) -> list[str]:
         """List of models to query status from."""
         models = [self.deployment.infra_model]
-        if run_sync(
-            self.jhelper.model_exists(self.deployment.openstack_machines_model)
-        ):
+        if self.jhelper.model_exists(self.deployment.openstack_machines_model):
             models.append(self.deployment.openstack_machines_model)
             return models
 

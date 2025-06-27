@@ -18,7 +18,7 @@ from sunbeam.commands.configure import (
     SetHypervisorUnitsOptionsStep,
 )
 from sunbeam.core.common import SunbeamException
-from sunbeam.core.juju import JujuHelper, run_sync
+from sunbeam.core.juju import JujuHelper
 from sunbeam.core.manifest import Manifest
 from sunbeam.steps import hypervisor
 from sunbeam.steps.cluster_status import ClusterStatusStep
@@ -66,22 +66,15 @@ class LocalSetHypervisorUnitsOptionsStep(SetHypervisorUnitsOptionsStep):
         """Returns true if the step has prompts that it can ask the user."""
         return True
 
-    async def _fetch_nics(self) -> dict:
+    def _fetch_nics(self) -> dict:
         """Fetch nics from hypervisor."""
         name = self.names[0]  # always only one name in local mode
         node = self.client.cluster.get_node_info(name)
         machine_id = str(node.get("machineid"))
-        async with self.jhelper.get_model_closing(self.model) as model:
-            unit = await self.jhelper.get_unit_from_machine(
-                "openstack-hypervisor", machine_id, model
-            )
-            action_result = await self.jhelper.run_action(
-                unit.entity_id, self.model, "list-nics"
-            )
-
-        if action_result.get("return-code", 0) > 1:
-            _message = f"Unable to fetch hypervisor {name!r} nics"
-            raise SunbeamException(_message)
+        unit = self.jhelper.get_unit_from_machine(
+            "openstack-hypervisor", machine_id, self.model
+        )
+        action_result = self.jhelper.run_action(unit, self.model, "list-nics")
         return json.loads(action_result.get("result", "{}"))
 
     def prompt_for_nic(self, console: Console | None = None) -> str | None:
@@ -92,7 +85,7 @@ class LocalSetHypervisorUnitsOptionsStep(SetHypervisorUnitsOptionsStep):
             context = contextlib.nullcontext()
 
         with context:
-            nics = run_sync(self._fetch_nics())
+            nics = self._fetch_nics()
 
         all_nics: list[dict] | None = nics.get("nics")
         candidate_nics: list[str] | None = nics.get("candidates")

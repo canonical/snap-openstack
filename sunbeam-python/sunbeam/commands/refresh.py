@@ -79,7 +79,7 @@ def refresh(
         manifest = deployment.get_manifest()
 
     LOG.debug(f"Manifest used for deployment - core: {manifest.core}")
-    jhelper = JujuHelper(deployment.get_connected_controller())
+    jhelper = JujuHelper(deployment.juju_controller)
     upgrade_coordinator: UpgradeCoordinator
     if upgrade_release:
         upgrade_coordinator = ChannelUpgradeCoordinator(

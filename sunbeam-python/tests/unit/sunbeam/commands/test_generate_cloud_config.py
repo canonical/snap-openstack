@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: 2023 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
-import asyncio
 from unittest.mock import Mock, patch
 
 import pytest
@@ -9,21 +8,6 @@ import pytest
 import sunbeam.commands.generate_cloud_config as generate
 import sunbeam.core.questions
 from sunbeam.core.common import ResultType
-
-
-@pytest.fixture(autouse=True)
-def mock_run_sync(mocker):
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-
-    def run_sync(coro):
-        return loop.run_until_complete(coro)
-
-    mocker.patch("sunbeam.commands.generate_cloud_config.run_sync", run_sync)
-    yield
-    loop.close()
 
 
 @pytest.fixture()

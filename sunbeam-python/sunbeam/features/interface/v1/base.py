@@ -764,7 +764,7 @@ class EnableDisableFeature(BaseFeature, Generic[ConfigType]):
         while current_click_context.parent is not None:
             if (
                 current_click_context.parent.command.name == "enable"
-                and "manifest" in current_click_context.parent.params  # noqa: W503
+                and "manifest" in current_click_context.parent.params
             ):
                 if manifest := current_click_context.parent.params.get("manifest"):
                     self.user_manifest = Path(manifest)

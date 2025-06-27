@@ -243,8 +243,8 @@ class FeatureManager:
             LOG.debug(f"Object created {p.name}")
             if (
                 hasattr(feature, "enabled")
-                and p.enabled  # noqa W503
-                and hasattr(feature, "upgrade_hook")  # noqa W503
+                and p.enabled
+                and hasattr(feature, "upgrade_hook")
             ):
                 LOG.debug(f"Upgrading feature {p.name}")
                 try:

@@ -1,14 +1,10 @@
 # SPDX-FileCopyrightText: 2023 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
-import asyncio
 import unittest
-from unittest.mock import AsyncMock, Mock
-
-import pytest
+from unittest.mock import Mock
 
 from sunbeam.core.common import ResultType
-from sunbeam.core.juju import TimeoutException
 from sunbeam.core.terraform import TerraformException
 from sunbeam.features.pro.feature import (
     DisableUbuntuProApplicationStep,
@@ -16,26 +12,11 @@ from sunbeam.features.pro.feature import (
 )
 
 
-@pytest.fixture(autouse=True)
-def mock_run_sync(mocker):
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-
-    def run_sync(coro):
-        return loop.run_until_complete(coro)
-
-    mocker.patch("sunbeam.features.pro.feature.run_sync", run_sync)
-    yield
-    loop.close()
-
-
 class TestEnableUbuntuProApplicationStep(unittest.TestCase):
     def setUp(self):
         self.client = Mock()
         self.tfhelper = Mock()
-        self.jhelper = AsyncMock()
+        self.jhelper = Mock()
         self.manifest = Mock()
         self.model = "test-model"
         self.token = "TOKENFORTESTING"
@@ -78,7 +59,7 @@ class TestEnableUbuntuProApplicationStep(unittest.TestCase):
         assert result.message == "apply failed..."
 
     def test_enable_waiting_timed_out(self):
-        self.jhelper.wait_application_ready.side_effect = TimeoutException("timed out")
+        self.jhelper.wait_application_ready.side_effect = TimeoutError("timed out")
 
         result = self.step.run()
 
@@ -91,7 +72,7 @@ class TestDisableUbuntuProApplicationStep(unittest.TestCase):
     def setUp(self):
         self.client = Mock()
         self.tfhelper = Mock()
-        self.jhelper = AsyncMock()
+        self.jhelper = Mock()
         self.manifest = Mock()
         self.step = DisableUbuntuProApplicationStep(
             self.client, self.tfhelper, self.manifest

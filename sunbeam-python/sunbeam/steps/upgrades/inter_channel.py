@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: 2023 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
-import asyncio
 import logging
+import queue
 
 from rich.console import Console
 from rich.status import Status
@@ -20,8 +20,6 @@ from sunbeam.core.juju import (
     JujuHelper,
     JujuStepHelper,
     JujuWaitException,
-    TimeoutException,
-    run_sync,
 )
 from sunbeam.core.manifest import Manifest
 from sunbeam.core.openstack import OPENSTACK_MODEL
@@ -124,24 +122,21 @@ class BaseUpgrade(BaseStep, JujuStepHelper):
         except TerraformException as e:
             LOG.exception("Error upgrading cloud")
             return Result(ResultType.FAILED, str(e))
-        queue: asyncio.queues.Queue[str] = asyncio.queues.Queue(maxsize=len(apps))
-        task = run_sync(update_status_background(self, apps, queue, status))
+        status_queue: queue.Queue[str] = queue.Queue(maxsize=len(apps))
+        task = update_status_background(self, apps, status_queue, status)
         try:
-            run_sync(
-                self.jhelper.wait_until_desired_status(
-                    model,
-                    apps,
-                    status=expected_wls,
-                    timeout=timeout,
-                    queue=queue,
-                )
+            self.jhelper.wait_until_desired_status(
+                model,
+                apps,
+                status=expected_wls,
+                timeout=timeout,
+                queue=status_queue,
             )
-        except (JujuWaitException, TimeoutException) as e:
+        except (JujuWaitException, TimeoutError) as e:
             LOG.debug(str(e))
             return Result(ResultType.FAILED, str(e))
         finally:
-            if not task.done():
-                task.cancel()
+            task.stop()
 
         return Result(ResultType.COMPLETED)
 
@@ -191,8 +186,8 @@ class UpgradeControlPlane(BaseUpgrade):
         LOG.debug("Upgrading openstack core charms")
         charms = (
             list(MISC_CHARMS_K8S.keys())
-            + list(OVN_CHARMS_K8S.keys())  # noqa: W503
-            + list(OPENSTACK_CHARMS_K8S.keys())  # noqa: W503
+            + list(OVN_CHARMS_K8S.keys())
+            + list(OPENSTACK_CHARMS_K8S.keys())
         )
         apps = self.get_apps_filter_by_charms(self.model, charms)
         result = self.upgrade_applications(
@@ -436,8 +431,7 @@ class ChannelUpgradeCoordinator(UpgradeCoordinator):
         Return the steps to complete this upgrade.
         """
         get_tf = self.deployment.get_tfhelper
-        plan = [
-            ValidationCheck(self.jhelper, self.manifest),
+        plan: list[BaseStep] = [
             UpgradeControlPlane(
                 self.deployment,
                 self.client,
@@ -496,33 +490,3 @@ class ChannelUpgradeCoordinator(UpgradeCoordinator):
         """Execute the upgrade plan."""
         plan = self.get_plan()
         run_plan(plan, console, show_hints)
-
-
-class ValidationCheck(BaseStep):
-    def __init__(self, jhelper: JujuHelper, manifest: Manifest):
-        """Run validation on the deployment.
-
-        Check whether the requested upgrade is possible.
-
-        :jhelper: Helper for interacting with pylibjuju
-        :manifest: Manifest object
-        """
-        super().__init__("Validation", "Running pre-upgrade validation")
-        self.jhelper = jhelper
-        self.manifest = manifest
-
-    def run(self, status: Status | None = None) -> Result:
-        """Run validation check."""
-        rabbit_channel = run_sync(
-            self.jhelper.get_charm_channel("rabbitmq", "openstack")
-        )
-        if rabbit_channel.split("/")[0] == "3.9":
-            return Result(
-                ResultType.FAILED,
-                (
-                    "Pre-upgrade validation failed: Rabbit charm cannot be "
-                    "upgraded from 3.9"
-                ),
-            )
-        else:
-            return Result(ResultType.COMPLETED)

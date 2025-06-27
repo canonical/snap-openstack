@@ -16,6 +16,7 @@ import time
 import typing
 from pathlib import Path
 
+import jubilant
 import pexpect  # type: ignore [import-untyped]
 import tenacity
 import yaml
@@ -47,8 +48,6 @@ from sunbeam.core.juju import (
     JujuStepHelper,
     JujuWaitException,
     ModelNotFoundException,
-    TimeoutException,
-    run_sync,
 )
 from sunbeam.utils import random_string
 from sunbeam.versions import JUJU_BASE, JUJU_CHANNEL
@@ -1305,7 +1304,7 @@ class WriteJujuStatusStep(BaseStep, JujuStepHelper):
         :return: ResultType.SKIPPED if the Step should be skipped,
                  ResultType.COMPLETED or ResultType.FAILED otherwise
         """
-        if run_sync(self.jhelper.model_exists(self.model)):
+        if self.jhelper.model_exists(self.model):
             return Result(ResultType.COMPLETED)
         LOG.debug(f"Model {self.model} not found")
         return Result(ResultType.SKIPPED)
@@ -1319,7 +1318,7 @@ class WriteJujuStatusStep(BaseStep, JujuStepHelper):
         """
         try:
             LOG.debug(f"Getting juju status for model {self.model}")
-            model_status = run_sync(self.jhelper.get_model_status_full(self.model))
+            model_status = self.jhelper.get_model_status(self.model)
             LOG.debug(model_status)
 
             if not self.file_path.exists():
@@ -1356,9 +1355,8 @@ class WriteCharmLogStep(BaseStep, JujuStepHelper):
                  ResultType.COMPLETED or ResultType.FAILED otherwise
         """
         try:
-            model = run_sync(self.jhelper.get_model(self.model))
-            self.model_uuid = model.info.uuid
-            run_sync(model.disconnect())
+            model = self.jhelper.get_model(self.model)
+            self.model_uuid = model.get("model-uuid")
             return Result(ResultType.COMPLETED)
         except ModelNotFoundException:
             LOG.debug(f"Model {self.model} not found")
@@ -1497,7 +1495,7 @@ class AddJujuModelStep(BaseStep):
 
     def is_skip(self, status: Status | None = None) -> Result:
         """Determines if the step should be skipped or not."""
-        if run_sync(self.jhelper.model_exists(self.model)):
+        if self.jhelper.model_exists(self.model):
             return Result(ResultType.SKIPPED)
         LOG.debug(f"Model {self.model} not found")
         return Result(ResultType.COMPLETED)
@@ -1509,15 +1507,13 @@ class AddJujuModelStep(BaseStep):
                 convert_proxy_to_model_configs(self.proxy_settings)
             )
             LOG.debug(f"Adding model {self.model} with config: {self.model_config}")
-            model = run_sync(
-                self.jhelper.add_model(
-                    self.model,
-                    cloud=self.cloud,
-                    credential=self.credential,
-                    config=self.model_config,
-                )
+
+            self.jhelper.add_model(
+                self.model,
+                cloud=self.cloud,
+                credential=self.credential,
+                config=self.model_config,
             )
-            run_sync(model.disconnect())
             return Result(ResultType.COMPLETED)
         except Exception as e:
             return Result(ResultType.FAILED, str(e))
@@ -1537,7 +1533,7 @@ class DestroyJujuModelStep(BaseStep):
 
     def is_skip(self, status: Status | None = None) -> Result:
         """Determines if the step should be skipped or not."""
-        if run_sync(self.jhelper.model_exists(self.model)):
+        if self.jhelper.model_exists(self.model):
             return Result(ResultType.COMPLETED)
         LOG.debug(f"Model {self.model} not found")
         return Result(ResultType.SKIPPED)
@@ -1545,12 +1541,10 @@ class DestroyJujuModelStep(BaseStep):
     def run(self, status: Status | None = None) -> Result:
         """Add model with configs."""
         try:
-            run_sync(self.jhelper.destroy_model(self.model, destroy_storage=True))
-            run_sync(
-                self.jhelper.wait_model_gone(
-                    self.model,
-                    timeout=self.timeout,
-                )
+            self.jhelper.destroy_model(self.model, destroy_storage=True)
+            self.jhelper.wait_model_gone(
+                self.model,
+                timeout=self.timeout,
             )
         except Exception as e:
             LOG.debug(f"Error destroying model {self.model}", exc_info=True)
@@ -1576,7 +1570,7 @@ class UpdateJujuModelConfigStep(BaseStep):
         :return:
         """
         try:
-            run_sync(self.jhelper.set_model_config(self.model, self.model_configs))
+            self.jhelper.set_model_config(self.model, self.model_configs)
         except ModelNotFoundException as e:
             message = f"Update Model config on controller failed: {str(e)}"
             return Result(ResultType.FAILED, message)
@@ -1656,13 +1650,10 @@ class AddJujuSpaceStep(BaseStep):
         self.space = space
         self.subnets = subnets
 
-    async def _get_spaces_subnets_mapping(self, model: str) -> dict[str, list[str]]:
+    def _get_spaces_subnets_mapping(self, model: str) -> dict[str, list[str]]:
         """Return a mapping of all spaces with associated subnets."""
-        spaces = await self.jhelper.get_spaces(model)
-        return {
-            space["name"]: [subnet["cidr"] for subnet in space["subnets"]]
-            for space in spaces
-        }
+        spaces = self.jhelper.get_spaces(model)
+        return {space["name"]: list(space["subnets"].keys()) for space in spaces}
 
     @tenacity.retry(
         wait=tenacity.wait_fixed(10),
@@ -1671,7 +1662,7 @@ class AddJujuSpaceStep(BaseStep):
         reraise=True,
     )
     def _wait_for_spaces(self, model: str) -> dict:
-        spaces_subnets = run_sync(self._get_spaces_subnets_mapping(model))
+        spaces_subnets = self._get_spaces_subnets_mapping(model)
         LOG.debug("Spaces and subnets mapping: %s", spaces_subnets)
         all_subnets = set(itertools.chain.from_iterable(spaces_subnets.values()))
         if not all_subnets:
@@ -1722,61 +1713,9 @@ class AddJujuSpaceStep(BaseStep):
         """
         self.update_status(status, "Adding space to model")
         try:
-            run_sync(self.jhelper.add_space(self.model, self.space, self.subnets))
+            self.jhelper.add_space(self.model, self.space, self.subnets)
         except JujuException as e:
             message = f"Failed to create space : {str(e)}"
-            return Result(ResultType.FAILED, message)
-
-        return Result(ResultType.COMPLETED)
-
-
-class BindJujuApplicationStep(BaseStep):
-    """Bind all application endpoints to a space."""
-
-    _bindings: dict[str, str]
-
-    def __init__(self, jhelper: JujuHelper, model: str, app: str, space: str):
-        super().__init__(
-            "Bind Application", f"Binding application {app} to space {space}"
-        )
-        self.jhelper = jhelper
-        self.model = model
-        self.app = app
-        self.space = space
-        self._bindings = {}
-
-    def is_skip(self, status: Status | None = None) -> Result:
-        """Determines if the step should be skipped or not."""
-        current_bindings = run_sync(
-            self.jhelper.get_application_bindings(self.model, self.app)
-        )
-        new_bindings = current_bindings.copy()
-        for endpoint, space in current_bindings.items():
-            if space != self.space:
-                LOG.debug(
-                    "Application's endpoint %r is bound to space %s",
-                    endpoint,
-                    space,
-                )
-                new_bindings[endpoint] = self.space
-
-        if new_bindings == current_bindings:
-            LOG.debug("Application's endpoints already bound to right spaces")
-            return Result(ResultType.SKIPPED)
-
-        self._bindings = new_bindings
-
-        return Result(ResultType.COMPLETED)
-
-    def run(self, status: Status | None = None) -> Result:
-        """Bind application to space."""
-        if not self._bindings:
-            return Result(ResultType.FAILED, "Bindings not set")
-        self.update_status(status, "Binding application to space")
-        try:
-            run_sync(self.jhelper.merge_bindings(self.model, self.app, self._bindings))
-        except JujuException as e:
-            message = f"Failed to bind application to space: {str(e)}"
             return Result(ResultType.FAILED, message)
 
         return Result(ResultType.COMPLETED)
@@ -1805,11 +1744,10 @@ class IntegrateJujuApplicationsStep(BaseStep):
 
     def is_skip(self, status: Status | None = None) -> Result:
         """Determines if the step should be skipped or not."""
-        are_integrated = run_sync(
-            self.jhelper.are_integrated(
-                self.model, self.requirer, self.provider, self.relation
-            )
+        are_integrated = self.jhelper.are_integrated(
+            self.model, self.requirer, self.provider, self.relation
         )
+
         if are_integrated:
             return Result(ResultType.SKIPPED)
         return Result(ResultType.COMPLETED)
@@ -1817,10 +1755,8 @@ class IntegrateJujuApplicationsStep(BaseStep):
     def run(self, status: Status | None) -> Result:
         """Integrate applications."""
         try:
-            run_sync(
-                self.jhelper.integrate(
-                    self.model, self.requirer, self.provider, self.relation
-                )
+            self.jhelper.integrate(
+                self.model, self.requirer, self.provider, self.relation
             )
         except ApplicationNotFoundException as e:
             return Result(ResultType.FAILED, str(e))
@@ -1828,14 +1764,12 @@ class IntegrateJujuApplicationsStep(BaseStep):
         time.sleep(15)
         apps = [self.requirer, self.provider]
         try:
-            run_sync(
-                self.jhelper.wait_until_active(
-                    self.model,
-                    apps,
-                    timeout=1200,
-                )
+            self.jhelper.wait_until_active(
+                self.model,
+                apps,
+                timeout=1200,
             )
-        except (JujuWaitException, TimeoutException) as e:
+        except (JujuWaitException, TimeoutError) as e:
             LOG.warning(str(e))
             return Result(ResultType.FAILED, str(e))
         return Result(ResultType.COMPLETED)
@@ -1868,23 +1802,20 @@ class UpdateJujuMachineIDStep(BaseStep):
         if len(clusterd_nodes) == 0:
             return Result(ResultType.SKIPPED)
 
-        model_status = run_sync(
-            self.jhelper.get_model_status(self.model, [self.application])
-        )
-        model = run_sync(self.jhelper.get_model(self.model))
-        juju_machines = run_sync(self.jhelper.get_machines(model))
+        model_status = self.jhelper.get_model_status(self.model)
+        juju_machines = model_status.machines
 
-        if self.application not in model_status["applications"]:
+        if self.application not in model_status.apps:
             return Result(ResultType.FAILED, "Application not found in model")
 
-        app_status = model_status["applications"][self.application]
+        app_status = model_status.apps[self.application]
 
         machines_ids = []
-        for name, unit in app_status["units"].items():
-            machines_ids.append(int(unit["machine"]))
+        for name, unit in app_status.units.items():
+            machines_ids.append(unit.machine)
         hostname_id = {}
         for id, machine in juju_machines.items():
-            if int(id) in machines_ids:
+            if id in machines_ids:
                 hostname_id[machine.hostname] = int(id)
 
         if len(hostname_id) != len(machines_ids):
@@ -1904,7 +1835,7 @@ class UpdateJujuMachineIDStep(BaseStep):
                         )
                     if (
                         node["systemid"] != machine.instance_id
-                        and node["systemid"] != ""  # noqa: W503
+                        and node["systemid"] != ""
                     ):
                         return Result(
                             ResultType.FAILED,
@@ -1915,8 +1846,6 @@ class UpdateJujuMachineIDStep(BaseStep):
                     if node_machine_id == -1:
                         nodes_to_update.append(node)
                     break
-
-        run_sync(model.disconnect())
 
         self.hostname_id = hostname_id
         self.nodes_to_update = nodes_to_update
@@ -2075,17 +2004,14 @@ class RemoveSaasApplicationsStep(BaseStep):
         self._remote_app_to_delete: list[str] = []
 
     def _get_remote_apps_from_model(
-        self, remote_applications: dict, offering_model: str
-    ) -> list:
+        self,
+        remote_applications: dict[str, "jubilant.statustypes.RemoteAppStatus"],
+        offering_model: str,
+    ) -> list[str]:
         """Get all remote apps connected to offering model."""
         remote_apps = []
         for name, remote_app in remote_applications.items():
-            if not remote_app:
-                continue
-
-            offer = remote_app.get("offer-url")
-            if not offer:
-                continue
+            offer = remote_app.url
 
             LOG.debug("Processing offer: %s", offer)
             model_name = offer.split("/", 1)[1].split(".", 1)[0]
@@ -2095,8 +2021,10 @@ class RemoveSaasApplicationsStep(BaseStep):
         return remote_apps
 
     def _get_remote_apps_from_interfaces(
-        self, remote_applications: dict, offering_interfaces: list
-    ) -> list:
+        self,
+        remote_applications: dict[str, "jubilant.statustypes.RemoteAppStatus"],
+        offering_interfaces: list[str],
+    ) -> list[str]:
         """Get all remote apps which has offered given interfaces."""
         remote_apps = []
         for name, remote_app in remote_applications.items():
@@ -2104,16 +2032,16 @@ class RemoveSaasApplicationsStep(BaseStep):
                 continue
 
             LOG.debug(f"Processing remote app: {remote_app}")
-            for endpoint in remote_app.get("endpoints", {}):
-                if endpoint.get("interface") in offering_interfaces:
+            for endpoint in remote_app.endpoints.values():
+                if endpoint.interface in offering_interfaces:
                     remote_apps.append(name)
 
         return remote_apps
 
     def is_skip(self, status: Status | None = None) -> Result:
         """Determines if the step should be skipped or not."""
-        model_status = run_sync(self.jhelper.get_model_status(self.model))
-        remote_applications = model_status.get("remote-applications")
+        model_status = self.jhelper.get_model_status(self.model)
+        remote_applications = model_status.app_endpoints
         if not remote_applications:
             return Result(ResultType.SKIPPED, "No remote applications found")
 
@@ -2155,13 +2083,12 @@ class RemoveSaasApplicationsStep(BaseStep):
         if not self._remote_app_to_delete:
             return Result(ResultType.COMPLETED)
 
-        model = run_sync(self.jhelper.get_model(self.model))
-
-        LOG.debug("Removing remote applications on model %s", model)
-        for saas in self._remote_app_to_delete:
-            LOG.debug("Removing remote application on %s", saas)
-            run_sync(model.remove_saas(saas))
-        run_sync(model.disconnect())
+        LOG.debug(
+            "Removing remote applications %s on model %s",
+            self._remote_app_to_delete,
+            self.model,
+        )
+        self.jhelper.remove_saas(self.model, *self._remote_app_to_delete)
         return Result(ResultType.COMPLETED)
 
 

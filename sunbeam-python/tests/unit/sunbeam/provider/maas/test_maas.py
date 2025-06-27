@@ -5,7 +5,7 @@ import copy
 import json
 from builtins import ConnectionRefusedError
 from ssl import SSLError
-from unittest.mock import AsyncMock, MagicMock, Mock
+from unittest.mock import MagicMock, Mock
 
 import pytest
 from lightkube import ApiError
@@ -898,7 +898,7 @@ class TestMaasDeployMachinesStep:
     @pytest.fixture
     def maas_deploy_machines_step(self):
         client = Mock()
-        jhelper = AsyncMock()
+        jhelper = Mock()
         model = "test_model"
         return MaasDeployMachinesStep(client, jhelper, model)
 
@@ -954,12 +954,12 @@ class TestMaasDeployMachinesStep:
             {"name": "test_node3"},
             {"name": "test_node4"},
         ]
-        maas_deploy_machines_step.jhelper.get_model.return_value = AsyncMock(
-            machines={
-                "1": Mock(hostname="test_node3", id=1),
-                "2": Mock(hostname="test_node4", id=2),
-            }
-        )
+        maas_deploy_machines_step.jhelper.get_machines.return_value = {
+            "1": Mock(hostname="test_node3", id=1),
+            "2": Mock(hostname="test_node4", id=2),
+        }
+
+        maas_deploy_machines_step.jhelper.add_machine.side_effect = ["0", "1"]
         result = maas_deploy_machines_step.run()
         assert result.result_type == ResultType.COMPLETED
         assert maas_deploy_machines_step.client.cluster.update_node_info.call_count == 4
@@ -972,7 +972,7 @@ class TestMaasDeployInfraMachinesStep:
     @pytest.fixture
     def maas_deploy_machines_step(self):
         maas_client = Mock()
-        jhelper = AsyncMock()
+        jhelper = Mock()
         model = "test_model"
         return MaasDeployInfraMachinesStep(maas_client, jhelper, model)
 
@@ -1039,10 +1039,10 @@ class TestMaasConfigureMicrocephOSDStep:
     @pytest.fixture
     def jhelper(self):
         jhelper = Mock()
-        jhelper.get_leader_unit = AsyncMock(return_value="leader_unit")
-        jhelper.get_unit_from_machine = AsyncMock(return_value="unit/1")
-        jhelper.get_model = AsyncMock()
-        jhelper.get_model_closing = AsyncMock()
+        jhelper.get_leader_unit = Mock(return_value="leader_unit")
+        jhelper.get_unit_from_machine = Mock(return_value="unit/1")
+        jhelper.get_model = Mock()
+        jhelper.get_model_closing = Mock()
         return jhelper
 
     @pytest.fixture
@@ -1079,18 +1079,17 @@ class TestMaasConfigureMicrocephOSDStep:
 
     @pytest.fixture
     def step_with_disks(self, step, microceph_disks, maas_disks):
-        step._get_microceph_disks = AsyncMock(return_value=microceph_disks)
+        step._get_microceph_disks = Mock(return_value=microceph_disks)
         step._get_maas_disks = Mock(return_value=maas_disks)
         return step
 
-    @pytest.mark.asyncio
-    async def test_get_microceph_disks(self, step, jhelper, microceph_disks):
+    def test_get_microceph_disks(self, step, jhelper, microceph_disks):
         osds = (
             '[{"location": "machine1", "path": "/dev/sdb"},'
             ' {"location": "machine1", "path": "/dev/sdc"},'
             ' {"location": "machine2", "path": "/dev/sde"}]'
         )
-        jhelper.run_action = AsyncMock(
+        jhelper.run_action = Mock(
             side_effect=[
                 {
                     "osds": (osds),
@@ -1109,26 +1108,26 @@ class TestMaasConfigureMicrocephOSDStep:
             {"name": "machine2"},
         ]
         step.jhelper.get_unit_from_machine.side_effect = [
-            Mock(entity_id="unit/1"),
-            Mock(entity_id="unit/2"),
+            "unit/1",
+            "unit/2",
         ]
         step.jhelper.get_machines.return_value = {
             "machine1": Mock(hostname="test_node1"),
             "machine2": Mock(hostname="test_node2"),
         }
 
-        ctxt_mgr = AsyncMock()
-        ctxt_mgr.__aenter__.return_value = Mock(
+        ctxt_mgr = Mock()
+        ctxt_mgr.return_value = Mock(
             machines={
                 "1": Mock(hostname="test_node1", id=1),
                 "2": Mock(hostname="test_node2", id=2),
             }
         )
-        ctxt_mgr.__aexit__.return_value = None
+        ctxt_mgr._aexit__.return_value = None
         step.jhelper.get_model_closing = Mock(return_value=ctxt_mgr)
 
         # Call the method under test
-        result = await step._get_microceph_disks()
+        result = step._get_microceph_disks()
 
         expected_osds = [osd["path"] for osd in json.loads(osds)]
         expected_microceph_disks = copy.deepcopy(microceph_disks)
@@ -1138,9 +1137,8 @@ class TestMaasConfigureMicrocephOSDStep:
         # Assert the result
         assert result == expected_microceph_disks
 
-    @pytest.mark.asyncio
-    async def test_list_disks(self, step, jhelper):
-        jhelper.run_action = AsyncMock(
+    def test_list_disks(self, step, jhelper):
+        jhelper.run_action = Mock(
             return_value={
                 "osds": (
                     '[{"location": "machine1", "path": "/dev/sdb"},'
@@ -1149,7 +1147,7 @@ class TestMaasConfigureMicrocephOSDStep:
                 "unpartitioned-disks": '[{"path": "/dev/sdd"}]',
             }
         )
-        result = await step._list_disks("unit1")
+        result = step._list_disks("unit1")
         assert result == (
             [
                 {"location": "machine1", "path": "/dev/sdb"},
@@ -1207,7 +1205,7 @@ class TestMaasConfigureMicrocephOSDStep:
         assert result.result_type == ResultType.COMPLETED
 
     def test_is_skip_failed_get_microceph_disks(self, step):
-        step._get_microceph_disks = AsyncMock(
+        step._get_microceph_disks = Mock(
             side_effect=ValueError("Failed to list microceph disks from units")
         )
         result = step.is_skip()
@@ -1215,7 +1213,7 @@ class TestMaasConfigureMicrocephOSDStep:
         assert result.message == "Failed to list microceph disks from units"
 
     def test_is_skip_failed_get_maas_disks(self, step):
-        step._get_microceph_disks = AsyncMock(return_value={})
+        step._get_microceph_disks = Mock(return_value={})
         step._get_maas_disks = MagicMock(
             side_effect=ValueError("Failed to list disks from MAAS")
         )
@@ -1224,13 +1222,13 @@ class TestMaasConfigureMicrocephOSDStep:
         assert result.message == "Failed to list disks from MAAS"
 
     def test_run(self, step_with_disks, jhelper):
-        jhelper.run_action = AsyncMock(return_value={"status": "completed"})
+        jhelper.run_action = Mock(return_value={"status": "completed"})
         result = step_with_disks.run()
         assert result.result_type == ResultType.COMPLETED
 
     def test_run_failed_run_action(self, step_with_disks, jhelper):
         step_with_disks.disks_to_configure = {"unit/1": ["/dev/sdd"]}
-        jhelper.run_action = AsyncMock(
+        jhelper.run_action = Mock(
             side_effect=ActionFailedException("Failed to run action")
         )
         result = step_with_disks.run()
@@ -1239,9 +1237,7 @@ class TestMaasConfigureMicrocephOSDStep:
 
     def test_run_failed_unit_not_found(self, step_with_disks, jhelper):
         step_with_disks.disks_to_configure = {"unit/1": ["/dev/sdd"]}
-        jhelper.run_action = AsyncMock(
-            side_effect=UnitNotFoundException("Unit not found")
-        )
+        jhelper.run_action = Mock(side_effect=UnitNotFoundException("Unit not found"))
         result = step_with_disks.run()
         assert result.result_type == ResultType.FAILED
         assert result.message == "Unit not found"

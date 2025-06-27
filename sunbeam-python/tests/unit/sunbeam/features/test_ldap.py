@@ -1,13 +1,11 @@
 # SPDX-FileCopyrightText: 2023 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
-import asyncio
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import Mock, patch
 
 import pytest
 
 from sunbeam.core.common import ResultType
-from sunbeam.core.juju import TimeoutException
 from sunbeam.core.terraform import TerraformException
 from sunbeam.features.interface.v1.openstack import TerraformPlanLocation
 from sunbeam.features.ldap.feature import (
@@ -36,21 +34,6 @@ def ssnap():
         yield p
 
 
-@pytest.fixture(autouse=True)
-def mock_run_sync(mocker):
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-
-    def run_sync(coro):
-        return loop.run_until_complete(coro)
-
-    mocker.patch("sunbeam.features.pro.feature.run_sync", run_sync)
-    yield
-    loop.close()
-
-
 class FakeLDAPFeature(LDAPFeature):
     def __init__(self):
         self.config_flags = None
@@ -64,7 +47,7 @@ class FakeLDAPFeature(LDAPFeature):
 
 class TestAddLDAPDomainStep:
     def setup_method(self):
-        self.jhelper = AsyncMock()
+        self.jhelper = Mock()
         self.charm_config = {"domain-name": "dom1"}
         self.feature = FakeLDAPFeature()
 
@@ -122,7 +105,7 @@ class TestAddLDAPDomainStep:
         assert result.message == "apply failed..."
 
     def test_enable_waiting_timed_out(self, read_config, update_config, snap):
-        self.jhelper.wait_until_active.side_effect = TimeoutException("timed out")
+        self.jhelper.wait_until_active.side_effect = TimeoutError("timed out")
         read_config.return_value = {}
         step = AddLDAPDomainStep(
             Mock(), Mock(), self.jhelper, self.feature, self.charm_config
@@ -140,7 +123,7 @@ class TestAddLDAPDomainStep:
 
 class TestDisableLDAPDomainStep:
     def setup_method(self):
-        self.jhelper = AsyncMock()
+        self.jhelper = Mock()
         self.charm_config = {"domain-name": "dom1"}
         self.feature = FakeLDAPFeature()
 
@@ -193,7 +176,7 @@ class TestDisableLDAPDomainStep:
 
 class TestUpdateLDAPDomainStep:
     def setup_method(self):
-        self.jhelper = AsyncMock()
+        self.jhelper = Mock()
         self.charm_config = {"domain-name": "dom1"}
         self.feature = FakeLDAPFeature()
 
@@ -262,7 +245,7 @@ class TestUpdateLDAPDomainStep:
         step = UpdateLDAPDomainStep(
             Mock(), self.jhelper, self.feature, self.charm_config
         )
-        self.jhelper.wait_until_active.side_effect = TimeoutException("timed out")
+        self.jhelper.wait_until_active.side_effect = TimeoutError("timed out")
         step.tfhelper.apply.side_effect = TerraformException("apply failed...")
         result = step.run()
         step.tfhelper.apply.assert_called_once_with()
