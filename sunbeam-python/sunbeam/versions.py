@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+from typing import TypedDict
+
 SUPPORTED_RELEASE = "noble"
 JUJU_CHANNEL = "3.6/stable"
 JUJU_BASE = "ubuntu@24.04"
@@ -92,11 +94,9 @@ Format of MANIFEST_ATTRIBUTES_TFVAR_MAP
             },
             ...
         },
-        "caas_config": {
-            <CaasConfig Attribute>: <Terraform variable name>
-            ...
-            ...
-        },
+        "preserve": [
+            <list of variables to preserve when reapplying the plan>
+        ]
     },
     ...
 }
@@ -129,7 +129,19 @@ Example:
     }
 }
 """
-DEPLOY_OPENSTACK_TFVAR_MAP = {
+
+
+class VarMap(TypedDict, total=False):
+    charms: dict[str, dict[str, str]]
+    # When re-applying a plan, Sunbeam will remove variables that are in DB
+    # but not in manifest / function call. Some variables are computed by
+    # Sunbeam and will be missing from the manifest. Allow each plan to define
+    # such variables that should not be removed when reapplying the plan.
+    preserve: list[str]
+    caas_config: dict[str, str]
+
+
+DEPLOY_OPENSTACK_TFVAR_MAP: VarMap = {
     "charms": {
         charm: {
             "channel": f"{charm.removesuffix('-k8s')}-channel",
@@ -137,7 +149,13 @@ DEPLOY_OPENSTACK_TFVAR_MAP = {
             "config": f"{charm.removesuffix('-k8s')}-config",
         }
         for charm, channel in K8S_CHARMS.items()
-    }
+    },
+    "preserve": [
+        "mysql-config",
+        "mysql-config-map",
+        "mysql-storage",
+        "mysql-storage-map",
+    ],
 }
 
 # mysql-k8s supports a config map when deployed in many-mysql mode
@@ -154,7 +172,7 @@ DEPLOY_OPENSTACK_TFVAR_MAP["charms"]["self-signed-certificates"] = {
     "revision": "certificate-authority-revision",
     "config": "certificate-authority-config",
 }
-DEPLOY_K8S_TFVAR_MAP = {
+DEPLOY_K8S_TFVAR_MAP: VarMap = {
     "charms": {
         "k8s": {
             "channel": "k8s_channel",
@@ -163,7 +181,7 @@ DEPLOY_K8S_TFVAR_MAP = {
         },
     }
 }
-DEPLOY_MICROCEPH_TFVAR_MAP = {
+DEPLOY_MICROCEPH_TFVAR_MAP: VarMap = {
     "charms": {
         "microceph": {
             "channel": "charm_microceph_channel",
@@ -172,7 +190,7 @@ DEPLOY_MICROCEPH_TFVAR_MAP = {
         }
     }
 }
-DEPLOY_OPENSTACK_HYPERVISOR_TFVAR_MAP = {
+DEPLOY_OPENSTACK_HYPERVISOR_TFVAR_MAP: VarMap = {
     "charms": {
         "openstack-hypervisor": {
             "channel": "charm_channel",
@@ -181,7 +199,7 @@ DEPLOY_OPENSTACK_HYPERVISOR_TFVAR_MAP = {
         }
     }
 }
-DEPLOY_SUNBEAM_MACHINE_TFVAR_MAP = {
+DEPLOY_SUNBEAM_MACHINE_TFVAR_MAP: VarMap = {
     "charms": {
         "sunbeam-machine": {
             "channel": "charm_channel",
@@ -190,7 +208,7 @@ DEPLOY_SUNBEAM_MACHINE_TFVAR_MAP = {
         }
     }
 }
-DEPLOY_CINDER_VOLUME_TFVAR_MAP = {
+DEPLOY_CINDER_VOLUME_TFVAR_MAP: VarMap = {
     "charms": {
         "cinder-volume": {
             "channel": "charm_cinder_volume_channel",
@@ -206,7 +224,7 @@ DEPLOY_CINDER_VOLUME_TFVAR_MAP = {
 }
 
 
-MANIFEST_ATTRIBUTES_TFVAR_MAP = {
+MANIFEST_ATTRIBUTES_TFVAR_MAP: dict[str, VarMap] = {
     "sunbeam-machine-plan": DEPLOY_SUNBEAM_MACHINE_TFVAR_MAP,
     "k8s-plan": DEPLOY_K8S_TFVAR_MAP,
     "microceph-plan": DEPLOY_MICROCEPH_TFVAR_MAP,

@@ -7,8 +7,10 @@ from rich.console import Console
 from rich.status import Status
 
 from sunbeam.core.common import BaseStep, Result, ResultType
+from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import JujuHelper, JujuStepHelper
 from sunbeam.core.manifest import Manifest
+from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.core.terraform import TerraformInitStep
 from sunbeam.steps.cinder_volume import DeployCinderVolumeApplicationStep
 from sunbeam.steps.hypervisor import ReapplyHypervisorTerraformPlanStep
@@ -23,7 +25,7 @@ console = Console()
 
 
 class LatestInChannel(BaseStep, JujuStepHelper):
-    def __init__(self, jhelper: JujuHelper, manifest: Manifest):
+    def __init__(self, deployment: Deployment, jhelper: JujuHelper, manifest: Manifest):
         """Upgrade all charms to latest in current channel.
 
         :jhelper: Helper for interacting with pylibjuju
@@ -31,6 +33,7 @@ class LatestInChannel(BaseStep, JujuStepHelper):
         super().__init__(
             "In channel upgrade", "Upgrade charms to latest revision in current channel"
         )
+        self.deployment = deployment
         self.jhelper = jhelper
         self.manifest = manifest
 
@@ -94,8 +97,10 @@ class LatestInChannel(BaseStep, JujuStepHelper):
         If the manifest has only charm, then juju refresh is required if channel is
         same as deployed charm, otherwise juju upgrade charm.
         """
-        deployed_k8s_apps = self.get_charm_deployed_versions("openstack")
-        deployed_machine_apps = self.get_charm_deployed_versions("controller")
+        deployed_k8s_apps = self.get_charm_deployed_versions(OPENSTACK_MODEL)
+        deployed_machine_apps = self.get_charm_deployed_versions(
+            self.deployment.openstack_machines_model
+        )
 
         all_deployed_apps = deployed_k8s_apps.copy()
         all_deployed_apps.update(deployed_machine_apps)
@@ -107,8 +112,10 @@ class LatestInChannel(BaseStep, JujuStepHelper):
             )
             return Result(ResultType.FAILED, error_msg)
 
-        self.refresh_apps(deployed_k8s_apps, "openstack")
-        self.refresh_apps(deployed_machine_apps, "controller")
+        self.refresh_apps(deployed_k8s_apps, OPENSTACK_MODEL)
+        self.refresh_apps(
+            deployed_machine_apps, self.deployment.openstack_machines_model
+        )
         return Result(ResultType.COMPLETED)
 
 
@@ -118,7 +125,7 @@ class LatestInChannelCoordinator(UpgradeCoordinator):
     def get_plan(self) -> list[BaseStep]:
         """Return the upgrade plan."""
         plan = [
-            LatestInChannel(self.jhelper, self.manifest),
+            LatestInChannel(self.deployment, self.jhelper, self.manifest),
             TerraformInitStep(self.deployment.get_tfhelper("openstack-plan")),
             ReapplyOpenStackTerraformPlanStep(
                 self.client,

@@ -11,7 +11,6 @@ from sunbeam.core.common import BaseStep, Result, ResultType, run_plan
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import JujuHelper
 from sunbeam.core.manifest import Manifest
-from sunbeam.feature_manager import FeatureManager
 
 LOG = logging.getLogger(__name__)
 console = Console()
@@ -34,7 +33,7 @@ class UpgradeFeatures(BaseStep):
 
     def run(self, status: Status | None = None) -> Result:
         """Upgrade features."""
-        FeatureManager.update_features(
+        self.deployment.get_feature_manager().update_features(
             self.deployment, upgrade_release=self.upgrade_release
         )
         return Result(ResultType.COMPLETED)

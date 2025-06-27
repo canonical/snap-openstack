@@ -26,6 +26,7 @@ from sunbeam.features.interface.v1.base import (
 from sunbeam.features.interface.v1.base import (
     groups as all_groups,
 )
+from sunbeam.versions import VarMap
 
 LOG = logging.getLogger(__name__)
 
@@ -118,9 +119,9 @@ class FeatureManager:
         manifests.update(groups)
         return manifests
 
-    def get_all_feature_manifest_tfvar_map(self) -> dict:
+    def get_all_feature_manifest_tfvar_map(self) -> dict[str, VarMap]:
         """Return a dict of all feature manifest attributes terraformvars map."""
-        tfvar_map: dict = {}
+        tfvar_map: dict[str, VarMap] = {}
         for feature in self.features().values():
             m_dict = feature.manifest_attributes_tfvar_map()
             utils.merge_dict(tfvar_map, m_dict)
@@ -224,9 +225,8 @@ class FeatureManager:
             "version", "0.0.0"
         ) == str(feature.version)
 
-    @classmethod
     def update_features(
-        cls,
+        self,
         deployment: Deployment,
         upgrade_release: bool = False,
     ) -> None:
@@ -238,19 +238,17 @@ class FeatureManager:
         :param deployment: Deployment instance.
         :param upgrade_release: Upgrade release flag.
         """
-        for feature in cls.get_all_feature_classes():
-            p = feature(deployment)
-            LOG.debug(f"Object created {p.name}")
+        for name, feature in self.features().items():
             if (
                 hasattr(feature, "enabled")
-                and p.enabled
+                and feature.enabled
                 and hasattr(feature, "upgrade_hook")
             ):
-                LOG.debug(f"Upgrading feature {p.name}")
+                LOG.debug(f"Upgrading feature {feature.name}")
                 try:
-                    p.upgrade_hook(deployment, upgrade_release=upgrade_release)
+                    feature.upgrade_hook(deployment, upgrade_release=upgrade_release)
                 except TypeError:
                     LOG.debug(
-                        f"Feature {p.name} does not support upgrades between channels"
+                        f"Feature {name} does not support upgrades between channels"
                     )
-                    p.upgrade_hook(deployment)
+                    feature.upgrade_hook(deployment)
