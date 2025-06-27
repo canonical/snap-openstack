@@ -32,8 +32,6 @@ from sunbeam.core.juju import (
     JujuStepHelper,
     JujuWaitException,
     ModelNotFoundException,
-    TimeoutException,
-    run_sync,
 )
 from sunbeam.core.manifest import CharmManifest, Manifest
 from sunbeam.steps.juju import BOOTSTRAP_CONFIG_KEY
@@ -593,24 +591,19 @@ class DeploySunbeamClusterdApplicationStep(BaseStep):
     def is_skip(self, status: Status | None = None) -> Result:
         """Check wheter or not to deploy sunbeam-clusterd."""
         try:
-            model = run_sync(self.jhelper.get_model(self.model))
+            self.jhelper.get_application(self.app, self.model)
         except ModelNotFoundException:
             return Result(ResultType.FAILED, f"Model {self.model} not found")
-        try:
-            run_sync(self.jhelper.get_application(self.app, model))
         except ApplicationNotFoundException:
             return Result(ResultType.COMPLETED)
-        finally:
-            run_sync(model.disconnect())
+
         return Result(ResultType.SKIPPED)
 
     def run(self, status: Status | None = None) -> Result:
         """Deploy sunbeam clusterd to infra machines."""
         self.update_status(status, "fetching infra machines")
-        model = run_sync(self.jhelper.get_model(self.model))
-        infra_machines = run_sync(self.jhelper.get_machines(model))
+        infra_machines = self.jhelper.get_machines(self.model)
         machines = list(infra_machines.keys())
-        run_sync(model.disconnect())
 
         self.update_status(status, "computing number of units for sunbeam-clusterd")
         num_machines = len(machines)
@@ -625,30 +618,26 @@ class DeploySunbeamClusterdApplicationStep(BaseStep):
         charm_config = {"snap-channel": versions.SNAP_SUNBEAM_CLUSTERD_CHANNEL}
         if charm_manifest.config:
             charm_config.update(charm_manifest.config)
-        run_sync(
-            self.jhelper.deploy(
-                APPLICATION,
-                "sunbeam-clusterd",
-                self.model,
-                num_units,
-                channel=charm_manifest.channel,
-                revision=charm_manifest.revision,
-                to=machines,
-                config=charm_config,
-                base=versions.JUJU_BASE,
-            )
+        self.jhelper.deploy(
+            APPLICATION,
+            "sunbeam-clusterd",
+            self.model,
+            num_units,
+            channel=charm_manifest.channel,
+            revision=charm_manifest.revision,
+            to=machines,
+            config=charm_config,
+            base=versions.JUJU_BASE,
         )
 
-        apps = run_sync(self.jhelper.get_application_names(self.model))
+        apps = self.jhelper.get_application_names(self.model)
         try:
-            run_sync(
-                self.jhelper.wait_until_active(
-                    self.model,
-                    apps,
-                    timeout=SUNBEAM_CLUSTERD_APP_TIMEOUT,
-                )
+            self.jhelper.wait_until_active(
+                self.model,
+                apps,
+                timeout=SUNBEAM_CLUSTERD_APP_TIMEOUT,
             )
-        except (JujuWaitException, TimeoutException) as e:
+        except (JujuWaitException, TimeoutError) as e:
             LOG.warning(str(e))
             return Result(ResultType.FAILED, str(e))
 

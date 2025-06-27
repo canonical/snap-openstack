@@ -49,7 +49,7 @@ def resize(
     openstack_tfhelper = deployment.get_tfhelper("openstack-plan")
     microceph_tfhelper = deployment.get_tfhelper("microceph-plan")
     cinder_volume_tfhelper = deployment.get_tfhelper("cinder-volume-plan")
-    jhelper = JujuHelper(deployment.get_connected_controller())
+    jhelper = JujuHelper(deployment.juju_controller)
 
     storage_nodes = client.cluster.list_nodes_by_role("storage")
 

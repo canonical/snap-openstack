@@ -1,36 +1,18 @@
 # SPDX-FileCopyrightText: 2023 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
-import asyncio
 import json
 import unittest
-from unittest.mock import AsyncMock, Mock, patch
-
-import pytest
+from unittest.mock import Mock, patch
 
 from sunbeam.clusterd.service import NodeNotExistInClusterException
 from sunbeam.core.common import ResultType
-from sunbeam.core.juju import ApplicationNotFoundException, TimeoutException
+from sunbeam.core.juju import ApplicationNotFoundException
 from sunbeam.core.terraform import TerraformException
 from sunbeam.steps.hypervisor import (
     ReapplyHypervisorTerraformPlanStep,
     RemoveHypervisorUnitStep,
 )
-
-
-@pytest.fixture(autouse=True)
-def mock_run_sync(mocker):
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-
-    def run_sync(coro):
-        return loop.run_until_complete(coro)
-
-    mocker.patch("sunbeam.steps.hypervisor.run_sync", run_sync)
-    yield
-    loop.close()
 
 
 class TestRemoveHypervisorUnitStep(unittest.TestCase):
@@ -51,7 +33,7 @@ class TestRemoveHypervisorUnitStep(unittest.TestCase):
     def setUp(self):
         self.client = Mock()
         self.read_config.start()
-        self.jhelper = AsyncMock()
+        self.jhelper = Mock()
         self.name = "test-0"
 
     def tearDown(self):
@@ -61,7 +43,7 @@ class TestRemoveHypervisorUnitStep(unittest.TestCase):
         id = "1"
         self.client.cluster.get_node_info.return_value = {"machineid": id}
         self.jhelper.get_application.return_value = Mock(
-            units=[Mock(machine=Mock(id=id))]
+            units={"hypervisor/1": Mock(machine=id)}
         )
         self.jhelper.run_action.return_value = {"results": {"result": []}}
 
@@ -102,7 +84,7 @@ class TestRemoveHypervisorUnitStep(unittest.TestCase):
 
     def test_is_skip_unit_missing(self):
         self.client.cluster.get_node_info.return_value = {}
-        self.jhelper.get_application.return_value = Mock(units=[])
+        self.jhelper.get_application.return_value = Mock(units={})
 
         step = RemoveHypervisorUnitStep(
             self.client, self.name, self.jhelper, "test-model"
@@ -116,7 +98,7 @@ class TestRemoveHypervisorUnitStep(unittest.TestCase):
     def test_is_skip_running_guests(self):
         self.client.cluster.get_node_info.return_value = {"machineid": "1"}
         self.jhelper.get_application.return_value = Mock(
-            units=[Mock(machine=Mock(id="1"))]
+            units={"hypervisor/1": Mock(machine="1")}
         )
         self.jhelper.run_action.return_value = {"result": json.dumps(["1", "2"])}
         step = RemoveHypervisorUnitStep(
@@ -175,7 +157,7 @@ class TestRemoveHypervisorUnitStep(unittest.TestCase):
     @patch("sunbeam.steps.hypervisor.remove_hypervisor")
     def test_run_timeout(self, remove_hypervisor):
         self.jhelper.run_action.return_value = {"result": "[]"}
-        self.jhelper.wait_application_ready.side_effect = TimeoutException("timed out")
+        self.jhelper.wait_application_ready.side_effect = TimeoutError("timed out")
 
         step = RemoveHypervisorUnitStep(
             self.client, self.name, self.jhelper, "test-model"
@@ -210,7 +192,7 @@ class TestReapplyHypervisorTerraformPlanStep(unittest.TestCase):
         self.read_config.start()
         self.get_network_config.start()
         self.tfhelper = Mock()
-        self.jhelper = AsyncMock()
+        self.jhelper = Mock()
         self.manifest = Mock()
 
     def tearDown(self):
@@ -281,7 +263,7 @@ class TestReapplyHypervisorTerraformPlanStep(unittest.TestCase):
         assert result.message == "apply failed..."
 
     def test_run_waiting_timed_out(self):
-        self.jhelper.wait_application_ready.side_effect = TimeoutException("timed out")
+        self.jhelper.wait_application_ready.side_effect = TimeoutError("timed out")
 
         step = ReapplyHypervisorTerraformPlanStep(
             self.client, self.tfhelper, self.jhelper, self.manifest, "test-model"

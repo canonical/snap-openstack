@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import abc
-import asyncio
 import logging
+import queue
 import typing
 
 import tenacity
@@ -25,11 +25,10 @@ from sunbeam.core.common import (
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import (
     ApplicationNotFoundException,
+    JujuException,
     JujuHelper,
     JujuWaitException,
     ModelNotFoundException,
-    TimeoutException,
-    run_sync,
 )
 from sunbeam.core.k8s import K8SHelper
 from sunbeam.core.manifest import Manifest
@@ -44,15 +43,12 @@ if typing.TYPE_CHECKING:
     import lightkube.config.kubeconfig as l_kubeconfig
     import lightkube.core.client as l_client
     import lightkube.core.exceptions as l_exceptions
-    from juju import application, model
-    from juju import errors as juju_errors
     from lightkube.models import meta_v1
     from lightkube.resources import core_v1
 else:
     l_kubeconfig = LazyImport("lightkube.config.kubeconfig")
     l_client = LazyImport("lightkube.core.client")
     l_exceptions = LazyImport("lightkube.core.exceptions")
-    juju_errors = LazyImport("juju.errors")
     meta_v1 = LazyImport("lightkube.models.meta_v1")
     core_v1 = LazyImport("lightkube.resources.core_v1")
 
@@ -111,15 +107,9 @@ class DeployMachineApplicationStep(BaseStep):
             return Result(ResultType.COMPLETED)
 
         try:
-            model = run_sync(self.jhelper.get_model(self.model))
-        except ModelNotFoundException:
-            return Result(ResultType.FAILED, f"Model {self.model} not found")
-        try:
-            run_sync(self.jhelper.get_application(self.application, model))
+            self.jhelper.get_application(self.application, self.model)
         except ApplicationNotFoundException:
             return Result(ResultType.COMPLETED)
-        finally:
-            run_sync(model.disconnect())
 
         return Result(ResultType.SKIPPED)
 
@@ -135,16 +125,13 @@ class DeployMachineApplicationStep(BaseStep):
     )
     def run(self, status: Status | None = None) -> Result:
         """Apply terraform configuration to deploy sunbeam machine."""
-        machine_ids: list[int] = []
-        model = run_sync(self.jhelper.get_model(self.model))
+        machine_ids: list[str] = []
 
         try:
-            app = run_sync(self.jhelper.get_application(self.application, model))
-            machine_ids.extend(unit.machine.id for unit in app.units)
+            app = self.jhelper.get_application(self.application, self.model)
+            machine_ids.extend(unit.machine for unit in app.units.values())
         except ApplicationNotFoundException as e:
             LOG.debug(str(e))
-        finally:
-            run_sync(model.disconnect())
 
         try:
             extra_tfvars = self.extra_tfvars()
@@ -167,15 +154,13 @@ class DeployMachineApplicationStep(BaseStep):
         # Note(gboutry): application is in state unknown when it's deployed
         # without units
         try:
-            run_sync(
-                self.jhelper.wait_application_ready(
-                    self.application,
-                    self.model,
-                    accepted_status=self.get_accepted_application_status(),
-                    timeout=self.get_application_timeout(),
-                )
+            self.jhelper.wait_application_ready(
+                self.application,
+                self.model,
+                accepted_status=self.get_accepted_application_status(),
+                timeout=self.get_application_timeout(),
             )
-        except TimeoutException as e:
+        except TimeoutError as e:
             LOG.warning(str(e))
             return Result(ResultType.FAILED, str(e))
 
@@ -245,17 +230,14 @@ class AddMachineUnitsStep(BaseStep):
                 f"Nodes '{','.join(nodes_without_machine_id)}' do not have machine id,"
                 " are they deployed?",
             )
-        model = run_sync(self.jhelper.get_model(self.model))
         try:
-            app = run_sync(self.jhelper.get_application(self.application, model))
-            deployed_units_machine_ids = {unit.machine.id for unit in app.units}
+            app = self.jhelper.get_application(self.application, self.model)
+            deployed_units_machine_ids = {unit.machine for unit in app.units.values()}
         except ApplicationNotFoundException:
             return Result(
                 ResultType.FAILED,
                 f"Application {self.application} has not been deployed",
             )
-        finally:
-            run_sync(model.disconnect())
 
         self.to_deploy -= deployed_units_machine_ids
         if len(self.to_deploy) == 0:
@@ -287,40 +269,33 @@ class AddMachineUnitsStep(BaseStep):
     def run(self, status: Status | None = None) -> Result:
         """Add unit to machine application on Juju model."""
         try:
-            model = run_sync(self.jhelper.get_model(self.model))
-            application = run_sync(
-                self.jhelper.get_application(self.application, model)
+            unit_names = self.jhelper.add_unit(
+                self.model, self.application, list(self.to_deploy)
             )
-            units = run_sync(self.jhelper.add_unit(application, sorted(self.to_deploy)))
             self.add_machine_id_to_tfvar()
-            run_sync(model.disconnect())
-            unit_names = [unit.name for unit in units]
         except ApplicationNotFoundException as e:
             LOG.warning(str(e))
             return Result(ResultType.FAILED, str(e))
 
         apps = [self.application]
-        queue: asyncio.queues.Queue[str] = asyncio.queues.Queue(maxsize=len(apps))
-        task = run_sync(update_status_background(self, apps, queue, status))
+        status_queue: queue.Queue[str] = queue.Queue(maxsize=len(apps))
+        task = update_status_background(self, apps, status_queue, status)
         accepted_status = self.get_accepted_unit_status()
         try:
-            run_sync(
-                self.jhelper.wait_until_desired_status(
-                    self.model,
-                    apps,
-                    units=unit_names,
-                    status=accepted_status["workload"],
-                    agent_status=accepted_status["agent"],
-                    timeout=self.get_unit_timeout(),
-                    queue=queue,
-                )
+            self.jhelper.wait_until_desired_status(
+                self.model,
+                apps,
+                units=unit_names,
+                status=accepted_status["workload"],
+                agent_status=accepted_status["agent"],
+                timeout=self.get_unit_timeout(),
+                queue=status_queue,
             )
-        except (JujuWaitException, TimeoutException) as e:
+        except (JujuWaitException, TimeoutError) as e:
             LOG.warning(str(e))
             return Result(ResultType.FAILED, str(e))
         finally:
-            if not task.done():
-                task.cancel()
+            task.stop()
         return Result(ResultType.COMPLETED)
 
 
@@ -375,12 +350,10 @@ class RemoveMachineUnitsStep(BaseStep):
                 f"Nodes '{','.join(missing_nodes)}' do not exist in cluster database"
             )
 
-        model = run_sync(self.jhelper.get_model(self.model))
         try:
-            app = run_sync(self.jhelper.get_application(self.application, model))
+            app = self.jhelper.get_application(self.application, self.model)
         except ApplicationNotFoundException:
             LOG.debug("Failed to get application", exc_info=True)
-            run_sync(model.disconnect())
             return Result(
                 ResultType.SKIPPED,
                 f"Application {self.application} has not been deployed yet",
@@ -388,11 +361,10 @@ class RemoveMachineUnitsStep(BaseStep):
 
         to_remove_node_ids = {str(node["machineid"]) for node in filtered_nodes}
 
-        for unit in app.units:
-            if unit.machine.id in to_remove_node_ids:
-                LOG.debug(f"Unit {unit.name} is deployed on machine: {self.machine_id}")
-                self.units_to_remove.add(unit.name)
-        run_sync(model.disconnect())
+        for name, unit in app.units.items():
+            if unit.machine in to_remove_node_ids:
+                LOG.debug(f"Unit {name} is deployed on machine: {self.machine_id}")
+                self.units_to_remove.add(name)
 
         if len(self.units_to_remove) == 0:
             return Result(ResultType.SKIPPED)
@@ -405,22 +377,18 @@ class RemoveMachineUnitsStep(BaseStep):
             self.update_status(status, "Removing units")
             for unit in self.units_to_remove:
                 LOG.debug(f"Removing unit {unit} from application {self.application}")
-                run_sync(self.jhelper.remove_unit(self.application, unit, self.model))
+                self.jhelper.remove_unit(self.application, unit, self.model)
             self.update_status(status, "Waiting for units to be removed")
-            run_sync(
-                self.jhelper.wait_units_gone(
-                    list(self.units_to_remove), self.model, self.get_unit_timeout()
-                ),
+            self.jhelper.wait_units_gone(
+                list(self.units_to_remove), self.model, self.get_unit_timeout()
             )
-            run_sync(
-                self.jhelper.wait_application_ready(
-                    self.application,
-                    self.model,
-                    accepted_status=["active", "unknown"],
-                    timeout=self.get_unit_timeout(),
-                )
+            self.jhelper.wait_application_ready(
+                self.application,
+                self.model,
+                accepted_status=["active", "unknown"],
+                timeout=self.get_unit_timeout(),
             )
-        except (ApplicationNotFoundException, TimeoutException) as e:
+        except (ApplicationNotFoundException, TimeoutError) as e:
             LOG.warning(str(e))
             return Result(ResultType.FAILED, str(e))
 
@@ -456,25 +424,22 @@ class DestroyMachineApplicationStep(BaseStep):
         """Application timeout in seconds."""
         return 600
 
-    async def _list_applications(
-        self, model: "model.Model"
-    ) -> list["application.Application"]:
+    def _list_applications(self, model: str) -> list[str]:
         """List applications managed by this step."""
         apps = []
+        _model = self.jhelper.get_model_status(model)
+
         for app in self.applications:
-            try:
-                apps.append(await self.jhelper.get_application(app, model))
+            if app in _model.apps:
+                apps.append(app)
                 LOG.debug("Found application %s", app)
-            except ApplicationNotFoundException:
-                continue
+
         return apps
 
     def _wait_applications_gone(self, timeout: int) -> None:
         """Wait for applications to be removed."""
-        run_sync(
-            self.jhelper.wait_application_gone(
-                self.applications, self.model, timeout=timeout
-            )
+        self.jhelper.wait_application_gone(
+            self.applications, self.model, timeout=timeout
         )
 
     def is_skip(self, status: Status | None = None) -> Result:
@@ -490,9 +455,7 @@ class DestroyMachineApplicationStep(BaseStep):
             LOG.debug("Failed to pull state", exc_info=True)
 
         try:
-            model = run_sync(self.jhelper.get_model(self.model))
-            _has_juju_resources = len(run_sync(self._list_applications(model))) > 0
-            run_sync(model.disconnect())
+            _has_juju_resources = len(self._list_applications(self.model)) > 0
         except ModelNotFoundException:
             LOG.debug("Model not found", exc_info=True)
             _has_juju_resources = False
@@ -530,22 +493,20 @@ class DestroyMachineApplicationStep(BaseStep):
             self._wait_applications_gone(
                 int(self.get_application_timeout() * timeout_factor)
             )
-        except TimeoutException:
+        except TimeoutError:
             LOG.warning("Failed to destroy applications, trying through provider sdk")
-            model = run_sync(self.jhelper.get_model(self.model))
-            apps = run_sync(self._list_applications(model))
-            for app in apps:
-                try:
-                    run_sync(app.destroy(destroy_storage=True, force=True))
-                except juju_errors.JujuError:
-                    LOG.debug("Failed to destroy application", exc_info=True)
-                    continue
-            run_sync(model.disconnect())
+            apps = self._list_applications(self.model)
+            try:
+                self.jhelper.remove_application(
+                    *apps, model=self.model, destroy_storage=True, force=True
+                )
+            except JujuException:
+                LOG.debug("Failed to destroy applications", exc_info=True)
             try:
                 self._wait_applications_gone(
                     int(self.get_application_timeout() * (1 - timeout_factor))
                 )
-            except TimeoutException:
+            except TimeoutError:
                 return Result(
                     ResultType.FAILED, "Timed out destroying applications, try manually"
                 )

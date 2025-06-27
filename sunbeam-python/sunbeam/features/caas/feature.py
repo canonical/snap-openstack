@@ -216,7 +216,7 @@ class CaasFeature(OpenStackControlPlaneFeature):
     @pass_method_obj
     def configure(self, deployment: Deployment, show_hints: bool) -> None:
         """Configure Cloud for Container as a Service use."""
-        jhelper = JujuHelper(deployment.get_connected_controller())
+        jhelper = JujuHelper(deployment.juju_controller)
         admin_credentials = retrieve_admin_credentials(jhelper, OPENSTACK_MODEL)
 
         tfhelper = deployment.get_tfhelper(self.configure_plan)

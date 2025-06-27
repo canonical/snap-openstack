@@ -86,7 +86,7 @@ class TelemetryFeature(OpenStackControlPlaneFeature):
         tfhelper = deployment.get_tfhelper(self.tfplan)
         tfhelper_openstack = deployment.get_tfhelper("openstack-plan")
         tfhelper_hypervisor = deployment.get_tfhelper("hypervisor-plan")
-        jhelper = JujuHelper(deployment.get_connected_controller())
+        jhelper = JujuHelper(deployment.juju_controller)
         plan1: list[BaseStep] = []
         if self.user_manifest:
             plan1.append(AddManifestStep(deployment.get_client(), self.user_manifest))
@@ -126,7 +126,7 @@ class TelemetryFeature(OpenStackControlPlaneFeature):
         """Run plans to disable the feature."""
         tfhelper = deployment.get_tfhelper(self.tfplan)
         tfhelper_hypervisor = deployment.get_tfhelper("hypervisor-plan")
-        jhelper = JujuHelper(deployment.get_connected_controller())
+        jhelper = JujuHelper(deployment.juju_controller)
         extra_tfvars = {"ceilometer-offer-url": None}
         plan = [
             TerraformInitStep(tfhelper_hypervisor),

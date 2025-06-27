@@ -17,7 +17,7 @@ from snaphelpers import Snap
 from sunbeam.clusterd.client import Client
 from sunbeam.core.common import BaseStep, Result, ResultType, run_plan
 from sunbeam.core.deployment import Deployment
-from sunbeam.core.juju import JujuHelper, JujuStepHelper, TimeoutException, run_sync
+from sunbeam.core.juju import JujuHelper, JujuStepHelper
 from sunbeam.core.manifest import (
     FeatureConfig,
     Manifest,
@@ -97,34 +97,29 @@ class EnableUbuntuProApplicationStep(BaseStep, JujuStepHelper):
 
         # Note(gboutry): application is in state unknown when it's deployed
         # without units
-        model = run_sync(self.jhelper.get_model(self.model))
         try:
-            run_sync(
-                self.jhelper.wait_application_ready(
-                    APPLICATION,
-                    self.model,
-                    accepted_status=["active", "blocked", "unknown"],
-                    timeout=APP_TIMEOUT,
-                )
+            self.jhelper.wait_application_ready(
+                APPLICATION,
+                self.model,
+                accepted_status=["active", "blocked", "unknown"],
+                timeout=APP_TIMEOUT,
             )
 
             # Check status of pro application for any token issues
-            pro_app = run_sync(self.jhelper.get_application(APPLICATION, model))
-            if pro_app.status == "blocked":
+            pro_app = self.jhelper.get_application(APPLICATION, self.model)
+            if pro_app.app_status.current == "blocked":
                 re_match = re.search(
-                    ".*stderr:(.*)stdout.*", pro_app.status_message, re.DOTALL
+                    ".*stderr:(.*)stdout.*", pro_app.app_status.message, re.DOTALL
                 )
                 if re_match:
                     message = re_match.group(1)
                 else:
-                    message = pro_app.status_message
+                    message = pro_app.app_status.message
 
                 return Result(ResultType.FAILED, message)
-        except TimeoutException as e:
+        except TimeoutError as e:
             LOG.warning(str(e))
             return Result(ResultType.FAILED, str(e))
-        finally:
-            run_sync(model.disconnect())
 
         return Result(ResultType.COMPLETED)
 
@@ -210,7 +205,7 @@ class ProFeature(EnableDisableFeature):
     ):
         """Run the enablement plans."""
         tfhelper = deployment.get_tfhelper(self.tfplan)
-        jhelper = JujuHelper(deployment.get_connected_controller())
+        jhelper = JujuHelper(deployment.juju_controller)
         plan = [
             TerraformInitStep(tfhelper),
             EnableUbuntuProApplicationStep(

@@ -3,7 +3,7 @@
 
 import json
 import subprocess
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 from requests.exceptions import HTTPError
@@ -706,22 +706,22 @@ def manifest():
 
 class TestDeploySunbeamClusterdApplicationStep:
     def test_is_skip_when_application_not_found(self, manifest, model):
-        jhelper = AsyncMock()
+        jhelper = Mock()
         jhelper.get_application.side_effect = ApplicationNotFoundException
         step = DeploySunbeamClusterdApplicationStep(jhelper, manifest, model)
         result = step.is_skip()
         assert result.result_type == ResultType.COMPLETED
 
     def test_is_skip_when_application_found(self, manifest, model):
-        jhelper = AsyncMock()
-        jhelper.get_application.return_value = AsyncMock()
+        jhelper = Mock()
+        jhelper.get_application.return_value = Mock()
         step = DeploySunbeamClusterdApplicationStep(jhelper, manifest, model)
         result = step.is_skip()
         assert result.result_type == ResultType.SKIPPED
 
     def test_run_when_no_machines_found(self, manifest, model):
-        jhelper = AsyncMock()
-        jhelper.get_application.return_value = AsyncMock()
+        jhelper = Mock()
+        jhelper.get_application.return_value = Mock()
         jhelper.get_machines.return_value = {}
         step = DeploySunbeamClusterdApplicationStep(jhelper, manifest, model)
         result = step.run()
@@ -729,8 +729,8 @@ class TestDeploySunbeamClusterdApplicationStep:
         assert result.message == f"No machines found in {model} model"
 
     def test_run_when_machines_found(self, manifest, model):
-        jhelper = AsyncMock()
-        jhelper.get_application.return_value = AsyncMock()
+        jhelper = Mock()
+        jhelper.get_application.return_value = Mock()
         jhelper.get_machines.return_value = {"1": "m1", "2": "m2", "3": "m3"}
         manifest.core.software.charms = {"sunbeam-clusterd": Mock(config={})}
         step = DeploySunbeamClusterdApplicationStep(jhelper, manifest, model)

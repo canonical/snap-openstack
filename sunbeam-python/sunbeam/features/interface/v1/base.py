@@ -17,10 +17,9 @@ from sunbeam.clusterd.service import ConfigItemNotFoundException
 from sunbeam.core.common import RiskLevel, SunbeamException, read_config, update_config
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.manifest import FeatureConfig, Manifest, SoftwareConfig
-
-# from sunbeam.feature_manager import FeatureManager
 from sunbeam.features.interface import utils
 from sunbeam.provider.maas.deployment import MAAS_TYPE
+from sunbeam.versions import VarMap
 
 LOG = logging.getLogger(__name__)
 _GROUPS: dict[str, Type["BaseFeatureGroup"]] = {}
@@ -456,7 +455,7 @@ class BaseFeature(BaseRegisterable, Generic[ConfigType]):
         """
         return SoftwareConfig()
 
-    def manifest_attributes_tfvar_map(self) -> dict:
+    def manifest_attributes_tfvar_map(self) -> dict[str, VarMap]:
         """Return terraform var map for the manifest attributes.
 
         Map terraform variable for each manifest attribute.
@@ -764,7 +763,7 @@ class EnableDisableFeature(BaseFeature, Generic[ConfigType]):
         while current_click_context.parent is not None:
             if (
                 current_click_context.parent.command.name == "enable"
-                and "manifest" in current_click_context.parent.params  # noqa: W503
+                and "manifest" in current_click_context.parent.params
             ):
                 if manifest := current_click_context.parent.params.get("manifest"):
                     self.user_manifest = Path(manifest)

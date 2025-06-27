@@ -12,9 +12,9 @@ network - management, tenant and storage. If the networks are bind
 to the same juju space then only one consul server need to be started.
 """
 
-import asyncio
 import enum
 import logging
+import queue
 from typing import Any
 
 from rich.console import Console
@@ -28,7 +28,7 @@ from sunbeam.core.common import (
     update_status_background,
 )
 from sunbeam.core.deployment import Deployment, Networks
-from sunbeam.core.juju import JujuHelper, JujuWaitException, TimeoutException, run_sync
+from sunbeam.core.juju import JujuHelper, JujuWaitException
 from sunbeam.core.manifest import (
     FeatureConfig,
     Manifest,
@@ -186,24 +186,21 @@ class DeployConsulClientStep(BaseStep):
 
         apps = ConsulFeature.set_consul_client_application_names(self.deployment)
         LOG.debug(f"Application monitored for readiness: {apps}")
-        queue: asyncio.queues.Queue[str] = asyncio.queues.Queue(maxsize=len(apps))
-        task = run_sync(update_status_background(self, apps, queue, status))
+        status_queue: queue.Queue[str] = queue.Queue(maxsize=len(apps))
+        task = update_status_background(self, apps, status_queue, status)
         try:
-            run_sync(
-                self.jhelper.wait_until_desired_status(
-                    self.model,
-                    apps,
-                    status=self.app_desired_status,
-                    timeout=APPLICATION_DEPLOY_TIMEOUT,
-                    queue=queue,
-                )
+            self.jhelper.wait_until_desired_status(
+                self.model,
+                apps,
+                status=self.app_desired_status,
+                timeout=APPLICATION_DEPLOY_TIMEOUT,
+                queue=status_queue,
             )
-        except (JujuWaitException, TimeoutException) as e:
+        except (JujuWaitException, TimeoutError) as e:
             LOG.debug("Failed to deploy consul client", exc_info=True)
             return Result(ResultType.FAILED, str(e))
         finally:
-            if not task.done():
-                task.cancel()
+            task.stop()
 
         return Result(ResultType.COMPLETED)
 
@@ -237,14 +234,12 @@ class RemoveConsulClientStep(BaseStep):
         apps = ConsulFeature.set_consul_client_application_names(self.deployment)
         LOG.debug(f"Application monitored for removal: {apps}")
         try:
-            run_sync(
-                self.jhelper.wait_application_gone(
-                    apps,
-                    self.model,
-                    timeout=APPLICATION_DEPLOY_TIMEOUT,
-                )
+            self.jhelper.wait_application_gone(
+                apps,
+                self.model,
+                timeout=APPLICATION_DEPLOY_TIMEOUT,
             )
-        except TimeoutException as e:
+        except TimeoutError as e:
             LOG.debug(f"Failed to destroy {apps}", exc_info=True)
             return Result(ResultType.FAILED, str(e))
 

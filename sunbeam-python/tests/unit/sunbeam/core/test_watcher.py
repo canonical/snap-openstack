@@ -25,15 +25,14 @@ def test_get_watcher_client(
     mock_conn.session.get_endpoint.return_value = "fake_endpoint"
     mock_read_config.return_value = {"region": "fake_region"}
     mock_get_admin_connection.return_value = mock_conn
-    mock_deployment = Mock(spec=Deployment)
+    controller = Mock()
+    controller.name = "test"
+    mock_deployment = Mock(spec=Deployment, juju_controller=controller)
 
     client = watcher_helper.get_watcher_client(mock_deployment)
 
     mock_read_config.assert_called_once_with(
         mock_deployment.get_client.return_value, "Region"
-    )
-    mock_jhelper.assert_called_once_with(
-        mock_deployment.get_connected_controller.return_value
     )
     mock_get_admin_connection.assert_called_once_with(jhelper=mock_jhelper.return_value)
 

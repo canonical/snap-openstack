@@ -85,6 +85,7 @@ class TestTerraformHelper:
             "neutron-channel": "2023.1/stable",
             "neutron-revision": 123,
             "ldap-apps": {"dom1": {"domain-name": "dom1"}},
+            "mysql-config": {"debug": True},
         }
         mocker.patch.object(deployment_mod, "Snap", return_value=snap)
         mocker.patch.object(manifest_mod, "Snap", return_value=snap)
@@ -134,3 +135,7 @@ class TestTerraformHelper:
         # Below are asserts for charm config parameters
         # Assert config values coming from extra_tfvars and in manifest
         assert applied_tfvars.get("glance-config") == {"ceph-osd-replication-count": 5}
+
+        # While mysql-config is not in the manifest, it is in config db,
+        # and mysql-config is one of the preserve vars of the OpenStack plan
+        assert applied_tfvars.get("mysql-config") == {"debug": True}

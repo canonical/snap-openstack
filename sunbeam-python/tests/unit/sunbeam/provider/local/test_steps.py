@@ -1,8 +1,7 @@
 # SPDX-FileCopyrightText: 2023 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
-import asyncio
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -10,21 +9,6 @@ import sunbeam.core.questions
 import sunbeam.provider.local.steps as local_steps
 import sunbeam.utils
 from sunbeam.core.common import ResultType
-
-
-@pytest.fixture(autouse=True)
-def mock_run_sync(mocker):
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-
-    def run_sync(coro):
-        return loop.run_until_complete(coro)
-
-    mocker.patch("sunbeam.commands.configure.run_sync", run_sync)
-    yield
-    loop.close()
 
 
 @pytest.fixture()
@@ -52,7 +36,7 @@ def question_bank():
 
 @pytest.fixture()
 def jhelper():
-    yield AsyncMock()
+    yield Mock()
 
 
 @pytest.fixture()
@@ -87,7 +71,7 @@ class TestLocalSetHypervisorUnitsOptionsStep:
             ],
             "candidates": ["eth2"],
         }
-        step._fetch_nics = AsyncMock(return_value=nics_result)
+        step._fetch_nics = Mock(return_value=nics_result)
         step.prompt()
         assert step.nics["maas0.local"] == "eth2"
 
@@ -111,7 +95,7 @@ class TestLocalSetHypervisorUnitsOptionsStep:
             ],
             "candidates": ["eth2"],
         }
-        step._fetch_nics = AsyncMock(return_value=nics_result)
+        step._fetch_nics = Mock(return_value=nics_result)
         step.prompt()
         assert step.nics["maas0.local"] == "eth2"
 
@@ -146,20 +130,20 @@ class TestLocalSetHypervisorUnitsOptionsStep:
             ],
             "candidates": ["eth2"],
         }
-        step._fetch_nics = AsyncMock(return_value=nics_result)
+        step._fetch_nics = Mock(return_value=nics_result)
         step.prompt()
         assert step.nics["maas0.local"] == "eth2"
 
 
 class TestLocalClusterStatusStep:
     def test_run(self, deployment, jhelper):
-        status = Mock()
+        jhelper.get_model_status.return_value = Mock(machines={}, apps={})
         deployment.get_client().cluster.get_status.return_value = {
             "node-1": {"status": "ONLINE", "address": "10.0.0.1"}
         }
 
         step = local_steps.LocalClusterStatusStep(deployment, jhelper)
-        result = step.run(status)
+        result = step.run(Mock())
         assert result.result_type == ResultType.COMPLETED
 
     def test_compute_status(self, deployment, jhelper):
@@ -171,25 +155,25 @@ class TestLocalClusterStatusStep:
             hostname: {"status": "ONLINE", "address": f"{host_ip}:7000"}
         }
         deployment.openstack_machines_model = model
-        jhelper.get_model_status.return_value = {
-            "machines": {
-                "0": {
-                    "hostname": hostname,
-                    "dns-name": host_ip,
-                    "instance-status": {"status": "running"},
-                }
+        jhelper.get_model_status.return_value = Mock(
+            machines={
+                "0": Mock(
+                    hostname=hostname,
+                    dns_name=host_ip,
+                    machine_status=Mock(current="running"),
+                )
             },
-            "applications": {
-                "k8s": {
-                    "units": {
-                        "k8s/0": {
-                            "machine": "0",
-                            "workload-status": {"status": "active"},
-                        }
+            apps={
+                "k8s": Mock(
+                    units={
+                        "k8s/0": Mock(
+                            machine="0",
+                            workload_status=Mock(current="active"),
+                        )
                     }
-                }
+                )
             },
-        }
+        )
         expected_status = {
             model: {
                 "0": {
@@ -220,24 +204,26 @@ class TestLocalClusterStatusStep:
         }
         deployment.openstack_machines_model = model
         # missing hostname attribute in model status
-        jhelper.get_model_status.return_value = {
-            "machines": {
-                "0": {
-                    "dns-name": host_ip,
-                    "instance-status": {"status": "running"},
-                }
+        jhelper.get_model_status.return_value = Mock(
+            machines={
+                "0": Mock(
+                    hostname=None,
+                    dns_name=host_ip,
+                    machine_status=Mock(current="running"),
+                )
             },
-            "applications": {
-                "k8s": {
-                    "units": {
-                        "k8s/0": {
-                            "machine": "0",
-                            "workload-status": {"status": "active"},
-                        }
+            apps={
+                "k8s": Mock(
+                    units={
+                        "k8s/0": Mock(
+                            machine="0",
+                            workload_status=Mock(current="active"),
+                        )
                     }
-                }
+                )
             },
-        }
+        )
+
         expected_status = {
             model: {
                 "0": {

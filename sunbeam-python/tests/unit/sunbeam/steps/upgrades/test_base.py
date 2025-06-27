@@ -1,10 +1,9 @@
 # SPDX-FileCopyrightText: 2023 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import Mock
 
 from sunbeam.core.common import ResultType
-from sunbeam.core.juju import TimeoutException
 from sunbeam.core.terraform import TerraformException
 from sunbeam.steps.upgrades.inter_channel import BaseUpgrade
 
@@ -13,7 +12,7 @@ class TestBaseUpgrade:
     def setup_method(self):
         self.client = Mock()
         self.tfhelper = Mock()
-        self.jhelper = AsyncMock()
+        self.jhelper = Mock()
         self.manifest = Mock()
 
     def test_upgrade_applications(self):
@@ -72,9 +71,7 @@ class TestBaseUpgrade:
         assert result.message == "apply failed..."
 
     def test_upgrade_applications_waiting_timed_out(self):
-        self.jhelper.wait_until_desired_status.side_effect = TimeoutException(
-            "timed out"
-        )
+        self.jhelper.wait_until_desired_status.side_effect = TimeoutError("timed out")
 
         model = "openstack"
         apps = ["nova"]
