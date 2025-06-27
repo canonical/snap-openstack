@@ -257,7 +257,7 @@ class JujuHelper:
     def models(self) -> list[dict]:
         """Return list of models on controller."""
         try:
-            models: dict = self.cli("models", include_model=False)
+            models: dict = self.cli("models", "--all", include_model=False)
         except jubilant.CLIError as e:
             raise JujuException(e.stderr)
         return models.get("models", [])
