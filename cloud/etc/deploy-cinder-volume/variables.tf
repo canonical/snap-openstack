@@ -66,7 +66,7 @@ variable "cinder_volume_ceph_endpoint_bindings" {
 }
 
 variable "keystone-offer-url" {
-  description = "Offer URL for openstack keystone credentials"
+  description = "Offer URL for openstack keystone endpoints"
   type        = string
   default     = null
 }
