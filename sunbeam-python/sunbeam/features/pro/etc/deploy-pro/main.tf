@@ -18,7 +18,6 @@ resource "juju_application" "ubuntu_pro" {
   count = var.token != "" ? 1 : 0
   name  = "ubuntu-pro"
   model = var.machine-model
-  units = 0
 
   charm {
     name    = "ubuntu-advantage"
