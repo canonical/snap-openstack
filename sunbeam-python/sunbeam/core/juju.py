@@ -1028,6 +1028,33 @@ class JujuHelper:
             )
             self._wait(_ready_callback, juju, delay=MODEL_DELAY, timeout=timeout)
 
+    def wait_app_endpoint_gone(
+        self,
+        names: list[str],
+        model: str,
+        timeout: int | None = None,
+    ):
+        """Block execution until an application endpoint is gone.
+
+        This function can be used to wait for an application endpoint to be
+        removed when a SAAS app is removed from a model. When removing a SAAS,
+        if there are any integration to it, it might take a while for those
+        relations to be removed, in which time the application endpoint may
+        still be present in the model.
+
+        :names: List of application endpoints to wait for to dissapear
+        :model: Name of the model where the application endpoint is located
+        :timeout: Waiting timeout in seconds
+        """
+        name_set = set(names)
+
+        def _gone(status: "jubilant.statustypes.Status") -> bool:
+            """Check if applications are gone."""
+            return len(name_set.intersection(status.app_endpoints)) == 0
+
+        with self._model(model) as juju:
+            self._wait(_gone, juju, delay=MODEL_DELAY, timeout=timeout)
+
     def wait_application_gone(
         self,
         names: list[str],
@@ -1421,6 +1448,24 @@ class JujuHelper:
                 ) from e
 
         return cidrs
+
+    def consume_offer(self, model: str, offer_url: str, alias: str = ""):
+        """Consume an offer.
+
+        This function allows the consumtion of an offer with an alias.
+        """
+        args = [
+            offer_url,
+        ]
+        if alias:
+            args.append(alias)
+        with self._model(model) as juju:
+            try:
+                juju.cli("consume", *args)
+            except jubilant.CLIError as e:
+                raise JujuException(
+                    f"Failed to consume oofer {offer_url}: {str(e)}"
+                ) from e
 
     def remove_saas(self, model: str, *saas_name: str):
         """Remove a SaaS application from the model."""

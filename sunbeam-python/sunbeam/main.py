@@ -19,6 +19,7 @@ from sunbeam.commands import openrc as openrc_cmds
 from sunbeam.commands import plans as plans_cmd
 from sunbeam.commands import prepare_node as prepare_node_cmds
 from sunbeam.commands import proxy as proxy_cmds
+from sunbeam.commands import sso as sso_cmd
 from sunbeam.commands import utils as utils_cmds
 from sunbeam.core import deployments as deployments_jobs
 from sunbeam.provider import commands as provider_cmds
@@ -42,6 +43,20 @@ def cli(ctx, quiet, verbose):
     with by initializing the local node. Once the local node has been initialized,
     run the bootstrap process to get a live cloud.
     """
+
+
+@click.group("identity", context_settings=CONTEXT_SETTINGS, cls=CatchGroup)
+@click.pass_context
+def identity_group(ctx):
+    """Manage identity settings."""
+    pass
+
+
+@identity_group.group("provider")
+@click.pass_context
+def provider_group(ctx):
+    """Manage sso providers."""
+    pass
 
 
 @click.group("manifest", context_settings=CONTEXT_SETTINGS, cls=CatchGroup)
@@ -98,6 +113,18 @@ def main():
     cli.add_command(launch_cmds.launch)
     cli.add_command(openrc_cmds.openrc)
     cli.add_command(dasboard_url_cmds.dashboard_url)
+
+    # Add identity group
+    cli.add_command(identity_group)
+
+    # Add SSO group and commands
+    identity_group.add_command(provider_group)
+    provider_group.add_command(sso_cmd.list_sso)
+    provider_group.add_command(sso_cmd.add_sso)
+    provider_group.add_command(sso_cmd.remove_sso)
+    provider_group.add_command(sso_cmd.update_sso)
+    provider_group.add_command(sso_cmd.get_openid_redirect_uri)
+    provider_group.add_command(sso_cmd.purge_sso)
 
     # Cluster management
     provider_cmds.register_providers()
