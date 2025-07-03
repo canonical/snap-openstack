@@ -6,7 +6,7 @@ terraform {
   required_providers {
     juju = {
       source  = "juju/juju"
-      version = "= 0.17.1"
+      version = "= 0.20.0"
     }
   }
 
@@ -38,7 +38,7 @@ resource "juju_application" "cinder-volume" {
 
 resource "juju_offer" "storage-backend-offer" {
   application_name = juju_application.cinder-volume.name
-  endpoint         = "storage-backend"
+  endpoints        = ["storage-backend"]
   model            = data.juju_model.machine_model.name
 }
 
@@ -53,6 +53,7 @@ resource "juju_integration" "cinder-volume-identity" {
 
   application {
     offer_url = var.keystone-offer-url
+    endpoint  = "identity-credentials"
   }
 }
 
@@ -90,7 +91,6 @@ resource "juju_application" "cinder-volume-ceph" {
   model = data.juju_model.machine_model.name
 
   # charm is subordinate
-  units = 0
   charm {
     name     = "cinder-volume-ceph"
     channel  = var.charm_cinder_volume_ceph_channel

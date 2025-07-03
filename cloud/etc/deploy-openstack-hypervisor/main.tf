@@ -6,7 +6,7 @@ terraform {
   required_providers {
     juju = {
       source  = "juju/juju"
-      version = "= 0.17.1"
+      version = "= 0.20.0"
     }
   }
 
@@ -58,6 +58,7 @@ resource "juju_integration" "hypervisor-identity" {
 
   application {
     offer_url = var.keystone-offer-url
+    endpoint  = "identity-credentials"
   }
 }
 
@@ -72,6 +73,7 @@ resource "juju_integration" "hypervisor-cert-distributor" {
 
   application {
     offer_url = var.cert-distributor-offer-url
+    endpoint  = "send-ca-cert"
   }
 }
 

@@ -6,7 +6,7 @@ terraform {
   required_providers {
     juju = {
       source  = "juju/juju"
-      version = "= 0.17.1"
+      version = "= 0.20.0"
     }
   }
 
@@ -40,7 +40,7 @@ resource "juju_application" "microceph" {
 # juju_offer.microceph_offer will be created
 resource "juju_offer" "microceph_offer" {
   application_name = juju_application.microceph.name
-  endpoint         = "ceph"
+  endpoints        = ["ceph"]
   model            = data.juju_model.machine_model.name
 }
 
@@ -55,6 +55,7 @@ resource "juju_integration" "microceph-identity" {
 
   application {
     offer_url = var.keystone-endpoints-offer-url
+    endpoint  = "identity-service"
   }
 }
 

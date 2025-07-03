@@ -8,7 +8,7 @@ terraform {
   required_providers {
     juju = {
       source  = "juju/juju"
-      version = "= 0.17.1"
+      version = "= 0.20.0"
     }
   }
 }
@@ -435,7 +435,7 @@ resource "juju_offer" "prometheus-metrics-offer" {
   name             = "prometheus-scrape"
   model            = juju_model.cos.name
   application_name = juju_application.prometheus.name
-  endpoint         = "metrics-endpoint"
+  endpoints        = ["metrics-endpoint"]
 }
 
 # juju offer prometheus:receive-remote-write
@@ -443,7 +443,7 @@ resource "juju_offer" "prometheus-receive-remote-write-offer" {
   name             = "prometheus-receive-remote-write"
   model            = juju_model.cos.name
   application_name = juju_application.prometheus.name
-  endpoint         = "receive-remote-write"
+  endpoints        = ["receive-remote-write"]
 }
 
 # juju offer loki:logging
@@ -451,7 +451,7 @@ resource "juju_offer" "loki-logging-offer" {
   name             = "loki-logging"
   model            = juju_model.cos.name
   application_name = juju_application.loki.name
-  endpoint         = "logging"
+  endpoints        = ["logging"]
 }
 
 # juju offer grafana:dashboard
@@ -459,7 +459,7 @@ resource "juju_offer" "grafana-dashboard-offer" {
   name             = "grafana-dashboards"
   model            = juju_model.cos.name
   application_name = juju_application.grafana.name
-  endpoint         = "grafana-dashboard"
+  endpoints        = ["grafana-dashboard"]
 }
 
 # juju offer alertmanager:karma-dashboard
@@ -467,5 +467,5 @@ resource "juju_offer" "alertmanager-karma-dashboard-offer" {
   name             = "alertmanager-karma-dashboard"
   model            = juju_model.cos.name
   application_name = juju_application.alertmanager.name
-  endpoint         = "karma-dashboard"
+  endpoints        = ["karma-dashboard"]
 }
