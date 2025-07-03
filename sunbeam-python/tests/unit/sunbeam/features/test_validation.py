@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: 2024 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
+from unittest.mock import MagicMock
+
 import click
 import pytest
 
@@ -118,3 +120,29 @@ class TestValidatorFunction:
         # This is raise by `validated_config_args`
         with pytest.raises(click.ClickException):
             validation_feature.validated_config_args(input_args)
+
+    def test_get_enabled_roles_all(self):
+        deployment = MagicMock()
+        client = MagicMock()
+        deployment.get_client.return_value = client
+        client.cluster.list_nodes_by_role.side_effect = [
+            ["compute"],
+            ["control"],
+            ["storage"],
+            ["network"],
+        ]
+        roles = validation_feature.get_enabled_roles(deployment)
+        assert set(roles.split(",")) == {"compute", "control", "storage", "network"}
+
+    def test_get_enabled_roles_some(self):
+        deployment = MagicMock()
+        client = MagicMock()
+        deployment.get_client.return_value = client
+        client.cluster.list_nodes_by_role.side_effect = [
+            ["compute"],
+            ["control"],
+            [],
+            [],
+        ]
+        roles = validation_feature.get_enabled_roles(deployment)
+        assert set(roles.split(",")) == {"compute", "control"}
