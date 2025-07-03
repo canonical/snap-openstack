@@ -12,6 +12,7 @@ import typing
 from pathlib import Path
 from typing import Sequence
 
+import tenacity
 from rich.console import Console
 from rich.status import Status
 from snaphelpers import Snap
@@ -1558,6 +1559,11 @@ class MaasConfigureMicrocephOSDStep(BaseStep):
         self.model = model
         self.disks_to_configure: dict[str, list[str]] = {}
 
+    @tenacity.retry(
+        stop=tenacity.stop_after_attempt(3),
+        wait=tenacity.wait_exponential(min=2, max=10),
+        retry=tenacity.retry_if_exception_type(ActionFailedException),
+    )
     def _list_disks(self, unit: str) -> tuple[dict, dict]:
         """Call list-disks action on an unit."""
         LOG.debug("Running list-disks on : %r", unit)

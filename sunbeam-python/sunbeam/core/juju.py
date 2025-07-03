@@ -728,7 +728,10 @@ class JujuHelper:
         if timeout is None:
             timeout = 1800
         with self._model(model) as juju:
-            task = juju.run(name, action_name, action_params, wait=timeout)
+            try:
+                task = juju.run(name, action_name, action_params, wait=timeout)
+            except jubilant.CLIError as e:
+                raise ActionFailedException(str(e))
         if not task.success:
             raise ActionFailedException(str(task))
         return task.results

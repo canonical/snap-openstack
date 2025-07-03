@@ -5,6 +5,7 @@ import ast
 import logging
 from typing import Any
 
+import tenacity
 from rich.console import Console
 from rich.status import Status
 
@@ -62,6 +63,11 @@ def microceph_questions():
     }
 
 
+@tenacity.retry(
+    stop=tenacity.stop_after_attempt(3),
+    wait=tenacity.wait_exponential(min=2, max=10),
+    retry=tenacity.retry_if_exception_type(ActionFailedException),
+)
 def list_disks(jhelper: JujuHelper, model: str, unit: str) -> tuple[dict, dict]:
     """Call list-disks action on an unit."""
     LOG.debug("Running list-disks on : %r", unit)
