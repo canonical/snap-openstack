@@ -7,8 +7,8 @@ from rich.console import Console
 from rich.status import Status
 
 from sunbeam.core.common import BaseStep, Result, ResultType
-from sunbeam.core.juju import JujuHelper, JujuStepHelper, run_sync
 from sunbeam.core.deployment import Deployment
+from sunbeam.core.juju import JujuHelper, JujuStepHelper, run_sync
 from sunbeam.core.manifest import Manifest
 from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.core.terraform import TerraformInitStep
