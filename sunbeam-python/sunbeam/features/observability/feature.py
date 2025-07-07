@@ -797,6 +797,18 @@ class ObservabilityFeature(OpenStackControlPlaneFeature):
     def observability_group(self):
         """Manage Observability."""
 
+    def upgrade_hook(
+        self,
+        deployment: Deployment,
+        upgrade_release: bool = False,
+        show_hints: bool = False,
+    ):
+        """Run upgrade.
+
+        :param upgrade_release: Whether to upgrade release
+        """
+        self.run_enable_plans(deployment, FeatureConfig(), show_hints)
+
 
 class EmbeddedObservabilityFeature(ObservabilityFeature):
     name = "observability.embedded"

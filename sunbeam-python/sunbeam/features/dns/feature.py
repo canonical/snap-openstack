@@ -239,3 +239,27 @@ class DnsFeature(OpenStackControlPlaneFeature):
             "init": [{"name": "dns", "command": self.dns_groups}],
             "init.dns": [{"name": "address", "command": self.dns_address}],
         }
+
+    def upgrade_hook(
+        self,
+        deployment: Deployment,
+        upgrade_release: bool = False,
+        show_hints: bool = False,
+    ):
+        """Run upgrade.
+
+        :param upgrade_release: Whether to upgrade release
+        """
+        super().upgrade_hook(deployment, upgrade_release, show_hints)
+        plan: list[BaseStep] = []
+        if is_maas_deployment(deployment):
+            plan.append(
+                PatchBindLoadBalancerIPPoolStep(
+                    deployment.get_client(),
+                    deployment.public_api_label,  # type: ignore [attr-defined]
+                )
+            )
+        plan.append(PatchBindLoadBalancerIPStep(deployment.get_client()))
+
+        run_plan(plan, console, show_hints)
+        LOG.debug(f"OpenStack {self.display_name} application refreshed.")
