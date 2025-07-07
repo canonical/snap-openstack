@@ -238,17 +238,14 @@ class FeatureManager:
         :param deployment: Deployment instance.
         :param upgrade_release: Upgrade release flag.
         """
-        for name, feature in self.features().items():
-            if (
-                hasattr(feature, "enabled")
-                and feature.enabled
-                and hasattr(feature, "upgrade_hook")
-            ):
+        for feature in self.enabled_features(deployment):
+            if hasattr(feature, "upgrade_hook"):
                 LOG.debug(f"Upgrading feature {feature.name}")
                 try:
                     feature.upgrade_hook(deployment, upgrade_release=upgrade_release)
                 except TypeError:
                     LOG.debug(
-                        f"Feature {name} does not support upgrades between channels"
+                        f"Feature {feature.name} does not support upgrades between "
+                        "channels"
                     )
                     feature.upgrade_hook(deployment)

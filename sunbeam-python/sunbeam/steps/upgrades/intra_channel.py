@@ -12,11 +12,16 @@ from sunbeam.core.deployment import Deployment
 from sunbeam.core.manifest import Manifest
 from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.core.terraform import TerraformInitStep
+from sunbeam.features.interface.v1.base import is_maas_deployment
 from sunbeam.steps.cinder_volume import DeployCinderVolumeApplicationStep
 from sunbeam.steps.hypervisor import ReapplyHypervisorTerraformPlanStep
 from sunbeam.steps.k8s import DeployK8SApplicationStep
 from sunbeam.steps.microceph import DeployMicrocephApplicationStep
-from sunbeam.steps.openstack import ReapplyOpenStackTerraformPlanStep
+from sunbeam.steps.openstack import (
+    OpenStackPatchLoadBalancerServicesIPPoolStep,
+    OpenStackPatchLoadBalancerServicesIPStep,
+    ReapplyOpenStackTerraformPlanStep,
+)
 from sunbeam.steps.sunbeam_machine import DeploySunbeamMachineApplicationStep
 from sunbeam.steps.upgrades.base import UpgradeCoordinator, UpgradeFeatures
 
@@ -162,6 +167,18 @@ class LatestInChannelCoordinator(UpgradeCoordinator):
                 ),
             ]
         )
+
+        if is_maas_deployment(self.deployment):
+            plan.extend(
+                [
+                    OpenStackPatchLoadBalancerServicesIPPoolStep(
+                        self.client,
+                        self.deployment.public_api_label,  # type: ignore [attr-defined]
+                    )
+                ]
+            )
+
+        plan.extend([OpenStackPatchLoadBalancerServicesIPStep(self.client)])
 
         plan.extend(
             [

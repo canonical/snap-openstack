@@ -33,9 +33,9 @@ K8S_KUBECONFIG_KEY = "K8SKubeConfig"
 SERVICE_LB_ANNOTATION = "io.cilium/lb-ipam-ips"
 
 # --- Metallb specific
-METALLB_IP_ANNOTATION = "metallb.universe.tf/loadBalancerIPs"
-METALLB_ADDRESS_POOL_ANNOTATION = "metallb.universe.tf/address-pool"
-METALLB_ALLOCATED_POOL_ANNOTATION = "metallb.universe.tf/ip-allocated-from-pool"
+METALLB_IP_ANNOTATION = "metallb.io/loadBalancerIPs"
+METALLB_ADDRESS_POOL_ANNOTATION = "metallb.io/address-pool"
+METALLB_ALLOCATED_POOL_ANNOTATION = "metallb.io/ip-allocated-from-pool"
 METALLB_INTERNAL_POOL_NAME = "metallb-loadbalancer-ck-loadbalancer"
 
 CREDENTIAL_SUFFIX = "-creds"
