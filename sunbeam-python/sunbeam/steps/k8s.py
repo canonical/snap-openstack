@@ -56,6 +56,7 @@ from sunbeam.core.k8s import (
     fetch_pods,
     fetch_pods_for_eviction,
     find_node,
+    uncordon,
 )
 from sunbeam.core.manifest import Manifest
 from sunbeam.core.openstack import OPENSTACK_MODEL
@@ -1116,6 +1117,36 @@ class CordonK8SUnitStep(BaseStep, _CommonK8SStepMixin):
         self.update_status(status, "Cordoning unit")
         try:
             cordon(self.kube, self.node)
+        except K8SError as e:
+            LOG.debug("Failed to cordon unit", exc_info=True)
+            return Result(ResultType.FAILED, str(e))
+
+        return Result(ResultType.COMPLETED)
+
+
+class UncordonK8SUnitStep(BaseStep, _CommonK8SStepMixin):
+    _SUBSTRATE: str = APPLICATION
+
+    def __init__(self, client: Client, name: str, jhelper: JujuHelper, model: str):
+        super().__init__("Uncordon unit", "Allow node to receive new pods")
+        self.client = client
+        self.node = name
+        self.jhelper = jhelper
+        self.model = model
+
+    def is_skip(self, status: Status | None = None) -> Result:
+        """Determines if the step should be skipped or not.
+
+        :return: ResultType.SKIPPED if the Step should be skipped,
+                ResultType.COMPLETED or ResultType.FAILED otherwise
+        """
+        return self.skip_checks()
+
+    def run(self, status: Status | None = None) -> Result:
+        """Uncordon the unit."""
+        self.update_status(status, "Uncordoning unit")
+        try:
+            uncordon(self.kube, self.node)
         except K8SError as e:
             LOG.debug("Failed to cordon unit", exc_info=True)
             return Result(ResultType.FAILED, str(e))

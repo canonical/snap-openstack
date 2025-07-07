@@ -158,6 +158,17 @@ def cordon(client: "l_client.Client", name: str):
         raise K8SError(f"Failed to patch node {name}") from e
 
 
+def uncordon(client: "l_client.Client", name: str):
+    """Mark a node as schedulable."""
+    LOG.debug("Marking %s schedulable", name)
+    try:
+        client.patch(core_v1.Node, name, {"spec": {"unschedulable": False}})
+    except l_exceptions.ApiError as e:
+        if e.status.code == 404:
+            raise K8SNodeNotFoundError(f"Node {name} not found")
+        raise K8SError(f"Failed to patch node {name}") from e
+
+
 def is_not_daemonset(pod):
     return pod.metadata.ownerReferences[0].kind != "DaemonSet"
 

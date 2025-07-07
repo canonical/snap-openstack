@@ -10,7 +10,7 @@ from sunbeam.core.common import ResultType
 from sunbeam.features.maintenance.utils import (
     OperationGoal,
     OperationViewer,
-    get_node_status,
+    get_cluster_status,
 )
 from sunbeam.steps.hypervisor import EnableHypervisorStep
 from sunbeam.steps.maintenance import (
@@ -22,13 +22,14 @@ from sunbeam.steps.maintenance import (
 @patch("sunbeam.features.maintenance.utils.LocalClusterStatusStep")
 @patch("sunbeam.features.maintenance.utils.run_plan")
 @patch("sunbeam.features.maintenance.utils.get_step_message")
-def test_get_node_status(
+def test_get_cluster_status(
     mock_get_step_message,
     mock_run_plan,
     mock_local_cluster_status_step,
 ):
     mock_deployment = Mock()
     mock_deployment.type = "local"
+    mock_deployment.openstack_machines_model = "openstack-machines"
     mock_jhelper = Mock()
     mock_get_step_message.return_value = {
         "openstack-machines": {
@@ -47,9 +48,7 @@ def test_get_node_status(
         }
     }
 
-    result = get_node_status(
-        mock_deployment, mock_jhelper, "console", False, "fake-node-a"
-    )
+    result = get_cluster_status(mock_deployment, mock_jhelper, "console", False)
 
     mock_local_cluster_status_step.assert_called_once_with(
         mock_deployment, mock_jhelper
@@ -60,7 +59,11 @@ def test_get_node_status(
     mock_get_step_message.assert_called_once_with(
         mock_run_plan.return_value, mock_local_cluster_status_step
     )
-    assert result == "target-status-val"
+    assert result == {
+        "fake-node-a": "target-status-val",
+        "fake-node-b": "not-target-status-val",
+        "fake-node-c": "not-target-status-val",
+    }
 
 
 class TestOperationViewer:

@@ -18,14 +18,18 @@ from sunbeam.features.maintenance import checks
 from sunbeam.features.maintenance.utils import (
     OperationGoal,
     OperationViewer,
-    get_node_status,
+    get_cluster_status,
 )
+
 from sunbeam.steps.hypervisor import EnableHypervisorStep
 from sunbeam.steps.maintenance import (
+    CordonControlRoleNodeStep,
     CreateWatcherHostMaintenanceAuditStep,
     CreateWatcherWorkloadBalancingAuditStep,
+    DrainControlRoleNodeStep,
     MicroCephActionStep,
     RunWatcherAuditStep,
+    UncordonControlRoleNodeStep,
 )
 from sunbeam.utils import click_option_show_hints, pass_method_obj
 
@@ -81,28 +85,21 @@ def enable(
     """Enable maintenance mode for node."""
     jhelper = JujuHelper(deployment.juju_controller)
 
-    node_status = get_node_status(
+    cluster_status = get_cluster_status(
         deployment=deployment,
         jhelper=jhelper,
         console=console,
         show_hints=show_hints,
-        node=node,
     )
+    node_status = cluster_status.get(node)
 
     if not node_status:
         raise click.ClickException(f"Node: {node} does not exist in cluster")
 
-    # This check is to avoid issue which maintenance mode haven't support
-    # control role, which should be removed after control role be supported.
-    if "control" in node_status:
-        msg = f"Node {node} is control role, which doesn't support maintenance mode"
-        if force:
-            LOG.warning(f"Ignore issue: {msg}")
-        else:
-            raise click.ClickException(msg)
-
     # Run preflight_checks
-    preflight_checks: list[Check] = []
+    preflight_checks: list[Check] = [
+        checks.NoLastNodeCheck(cluster_status, force=force)
+    ]
 
     if "compute" in node_status:
         preflight_checks += [
@@ -125,6 +122,19 @@ def enable(
                 },
             )
         ]
+    if "control" in node_status:
+        preflight_checks += [
+            checks.NoLastControlRoleCheck(cluster_status, force=force),
+            checks.ControlRoleRedundancyCheck(
+                node,
+                jhelper,
+                deployment,
+                force=force,
+            ),
+            checks.JujuContollerPodCheck(node, deployment, force=force),
+            checks.ControlRoleNodeDrainCheck(node, deployment, force=force),
+        ]
+
     run_preflight_checks(preflight_checks, console)
 
     # Generate operations
@@ -150,6 +160,24 @@ def enable(
                 },
             )
         )
+    if "control" in node_status:
+        # The order is important
+        generate_operation_plan += [
+            CordonControlRoleNodeStep(
+                node,
+                deployment.get_client(),
+                jhelper,
+                deployment.openstack_machines_model,
+                dry_run=True,
+            ),
+            DrainControlRoleNodeStep(
+                node,
+                deployment.get_client(),
+                jhelper,
+                deployment.openstack_machines_model,
+                dry_run=True,
+            ),
+        ]
 
     generate_operation_plan_results = run_plan(
         generate_operation_plan, console, show_hints
@@ -161,6 +189,12 @@ def enable(
     microceph_enter_maintenance_dry_run_action_result = get_step_message(
         generate_operation_plan_results, MicroCephActionStep
     )
+    drain_k8s_node_dry_run_result = get_step_message(
+        generate_operation_plan_results, DrainControlRoleNodeStep
+    )
+    cordon_k8s_node_dry_run_result = get_step_message(
+        generate_operation_plan_results, CordonControlRoleNodeStep
+    )
 
     ops_viewer = OperationViewer(node, OperationGoal.EnableMaintenance)
     if "compute" in node_status:
@@ -169,6 +203,9 @@ def enable(
         ops_viewer.add_maintenance_action_steps(
             action_result=microceph_enter_maintenance_dry_run_action_result
         )
+    if "control" in node_status:
+        ops_viewer.add_drain_control_role_step(result=drain_k8s_node_dry_run_result)
+        ops_viewer.add_cordon_control_role_step(result=cordon_k8s_node_dry_run_result)
 
     if dry_run:
         console.print(ops_viewer.dry_run_message)
@@ -203,6 +240,23 @@ def enable(
                 },
             )
         )
+    if "control" in node_status:
+        operation_plan += [
+            CordonControlRoleNodeStep(
+                node,
+                deployment.get_client(),
+                jhelper,
+                deployment.openstack_machines_model,
+                dry_run=False,
+            ),
+            DrainControlRoleNodeStep(
+                node,
+                deployment.get_client(),
+                jhelper,
+                deployment.openstack_machines_model,
+                dry_run=False,
+            ),
+        ]
 
     operation_plan_results = run_plan(operation_plan, console, show_hints, True)
     ops_viewer.check_operation_succeeded(operation_plan_results)
@@ -214,6 +268,12 @@ def enable(
             checks.NovaInDisableStatusCheck(jhelper=jhelper, node=node, force=force),
             checks.NoInstancesOnNodeCheck(jhelper=jhelper, node=node, force=force),
         ]
+    if "control" in node_status:
+        post_checks += [
+            checks.ControlRoleNodeDrainedCheck(node, deployment, force=force),
+            checks.ControlRoleNodeCordonedCheck(node, deployment, force=force),
+        ]
+
     run_preflight_checks(post_checks, console)
     console.print(f"Enable maintenance for node: {node}")
 
@@ -248,15 +308,16 @@ def disable(
     """Disable maintenance mode for node."""
     jhelper = JujuHelper(deployment.juju_controller)
 
-    node_status = get_node_status(
+    cluster_status = get_cluster_status(
         deployment=deployment,
         jhelper=jhelper,
         console=console,
         show_hints=show_hints,
-        node=node,
     )
+    node_status = cluster_status.get(node)
+
     if not node_status:
-        raise click.ClickException(f"Node: {node} does not exist in cluster")
+        raise click.ClickException(f"Node: {node} does not exist in node_status")
 
     # Run preflight_checks
     preflight_checks: list[Check] = []
@@ -265,6 +326,7 @@ def disable(
         preflight_checks += [
             checks.WatcherApplicationExistsCheck(jhelper=jhelper),
         ]
+
     run_preflight_checks(preflight_checks, console)
 
     generate_operation_plan: list[BaseStep] = []
@@ -290,6 +352,16 @@ def disable(
                 },
             )
         )
+    if "control" in node_status:
+        generate_operation_plan.append(
+            UncordonControlRoleNodeStep(
+                node,
+                deployment.get_client(),
+                jhelper,
+                deployment.openstack_machines_model,
+                dry_run=True,
+            )
+        )
 
     generate_operation_plan_results = run_plan(
         generate_operation_plan, console, show_hints
@@ -302,6 +374,9 @@ def disable(
     microceph_exit_maintenance_dry_run_action_result = get_step_message(
         generate_operation_plan_results, MicroCephActionStep
     )
+    uncordon_k8s_node_dry_run_result = get_step_message(
+        generate_operation_plan_results, UncordonControlRoleNodeStep
+    )
 
     ops_viewer = OperationViewer(node, OperationGoal.DisableMaintenance)
     if "compute" in node_status:
@@ -311,6 +386,10 @@ def disable(
     if "storage" in node_status:
         ops_viewer.add_maintenance_action_steps(
             action_result=microceph_exit_maintenance_dry_run_action_result
+        )
+    if "control" in node_status:
+        ops_viewer.add_uncordon_control_role_step(
+            result=uncordon_k8s_node_dry_run_result
         )
 
     if dry_run:
@@ -352,6 +431,17 @@ def disable(
                 },
             )
         )
+    if "control" in node_status:
+        operation_plan.append(
+            UncordonControlRoleNodeStep(
+                node,
+                deployment.get_client(),
+                jhelper,
+                deployment.openstack_machines_model,
+                dry_run=False,
+            )
+        )
+
     operation_plan_results = run_plan(operation_plan, console, show_hints, True)
     ops_viewer.check_operation_succeeded(operation_plan_results)
 
