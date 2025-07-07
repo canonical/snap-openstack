@@ -737,7 +737,7 @@ class PatchLoadBalancerServicesIPPoolStep(BaseStep, abc.ABC):
     def _wait_for_ip_allocated_from_pool_annotation_update(
         self, service_name: str, pool_name: str
     ):
-        """Wait until metallb.universe.tf/ip-allocated-from-pool is updated.
+        """Wait until metallb.io/ip-allocated-from-pool is updated.
 
         Wait until the ip-allocated-from-pool annotation is updated to pool_name
         for the service

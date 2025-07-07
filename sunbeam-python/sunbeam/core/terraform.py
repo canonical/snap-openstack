@@ -16,6 +16,7 @@ from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import ConfigItemNotFoundException
 from sunbeam.core.common import BaseStep, Result, ResultType, read_config, update_config
 from sunbeam.core.manifest import Manifest
+from sunbeam.versions import VarMap
 
 LOG = logging.getLogger(__name__)
 TERRAFORM_APPLY_TIMEOUT = 1200  # 20 minutes
@@ -75,7 +76,7 @@ class TerraformHelper:
         self,
         path: Path,
         plan: str,
-        tfvar_map: dict,
+        tfvar_map: VarMap,
         env: dict | None = None,
         parallelism: int | None = None,
         backend: str | None = None,
@@ -428,8 +429,11 @@ class TerraformHelper:
             try:
                 current_tfvars = read_config(client, tfvar_config)
                 # Exclude all default tfvar keys from the previous terraform
-                # vars applied to the plan.
-                _tfvar_names = self._get_tfvar_names(charms)
+                # vars applied to the plan. Ignore the keys that should
+                # be preserved.
+                _tfvar_names = set(self._get_tfvar_names()).difference(
+                    self.tfvar_map.get("preserve", [])
+                )
                 updated_tfvars = {
                     k: v for k, v in current_tfvars.items() if k not in _tfvar_names
                 }
@@ -472,8 +476,11 @@ class TerraformHelper:
             try:
                 current_tfvars = read_config(client, tfvar_config)
                 # Exclude all default tfvar keys from the previous terraform
-                # vars applied to the plan.
-                _tfvar_names = self._get_tfvar_names()
+                # vars applied to the plan. Ignore the keys that should
+                # be preserved.
+                _tfvar_names = set(self._get_tfvar_names()).difference(
+                    self.tfvar_map.get("preserve", [])
+                )
                 updated_tfvars = {
                     k: v for k, v in current_tfvars.items() if k not in _tfvar_names
                 }
@@ -552,7 +559,7 @@ class TerraformHelper:
 
         return tfvars
 
-    def _get_tfvar_names(self, charms: list | None = None) -> list:
+    def _get_tfvar_names(self, charms: list | None = None) -> list[str]:
         if charms:
             return [
                 tfvar_name
