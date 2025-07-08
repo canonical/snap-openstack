@@ -807,6 +807,8 @@ class ObservabilityFeature(OpenStackControlPlaneFeature):
 
         :param upgrade_release: Whether to upgrade release
         """
+        # Supports --upgrade-release, so no condition required
+        # based on upgrade_release flag
         self.run_enable_plans(deployment, FeatureConfig(), show_hints)
 
 
