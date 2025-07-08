@@ -44,6 +44,12 @@ def deployment():
     yield Mock()
 
 
+@pytest.fixture()
+def fetch_nics():
+    with patch.object(local_steps, "_fetch_nics") as p:
+        yield p
+
+
 class TestLocalSetHypervisorUnitsOptionsStep:
     def test_has_prompts(self, cclient, jhelper):
         step = local_steps.LocalSetHypervisorUnitsOptionsStep(
@@ -57,6 +63,7 @@ class TestLocalSetHypervisorUnitsOptionsStep:
         jhelper,
         load_answers,
         question_bank,
+        fetch_nics,
     ):
         load_answers.return_value = {"user": {"remote_access_location": "remote"}}
         local_hypervisor_bank_mock = Mock()
@@ -71,7 +78,7 @@ class TestLocalSetHypervisorUnitsOptionsStep:
             ],
             "candidates": ["eth2"],
         }
-        step._fetch_nics = Mock(return_value=nics_result)
+        fetch_nics.return_value = nics_result
         step.prompt()
         assert step.nics["maas0.local"] == "eth2"
 
@@ -81,6 +88,7 @@ class TestLocalSetHypervisorUnitsOptionsStep:
         jhelper,
         load_answers,
         question_bank,
+        fetch_nics,
     ):
         load_answers.return_value = {"user": {"remote_access_location": "remote"}}
         local_hypervisor_bank_mock = Mock()
@@ -95,7 +103,7 @@ class TestLocalSetHypervisorUnitsOptionsStep:
             ],
             "candidates": ["eth2"],
         }
-        step._fetch_nics = Mock(return_value=nics_result)
+        fetch_nics.return_value = nics_result
         step.prompt()
         assert step.nics["maas0.local"] == "eth2"
 
@@ -116,6 +124,7 @@ class TestLocalSetHypervisorUnitsOptionsStep:
         jhelper,
         load_answers,
         question_bank,
+        fetch_nics,
     ):
         load_answers.return_value = {"user": {"remote_access_location": "local"}}
         local_hypervisor_bank_mock = Mock()
@@ -130,7 +139,7 @@ class TestLocalSetHypervisorUnitsOptionsStep:
             ],
             "candidates": ["eth2"],
         }
-        step._fetch_nics = Mock(return_value=nics_result)
+        fetch_nics.return_value = nics_result
         step.prompt()
         assert step.nics["maas0.local"] == "eth2"
 

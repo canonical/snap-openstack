@@ -77,6 +77,7 @@ from sunbeam.provider.base import ProviderBase
 from sunbeam.provider.local.deployment import LOCAL_TYPE, LocalDeployment
 from sunbeam.provider.local.steps import (
     LocalClusterStatusStep,
+    LocalConfigSRIOVStep,
     LocalSetHypervisorUnitsOptionsStep,
 )
 from sunbeam.steps import cluster_status
@@ -215,6 +216,8 @@ class LocalProvider(ProviderBase):
         cluster.add_command(remove)
         cluster.add_command(resize_cmds.resize)
         cluster.add_command(refresh_cmds.refresh)
+        # TODO: remove this.
+        cluster.add_command(configure_sriov)
 
     def deployment_type(self) -> Tuple[str, Type[Deployment]]:
         """Retrieve the deployment type and class."""
@@ -881,11 +884,68 @@ def bootstrap(
                 client, fqdn, jhelper, deployment.openstack_machines_model
             )
         )
+        plan2.append(
+            LocalConfigSRIOVStep(
+                client, fqdn, jhelper, deployment.openstack_machines_model, manifest
+            ),
+        )
 
     plan2.append(SetBootstrapped(client))
     run_plan(plan2, console, show_hints)
 
     click.echo(f"Node has been bootstrapped with roles: {pretty_roles}")
+
+
+@click.command()
+@click.option("-a", "--accept-defaults", help="Accept all defaults.", is_flag=True)
+@click.option(
+    "-m",
+    "--manifest",
+    "manifest_path",
+    help="Manifest file.",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+)
+@click_option_show_hints
+@click.pass_context
+def configure_sriov(
+    ctx: click.Context,
+    manifest_path: Path | None = None,
+    accept_defaults: bool = False,
+    show_hints: bool = False,
+) -> None:
+    """Configure SR-IOV.
+
+    TODO: this command is added for testing purposes and must be
+    removed before the SR-IOV implementation is merged upstream.
+    """
+    deployment: LocalDeployment = ctx.obj
+    client = deployment.get_client()
+    # snap = Snap()
+    fqdn = utils.get_fqdn()
+    manifest = deployment.get_manifest(manifest_path)
+    jhelper = JujuHelper(deployment.juju_controller)
+
+    admin_credentials = retrieve_admin_credentials(jhelper, OPENSTACK_MODEL)
+    admin_credentials["OS_INSECURE"] = "true"
+
+    tfplan = "demo-setup"
+    tfhelper = deployment.get_tfhelper(tfplan)
+    tfhelper.env = (tfhelper.env or {}) | admin_credentials
+    tfhelper_hypervisor = deployment.get_tfhelper("hypervisor-plan")
+
+    plan: list[BaseStep] = [
+        LocalConfigSRIOVStep(
+            client, fqdn, jhelper, deployment.openstack_machines_model, manifest
+        ),
+        ReapplyHypervisorTerraformPlanStep(
+            client,
+            tfhelper_hypervisor,
+            jhelper,
+            manifest,
+            model=deployment.openstack_machines_model,
+        ),
+    ]
+    run_plan(plan, console, show_hints)
 
 
 def _print_output(token: str, format: str, name: str):
@@ -1237,6 +1297,9 @@ def join(
                     deployment.openstack_machines_model,
                     join_mode=True,
                     manifest=manifest,
+                ),
+                LocalConfigSRIOVStep(
+                    client, name, jhelper, deployment.openstack_machines_model, manifest
                 ),
             ]
         )
