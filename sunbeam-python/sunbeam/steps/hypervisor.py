@@ -253,7 +253,7 @@ class RemoveHypervisorUnitStep(BaseStep, JujuStepHelper):
             "Remove openstack-hypervisor unit from machine",
         )
         self.client = client
-        self.name = name
+        self.node_name = name
         self.jhelper = jhelper
         self.model = model
         self.force = force
@@ -267,10 +267,10 @@ class RemoveHypervisorUnitStep(BaseStep, JujuStepHelper):
                 ResultType.COMPLETED or ResultType.FAILED otherwise
         """
         try:
-            node = self.client.cluster.get_node_info(self.name)
+            node = self.client.cluster.get_node_info(self.node_name)
             self.machine_id = str(node.get("machineid"))
         except NodeNotExistInClusterException:
-            LOG.debug(f"Machine {self.name} does not exist, skipping.")
+            LOG.debug(f"Machine {self.node_name} does not exist, skipping.")
             return Result(ResultType.SKIPPED)
 
         model = run_sync(self.jhelper.get_model(self.model))
@@ -358,7 +358,7 @@ class RemoveHypervisorUnitStep(BaseStep, JujuStepHelper):
             LOG.warning(str(e))
             return Result(ResultType.FAILED, str(e))
         try:
-            remove_hypervisor(self.name, self.jhelper)
+            remove_hypervisor(self.node_name, self.jhelper)
         except openstack.exceptions.SDKException as e:
             LOG.error(
                 "Encountered error removing hypervisor references from control plane."

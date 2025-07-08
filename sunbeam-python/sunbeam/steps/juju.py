@@ -1062,7 +1062,8 @@ class RemoveJujuMachineStep(BaseStep, JujuStepHelper):
             node = self.client.cluster.get_node_info(self.node_name)
             self.machine_id = node.get("machineid", -1)
         except NodeNotExistInClusterException as e:
-            return Result(ResultType.FAILED, str(e))
+            return Result(ResultType.SKIPPED, str(e))
+
         self.model_with_owner = self.get_model_name_with_owner(self.model)
         try:
             machines = self._juju_cmd("machines", "-m", self.model_with_owner)
