@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
-import secrets
 from pathlib import Path
 
 import click
@@ -207,7 +206,6 @@ class SharedFilesystemFeature(OpenStackControlPlaneFeature):
         """Run the enablement plans."""
         jhelper = JujuHelper(deployment.juju_controller)
         tfhelper = deployment.get_tfhelper(self.tfplan)
-        tfhelper_openstack = deployment.get_tfhelper("openstack-plan")
         tfhelper_manila_data = deployment.get_tfhelper(self.tfplan_manila_data)
         client = deployment.get_client()
 
@@ -241,23 +239,7 @@ class SharedFilesystemFeature(OpenStackControlPlaneFeature):
             ),
         ]
 
-        storage_nodes = client.cluster.list_nodes_by_role("storage")
-        if storage_nodes:
-            i = secrets.randbelow(len(storage_nodes))
-            manila_data_plan.extend(
-                [
-                    manila_data.AddManilaDataUnitsStep(
-                        client,
-                        storage_nodes[i]["name"],
-                        jhelper,
-                        deployment.openstack_machines_model,
-                        tfhelper_openstack,
-                    ),
-                ]
-            )
-
         run_plan(ceph_nfs_plan, console, show_hints)
-        # run_plan(plan, console, show_hints)
         run_plan(manila_data_plan, console, show_hints)
 
         click.echo("Shared Filesystems enabled.")

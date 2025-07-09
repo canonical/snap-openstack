@@ -66,6 +66,7 @@ class DeployManilaDataApplicationStep(DeployMachineApplicationStep):
             CONFIG_KEY,
             APPLICATION,
             model,
+            [],
             "Deploy Manila Data",
             "Deploying Manila Data",
             refresh,
@@ -93,7 +94,13 @@ class DeployManilaDataApplicationStep(DeployMachineApplicationStep):
 
     def extra_tfvars(self) -> dict:
         """Extra terraform vars to pass to terraform apply."""
-        # storage_nodes = self.client.cluster.list_nodes_by_role("storage")
+        nodes = self.client.cluster.list_nodes_by_role("storage")
+        machine_ids = {
+            node.get("machineid") for node in nodes if node.get("machineid") != -1
+        }
+        if machine_ids:
+            machine_ids = {sorted(machine_ids)[0]}
+
         tfvars: dict[str, Any] = {
             "endpoint_bindings": [
                 {
@@ -113,6 +120,7 @@ class DeployManilaDataApplicationStep(DeployMachineApplicationStep):
                 },
             ],
             "charm-manila-data-config": {},
+            "machine_ids": list(machine_ids),
         }
 
         tfvars.update(self._get_offers())

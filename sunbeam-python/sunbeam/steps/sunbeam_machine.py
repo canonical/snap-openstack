@@ -4,6 +4,7 @@
 import logging
 
 from sunbeam.clusterd.client import Client
+from sunbeam.core.common import Role
 from sunbeam.core.deployment import Deployment, Networks
 from sunbeam.core.juju import JujuHelper
 from sunbeam.core.manifest import Manifest
@@ -48,6 +49,7 @@ class DeploySunbeamMachineApplicationStep(DeployMachineApplicationStep):
             CONFIG_KEY,
             APPLICATION,
             model,
+            [Role.CONTROL, Role.COMPUTE, Role.STORAGE],
             "Deploy sunbeam-machine",
             "Deploying Sunbeam Machine",
             refresh,
