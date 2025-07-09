@@ -148,7 +148,7 @@ class KubeClientError(K8SError):
     pass
 
 
-def _get_kube_client(client: Client, namespace: str | None = None) -> "l_client.Client":
+def get_kube_client(client: Client, namespace: str | None = None) -> "l_client.Client":
     try:
         kubeconfig_raw = read_config(client, K8SHelper.get_kubeconfig_key())
     except ConfigItemNotFoundException as e:
@@ -466,7 +466,7 @@ class EnsureK8SUnitsTaggedStep(BaseStep):
         else:
             control_nodes = self.client.cluster.list_nodes_by_role(control)
         try:
-            self.kube = _get_kube_client(
+            self.kube = get_kube_client(
                 self.client,
             )
         except KubeClientError as e:
@@ -1356,7 +1356,7 @@ class EnsureL2AdvertisementByHostStep(BaseStep):
             self.control_nodes = self.client.cluster.list_nodes_by_role(control)
 
         try:
-            self.kube = _get_kube_client(
+            self.kube = get_kube_client(
                 self.client,
                 self.l2_advertisement_namespace,
             )
@@ -1491,7 +1491,7 @@ class EnsureDefaultL2AdvertisementMutedStep(BaseStep):
                  ResultType.COMPLETED or ResultType.FAILED otherwise
         """
         try:
-            self.kube = _get_kube_client(
+            self.kube = get_kube_client(
                 self.client,
                 self.l2_advertisement_namespace,
             )
@@ -1585,7 +1585,7 @@ class PatchCoreDNSStep(BaseStep):
                  ResultType.COMPLETED or ResultType.FAILED otherwise
         """
         try:
-            self.kube = _get_kube_client(
+            self.kube = get_kube_client(
                 self.client,
                 self.coredns_namespace,
             )

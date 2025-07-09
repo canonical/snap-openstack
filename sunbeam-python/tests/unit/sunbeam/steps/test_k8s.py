@@ -32,8 +32,8 @@ from sunbeam.steps.k8s import (
     KubeClientError,
     PatchCoreDNSStep,
     StoreK8SKubeConfigStep,
-    _get_kube_client,
     _get_machines_space_ips,
+    get_kube_client,
 )
 
 
@@ -726,7 +726,7 @@ class TestEnsureK8SUnitsTaggedStep(unittest.TestCase):
                 }
             ),
         }
-        with patch("sunbeam.steps.k8s._get_kube_client", return_value=self.kube):
+        with patch("sunbeam.steps.k8s.get_kube_client", return_value=self.kube):
             result = self.step.is_skip()
         assert result.result_type == ResultType.SKIPPED
 
@@ -758,7 +758,7 @@ class TestEnsureK8SUnitsTaggedStep(unittest.TestCase):
                 }
             ),
         }
-        with patch("sunbeam.steps.k8s._get_kube_client", return_value=self.kube):
+        with patch("sunbeam.steps.k8s.get_kube_client", return_value=self.kube):
             result = self.step.is_skip()
         assert result.result_type == ResultType.COMPLETED
         assert "node2" in self.step.to_update
@@ -766,7 +766,7 @@ class TestEnsureK8SUnitsTaggedStep(unittest.TestCase):
     def test_is_skip_kube_client_error(self):
         self.client.cluster.list_nodes_by_role.return_value = []
         with patch(
-            "sunbeam.steps.k8s._get_kube_client", side_effect=KubeClientError("fail")
+            "sunbeam.steps.k8s.get_kube_client", side_effect=KubeClientError("fail")
         ):
             result = self.step.is_skip()
         assert result.result_type == ResultType.FAILED
@@ -778,7 +778,7 @@ class TestEnsureK8SUnitsTaggedStep(unittest.TestCase):
         api_error = ApiError.__new__(ApiError)
         api_error.status = Mock(code=500)
         self.kube.list.side_effect = api_error
-        with patch("sunbeam.steps.k8s._get_kube_client", return_value=self.kube):
+        with patch("sunbeam.steps.k8s.get_kube_client", return_value=self.kube):
             result = self.step.is_skip()
         assert result.result_type == ResultType.FAILED
 
@@ -789,7 +789,7 @@ class TestEnsureK8SUnitsTaggedStep(unittest.TestCase):
         self.client.cluster.list_nodes_by_role.return_value = control_nodes
         self.kube.list.return_value = [Mock(metadata=Mock(name="node1", labels={}))]
         self.jhelper.get_machines.return_value = {}
-        with patch("sunbeam.steps.k8s._get_kube_client", return_value=self.kube):
+        with patch("sunbeam.steps.k8s.get_kube_client", return_value=self.kube):
             result = self.step.is_skip()
         assert result.result_type == ResultType.FAILED
 
@@ -849,7 +849,7 @@ class TestGetKubeClient(unittest.TestCase):
         mock_read_config.return_value = {"apiVersion": "v1"}
         mock_kubeconfig_from_dict.return_value = Mock()
 
-        result = _get_kube_client(self.client, self.namespace)
+        result = get_kube_client(self.client, self.namespace)
 
         mock_read_config.assert_called_once_with(self.client, "kubeconfig-key")
         mock_kubeconfig_from_dict.assert_called_once_with({"apiVersion": "v1"})
@@ -868,7 +868,7 @@ class TestGetKubeClient(unittest.TestCase):
         self, mock_get_kubeconfig_key, mock_read_config
     ):
         with self.assertRaises(KubeClientError) as context:
-            _get_kube_client(self.client, self.namespace)
+            get_kube_client(self.client, self.namespace)
 
         mock_read_config.assert_called_once_with(self.client, "kubeconfig-key")
         assert "K8S kubeconfig not found" in str(context.exception)
@@ -893,7 +893,7 @@ class TestGetKubeClient(unittest.TestCase):
         mock_kubeconfig_from_dict.return_value = Mock()
 
         with self.assertRaises(KubeClientError) as context:
-            _get_kube_client(self.client, self.namespace)
+            get_kube_client(self.client, self.namespace)
 
         mock_read_config.assert_called_once_with(self.client, "kubeconfig-key")
         mock_kubeconfig_from_dict.assert_called_once_with({"apiVersion": "v1"})
@@ -979,7 +979,7 @@ class TestPatchCoreDNSStep(unittest.TestCase):
         )
         self.kube.get = Mock(side_effect=api_error)
 
-        with patch("sunbeam.steps.k8s._get_kube_client", return_value=self.kube):
+        with patch("sunbeam.steps.k8s.get_kube_client", return_value=self.kube):
             result = self.step.is_skip()
         assert result.result_type == ResultType.COMPLETED
 
@@ -998,7 +998,7 @@ class TestPatchCoreDNSStep(unittest.TestCase):
         )
         self.kube.get = Mock(side_effect=api_error)
 
-        with patch("sunbeam.steps.k8s._get_kube_client", return_value=self.kube):
+        with patch("sunbeam.steps.k8s.get_kube_client", return_value=self.kube):
             result = self.step.is_skip()
         assert result.result_type == ResultType.FAILED
 
@@ -1012,7 +1012,7 @@ class TestPatchCoreDNSStep(unittest.TestCase):
         hpa.spec = Mock()
         hpa.spec.minReplicas = 1
 
-        with patch("sunbeam.steps.k8s._get_kube_client", return_value=self.kube):
+        with patch("sunbeam.steps.k8s.get_kube_client", return_value=self.kube):
             self.kube.get = Mock(return_value=hpa)
             result = self.step.is_skip()
         assert result.result_type == ResultType.SKIPPED
@@ -1028,7 +1028,7 @@ class TestPatchCoreDNSStep(unittest.TestCase):
         hpa.spec = Mock()
         hpa.spec.minReplicas = 1
 
-        with patch("sunbeam.steps.k8s._get_kube_client", return_value=self.kube):
+        with patch("sunbeam.steps.k8s.get_kube_client", return_value=self.kube):
             self.kube.get = Mock(return_value=hpa)
             result = self.step.is_skip()
         assert result.result_type == ResultType.COMPLETED
@@ -1044,7 +1044,7 @@ class TestPatchCoreDNSStep(unittest.TestCase):
         hpa.spec = Mock()
         hpa.spec.minReplicas = 3
 
-        with patch("sunbeam.steps.k8s._get_kube_client", return_value=self.kube):
+        with patch("sunbeam.steps.k8s.get_kube_client", return_value=self.kube):
             self.kube.get = Mock(return_value=hpa)
             result = self.step.is_skip()
         assert result.result_type == ResultType.COMPLETED
