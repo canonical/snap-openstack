@@ -408,12 +408,13 @@ class OpenStackControlPlaneFeature(EnableDisableFeature, typing.Generic[ConfigTy
 
         :param upgrade_release: Whether to upgrade release
         """
+        if upgrade_release:
+            LOG.debug(f"Release upgrade not supported for feature {self.name}")
+            return
+
         # Nothig to do if the plan is openstack-plan as it is taken
         # care during control plane refresh
-        if (
-            not upgrade_release
-            or self.tf_plan_location == TerraformPlanLocation.SUNBEAM_TERRAFORM_REPO
-        ):
+        if self.tf_plan_location == TerraformPlanLocation.SUNBEAM_TERRAFORM_REPO:
             LOG.debug(
                 f"Ignore upgrade_hook for feature {self.name}, the corresponding apps"
                 f" will be refreshed as part of Control plane refresh"

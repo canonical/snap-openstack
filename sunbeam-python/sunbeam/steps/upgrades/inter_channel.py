@@ -24,7 +24,6 @@ from sunbeam.core.juju import (
     run_sync,
 )
 from sunbeam.core.manifest import Manifest
-from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.core.terraform import TerraformException, TerraformHelper
 from sunbeam.steps.cinder_volume import CONFIG_KEY as CINDER_VOLUME_CONFIG_KEY
 from sunbeam.steps.hypervisor import CONFIG_KEY as HYPERVISOR_CONFIG_KEY
@@ -435,6 +434,16 @@ class ChannelUpgradeCoordinator(UpgradeCoordinator):
 
         Return the steps to complete this upgrade.
         """
+        plan: list[BaseStep] = [UpgradeFeatures(self.deployment, upgrade_release=True)]
+        return plan
+
+        # --release-upgrade implementation is not proper and so the
+        # option is hidden. Bug [1] requires to support the flag,
+        # however to avoid any upgrades on other charms, this is
+        # supported only for charms involved in observability
+        # and rest of the code is commented out.
+        # https://bugs.launchpad.net/snap-openstack/+bug/2115169
+        """
         get_tf = self.deployment.get_tfhelper
         plan = [
             ValidationCheck(self.jhelper, self.manifest),
@@ -490,7 +499,7 @@ class ChannelUpgradeCoordinator(UpgradeCoordinator):
                 UpgradeFeatures(self.deployment, upgrade_release=True),
             ]
         )
-        return plan
+        """
 
     def run_plan(self, show_hints: bool = False) -> None:
         """Execute the upgrade plan."""

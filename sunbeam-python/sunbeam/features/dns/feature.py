@@ -250,6 +250,10 @@ class DnsFeature(OpenStackControlPlaneFeature):
 
         :param upgrade_release: Whether to upgrade release
         """
+        if upgrade_release:
+            LOG.debug(f"Release upgrade not supported for feature {self.name}")
+            return
+
         super().upgrade_hook(deployment, upgrade_release, show_hints)
         plan: list[BaseStep] = []
         if is_maas_deployment(deployment):

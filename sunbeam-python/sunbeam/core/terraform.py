@@ -431,7 +431,7 @@ class TerraformHelper:
                 # Exclude all default tfvar keys from the previous terraform
                 # vars applied to the plan. Ignore the keys that should
                 # be preserved.
-                _tfvar_names = set(self._get_tfvar_names()).difference(
+                _tfvar_names = set(self._get_tfvar_names(charms)).difference(
                     self.tfvar_map.get("preserve", [])
                 )
                 updated_tfvars = {
