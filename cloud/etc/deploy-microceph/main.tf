@@ -19,10 +19,11 @@ data "juju_model" "machine_model" {
 }
 
 resource "juju_application" "microceph" {
-  name  = "microceph"
-  trust = true
-  model = data.juju_model.machine_model.name
-  units = length(var.machine_ids) # need to manage the number of units
+  name     = "microceph"
+  trust    = true
+  model    = data.juju_model.machine_model.name
+  machines = length(var.machine_ids) == 0 ? null : toset(var.machine_ids)
+  units    = length(var.machine_ids) == 0 ? 0 : null
 
   charm {
     name     = "microceph"
