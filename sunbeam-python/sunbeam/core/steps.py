@@ -17,8 +17,10 @@ from sunbeam.core.common import (
     BaseStep,
     Result,
     ResultType,
+    Role,
     convert_retry_failure_as_result,
     read_config,
+    roles_to_str_list,
     update_config,
     update_status_background,
 )
@@ -69,6 +71,7 @@ class DeployMachineApplicationStep(BaseStep):
         config: str,
         application: str,
         model: str,
+        roles: list[Role] | list[list[Role]] = [],
         banner: str = "",
         description: str = "",
         refresh: bool = False,
@@ -84,6 +87,7 @@ class DeployMachineApplicationStep(BaseStep):
         self.model = model
         # Set refresh flag to True to redeploy the application
         self.refresh = refresh
+        self.roles = roles
 
     def extra_tfvars(self) -> dict:
         """Extra terraform vars to pass to terraform apply."""
@@ -97,22 +101,6 @@ class DeployMachineApplicationStep(BaseStep):
         """Application timeout in seconds."""
         return 600
 
-    def is_skip(self, status: Status | None = None) -> Result:
-        """Determines if the step should be skipped or not.
-
-        :return: ResultType.SKIPPED if the Step should be skipped,
-                ResultType.COMPLETED or ResultType.FAILED otherwise
-        """
-        if self.refresh:
-            return Result(ResultType.COMPLETED)
-
-        try:
-            self.jhelper.get_application(self.application, self.model)
-        except ApplicationNotFoundException:
-            return Result(ResultType.COMPLETED)
-
-        return Result(ResultType.SKIPPED)
-
     def get_accepted_application_status(self) -> list[str]:
         """Accepted status to pass wait_application_ready function."""
         return ["active", "unknown"]
@@ -125,19 +113,24 @@ class DeployMachineApplicationStep(BaseStep):
     )
     def run(self, status: Status | None = None) -> Result:
         """Apply terraform configuration to deploy sunbeam machine."""
-        machine_ids: list[str] = []
+        machine_ids: set[str] = set()
+        nodes: list[dict] = []
 
-        try:
-            app = self.jhelper.get_application(self.application, self.model)
-            machine_ids.extend(unit.machine for unit in app.units.values())
-        except ApplicationNotFoundException as e:
-            LOG.debug(str(e))
+        # TODO(hemanth): change the logic a bit
+        for role in self.roles:
+            if isinstance(role, Role):
+                role = [role]
+            nodes = self.client.cluster.list_nodes_by_role(roles_to_str_list(role))
+            for node in nodes:
+                node_machine_id = node.get("machineid", -1)
+                if node_machine_id != -1:
+                    machine_ids.add(node_machine_id)
 
         try:
             extra_tfvars = self.extra_tfvars()
             extra_tfvars.update(
                 {
-                    "machine_ids": machine_ids,
+                    "machine_ids": sorted(machine_ids),
                     "machine_model": self.model,
                 }
             )
