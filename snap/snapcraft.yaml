@@ -144,6 +144,7 @@ parts:
     after: [terraform]
     plugin: dump
     source: https://github.com/canonical/sunbeam-terraform
+    source-branch: stable/2024.1
     source-depth: 1
     source-type: git
     organize:
