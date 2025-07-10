@@ -294,6 +294,25 @@ class WatcherApplicationExistsCheck(Check):
         return True
 
 
+class NodeExistCheck(Check):
+    """Check if the node is in the cluster."""
+
+    def __init__(self, node: str, cluster_status: dict[str, Any]):
+        super().__init__(
+            "Check if the node is in the cluster.",
+            "Checking if the node is in the cluster.",
+        )
+        self.node = node
+        self.cluster_status = cluster_status
+
+    def run(self) -> bool:
+        """Check if the node is in the cluster."""
+        if not self.cluster_status.get(self.node):
+            self.message = f"'{self.node}' does not exist in cluster."
+            return False
+        return True
+
+
 class NoLastNodeCheck(Check):
     """Check if the cluster has more than one node."""
 
@@ -651,5 +670,43 @@ class ControlRoleNodeCordonedCheck(Check):
             return True
 
         self.message = "node is not cordoned."
+
+        return False
+
+
+class ControlRoleNodeUncordonedCheck(Check):
+    """Check if the node is uncordoned."""
+
+    def __init__(self, node: str, deployment: Deployment, force: bool = False):
+        super().__init__(
+            "Check if the node is uncordoned.",
+            "Checking if the node is uncordoned.",
+        )
+        self.node = node
+        self.force = force
+        self.deployment = deployment
+
+    def run(self) -> bool:
+        """Check if the node is uncordoned."""
+        try:
+            kube_client = get_kube_client(self.deployment.get_client())
+        except KubeClientError:
+            self.message = "failed to get k8s client"
+            return False
+
+        try:
+            node = find_node(kube_client, self.node)
+        except (K8SNodeNotFoundError, K8SError):
+            self.message = f"failed to get k8s node: '{self.node}'"
+            return False
+
+        if node.spec and not node.spec.unschedulable:
+            return True
+
+        if self.force:
+            LOG.warning("Ignore issue: node is not uncordoned.")
+            return True
+
+        self.message = "node is not uncordoned."
 
         return False
