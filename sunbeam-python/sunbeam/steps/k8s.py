@@ -1157,12 +1157,20 @@ class UncordonK8SUnitStep(BaseStep, _CommonK8SStepMixin):
 class DrainK8SUnitStep(BaseStep, _CommonK8SStepMixin):
     _SUBSTRATE: str = APPLICATION
 
-    def __init__(self, client: Client, name: str, jhelper: JujuHelper, model: str):
+    def __init__(
+        self,
+        client: Client,
+        name: str,
+        jhelper: JujuHelper,
+        model: str,
+        remove_pvc: bool = False,
+    ):
         super().__init__("Drain unit", "Drain node workloads")
         self.client = client
         self.node = name
         self.jhelper = jhelper
         self.model = model
+        self.remove_pvc = remove_pvc
 
     def is_skip(self, status: Status | None = None) -> Result:
         """Determines if the step should be skipped or not.
@@ -1189,7 +1197,7 @@ class DrainK8SUnitStep(BaseStep, _CommonK8SStepMixin):
         """Drain the unit."""
         self.update_status(status, "Evicting workloads")
         try:
-            drain(self.kube, self.node)
+            drain(self.kube, self.node, remove_pvc=self.remove_pvc)
         except K8SError as e:
             LOG.debug("Failed to drain unit", exc_info=True)
             return Result(ResultType.FAILED, str(e))

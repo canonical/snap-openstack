@@ -1331,7 +1331,9 @@ def remove(ctx: click.Context, name: str, force: bool, show_hints: bool) -> None
             client, name, jhelper, deployment.openstack_machines_model
         ),
         CordonK8SUnitStep(client, name, jhelper, deployment.openstack_machines_model),
-        DrainK8SUnitStep(client, name, jhelper, deployment.openstack_machines_model),
+        DrainK8SUnitStep(
+            client, name, jhelper, deployment.openstack_machines_model, remove_pvc=True
+        ),
         RemoveK8SUnitsStep(client, name, jhelper, deployment.openstack_machines_model),
         EnsureL2AdvertisementByHostStep(
             deployment,

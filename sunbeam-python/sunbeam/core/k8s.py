@@ -259,9 +259,13 @@ def delete_pvc(
         )
 
 
-def drain(client: "l_client.Client", name: str):
+def drain(client: "l_client.Client", name: str, remove_pvc: bool = False):
     """Evict all pods from a node."""
     pods = fetch_pods_for_eviction(client, name)
-    pvcs = fetch_pvc(client, pods)
     evict_pods(client, pods)
-    delete_pvc(client, pvcs)
+
+    # Optionally remove the PVC.
+    # This can be useful when removing the node from the cluster.
+    if remove_pvc:
+        pvcs = fetch_pvc(client, pods)
+        delete_pvc(client, pvcs)
