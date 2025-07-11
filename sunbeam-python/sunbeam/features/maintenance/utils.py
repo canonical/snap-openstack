@@ -54,8 +54,8 @@ def get_cluster_status(
     cluster_status = get_step_message(results, cluster_status_step)
 
     return {
-        i["hostname"]: i["status"]
-        for i in cluster_status[deployment.openstack_machines_model].values()
+        machine["hostname"]: machine["status"]
+        for machine in cluster_status[deployment.openstack_machines_model].values()
     }
 
 

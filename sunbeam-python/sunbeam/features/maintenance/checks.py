@@ -10,7 +10,6 @@ from sunbeam.clusterd.client import Client
 from sunbeam.core.checks import Check
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import (
-    CONTROLLER,
     ActionFailedException,
     ApplicationNotFoundException,
     ExecFailedException,
@@ -19,6 +18,9 @@ from sunbeam.core.juju import (
     UnitNotFoundException,
 )
 from sunbeam.core.k8s import (
+    K8S_APP_NAME,
+    K8S_DEFAULT_JUJU_CONTROLLER_NAMESPACE,
+    K8S_DQLITE_SVC_NAME,
     fetch_pods,
     fetch_pods_for_eviction,
     fetch_pvc,
@@ -42,10 +44,6 @@ from sunbeam.steps.microceph import APPLICATION as _MICROCEPH_APPLICATION
 console = Console()
 LOG = logging.getLogger(__name__)
 COMMAND_TIMEOUT = 60
-
-K8S_APP_NAME = "k8s"
-K8S_DQLITE_SVC_NAME = "k8s.k8s-dqlite"
-K8S_DEFAULT_JUJU_CONTROLLER_NAMESPACE = f"controller-{CONTROLLER}"
 
 
 class InstancesStatusCheck(Check):
@@ -373,8 +371,8 @@ class NoLastControlRoleCheck(Check):
         return False
 
 
-class ControlRoleRedundancyCheck(Check):
-    """Check if the control role has enough redundancy."""
+class K8sDqliteRedundancyCheck(Check):
+    """Check if the k8s dqlite has enough redundancy."""
 
     def __init__(
         self,
@@ -384,8 +382,8 @@ class ControlRoleRedundancyCheck(Check):
         force: bool = False,
     ):
         super().__init__(
-            "Check if the control role has enough redundancy.",
-            "Checking if the control role has enough redundancy.",
+            "Check if the k8s dqlite has enough redundancy.",
+            "Checking if the k8s dqlite has enough redundancy.",
         )
         self.node = node
         self.force = force
@@ -393,7 +391,7 @@ class ControlRoleRedundancyCheck(Check):
         self.deployment = deployment
 
     def run(self) -> bool:
-        """Check if the control role has enough redundancy."""
+        """Check if the k8s dqlite has enough redundancy."""
         this_k8s_unit_name = self._get_this_k8s_unit_name(self.node)
 
         total_k8s_dqlite_svcs = 0
@@ -416,7 +414,7 @@ class ControlRoleRedundancyCheck(Check):
 
         self.message = (
             "cannot enable maintenance mode because there is not enough"
-            f" {K8S_DQLITE_SVC_NAME} in cluster to maintain quorom"
+            f" {K8S_DQLITE_SVC_NAME} in the cluster to maintain quorom"
             f" (want {min_k8s_dqlite_svcs} for a {total_k8s_dqlite_svcs} node k8s"
             f" cluster, but will have {remaining_active_k8s_dqlite_svcs} left after"
             " enabling maintenance mode for this node)"
@@ -496,7 +494,7 @@ class JujuContollerPodCheck(Check):
         if juju_controller and juju_controller.is_external:
             LOG.debug(
                 "Skipped checking juju controller pods. Local deployment with"
-                " external Juju controller will not be managed by Sunbeam."
+                " external Juju controller is not be managed by Sunbeam."
             )
             return True
 
@@ -516,6 +514,7 @@ class JujuContollerPodCheck(Check):
 
         has_juju_controller_pods = False
         for pod in juju_controller_pods:
+            # Found juju controller pod in this node
             if pod.spec and pod.spec.nodeName == self.node:
                 LOG.debug(
                     "Found juju controller pod '$s' in '%s'",

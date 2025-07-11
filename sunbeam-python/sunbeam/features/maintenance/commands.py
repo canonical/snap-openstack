@@ -39,14 +39,22 @@ LOG = logging.getLogger(__name__)
 
 
 class MaintenanceCommand(abc.ABC):
-    """Base class for maintenance mode command."""
+    """Base class for any maintenance mode command.
+
+    The maintenance mode command should follow check-apply-verify pattern for consistent
+    behaviors. This base class only provides the overall pattern.
+
+    Check: Run the pre-flight checks before running any the core commands.
+    Apply: Run the core commands related to maintenance mode operations.
+    Verify: Run the verification steps to ensure that the cloud reaches expected state.
+    """
 
     @abc.abstractmethod
     def check(self, console: Console) -> None:
         """Run pre-flight checks."""
 
     @abc.abstractmethod
-    def apply(self, console: Console, show_hints: bool, operation_plan_results) -> None:
+    def apply(self, console: Console, show_hints: bool, plan_results: dict) -> None:
         """Run the core commands."""
 
     @abc.abstractmethod
@@ -61,11 +69,11 @@ class MaintenanceCommand(abc.ABC):
         """Run the commands following check-apply-verify order."""
         self.check(console)
 
-        operation_plan_results = self.dry_run(console, show_hints)
+        plan_results = self.dry_run(console, show_hints)
         if dry_run:
             return
 
-        self.apply(console, show_hints, operation_plan_results)
+        self.apply(console, show_hints, plan_results)
         self.verify(console)
 
 
@@ -135,7 +143,7 @@ class EnableMaintenance(MaintenanceCommand):
                     self.cluster_status,
                     force=self.force,
                 ),
-                checks.ControlRoleRedundancyCheck(
+                checks.K8sDqliteRedundancyCheck(
                     self.node,
                     self.jhelper,
                     self.deployment,
@@ -155,9 +163,7 @@ class EnableMaintenance(MaintenanceCommand):
 
         run_preflight_checks(preflight_checks, console)
 
-    def apply(
-        self, console: Console, show_hints: bool, operation_plan_results: dict
-    ) -> None:
+    def apply(self, console: Console, show_hints: bool, plan_results: dict) -> None:
         """Run the core commands."""
         node_status = self.cluster_status.get(self.node, "")
 
@@ -169,7 +175,7 @@ class EnableMaintenance(MaintenanceCommand):
 
         if "compute" in node_status:
             audit_info = get_step_message(
-                operation_plan_results, CreateWatcherHostMaintenanceAuditStep
+                plan_results, CreateWatcherHostMaintenanceAuditStep
             )
             operation_plan.append(
                 RunWatcherAuditStep(
@@ -369,9 +375,7 @@ class DisableMaintenance(MaintenanceCommand):
 
         run_preflight_checks(preflight_checks, console)
 
-    def apply(
-        self, console: Console, show_hints: bool, operation_plan_results: dict
-    ) -> None:
+    def apply(self, console: Console, show_hints: bool, plan_results: dict) -> None:
         """Run the core commands."""
         node_status = self.cluster_status.get(self.node, "")
 
@@ -391,7 +395,7 @@ class DisableMaintenance(MaintenanceCommand):
             ]
             if not self.disable_instance_rebalancing:
                 audit_info = get_step_message(
-                    operation_plan_results,
+                    plan_results,
                     CreateWatcherWorkloadBalancingAuditStep,
                 )
                 operation_plan += [
