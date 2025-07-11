@@ -154,11 +154,6 @@ class EnableMaintenance(MaintenanceCommand):
                     self.deployment,
                     force=self.force,
                 ),
-                checks.ControlRoleNodeDrainCheck(
-                    self.node,
-                    self.deployment,
-                    force=self.force,
-                ),
             ]
 
         run_preflight_checks(preflight_checks, console)
@@ -243,9 +238,6 @@ class EnableMaintenance(MaintenanceCommand):
 
         if "control" in node_status:
             post_checks += [
-                checks.ControlRoleNodeDrainedCheck(
-                    self.node, self.deployment, force=self.force
-                ),
                 checks.ControlRoleNodeCordonedCheck(
                     self.node, self.deployment, force=self.force
                 ),

@@ -22,8 +22,6 @@ from sunbeam.core.k8s import (
     K8S_DEFAULT_JUJU_CONTROLLER_NAMESPACE,
     K8S_DQLITE_SVC_NAME,
     fetch_pods,
-    fetch_pods_for_eviction,
-    fetch_pvc,
     find_node,
 )
 from sunbeam.core.openstack import OPENSTACK_MODEL
@@ -551,88 +549,6 @@ class JujuContollerPodCheck(Check):
         )
         pods = fetch_pods(kube_client, K8S_DEFAULT_JUJU_CONTROLLER_NAMESPACE)
         return list(filter(self._is_juju_controller_pod, pods))
-
-
-class ControlRoleNodeDrainCheck(Check):
-    """Check if the control role node can be drained."""
-
-    def __init__(self, node: str, deployment: Deployment, force: bool = False):
-        super().__init__(
-            "Check if the control role node can be drained.",
-            "Checking if the control role node can be drained.",
-        )
-        self.node = node
-        self.force = force
-        self.deployment = deployment
-
-    def run(self) -> bool:
-        """Check if the control role node can be drained."""
-        try:
-            kube_client = get_kube_client(self.deployment.get_client())
-        except KubeClientError:
-            self.message = "failed to get k8s client"
-            return False
-
-        pods = fetch_pods(kube_client, fields={"spec.nodeName": self.node})
-        pvcs = fetch_pvc(kube_client, pods)
-        daemonset_pods = list(filter(self._is_daemonset_pod, pods))
-
-        if daemonset_pods or pvcs:
-            if self.force:
-                LOG.warning("Ignore issue: node have daemonset pods or local storages")
-                return True
-            else:
-                self.message = (
-                    f"cannot enable maintenance mode for '{self.node}' because this"
-                    " node hosts daemonset pods or has local storages. You will need"
-                    " to pass `--force` to the command to confirm the operation."
-                    " Note, this is generally safe if you know what you're doing."
-                )
-                return False
-
-        return True
-
-    def _is_daemonset_pod(self, pod) -> bool:
-        """Check if the pod is a daemonset pod or not."""
-        return pod.metadata.ownerReferences[0].kind == "DaemonSet"
-
-
-class ControlRoleNodeDrainedCheck(Check):
-    """Check if the node is drained."""
-
-    def __init__(self, node: str, deployment: Deployment, force: bool = False):
-        super().__init__(
-            "Check if the node is drained.",
-            "Checking if the node is drained.",
-        )
-        self.node = node
-        self.force = force
-        self.deployment = deployment
-
-    def run(self) -> bool:
-        """Check if the node is drained."""
-        try:
-            kube_client = get_kube_client(self.deployment.get_client())
-        except KubeClientError:
-            self.message = "failed to get k8s client"
-            return False
-
-        pods_for_eviction = fetch_pods_for_eviction(kube_client, self.node)
-        pvcs_for_deletion = fetch_pvc(kube_client, pods_for_eviction)
-
-        if not pods_for_eviction and not pvcs_for_deletion:
-            return True
-
-        if self.force:
-            LOG.warning("Ignore issue: node is not drained")
-            return True
-
-        self.message = (
-            "node is not drained because it still has non daemonset pods and / or"
-            " local storages."
-        )
-
-        return False
 
 
 class ControlRoleNodeCordonedCheck(Check):
