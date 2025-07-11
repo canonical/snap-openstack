@@ -56,6 +56,7 @@ from sunbeam.core.k8s import (
     fetch_pods,
     fetch_pods_for_eviction,
     find_node,
+    uncordon,
 )
 from sunbeam.core.manifest import Manifest
 from sunbeam.core.openstack import OPENSTACK_MODEL
@@ -148,7 +149,7 @@ class KubeClientError(K8SError):
     pass
 
 
-def _get_kube_client(client: Client, namespace: str | None = None) -> "l_client.Client":
+def get_kube_client(client: Client, namespace: str | None = None) -> "l_client.Client":
     try:
         kubeconfig_raw = read_config(client, K8SHelper.get_kubeconfig_key())
     except ConfigItemNotFoundException as e:
@@ -466,7 +467,7 @@ class EnsureK8SUnitsTaggedStep(BaseStep):
         else:
             control_nodes = self.client.cluster.list_nodes_by_role(control)
         try:
-            self.kube = _get_kube_client(
+            self.kube = get_kube_client(
                 self.client,
             )
         except KubeClientError as e:
@@ -1123,15 +1124,53 @@ class CordonK8SUnitStep(BaseStep, _CommonK8SStepMixin):
         return Result(ResultType.COMPLETED)
 
 
-class DrainK8SUnitStep(BaseStep, _CommonK8SStepMixin):
+class UncordonK8SUnitStep(BaseStep, _CommonK8SStepMixin):
     _SUBSTRATE: str = APPLICATION
 
     def __init__(self, client: Client, name: str, jhelper: JujuHelper, model: str):
+        super().__init__("Uncordon unit", "Allow node to receive new pods")
+        self.client = client
+        self.node = name
+        self.jhelper = jhelper
+        self.model = model
+
+    def is_skip(self, status: Status | None = None) -> Result:
+        """Determines if the step should be skipped or not.
+
+        :return: ResultType.SKIPPED if the Step should be skipped,
+                ResultType.COMPLETED or ResultType.FAILED otherwise
+        """
+        return self.skip_checks()
+
+    def run(self, status: Status | None = None) -> Result:
+        """Uncordon the unit."""
+        self.update_status(status, "Uncordoning unit")
+        try:
+            uncordon(self.kube, self.node)
+        except K8SError as e:
+            LOG.debug("Failed to cordon unit", exc_info=True)
+            return Result(ResultType.FAILED, str(e))
+
+        return Result(ResultType.COMPLETED)
+
+
+class DrainK8SUnitStep(BaseStep, _CommonK8SStepMixin):
+    _SUBSTRATE: str = APPLICATION
+
+    def __init__(
+        self,
+        client: Client,
+        name: str,
+        jhelper: JujuHelper,
+        model: str,
+        remove_pvc: bool = False,
+    ):
         super().__init__("Drain unit", "Drain node workloads")
         self.client = client
         self.node = name
         self.jhelper = jhelper
         self.model = model
+        self.remove_pvc = remove_pvc
 
     def is_skip(self, status: Status | None = None) -> Result:
         """Determines if the step should be skipped or not.
@@ -1158,7 +1197,7 @@ class DrainK8SUnitStep(BaseStep, _CommonK8SStepMixin):
         """Drain the unit."""
         self.update_status(status, "Evicting workloads")
         try:
-            drain(self.kube, self.node)
+            drain(self.kube, self.node, remove_pvc=self.remove_pvc)
         except K8SError as e:
             LOG.debug("Failed to drain unit", exc_info=True)
             return Result(ResultType.FAILED, str(e))
@@ -1356,7 +1395,7 @@ class EnsureL2AdvertisementByHostStep(BaseStep):
             self.control_nodes = self.client.cluster.list_nodes_by_role(control)
 
         try:
-            self.kube = _get_kube_client(
+            self.kube = get_kube_client(
                 self.client,
                 self.l2_advertisement_namespace,
             )
@@ -1491,7 +1530,7 @@ class EnsureDefaultL2AdvertisementMutedStep(BaseStep):
                  ResultType.COMPLETED or ResultType.FAILED otherwise
         """
         try:
-            self.kube = _get_kube_client(
+            self.kube = get_kube_client(
                 self.client,
                 self.l2_advertisement_namespace,
             )
@@ -1585,7 +1624,7 @@ class PatchCoreDNSStep(BaseStep):
                  ResultType.COMPLETED or ResultType.FAILED otherwise
         """
         try:
-            self.kube = _get_kube_client(
+            self.kube = get_kube_client(
                 self.client,
                 self.coredns_namespace,
             )

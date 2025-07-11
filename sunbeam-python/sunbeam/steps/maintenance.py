@@ -19,6 +19,11 @@ from sunbeam.core.juju import (
     UnitNotFoundException,
 )
 from sunbeam.core.watcher import WatcherActionFailedException
+from sunbeam.steps.k8s import (
+    CordonK8SUnitStep,
+    DrainK8SUnitStep,
+    UncordonK8SUnitStep,
+)
 from sunbeam.steps.microceph import APPLICATION as _MICROCEPH_APPLICATION
 
 if TYPE_CHECKING:
@@ -182,3 +187,75 @@ class RunWatcherAuditStep(BaseStep):
             ResultType.COMPLETED if not failed else ResultType.FAILED,
             actions,
         )
+
+
+class DrainControlRoleNodeStep(DrainK8SUnitStep):
+    def __init__(
+        self,
+        node: str,
+        client: Client,
+        jhelper: JujuHelper,
+        model: str,
+        dry_run: bool = True,
+    ):
+        super().__init__(client, node, jhelper, model)
+        self.dry_run = dry_run
+
+    def run(self, status: Status | None = None) -> Result:
+        """Execute drain control role node step."""
+        step_key = f"Drain '{self.node}'"
+
+        if self.dry_run:
+            return Result(ResultType.COMPLETED, {"id": step_key})
+
+        result = super().run(status)
+        result.message = {"id": step_key}
+        return result
+
+
+class CordonControlRoleNodeStep(CordonK8SUnitStep):
+    def __init__(
+        self,
+        node: str,
+        client: Client,
+        jhelper: JujuHelper,
+        model: str,
+        dry_run: bool = True,
+    ):
+        super().__init__(client, node, jhelper, model)
+        self.dry_run = dry_run
+
+    def run(self, status: Status | None = None) -> Result:
+        """Execute cordon control role node step."""
+        step_key = f"Cordon '{self.node}'"
+
+        if self.dry_run:
+            return Result(ResultType.COMPLETED, {"id": step_key})
+
+        result = super().run(status)
+        result.message = {"id": step_key}
+        return result
+
+
+class UncordonControlRoleNodeStep(UncordonK8SUnitStep):
+    def __init__(
+        self,
+        node: str,
+        client: Client,
+        jhelper: JujuHelper,
+        model: str,
+        dry_run: bool = True,
+    ):
+        super().__init__(client, node, jhelper, model)
+        self.dry_run = dry_run
+
+    def run(self, status: Status | None = None) -> Result:
+        """Execute uncordon control role node step."""
+        step_key = f"Uncordon '{self.node}'"
+
+        if self.dry_run:
+            return Result(ResultType.COMPLETED, {"id": step_key})
+
+        result = super().run(status)
+        result.message = {"id": step_key}
+        return result

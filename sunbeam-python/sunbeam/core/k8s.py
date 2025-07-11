@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Type
 from snaphelpers import Snap  # noqa: F401 - required for test mocks
 
 from sunbeam.core.common import SunbeamException
+from sunbeam.core.juju import CONTROLLER
 from sunbeam.lazy import LazyImport
 
 if TYPE_CHECKING:
@@ -28,7 +29,10 @@ else:
 LOG = logging.getLogger(__name__)
 
 # --- K8s specific
+K8S_APP_NAME = "k8s"
+K8S_DEFAULT_JUJU_CONTROLLER_NAMESPACE = f"controller-{CONTROLLER}"
 K8S_DEFAULT_STORAGECLASS = "csi-rawfile-default"
+K8S_DQLITE_SVC_NAME = "k8s.k8s-dqlite"
 K8S_KUBECONFIG_KEY = "K8SKubeConfig"
 SERVICE_LB_ANNOTATION = "io.cilium/lb-ipam-ips"
 
@@ -158,6 +162,17 @@ def cordon(client: "l_client.Client", name: str):
         raise K8SError(f"Failed to patch node {name}") from e
 
 
+def uncordon(client: "l_client.Client", name: str):
+    """Mark a node as schedulable."""
+    LOG.debug("Marking %s schedulable", name)
+    try:
+        client.patch(core_v1.Node, name, {"spec": {"unschedulable": False}})
+    except l_exceptions.ApiError as e:
+        if e.status.code == 404:
+            raise K8SNodeNotFoundError(f"Node {name} not found")
+        raise K8SError(f"Failed to patch node {name}") from e
+
+
 def is_not_daemonset(pod):
     return pod.metadata.ownerReferences[0].kind != "DaemonSet"
 
@@ -248,9 +263,13 @@ def delete_pvc(
         )
 
 
-def drain(client: "l_client.Client", name: str):
+def drain(client: "l_client.Client", name: str, remove_pvc: bool = False):
     """Evict all pods from a node."""
     pods = fetch_pods_for_eviction(client, name)
-    pvcs = fetch_pvc(client, pods)
     evict_pods(client, pods)
-    delete_pvc(client, pvcs)
+
+    # Optionally remove the PVC.
+    # This can be useful when removing the node from the cluster.
+    if remove_pvc:
+        pvcs = fetch_pvc(client, pods)
+        delete_pvc(client, pvcs)

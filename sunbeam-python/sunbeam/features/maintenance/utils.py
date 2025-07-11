@@ -23,8 +23,11 @@ from sunbeam.provider.maas.steps import MaasClusterStatusStep
 from sunbeam.steps.cluster_status import ClusterStatusStep
 from sunbeam.steps.hypervisor import EnableHypervisorStep
 from sunbeam.steps.maintenance import (
+    CordonControlRoleNodeStep,
+    DrainControlRoleNodeStep,
     MicroCephActionStep,
     RunWatcherAuditStep,
+    UncordonControlRoleNodeStep,
 )
 
 if TYPE_CHECKING:
@@ -35,12 +38,11 @@ console = Console()
 LOG = logging.getLogger(__name__)
 
 
-def get_node_status(
+def get_cluster_status(
     deployment: Deployment,
     jhelper: JujuHelper,
     console: Console,
     show_hints: bool,
-    node: str,
 ) -> dict[str, Any]:
     cluster_status_step: type[ClusterStatusStep]
     if deployment.type == "local":
@@ -51,10 +53,10 @@ def get_node_status(
     results = run_plan([cluster_status_step(deployment, jhelper)], console, show_hints)
     cluster_status = get_step_message(results, cluster_status_step)
 
-    for _, _node in cluster_status["openstack-machines"].items():
-        if _node["hostname"] == node:
-            return _node["status"]
-    return {}
+    return {
+        machine["hostname"]: machine["status"]
+        for machine in cluster_status[deployment.openstack_machines_model].values()
+    }
 
 
 class OperationGoal(enum.Enum):
@@ -139,6 +141,21 @@ class OperationViewer:
             self.operations.append(action["id"])
             self.operation_states[action["id"]] = "SKIPPED"
 
+    def add_drain_control_role_step(self, result: dict[str, Any]):
+        """Append drain control role node step to operations."""
+        self.operations.append(result["id"])
+        self.operation_states[result["id"]] = "SKIPPED"
+
+    def add_cordon_control_role_step(self, result: dict[str, Any]):
+        """Append cordon control role node step to operations."""
+        self.operations.append(result["id"])
+        self.operation_states[result["id"]] = "SKIPPED"
+
+    def add_uncordon_control_role_step(self, result: dict[str, Any]):
+        """Append uncordon control role node step to operations."""
+        self.operations.append(result["id"])
+        self.operation_states[result["id"]] = "SKIPPED"
+
     def add_step(self, step_name: str):
         """Append BaseStep to operations."""
         self.operations.append(step_name)
@@ -201,6 +218,12 @@ class OperationViewer:
                 self.update_maintenance_action_steps_result(result.message)
             elif name == EnableHypervisorStep.__name__:
                 self.update_step_result(name, result)
+            elif name == DrainControlRoleNodeStep.__name__:
+                self.update_step_result(result.message["id"], result)
+            elif name == CordonControlRoleNodeStep.__name__:
+                self.update_step_result(result.message["id"], result)
+            elif name == UncordonControlRoleNodeStep.__name__:
+                self.update_step_result(result.message["id"], result)
         console.print(self._operation_result)
         if failed_result is not None and failed_result_name is not None:
             self._raise_exception(failed_result_name, failed_result)
