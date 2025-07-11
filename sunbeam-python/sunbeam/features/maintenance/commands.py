@@ -149,10 +149,9 @@ class EnableMaintenance(MaintenanceCommand):
                     self.deployment,
                     force=self.force,
                 ),
-                checks.JujuContollerPodCheck(
+                checks.JujuControllerPodCheck(
                     self.node,
                     self.deployment,
-                    force=self.force,
                 ),
             ]
 

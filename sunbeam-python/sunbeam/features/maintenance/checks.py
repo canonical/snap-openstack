@@ -462,21 +462,15 @@ class K8sDqliteRedundancyCheck(Check):
         return "active" in result.stdout
 
 
-class JujuContollerPodCheck(Check):
+class JujuControllerPodCheck(Check):
     """Check if the node has juju controller pods."""
 
-    def __init__(
-        self,
-        node: str,
-        deployment: Deployment,
-        force: bool = False,
-    ):
+    def __init__(self, node: str, deployment: Deployment):
         super().__init__(
             "Check if there are juju contoller pods in the node.",
             "Checking if there are juju contoller pods in the node.",
         )
         self.node = node
-        self.force = force
         self.deployment = deployment
 
     def run(self) -> bool:
@@ -491,8 +485,8 @@ class JujuContollerPodCheck(Check):
         juju_controller = self.deployment.juju_controller
         if juju_controller and juju_controller.is_external:
             LOG.debug(
-                "Skipped checking juju controller pods. Local deployment with"
-                " external Juju controller is not be managed by Sunbeam."
+                "Skipped checking juju controller pods. Juju controller pod is not"
+                " managed by Sunbeam for manual bare metal provider with an external."
             )
             return True
 
@@ -524,16 +518,12 @@ class JujuContollerPodCheck(Check):
         if not has_juju_controller_pods:
             return True
 
-        if self.force:
-            LOG.warning("Ignore issue: juju contoller pods exist error")
-            return True
-
         self.message = (
             f"cannot enable maintenance mode for '{self.node}' because this"
-            " node hosts juju controller pods. In manual mode, the"
-            " juju controller pod is not HA, enabling maintenance mode for"
-            " this node will lost juju controller. If you still want to"
-            " continue, add `--force` to the command at your own risks."
+            " node hosts juju controller pods. The juju controller is not HA for"
+            " Sunbeam deployed using the manual bare metal provider with an internal"
+            " juju controller. Enabling maintenance mode for this node will lost the"
+            " juju controller. This is not supported."
         )
         return False
 
