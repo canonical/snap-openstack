@@ -112,6 +112,7 @@ class DeployMicrocephApplicationStep(DeployMachineApplicationStep):
             CONFIG_KEY,
             APPLICATION,
             model,
+            [Role.STORAGE],
             "Deploy MicroCeph",
             "Deploying MicroCeph",
             refresh,

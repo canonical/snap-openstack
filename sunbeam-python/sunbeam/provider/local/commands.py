@@ -82,7 +82,6 @@ from sunbeam.provider.local.steps import (
 from sunbeam.steps import cluster_status
 from sunbeam.steps.bootstrap_state import SetBootstrapped
 from sunbeam.steps.cinder_volume import (
-    AddCinderVolumeUnitsStep,
     CheckCinderVolumeDistributionStep,
     DeployCinderVolumeApplicationStep,
     RemoveCinderVolumeUnitsStep,
@@ -99,7 +98,6 @@ from sunbeam.steps.clusterd import (
     SaveManagementCidrStep,
 )
 from sunbeam.steps.hypervisor import (
-    AddHypervisorUnitsStep,
     DeployHypervisorApplicationStep,
     ReapplyHypervisorOptionalIntegrationsStep,
     ReapplyHypervisorTerraformPlanStep,
@@ -131,7 +129,6 @@ from sunbeam.steps.k8s import (
     AddK8SCloudInClientStep,
     AddK8SCloudStep,
     AddK8SCredentialStep,
-    AddK8SUnitsStep,
     CheckMysqlK8SDistributionStep,
     CheckOvnK8SDistributionStep,
     CheckRabbitmqK8SDistributionStep,
@@ -148,7 +145,6 @@ from sunbeam.steps.k8s import (
     UpdateK8SCloudStep,
 )
 from sunbeam.steps.microceph import (
-    AddMicrocephUnitsStep,
     CheckMicrocephDistributionStep,
     ConfigureMicrocephOSDStep,
     DeployMicrocephApplicationStep,
@@ -161,7 +157,6 @@ from sunbeam.steps.openstack import (
     PromptRegionStep,
 )
 from sunbeam.steps.sunbeam_machine import (
-    AddSunbeamMachineUnitsStep,
     DeploySunbeamMachineApplicationStep,
     RemoveSunbeamMachineUnitsStep,
 )
@@ -223,7 +218,6 @@ def get_sunbeam_machine_plans(
     plans: list[BaseStep] = []
     client = deployment.get_client()
     proxy_settings = deployment.get_proxy_settings()
-    fqdn = utils.get_fqdn()
 
     sunbeam_machine_tfhelper = deployment.get_tfhelper("sunbeam-machine-plan")
     plans.extend(
@@ -238,9 +232,6 @@ def get_sunbeam_machine_plans(
                 deployment.openstack_machines_model,
                 refresh=True,
                 proxy_settings=proxy_settings,
-            ),
-            AddSunbeamMachineUnitsStep(
-                client, fqdn, jhelper, deployment.openstack_machines_model
             ),
         ]
     )
@@ -271,7 +262,6 @@ def get_k8s_plans(
                 deployment.openstack_machines_model,
                 accept_defaults=accept_defaults,
             ),
-            AddK8SUnitsStep(client, fqdn, jhelper, deployment.openstack_machines_model),
             StoreK8SKubeConfigStep(
                 deployment, client, jhelper, deployment.openstack_machines_model
             ),
@@ -775,11 +765,6 @@ def bootstrap(
 
     if is_storage_node:
         plan1.append(
-            AddMicrocephUnitsStep(
-                client, fqdn, jhelper, deployment.openstack_machines_model
-            )
-        )
-        plan1.append(
             ConfigureMicrocephOSDStep(
                 client,
                 fqdn,
@@ -787,15 +772,6 @@ def bootstrap(
                 deployment.openstack_machines_model,
                 accept_defaults=accept_defaults,
                 manifest=manifest,
-            )
-        )
-        plan1.append(
-            AddCinderVolumeUnitsStep(
-                client,
-                fqdn,
-                jhelper,
-                deployment.openstack_machines_model,
-                openstack_tfhelper,
             )
         )
 
@@ -862,12 +838,6 @@ def bootstrap(
             deployment.openstack_machines_model,
         )
     )
-    if is_compute_node:
-        plan2.append(
-            AddHypervisorUnitsStep(
-                client, fqdn, jhelper, deployment.openstack_machines_model
-            )
-        )
 
     plan2.append(SetBootstrapped(client))
     run_plan(plan2, console, show_hints)
@@ -1082,6 +1052,12 @@ def join(
     deployment.reload_credentials()
     # Get manifest object once the cluster is joined
     manifest = deployment.get_manifest()
+    proxy_settings = deployment.get_proxy_settings()
+    sunbeam_machine_tfhelper = deployment.get_tfhelper("sunbeam-machine-plan")
+    k8s_tfhelper = deployment.get_tfhelper("k8s-plan")
+    cinder_volume_tfhelper = deployment.get_tfhelper("cinder-volume-plan")
+    microceph_tfhelper = deployment.get_tfhelper("microceph-plan")
+    openstack_tfhelper = deployment.get_tfhelper("openstack-plan")
 
     machine_id = -1
     machine_id_result = get_step_message(plan3_results, AddJujuMachineStep)
@@ -1090,15 +1066,33 @@ def join(
 
     plan4: list[BaseStep] = []
     plan4.append(ClusterUpdateNodeStep(client, name, machine_id=machine_id))
+    plan4.append(TerraformInitStep(sunbeam_machine_tfhelper))
     plan4.append(
-        AddSunbeamMachineUnitsStep(
-            client, name, jhelper, deployment.openstack_machines_model
-        ),
+        DeploySunbeamMachineApplicationStep(
+            deployment,
+            client,
+            sunbeam_machine_tfhelper,
+            jhelper,
+            manifest,
+            deployment.openstack_machines_model,
+            refresh=True,
+            proxy_settings=proxy_settings,
+        )
     )
 
     if is_control_node:
+        # accept_defaults True to pick from manifest saved ones??
+        plan4.append(TerraformInitStep(k8s_tfhelper))
         plan4.append(
-            AddK8SUnitsStep(client, name, jhelper, deployment.openstack_machines_model)
+            DeployK8SApplicationStep(
+                deployment,
+                client,
+                k8s_tfhelper,
+                jhelper,
+                manifest,
+                deployment.openstack_machines_model,
+                accept_defaults=True,
+            )
         )
         plan4.append(
             EnsureK8SUnitsTaggedStep(
@@ -1123,12 +1117,17 @@ def join(
         )
         plan4.append(AddK8SCredentialStep(deployment, jhelper))
 
-    openstack_tfhelper = deployment.get_tfhelper("openstack-plan")
     plan4.append(TerraformInitStep(openstack_tfhelper))
     if is_storage_node:
+        plan4.append(TerraformInitStep(microceph_tfhelper))
         plan4.append(
-            AddMicrocephUnitsStep(
-                client, name, jhelper, deployment.openstack_machines_model
+            DeployMicrocephApplicationStep(
+                deployment,
+                client,
+                microceph_tfhelper,
+                jhelper,
+                manifest,
+                deployment.openstack_machines_model,
             )
         )
         plan4.append(
@@ -1141,17 +1140,19 @@ def join(
                 manifest=manifest,
             )
         )
+        plan4.append(TerraformInitStep(cinder_volume_tfhelper))
         plan4.append(
-            AddCinderVolumeUnitsStep(
+            DeployCinderVolumeApplicationStep(
+                deployment,
                 client,
-                name,
+                cinder_volume_tfhelper,
                 jhelper,
+                manifest,
                 deployment.openstack_machines_model,
-                openstack_tfhelper,
+                refresh=True,
             )
         )
-        cinder_volume_tfhelper = deployment.get_tfhelper("cinder-volume-plan")
-        plan4.append(TerraformInitStep(cinder_volume_tfhelper))
+
         # Re-deploy control plane if this is the first storage node joining
         # the cluster to enable mandatory storage services
         storage_nodes = client.cluster.list_nodes_by_role(Role.STORAGE.name.lower())
@@ -1164,34 +1165,6 @@ def join(
                     manifest,
                     "auto",
                     deployment.openstack_machines_model,
-                )
-            )
-            # Redeploy of Microceph is required to fill terraform vars
-            # related to traefik-rgw/keystone-endpoints offers from
-            # openstack model
-            microceph_tfhelper = deployment.get_tfhelper("microceph-plan")
-            plan4.append(TerraformInitStep(microceph_tfhelper))
-            plan4.append(
-                DeployMicrocephApplicationStep(
-                    deployment,
-                    client,
-                    microceph_tfhelper,
-                    jhelper,
-                    manifest,
-                    deployment.openstack_machines_model,
-                    refresh=True,
-                )
-            )
-            # Fill AMQP / Keystone / MySQL offers from openstack model
-            plan4.append(
-                DeployCinderVolumeApplicationStep(
-                    deployment,
-                    client,
-                    cinder_volume_tfhelper,
-                    jhelper,
-                    manifest,
-                    deployment.openstack_machines_model,
-                    refresh=True,
                 )
             )
 
@@ -1212,10 +1185,19 @@ def join(
         )
 
     if is_compute_node:
+        hypervisor_tfhelper = deployment.get_tfhelper("hypervisor-plan")
         plan4.extend(
             [
-                AddHypervisorUnitsStep(
-                    client, name, jhelper, deployment.openstack_machines_model
+                TerraformInitStep(hypervisor_tfhelper),
+                DeployHypervisorApplicationStep(
+                    deployment,
+                    client,
+                    hypervisor_tfhelper,
+                    openstack_tfhelper,
+                    cinder_volume_tfhelper,
+                    jhelper,
+                    manifest,
+                    deployment.openstack_machines_model,
                 ),
                 LocalSetHypervisorUnitsOptionsStep(
                     client,
