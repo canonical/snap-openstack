@@ -209,6 +209,7 @@ class LocalProvider(ProviderBase):
         """
         init.add_command(cluster)
         configure.add_command(configure_cmd)
+        configure.add_command(configure_sriov)
         cluster.add_command(bootstrap)
         cluster.add_command(add)
         cluster.add_command(join)
@@ -216,7 +217,6 @@ class LocalProvider(ProviderBase):
         cluster.add_command(remove)
         cluster.add_command(resize_cmds.resize)
         cluster.add_command(refresh_cmds.refresh)
-        cluster.add_command(configure_sriov)
 
     def deployment_type(self) -> Tuple[str, Type[Deployment]]:
         """Retrieve the deployment type and class."""
@@ -902,7 +902,7 @@ def bootstrap(
     click.echo(f"Node has been bootstrapped with roles: {pretty_roles}")
 
 
-@click.command()
+@click.command("sriov")
 @click.option("-a", "--accept-defaults", help="Accept all defaults.", is_flag=True)
 @click.option(
     "-m",
