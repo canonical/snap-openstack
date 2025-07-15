@@ -216,7 +216,6 @@ class LocalProvider(ProviderBase):
         cluster.add_command(remove)
         cluster.add_command(resize_cmds.resize)
         cluster.add_command(refresh_cmds.refresh)
-        # TODO: remove this.
         cluster.add_command(configure_sriov)
 
     def deployment_type(self) -> Tuple[str, Type[Deployment]]:
@@ -913,14 +912,9 @@ def configure_sriov(
     accept_defaults: bool = False,
     show_hints: bool = False,
 ) -> None:
-    """Configure SR-IOV.
-
-    TODO: this command is added for testing purposes and must be
-    removed before the SR-IOV implementation is merged upstream.
-    """
+    """Configure SR-IOV."""
     deployment: LocalDeployment = ctx.obj
     client = deployment.get_client()
-    # snap = Snap()
     fqdn = utils.get_fqdn()
     manifest = deployment.get_manifest(manifest_path)
     jhelper = JujuHelper(deployment.juju_controller)
