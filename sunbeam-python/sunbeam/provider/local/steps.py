@@ -365,6 +365,22 @@ class LocalConfigSRIOVStep(BaseStep):
                 if excluded_device not in excluded_devices[self.node_name]:
                     excluded_devices[self.node_name].append(excluded_device)
 
+            self._do_prompt(pci_whitelist, excluded_devices, show_hint)
+
+        LOG.info("Updated PCI device whitelist: %s", pci_whitelist)
+        LOG.info("Updated PCI device exclusion list: %s", excluded_devices)
+
+        self.variables["pci_whitelist"] = pci_whitelist
+        self.variables["excluded_devices"] = excluded_devices
+
+        write_answers(self.client, PCI_CONFIG_SECTION, self.variables)
+
+    def _do_prompt(
+        self,
+        pci_whitelist: list[dict],
+        excluded_devices: dict[str, list],
+        show_hint: bool = False,
+    ):
         sriov_bank = QuestionBank(
             questions=sriov_questions(),
             console=console,
@@ -402,14 +418,6 @@ class LocalConfigSRIOVStep(BaseStep):
 
         else:
             LOG.info("No SR-IOV devics detected, skipping SR-IOV configuration.")
-
-        LOG.info("Updated PCI device whitelist: %s", pci_whitelist)
-        LOG.info("Updated PCI device exclusion list: %s", excluded_devices)
-
-        self.variables["pci_whitelist"] = pci_whitelist
-        self.variables["excluded_devices"] = excluded_devices
-
-        write_answers(self.client, PCI_CONFIG_SECTION, self.variables)
 
     def _is_sriov_nic_whitelisted(
         self, nic: dict, pci_whitelist: list[dict], excluded_devices: dict[str, list]
