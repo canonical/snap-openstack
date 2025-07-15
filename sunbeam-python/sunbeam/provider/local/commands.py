@@ -878,15 +878,22 @@ def bootstrap(
         )
     )
     if is_compute_node:
-        plan2.append(
-            AddHypervisorUnitsStep(
-                client, fqdn, jhelper, deployment.openstack_machines_model
-            )
-        )
-        plan2.append(
-            LocalConfigSRIOVStep(
-                client, fqdn, jhelper, deployment.openstack_machines_model, manifest
-            ),
+        plan2.extend(
+            [
+                AddHypervisorUnitsStep(
+                    client, fqdn, jhelper, deployment.openstack_machines_model
+                ),
+                LocalConfigSRIOVStep(
+                    client, fqdn, jhelper, deployment.openstack_machines_model, manifest
+                ),
+                ReapplyHypervisorTerraformPlanStep(
+                    client,
+                    hypervisor_tfhelper,
+                    jhelper,
+                    manifest,
+                    model=deployment.openstack_machines_model,
+                ),
+            ]
         )
 
     plan2.append(SetBootstrapped(client))
@@ -1191,6 +1198,7 @@ def join(
         plan4.append(AddK8SCredentialStep(deployment, jhelper))
 
     openstack_tfhelper = deployment.get_tfhelper("openstack-plan")
+    hypervisor_tfhelper = deployment.get_tfhelper("hypervisor-plan")
     plan4.append(TerraformInitStep(openstack_tfhelper))
     if is_storage_node:
         plan4.append(
@@ -1294,6 +1302,13 @@ def join(
                 ),
                 LocalConfigSRIOVStep(
                     client, name, jhelper, deployment.openstack_machines_model, manifest
+                ),
+                ReapplyHypervisorTerraformPlanStep(
+                    client,
+                    hypervisor_tfhelper,
+                    jhelper,
+                    manifest,
+                    model=deployment.openstack_machines_model,
                 ),
             ]
         )
