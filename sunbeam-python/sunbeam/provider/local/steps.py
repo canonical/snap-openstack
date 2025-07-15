@@ -352,12 +352,18 @@ class LocalConfigSRIOVStep(BaseStep):
         if self.node_name not in excluded_devices:
             excluded_devices[self.node_name] = []
 
-        for device_spec in previous_pci_whitelist:
-            if device_spec not in pci_whitelist:
-                pci_whitelist.append(device_spec)
-        for excluded_device in previous_node_excluded_devices:
-            if excluded_device not in excluded_devices[self.node_name]:
-                excluded_devices[self.node_name].append(excluded_device)
+        if self.accept_defaults:
+            LOG.debug(
+                "Received '--accept-defaults', ignoring previous "
+                "answers and applying the manifest configuration."
+            )
+        else:
+            for device_spec in previous_pci_whitelist:
+                if device_spec not in pci_whitelist:
+                    pci_whitelist.append(device_spec)
+            for excluded_device in previous_node_excluded_devices:
+                if excluded_device not in excluded_devices[self.node_name]:
+                    excluded_devices[self.node_name].append(excluded_device)
 
         sriov_bank = QuestionBank(
             questions=sriov_questions(),

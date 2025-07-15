@@ -884,7 +884,12 @@ def bootstrap(
                     client, fqdn, jhelper, deployment.openstack_machines_model
                 ),
                 LocalConfigSRIOVStep(
-                    client, fqdn, jhelper, deployment.openstack_machines_model, manifest
+                    client,
+                    fqdn,
+                    jhelper,
+                    deployment.openstack_machines_model,
+                    manifest,
+                    accept_defaults,
                 ),
                 ReapplyHypervisorTerraformPlanStep(
                     client,
@@ -936,7 +941,12 @@ def configure_sriov(
 
     plan: list[BaseStep] = [
         LocalConfigSRIOVStep(
-            client, fqdn, jhelper, deployment.openstack_machines_model, manifest
+            client,
+            fqdn,
+            jhelper,
+            deployment.openstack_machines_model,
+            manifest,
+            accept_defaults,
         ),
         ReapplyHypervisorTerraformPlanStep(
             client,
@@ -1301,7 +1311,12 @@ def join(
                     manifest=manifest,
                 ),
                 LocalConfigSRIOVStep(
-                    client, name, jhelper, deployment.openstack_machines_model, manifest
+                    client,
+                    name,
+                    jhelper,
+                    deployment.openstack_machines_model,
+                    manifest,
+                    accept_defaults,
                 ),
                 ReapplyHypervisorTerraformPlanStep(
                     client,
