@@ -27,12 +27,7 @@ from sunbeam.core.common import (
 )
 from sunbeam.core.juju import ActionFailedException, JujuHelper
 from sunbeam.core.manifest import Manifest
-from sunbeam.core.questions import (
-    ConfirmQuestion,
-    QuestionBank,
-    load_answers,
-    write_answers,
-)
+from sunbeam.core.questions import ConfirmQuestion
 from sunbeam.steps import hypervisor
 from sunbeam.steps.cluster_status import ClusterStatusStep
 from sunbeam.steps.clusterd import CLUSTERD_PORT
@@ -320,7 +315,9 @@ class LocalConfigSRIOVStep(BaseStep):
             LOG.info("No console available, skipping prompt.")
             return
 
-        self.variables = load_answers(self.client, PCI_CONFIG_SECTION)
+        self.variables = sunbeam.core.questions.load_answers(
+            self.client, PCI_CONFIG_SECTION
+        )
 
         pci_whitelist: list[dict] = []
         excluded_devices: dict[str, list] = {}
@@ -341,9 +338,7 @@ class LocalConfigSRIOVStep(BaseStep):
 
         previous_pci_whitelist = self.variables.get("pci_whitelist") or []
         previous_excluded_devices = self.variables.get("excluded_devices") or {}
-        previous_node_excluded_devices = (
-            previous_excluded_devices.get(self.node_name) or []
-        )
+
         LOG.debug("PCI whitelist from previous answers: %s", previous_pci_whitelist)
         LOG.debug(
             "PCI exclude list from previous answers: %s", previous_excluded_devices
@@ -361,9 +356,13 @@ class LocalConfigSRIOVStep(BaseStep):
             for device_spec in previous_pci_whitelist:
                 if device_spec not in pci_whitelist:
                     pci_whitelist.append(device_spec)
-            for excluded_device in previous_node_excluded_devices:
-                if excluded_device not in excluded_devices[self.node_name]:
-                    excluded_devices[self.node_name].append(excluded_device)
+            for node in previous_excluded_devices:
+                if node not in excluded_devices:
+                    excluded_devices[node] = previous_excluded_devices[node]
+                else:
+                    for excluded_device in previous_excluded_devices[node]:
+                        if excluded_device not in excluded_devices[node]:
+                            excluded_devices[node].append(excluded_device)
 
             self._do_prompt(pci_whitelist, excluded_devices, show_hint)
 
@@ -373,7 +372,9 @@ class LocalConfigSRIOVStep(BaseStep):
         self.variables["pci_whitelist"] = pci_whitelist
         self.variables["excluded_devices"] = excluded_devices
 
-        write_answers(self.client, PCI_CONFIG_SECTION, self.variables)
+        sunbeam.core.questions.write_answers(
+            self.client, PCI_CONFIG_SECTION, self.variables
+        )
 
     def _do_prompt(
         self,
@@ -381,7 +382,7 @@ class LocalConfigSRIOVStep(BaseStep):
         excluded_devices: dict[str, list],
         show_hint: bool = False,
     ):
-        sriov_bank = QuestionBank(
+        sriov_bank = sunbeam.core.questions.QuestionBank(
             questions=sriov_questions(),
             console=console,
             preseed=None,
@@ -437,8 +438,8 @@ class LocalConfigSRIOVStep(BaseStep):
 
             pci_spec = devspec.PciDeviceSpec(spec_dict)
             dev = {
-                "vendor_id": nic["vendor_id"].lstrip("0x"),
-                "product_id": nic["product_id"].lstrip("0x"),
+                "vendor_id": nic["vendor_id"].replace("0x", ""),
+                "product_id": nic["product_id"].replace("0x", ""),
                 "address": nic["pci_address"],
                 "parent_addr": nic["pf_pci_address"],
             }
@@ -474,8 +475,8 @@ class LocalConfigSRIOVStep(BaseStep):
         if not whitelisted:
             new_dev_spec = {
                 "address": nic["pci_address"],
-                "vendor_id": nic["vendor_id"].lstrip("0x"),
-                "product_id": nic["product_id"].lstrip("0x"),
+                "vendor_id": nic["vendor_id"].replace("0x", ""),
+                "product_id": nic["product_id"].replace("0x", ""),
                 "physical_network": physnet,
             }
             pci_whitelist.append(new_dev_spec)

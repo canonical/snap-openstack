@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2023 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
+from unittest import mock
 from unittest.mock import Mock, patch
 
 import pytest
@@ -31,6 +32,12 @@ def write_answers():
 @pytest.fixture()
 def question_bank():
     with patch.object(sunbeam.core.questions, "QuestionBank") as p:
+        yield p
+
+
+@pytest.fixture()
+def prompt_question():
+    with patch.object(sunbeam.core.questions, "PromptQuestion") as p:
         yield p
 
 
@@ -250,3 +257,238 @@ class TestLocalClusterStatusStep:
         actual_status = step._compute_status()
 
         assert expected_status == actual_status
+
+
+class TestLocalConfigSRIOVStep:
+    def _get_step(self, manifest=None, accept_defaults=False):
+        return local_steps.LocalConfigSRIOVStep(
+            mock.Mock(),
+            "maas0.local",
+            mock.Mock(),
+            "test-model",
+            manifest=manifest,
+            accept_defaults=accept_defaults,
+        )
+
+    def test_has_prompts(self):
+        assert self._get_step().has_prompts()
+
+    @pytest.mark.parametrize(
+        "prev_answers, accept_defaults, manifest_dev_specs, manifest_excl_devs, "
+        "prompt_answers, exp_dev_specs, exp_excl_devs",
+        # For simplicity, the same list of nics will be used for all test cases.
+        # It's defined inside the test function.
+        [
+            # The following scenario merges manifest data with previous answers and
+            # the prompt answers.
+            (
+                # Previous answers from another node
+                {
+                    "pci_whitelist": [
+                        {
+                            "vendor_id": "0001",
+                            "product_id": "0001",
+                            "address": "0000:0:0.1",
+                            "physical_network": "physnet1",
+                        }
+                    ],
+                    "excluded_devices": {"other-node": ["0000:0:0.2"]},
+                },
+                # Accept defaults
+                False,
+                # Manifest dev specs
+                [
+                    # Other device, not SR-IOV
+                    {
+                        "address": {
+                            "domain": ".*",
+                            "bus": "1b",
+                            "slot": "10",
+                            "function": "[0-4]",
+                        }
+                    },
+                    {"address": ":2a:", "physical_network": "physnet2"},
+                ],
+                # Manifest excluded devices
+                {
+                    "maas0.local": ["0000:2a:0.2"],
+                },
+                # Physnet prompt answers,
+                ["physnet1", "none", "physnet2", "physnet2", "physnet3"],
+                # Expected device specs
+                [
+                    {
+                        "address": {
+                            "domain": ".*",
+                            "bus": "1b",
+                            "slot": "10",
+                            "function": "[0-4]",
+                        }
+                    },
+                    {"address": ":2a:", "physical_network": "physnet2"},
+                    {
+                        "vendor_id": "0001",
+                        "product_id": "0001",
+                        "address": "0000:0:0.1",
+                        "physical_network": "physnet1",
+                    },
+                    {
+                        "vendor_id": "0003",
+                        "product_id": "0003",
+                        "address": "0000:3a:0.1",
+                        "physical_network": "physnet3",
+                    },
+                ],
+                # Expected excluded devices
+                {
+                    "other-node": ["0000:0:0.2"],
+                    "maas0.local": ["0000:0:0.2"],
+                },
+            ),
+            # --accept-defaults was passed, so the previous answers are ignored and
+            # the manifest specs are applied as-is, without prompting the user.
+            (
+                # Previous answers
+                {
+                    "pci_whitelist": [
+                        {
+                            "vendor_id": "0001",
+                            "product_id": "0001",
+                            "address": "0000:0:0.1",
+                            "physical_network": "physnet1",
+                        }
+                    ],
+                    "excluded_devices": {"other-node": ["0000:0:0.2"]},
+                },
+                # Accept defaults
+                True,
+                # Manifest dev specs
+                [
+                    # Other device, not SR-IOV
+                    {
+                        "address": {
+                            "domain": ".*",
+                            "bus": "1b",
+                            "slot": "10",
+                            "function": "[0-4]",
+                        }
+                    },
+                    {"address": ":2a:", "physical_network": "physnet2"},
+                ],
+                # Manifest excluded devices
+                {
+                    "maas0.local": ["0000:2a:0.2"],
+                },
+                # Physnet prompt answers,
+                ["physnet1", "none", "physnet2", "physnet2", "physnet3"],
+                # Expected device specs
+                [
+                    {
+                        "address": {
+                            "domain": ".*",
+                            "bus": "1b",
+                            "slot": "10",
+                            "function": "[0-4]",
+                        }
+                    },
+                    {"address": ":2a:", "physical_network": "physnet2"},
+                ],
+                # Expected excluded devices
+                {
+                    "maas0.local": ["0000:2a:0.2"],
+                },
+            ),
+        ],
+    )
+    def test_prompt(
+        self,
+        load_answers,
+        write_answers,
+        prompt_question,
+        question_bank,
+        fetch_nics,
+        prev_answers,
+        accept_defaults,
+        manifest_dev_specs,
+        manifest_excl_devs,
+        prompt_answers,
+        exp_dev_specs,
+        exp_excl_devs,
+    ):
+        nic_list = [
+            {
+                "pci_address": "0000:0:0.1",
+                "vendor_id": "0x0001",
+                "product_id": "0x0001",
+                "pf_pci_address": "",
+                "sriov_available": True,
+                "name": "eno1",
+            },
+            {
+                "pci_address": "0000:0:0.2",
+                "vendor_id": "0x0001",
+                "product_id": "0x0001",
+                "pf_pci_address": "",
+                "sriov_available": True,
+                "name": "eno2",
+            },
+            {
+                "pci_address": "0000:2a:0.1",
+                "vendor_id": "0x0002",
+                "product_id": "0x0002",
+                "pf_pci_address": "",
+                "sriov_available": True,
+                "name": "eno3",
+            },
+            {
+                "pci_address": "0000:2a:0.2",
+                "vendor_id": "0x0002",
+                "product_id": "0x0002",
+                "pf_pci_address": "",
+                "sriov_available": True,
+                "name": "eno4",
+            },
+            # SR-IOV unavailable, shouldn't prompt
+            {
+                "pci_address": "0000:11:11.2",
+                "vendor_id": "0x0005",
+                "product_id": "0x0005",
+                "pf_pci_address": "",
+                "sriov_available": False,
+                "name": "eno5",
+            },
+            {
+                "pci_address": "0000:3a:0.1",
+                "vendor_id": "0x0003",
+                "product_id": "0x0003",
+                "pf_pci_address": "",
+                "sriov_available": True,
+                "name": "eno6",
+            },
+        ]
+        load_answers.return_value = prev_answers
+        fetch_nics.return_value = {
+            "nics": nic_list,
+            "candidates": [],
+        }
+        sriov_question = question_bank.return_value.configure_sriov
+        sriov_question.ask.return_value = True
+        prompt_question.return_value.ask.side_effect = prompt_answers
+
+        if manifest_dev_specs or manifest_excl_devs:
+            manifest = mock.Mock()
+            manifest.core.config.pci.device_specs = manifest_dev_specs or []
+            manifest.core.config.pci.excluded_devices = manifest_excl_devs or []
+        else:
+            manifest = None
+
+        step = self._get_step(manifest, accept_defaults)
+        step.prompt(mock.sentinel.console)
+
+        if accept_defaults:
+            sriov_question.ask.assert_not_called()
+
+        assert exp_dev_specs == step.variables["pci_whitelist"]
+        assert exp_excl_devs == step.variables["excluded_devices"]
+
+        write_answers.assert_called_once_with(step.client, "PCI", step.variables)
