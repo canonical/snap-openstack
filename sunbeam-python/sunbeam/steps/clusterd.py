@@ -410,10 +410,10 @@ class ClusterRemoveNodeStep(BaseStep):
             NodeNotExistInClusterException,
         ) as e:
             # Consider these exceptions as soft ones
-            LOG.warning(e)
+            LOG.debug(e)
             return Result(ResultType.COMPLETED)
         except (LastNodeRemovalFromClusterException, Exception) as e:
-            LOG.warning(e)
+            LOG.debug(e)
             return Result(ResultType.FAILED, str(e))
 
 
