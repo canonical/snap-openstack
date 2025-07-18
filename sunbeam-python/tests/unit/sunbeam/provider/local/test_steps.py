@@ -42,6 +42,12 @@ def prompt_question():
 
 
 @pytest.fixture()
+def confirm_question():
+    with patch.object(sunbeam.core.questions, "ConfirmQuestion") as p:
+        yield p
+
+
+@pytest.fixture()
 def jhelper():
     yield Mock()
 
@@ -275,7 +281,7 @@ class TestLocalConfigSRIOVStep:
 
     @pytest.mark.parametrize(
         "prev_answers, accept_defaults, manifest_dev_specs, manifest_excl_devs, "
-        "prompt_answers, exp_dev_specs, exp_excl_devs",
+        "confirm_answers, prompt_answers, exp_dev_specs, exp_excl_devs",
         # For simplicity, the same list of nics will be used for all test cases.
         # It's defined inside the test function.
         [
@@ -313,8 +319,10 @@ class TestLocalConfigSRIOVStep:
                 {
                     "maas0.local": ["0000:2a:0.2"],
                 },
+                # Whitelist confirmation answers,
+                [True, False, True, True, True, True],
                 # Physnet prompt answers,
-                ["physnet1", "none", "physnet2", "physnet2", "physnet3"],
+                ["physnet1", "physnet2", "physnet2", "physnet3", ""],
                 # Expected device specs
                 [
                     {
@@ -337,6 +345,12 @@ class TestLocalConfigSRIOVStep:
                         "product_id": "0003",
                         "address": "0000:3a:0.1",
                         "physical_network": "physnet3",
+                    },
+                    {
+                        "vendor_id": "0003",
+                        "product_id": "0003",
+                        "address": "0000:3a:0.2",
+                        "physical_network": None,
                     },
                 ],
                 # Expected excluded devices
@@ -379,6 +393,8 @@ class TestLocalConfigSRIOVStep:
                 {
                     "maas0.local": ["0000:2a:0.2"],
                 },
+                # Whitelist confirmation answers,
+                [True, False, True, True, True, False],
                 # Physnet prompt answers,
                 ["physnet1", "none", "physnet2", "physnet2", "physnet3"],
                 # Expected device specs
@@ -405,12 +421,14 @@ class TestLocalConfigSRIOVStep:
         load_answers,
         write_answers,
         prompt_question,
+        confirm_question,
         question_bank,
         fetch_nics,
         prev_answers,
         accept_defaults,
         manifest_dev_specs,
         manifest_excl_devs,
+        confirm_answers,
         prompt_answers,
         exp_dev_specs,
         exp_excl_devs,
@@ -465,6 +483,14 @@ class TestLocalConfigSRIOVStep:
                 "sriov_available": True,
                 "name": "eno6",
             },
+            {
+                "pci_address": "0000:3a:0.2",
+                "vendor_id": "0x0003",
+                "product_id": "0x0003",
+                "pf_pci_address": "",
+                "sriov_available": True,
+                "name": "eno7",
+            },
         ]
         load_answers.return_value = prev_answers
         fetch_nics.return_value = {
@@ -473,6 +499,7 @@ class TestLocalConfigSRIOVStep:
         }
         sriov_question = question_bank.return_value.configure_sriov
         sriov_question.ask.return_value = True
+        confirm_question.return_value.ask.side_effect = confirm_answers
         prompt_question.return_value.ask.side_effect = prompt_answers
 
         if manifest_dev_specs or manifest_excl_devs:
