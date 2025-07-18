@@ -27,7 +27,6 @@ from sunbeam.core.common import (
 )
 from sunbeam.core.juju import ActionFailedException, JujuHelper
 from sunbeam.core.manifest import Manifest
-from sunbeam.core.questions import ConfirmQuestion
 from sunbeam.steps import hypervisor
 from sunbeam.steps.cluster_status import ClusterStatusStep
 from sunbeam.steps.clusterd import CLUSTERD_PORT
@@ -266,7 +265,7 @@ class LocalClusterStatusStep(ClusterStatusStep):
 
 def sriov_questions():
     return {
-        "configure_sriov": ConfirmQuestion(
+        "configure_sriov": sunbeam.core.questions.ConfirmQuestion(
             "Configure SR-IOV?",
             default_value=False,
             description=(
@@ -402,20 +401,30 @@ class LocalConfigSRIOVStep(BaseStep):
 
                 for nic in sriov_nics:
                     nic_str_repr = self._get_nic_str_repr(nic)
+                    whitelisted, physnet = self._is_sriov_nic_whitelisted(
+                        nic, pci_whitelist, excluded_devices
+                    )
+
+                    question = f"Add network adapter to PCI whitelist? {nic_str_repr} "
+                    should_whitelist = sunbeam.core.questions.ConfirmQuestion(
+                        question, default_value=whitelisted
+                    ).ask()
+                    if not should_whitelist:
+                        self._exclude_sriov_nic(nic, pci_whitelist, excluded_devices)
+                        continue
+
                     question = (
                         f"Specify the physical network for {nic_str_repr} "
-                        "or specify none to exclude the device."
+                        "or leave empty if using hardware offloading with "
+                        "overlay networks"
                     )
                     physnet = sunbeam.core.questions.PromptQuestion(
                         question,
-                        default_value="physnet1",
+                        default_value=physnet,
                     ).ask()
-                    if not physnet or physnet.lower() == "none":
-                        self._exclude_sriov_nic(nic, pci_whitelist, excluded_devices)
-                    else:
-                        self._whitelist_sriov_nic(
-                            nic, pci_whitelist, excluded_devices, physnet
-                        )
+                    self._whitelist_sriov_nic(
+                        nic, pci_whitelist, excluded_devices, physnet
+                    )
 
         else:
             LOG.info("No SR-IOV devics detected, skipping SR-IOV configuration.")
@@ -454,7 +463,7 @@ class LocalConfigSRIOVStep(BaseStep):
         nic: dict,
         pci_whitelist: list[dict],
         excluded_devices: dict[str, list],
-        physnet: str,
+        physnet: str | None,
     ):
         LOG.debug("Whitelisting SR-IOV nic: %s %s", nic["name"], nic["pci_address"])
         pci_address = nic["pci_address"]
@@ -473,6 +482,14 @@ class LocalConfigSRIOVStep(BaseStep):
             nic, pci_whitelist, excluded_devices
         )[0]
         if not whitelisted:
+            # Openstack expects this to be null when using hw offloading
+            # with overlay networks.
+            # https://docs.openstack.org/neutron/latest/admin/config-ovs-offload.html
+            if not physnet:
+                physnet = None
+            elif physnet.lower() in ("none", "null"):
+                physnet = None
+
             new_dev_spec = {
                 "address": nic["pci_address"],
                 "vendor_id": nic["vendor_id"].replace("0x", ""),
