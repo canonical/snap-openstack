@@ -219,6 +219,7 @@ class DeployK8SApplicationStep(DeployMachineApplicationStep):
 
         self.accept_defaults = accept_defaults
         self.variables: dict = {}
+        self.ranges: str | None = None
         self.traefik_variables: dict = {}
 
     def prompt(

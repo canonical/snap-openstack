@@ -656,8 +656,18 @@ class VaultFeature(OpenStackControlPlaneFeature):
     @pass_method_obj
     def disable_cmd(self, deployment: Deployment, show_hints: bool) -> None:
         """Disable Vault."""
-        self.disable_feature(deployment, show_hints)
         client = deployment.get_client()
+        try:
+            tls_cfg = read_config(client, "TlsProvider")
+        except ConfigItemNotFoundException:
+            tls_cfg = {}
+        if tls_cfg.get("provider") == "tls.vault":
+            raise click.ClickException(
+                "Vault is currently acting as your TLS provider. "
+                "Please run `sunbeam disable tls vault` first."
+            )
+
+        self.disable_feature(deployment, show_hints)
         update_config(client, VAULT_DEV_MODE_KEY, {})
 
     @click.command()
