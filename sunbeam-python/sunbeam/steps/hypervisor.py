@@ -14,7 +14,10 @@ from sunbeam.clusterd.service import (
     ConfigItemNotFoundException,
     NodeNotExistInClusterException,
 )
-from sunbeam.commands.configure import get_external_network_configs
+from sunbeam.commands.configure import (
+    get_external_network_configs,
+    get_pci_whitelist_config,
+)
 from sunbeam.core.common import (
     BaseStep,
     Result,
@@ -403,12 +406,19 @@ class ReapplyHypervisorTerraformPlanStep(BaseStep):
         """Apply terraform configuration to deploy hypervisor."""
         # Apply Network configs everytime reapply is called
         network_configs = get_external_network_configs(self.client)
+        if "charm_config" not in self.extra_tfvars:
+            self.extra_tfvars["charm_config"] = {}
+
         if network_configs:
             LOG.debug(
                 "Add external network configs from DemoSetup to extra tfvars: "
                 f"{network_configs}"
             )
-            self.extra_tfvars.update({"charm_config": network_configs})
+            self.extra_tfvars["charm_config"].update(network_configs)
+
+        pci_whitelist_config = get_pci_whitelist_config(self.client)
+        LOG.debug("Adding PCI whitelist configuration: %s", pci_whitelist_config)
+        self.extra_tfvars["charm_config"].update(pci_whitelist_config)
 
         statuses = ["active", "unknown"]
         if len(self.client.cluster.list_nodes_by_role("storage")) < 1:
