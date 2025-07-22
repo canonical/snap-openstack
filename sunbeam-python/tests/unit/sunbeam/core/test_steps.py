@@ -6,7 +6,7 @@ from unittest.mock import Mock, patch
 import pytest
 import tenacity
 
-from sunbeam.core.common import ResultType
+from sunbeam.core.common import ResultType, Role
 from sunbeam.core.juju import ApplicationNotFoundException
 from sunbeam.core.steps import (
     AddMachineUnitsStep,
@@ -120,7 +120,6 @@ class TestDeployMachineApplicationStep:
         )
         result = step.run()
 
-        jhelper.get_application.assert_called_once()
         tfhelper.update_tfvars_and_apply_tf.assert_called_once()
         assert result.result_type == ResultType.COMPLETED
 
@@ -130,15 +129,24 @@ class TestDeployMachineApplicationStep:
         tfconfig = "tfconfig"
         machines = ["1", "2"]
         model = "model1"
-        application = Mock(units={f"app/{m}": Mock(machine=m) for m in machines})
-        jhelper.get_application.return_value = application
+        cclient.cluster.list_nodes_by_role.return_value = [
+            {"name": "machine1", "machineid": "1"},
+            {"name": "machine1", "machineid": "2"},
+        ]
 
         step = DeployMachineApplicationStep(
-            deployment, cclient, tfhelper, jhelper, manifest, tfconfig, "app1", model
+            deployment,
+            cclient,
+            tfhelper,
+            jhelper,
+            manifest,
+            tfconfig,
+            "app1",
+            model,
+            [Role.CONTROL],
         )
         result = step.run()
 
-        jhelper.get_application.assert_called_once()
         tfhelper.update_tfvars_and_apply_tf.assert_called_with(
             cclient,
             manifest,
@@ -212,7 +220,6 @@ class TestDeployMachineApplicationStep:
             "tfconfig",
             "app1",
             "model1",
-            "fake-plan",
         )
         result = step.run()
 

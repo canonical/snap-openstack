@@ -19,6 +19,7 @@ from sunbeam.core.common import (
     BaseStep,
     Result,
     ResultType,
+    Role,
     convert_retry_failure_as_result,
     read_config,
     update_config,
@@ -53,7 +54,7 @@ else:
 LOG = logging.getLogger(__name__)
 CONFIG_KEY = "TerraformVarsHypervisor"
 APPLICATION = "openstack-hypervisor"
-HYPERVISOR_APP_TIMEOUT = 180  # 3 minutes, managing the application should be fast
+HYPERVISOR_APP_TIMEOUT = 1800  # 30 minutes, includes adding / removing units
 HYPERVISOR_DESTROY_TIMEOUT = 600
 HYPERVISOR_UNIT_TIMEOUT = (
     1800  # 30 minutes, adding / removing units can take a long time
@@ -86,6 +87,7 @@ class DeployHypervisorApplicationStep(DeployMachineApplicationStep):
             CONFIG_KEY,
             APPLICATION,
             model,
+            [Role.COMPUTE],
             "Deploy OpenStack Hypervisor",
             "Deploying OpenStack Hypervisor",
             refresh=refresh,

@@ -15,10 +15,11 @@ terraform {
 provider "juju" {}
 
 resource "juju_application" "sunbeam-machine" {
-  name  = "sunbeam-machine"
-  trust = false
-  model = var.machine_model
-  units = length(var.machine_ids) # need to manage the number of units
+  name     = "sunbeam-machine"
+  trust    = false
+  model    = var.machine_model
+  machines = length(var.machine_ids) == 0 ? null : toset(var.machine_ids)
+  units    = length(var.machine_ids) == 0 ? 0 : null
 
   charm {
     name     = "sunbeam-machine"
