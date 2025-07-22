@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ipaddress
+import json
 import logging
 import os
 from pathlib import Path
@@ -26,6 +27,7 @@ from sunbeam.core.terraform import (
 )
 
 CLOUD_CONFIG_SECTION = "CloudConfig"
+PCI_CONFIG_SECTION = "PCI"
 LOG = logging.getLogger(__name__)
 console = Console()
 
@@ -274,6 +276,13 @@ def get_external_network_configs(client: Client) -> dict:
     charm_config["physnet-name"] = variables.get("external_network", {}).get(
         "physical_network", VARIABLE_DEFAULTS["external_network"]["physical_network"]
     )
+    return charm_config
+
+
+def get_pci_whitelist_config(client: Client) -> dict:
+    charm_config = {}
+    variables = sunbeam.core.questions.load_answers(client, PCI_CONFIG_SECTION)
+    charm_config["pci-device-specs"] = json.dumps(variables.get("pci_whitelist", "[]"))
     return charm_config
 
 

@@ -77,6 +77,7 @@ from sunbeam.provider.base import ProviderBase
 from sunbeam.provider.local.deployment import LOCAL_TYPE, LocalDeployment
 from sunbeam.provider.local.steps import (
     LocalClusterStatusStep,
+    LocalConfigSRIOVStep,
     LocalSetHypervisorUnitsOptionsStep,
 )
 from sunbeam.steps import cluster_status
@@ -208,6 +209,7 @@ class LocalProvider(ProviderBase):
         """
         init.add_command(cluster)
         configure.add_command(configure_cmd)
+        configure.add_command(configure_sriov)
         cluster.add_command(bootstrap)
         cluster.add_command(add)
         cluster.add_command(join)
@@ -876,16 +878,85 @@ def bootstrap(
         )
     )
     if is_compute_node:
-        plan2.append(
-            AddHypervisorUnitsStep(
-                client, fqdn, jhelper, deployment.openstack_machines_model
-            )
+        plan2.extend(
+            [
+                AddHypervisorUnitsStep(
+                    client, fqdn, jhelper, deployment.openstack_machines_model
+                ),
+                LocalConfigSRIOVStep(
+                    client,
+                    fqdn,
+                    jhelper,
+                    deployment.openstack_machines_model,
+                    manifest,
+                    accept_defaults,
+                ),
+                ReapplyHypervisorTerraformPlanStep(
+                    client,
+                    hypervisor_tfhelper,
+                    jhelper,
+                    manifest,
+                    model=deployment.openstack_machines_model,
+                ),
+            ]
         )
 
     plan2.append(SetBootstrapped(client))
     run_plan(plan2, console, show_hints)
 
     click.echo(f"Node has been bootstrapped with roles: {pretty_roles}")
+
+
+@click.command("sriov")
+@click.option("-a", "--accept-defaults", help="Accept all defaults.", is_flag=True)
+@click.option(
+    "-m",
+    "--manifest",
+    "manifest_path",
+    help="Manifest file.",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+)
+@click_option_show_hints
+@click.pass_context
+def configure_sriov(
+    ctx: click.Context,
+    manifest_path: Path | None = None,
+    accept_defaults: bool = False,
+    show_hints: bool = False,
+) -> None:
+    """Configure SR-IOV."""
+    deployment: LocalDeployment = ctx.obj
+    client = deployment.get_client()
+    fqdn = utils.get_fqdn()
+    manifest = deployment.get_manifest(manifest_path)
+    jhelper = JujuHelper(deployment.juju_controller)
+
+    admin_credentials = retrieve_admin_credentials(jhelper, OPENSTACK_MODEL)
+    admin_credentials["OS_INSECURE"] = "true"
+
+    tfplan = "demo-setup"
+    tfhelper = deployment.get_tfhelper(tfplan)
+    tfhelper.env = (tfhelper.env or {}) | admin_credentials
+    tfhelper_hypervisor = deployment.get_tfhelper("hypervisor-plan")
+
+    plan: list[BaseStep] = [
+        LocalConfigSRIOVStep(
+            client,
+            fqdn,
+            jhelper,
+            deployment.openstack_machines_model,
+            manifest,
+            accept_defaults,
+        ),
+        ReapplyHypervisorTerraformPlanStep(
+            client,
+            tfhelper_hypervisor,
+            jhelper,
+            manifest,
+            model=deployment.openstack_machines_model,
+        ),
+    ]
+    run_plan(plan, console, show_hints)
 
 
 def _print_output(token: str, format: str, name: str):
@@ -1137,6 +1208,7 @@ def join(
         plan4.append(AddK8SCredentialStep(deployment, jhelper))
 
     openstack_tfhelper = deployment.get_tfhelper("openstack-plan")
+    hypervisor_tfhelper = deployment.get_tfhelper("hypervisor-plan")
     plan4.append(TerraformInitStep(openstack_tfhelper))
     if is_storage_node:
         plan4.append(
@@ -1237,6 +1309,21 @@ def join(
                     deployment.openstack_machines_model,
                     join_mode=True,
                     manifest=manifest,
+                ),
+                LocalConfigSRIOVStep(
+                    client,
+                    name,
+                    jhelper,
+                    deployment.openstack_machines_model,
+                    manifest,
+                    accept_defaults,
+                ),
+                ReapplyHypervisorTerraformPlanStep(
+                    client,
+                    hypervisor_tfhelper,
+                    jhelper,
+                    manifest,
+                    model=deployment.openstack_machines_model,
                 ),
             ]
         )

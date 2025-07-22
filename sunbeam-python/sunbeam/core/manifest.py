@@ -222,6 +222,14 @@ class CoreConfig(pydantic.BaseModel):
 
         profiles: dict[str, _IdentityProfile]
 
+    class _PCI(pydantic.BaseModel):
+        # Source: https://docs.openstack.org/nova/latest/configuration/config.html#pci.device_spec
+        device_specs: list[dict[str, Any]] | None = None
+        # https://docs.openstack.org/nova/latest/configuration/config.html#pci.alias
+        aliases: list[dict[str, Any]] | None = None
+        # Excluded PCI addresses per node.
+        excluded_devices: dict[str, list[str]] | None = None
+
     proxy: _ProxyConfig | None = None
     bootstrap: _BootstrapConfig | None = None
     database: str | None = None
@@ -235,6 +243,7 @@ class CoreConfig(pydantic.BaseModel):
     user: _User | None = None
     external_network: _ExternalNetwork | None = None
     microceph_config: pydantic.RootModel[dict[str, _HostMicroCephConfig]] | None = None
+    pci: _PCI | None = None
 
 
 class CoreManifest(pydantic.BaseModel):

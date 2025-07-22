@@ -185,12 +185,17 @@ class TestReapplyHypervisorTerraformPlanStep(unittest.TestCase):
             "sunbeam.steps.hypervisor.get_external_network_configs",
             Mock(return_value={}),
         )
+        self.get_pci_whitelist_config = patch(
+            "sunbeam.steps.hypervisor.get_pci_whitelist_config",
+            Mock(return_value={}),
+        )
 
     def setUp(self):
         self.client = Mock()
         self.client.cluster.list_nodes_by_role.return_value = []
         self.read_config.start()
         self.get_network_config.start()
+        self.get_pci_whitelist_config.start()
         self.tfhelper = Mock()
         self.jhelper = Mock()
         self.manifest = Mock()
@@ -198,6 +203,7 @@ class TestReapplyHypervisorTerraformPlanStep(unittest.TestCase):
     def tearDown(self):
         self.read_config.stop()
         self.get_network_config.stop()
+        self.get_pci_whitelist_config.stop()
 
     def test_is_skip(self):
         self.client.cluster.list_nodes_by_role.return_value = ["node-1"]
@@ -222,7 +228,10 @@ class TestReapplyHypervisorTerraformPlanStep(unittest.TestCase):
         assert result.result_type == ResultType.COMPLETED
 
     @patch("sunbeam.steps.hypervisor.get_external_network_configs")
-    def test_run_after_configure_step(self, get_external_network_configs):
+    @patch("sunbeam.steps.hypervisor.get_pci_whitelist_config")
+    def test_run_after_configure_step(
+        self, get_pci_whitelist_config, get_external_network_configs
+    ):
         # This is a case where external network configs are already added
         # and Reapply terraform plan is called.
         # Check if override_tfvars contain external network configs
@@ -232,14 +241,22 @@ class TestReapplyHypervisorTerraformPlanStep(unittest.TestCase):
             "external-bridge-address": "172.16.2.1/24",
             "physnet-name": "physnet1",
         }
+        pci_config_tfvars = {
+            "pci-device-specs": '[{"vendor_id": "8086", "product_id": "1563", "physical_network": "physnet1"}]'
+        }
         get_external_network_configs.return_value = network_config_tfvars
+        get_pci_whitelist_config.return_value = pci_config_tfvars
         step = ReapplyHypervisorTerraformPlanStep(
             self.client, self.tfhelper, self.jhelper, self.manifest, "test-model"
         )
         result = step.run()
 
         self.tfhelper.update_tfvars_and_apply_tf.assert_called_once()
-        expected_override_tfvars = {"charm_config": network_config_tfvars}
+
+        expected_override_tfvars = {"charm_config": {}}
+        expected_override_tfvars["charm_config"].update(network_config_tfvars)
+        expected_override_tfvars["charm_config"].update(pci_config_tfvars)
+
         override_tfvars_from_mock_call = (
             self.tfhelper.update_tfvars_and_apply_tf.call_args.kwargs.get(
                 "override_tfvars", {}
