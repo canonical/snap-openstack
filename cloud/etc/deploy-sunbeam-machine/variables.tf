@@ -35,3 +35,21 @@ variable "endpoint_bindings" {
   type        = set(map(string))
   default     = null
 }
+
+variable "charm_epa_orchestrator_channel" {
+  description = "Operator channel for epa-orchestrator deployment"
+  type        = string
+  default     = "2025.1/edge"
+}
+
+variable "charm_epa_orchestrator_config" {
+  description = "Operator config for epa-orchestrator deployment"
+  type        = map(string)
+  default     = {}
+}
+
+variable "epa_orchestrator_endpoint_bindings" {
+  description = "Endpoint bindings for epa-orchestrator"
+  type        = set(map(string))
+  default     = null
+}
