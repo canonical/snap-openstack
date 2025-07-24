@@ -1,26 +1,45 @@
 # SPDX-FileCopyrightText: 2025 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
-import importlib
-import pkgutil
+import logging
 
 import click
+from rich.console import Console
 
-import sunbeam.storage_backends
+from sunbeam.core.deployment import Deployment
+from sunbeam.storage_backends.registry import StorageBackendRegistry
+
+LOG = logging.getLogger(__name__)
+console = Console()
 
 CONTEXT_SETTINGS = {"help_option_names": ["-h", "--help"]}
 
 
 @click.group("storage", context_settings=CONTEXT_SETTINGS)
-def storage():
-    """Manage Cinder back-ends (default Ceph, plus Hitachi)."""
-    pass
+@click.pass_context
+def storage(ctx):
+    """Manage Cinder storage backends.
+
+    Provides commands to add, remove, and list storage backends.
+    Supports multiple backend types including Hitachi VSP and others.
+    """
+    # Ensure we have a deployment object
+    if not hasattr(ctx, "obj") or not isinstance(ctx.obj, Deployment):
+        raise click.ClickException(
+            "Storage commands require a valid deployment context. "
+            "Please ensure sunbeam is properly initialized."
+        )
 
 
-# Discover and register all storage backends
-for finder, name, ispkg in pkgutil.iter_modules(sunbeam.storage_backends.__path__):
-    if name == "base":
-        continue
-    mod = importlib.import_module(f"sunbeam.storage_backends.{name}")
-    backend_class = getattr(mod, f"{name.capitalize()}Backend")
-    storage.add_command(backend_class.commands())
+def register_storage_commands(deployment: Deployment) -> None:
+    """Register storage backend commands with the storage group.
+
+    This function is called from main.py to register all storage backend
+    commands dynamically based on available backends.
+    """
+    try:
+        StorageBackendRegistry().register_cli_commands(storage, deployment)
+        LOG.debug("Storage backend commands registered successfully")
+    except Exception as e:
+        LOG.error(f"Failed to register storage backend commands: {e}")
+        # Don't raise here as we want the CLI to still work
