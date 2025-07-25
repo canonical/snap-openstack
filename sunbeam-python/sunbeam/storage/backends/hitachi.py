@@ -4,7 +4,7 @@
 import ipaddress
 import logging
 import re
-from typing import Any, Dict
+from typing import Any, Dict, List, Mapping
 
 import click
 import pydantic
@@ -31,8 +31,13 @@ console = Console()
 
 
 class HitachiConfig(StorageBackendConfig):
-    """Configuration model for Hitachi storage backend."""
+    """Configuration model for Hitachi storage backend.
+    
+    Contains only the basic required fields for deployment.
+    All other configuration options are managed dynamically through the charm.
+    """
 
+    # Basic required connection parameters for deployment
     serial: str = pydantic.Field(..., description="Array serial number")
     pools: str = pydantic.Field(..., description="Storage pools (comma separated)")
     protocol: str = pydantic.Field(default="FC", description="Protocol (FC or iSCSI)")
@@ -41,6 +46,9 @@ class HitachiConfig(StorageBackendConfig):
         default="maintenance", description="SAN username"
     )
     san_password: str = pydantic.Field(..., description="SAN password")
+
+    volume_backend_name: str = pydantic.Field(default=None, description="Backend name for Cinder")
+    backend_availability_zone: str = pydantic.Field(default=None, description="Availability zone")
 
     @pydantic.validator("protocol")
     def validate_protocol(cls, v):  # noqa: N805
@@ -101,6 +109,29 @@ class HitachiBackend(StorageBackendBase):
             RemoveHitachiBackendStep(deployment, backend_name),
         ]
 
+    def commands(
+        self, conditions: Mapping[str, str | bool] = {}
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        """Return commands for registration under storage group."""
+        return {
+            "storage.add": [{"name": self.name, "command": self._create_add_command()}],
+            "storage.remove": [
+                {"name": self.name, "command": self._create_remove_command()}
+            ],
+            "storage.config": [
+                {"name": self.name, "command": self._create_config_command()}
+            ],
+            "storage.set-config": [
+                {"name": self.name, "command": self._create_set_config_command()}
+            ],
+            "storage.reset-config": [
+                {"name": self.name, "command": self._create_reset_config_command()}
+            ],
+            "storage.config-options": [
+                {"name": self.name, "command": self._create_config_options_command()}
+            ],
+        }
+
     def _prompt_for_config(self) -> Dict[str, Any]:
         """Prompt user for Hitachi backend configuration."""
         console.print("[bold]Hitachi VSP Storage Backend Configuration[/bold]")
@@ -145,10 +176,11 @@ class DeployHitachiCharmStep(DeployCharmStep):
     def __init__(
         self, deployment: Deployment, config: HitachiConfig, local_charm: str = ""
     ):
+        # only requierd fields
         charm_config = {
-            "hitachi-storage-id ": config.serial,
+            "hitachi-storage-id": config.serial,
             "hitachi-pools": config.pools,
-            "hitachi-protocol": config.protocol.lower(),
+            "protocol": config.protocol.lower(),
             "san-ip": config.san_ip,
             "san-login": config.san_username,
             "san-password": config.san_password,
