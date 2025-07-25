@@ -7,7 +7,7 @@ import click
 from rich.console import Console
 
 from sunbeam.core.deployment import Deployment
-from sunbeam.storage_backends.registry import StorageBackendRegistry
+from sunbeam.storage.registry import StorageBackendRegistry
 
 LOG = logging.getLogger(__name__)
 console = Console()

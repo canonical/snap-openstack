@@ -12,11 +12,11 @@ from rich.console import Console
 
 from sunbeam.core.common import BaseStep
 from sunbeam.core.deployment import Deployment
-from sunbeam.storage_backends.base import (
+from sunbeam.storage.basestorage import (
     StorageBackendBase,
     StorageBackendConfig,
 )
-from sunbeam.storage_backends.steps import (
+from sunbeam.storage.steps import (
     CheckBackendExistsStep,
     DeployCharmStep,
     IntegrateWithCinderVolumeStep,
@@ -111,7 +111,7 @@ class HitachiBackend(StorageBackendBase):
         protocol = click.prompt(
             "Protocol", type=click.Choice(["FC", "iSCSI"]), default="FC"
         )
-        san_ip = click.prompt("Management IP/FQDN", type=str, value_proc=self._validate_ip_or_fqdn)
+        san_ip = click.prompt("Management IP/FQDN", type=str)
         san_username = click.prompt("SAN username", type=str, default="maintenance")
         san_password = click.prompt("SAN password", type=str, hide_input=True)
 
@@ -146,10 +146,12 @@ class DeployHitachiCharmStep(DeployCharmStep):
         self, deployment: Deployment, config: HitachiConfig, local_charm: str = ""
     ):
         charm_config = {
+            "hitachi-storage-id ": config.serial,
+            "hitachi-pools": config.pools,
+            "hitachi-protocol": config.protocol.lower(),
             "san-ip": config.san_ip,
             "san-login": config.san_username,
             "san-password": config.san_password,
-            "protocol": config.protocol.lower(),
         }
         super().__init__(
             deployment, config, "cinder-volume-hitachi", charm_config, local_charm

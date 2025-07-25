@@ -10,9 +10,9 @@ import click
 from rich.console import Console
 from rich.table import Table
 
-import sunbeam.storage_backends
+import sunbeam.storage.backends
 from sunbeam.core.deployment import Deployment
-from sunbeam.storage_backends.base import (
+from sunbeam.storage.basestorage import (
     StorageBackendBase,
     StorageBackendInfo,
     StorageBackendService,
@@ -33,25 +33,23 @@ class StorageBackendRegistry:
         self._loaded = False
 
     def _load_backends(self) -> None:
-        """Load all storage backends from the storage_backends directory."""
+        """Load all storage backends from the storage/backends directory."""
         if self._loaded:
             return
 
         LOG.debug("Loading storage backends")
         sunbeam_storage_backends = pathlib.Path(
-            sunbeam.storage_backends.__file__
+            sunbeam.storage.backends.__file__
         ).parent
 
         for path in sunbeam_storage_backends.iterdir():
             if not path.is_file() or not path.name.endswith(".py"):
                 continue
-            if path.name.startswith("_") or path.name in ["base.py", "registry.py"]:
-                continue
-
+            
             module_name = path.stem
             try:
                 LOG.debug(f"Loading storage backend module: {module_name}")
-                mod = importlib.import_module(f"sunbeam.storage_backends.{module_name}")
+                mod = importlib.import_module(f"sunbeam.storage.backends.{module_name}")
 
                 # Look for backend classes
                 for attr_name in dir(mod):

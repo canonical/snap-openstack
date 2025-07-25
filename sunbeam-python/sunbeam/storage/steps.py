@@ -10,7 +10,7 @@ from rich.status import Status
 
 from sunbeam.core.common import BaseStep, Result, ResultType
 from sunbeam.core.deployment import Deployment
-from sunbeam.storage_backends.base import (
+from sunbeam.storage.basestorage import (
     StorageBackendConfig,
     StorageBackendService,
 )
@@ -177,29 +177,29 @@ class WaitForReadyStep(BaseStep):
 
 
 class IntegrateWithCinderVolumeStep(BaseStep):
-    """Step to integrate storage backend with Cinder."""
+    """Step to integrate storage backend with Cinder Volume App."""
 
     def __init__(self, deployment: Deployment, config: StorageBackendConfig):
         super().__init__(
-            "Integrate with Cinder", f"Integrating {config.name} with Cinder volume"
+            "Integrate with Cinder Volume App", f"Integrating {config.name} with Cinder Volume App"
         )
         self.deployment = deployment
         self.config = config
 
     def run(self, status: Status | None = None) -> Result:
-        """Integrate with Cinder."""
+        """Integrate with Cinder Volume Charm."""
         try:
             self.update_status(status, "creating integration with Cinder volume...")
             service = StorageBackendService(self.deployment)
 
             service.juju_helper.integrate(
-                service.model, self.config.name, "cinder-volume", "storage-backend"
+                service.model, self.config.name, "cinder-volume", "cinder-volume"
             )
 
             self.update_status(status, "integration created successfully")
             return Result(ResultType.COMPLETED)
         except Exception as e:
-            LOG.error(f"Failed to integrate {self.config.name} with cinder-volume: {e}")
+            LOG.error(f"Failed to integrate {self.config.name} with Cinder Volume App: {e}")
             return Result(ResultType.FAILED, str(e))
 
 
