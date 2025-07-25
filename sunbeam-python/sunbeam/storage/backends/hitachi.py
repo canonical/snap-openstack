@@ -32,7 +32,7 @@ console = Console()
 
 class HitachiConfig(StorageBackendConfig):
     """Configuration model for Hitachi storage backend.
-    
+
     Contains only the basic required fields for deployment.
     All other configuration options are managed dynamically through the charm.
     """
@@ -47,8 +47,12 @@ class HitachiConfig(StorageBackendConfig):
     )
     san_password: str = pydantic.Field(..., description="SAN password")
 
-    volume_backend_name: str = pydantic.Field(default=None, description="Backend name for Cinder")
-    backend_availability_zone: str = pydantic.Field(default=None, description="Availability zone")
+    volume_backend_name: str = pydantic.Field(
+        default=None, description="Backend name for Cinder"
+    )
+    backend_availability_zone: str = pydantic.Field(
+        default=None, description="Availability zone"
+    )
 
     @pydantic.validator("protocol")
     def validate_protocol(cls, v):  # noqa: N805
@@ -167,7 +171,6 @@ class ValidateHitachiConfigStep(ValidateConfigStep):
         self.description = f"Validating Hitachi VSP configuration for {config.name}"
         # TODO: Validate not allready instsalled
         #       Validate cinder-volume is installed and ready
-        
 
 
 class DeployHitachiCharmStep(DeployCharmStep):

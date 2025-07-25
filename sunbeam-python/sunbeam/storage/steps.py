@@ -181,7 +181,8 @@ class IntegrateWithCinderVolumeStep(BaseStep):
 
     def __init__(self, deployment: Deployment, config: StorageBackendConfig):
         super().__init__(
-            "Integrate with Cinder Volume App", f"Integrating {config.name} with Cinder Volume App"
+            "Integrate with Cinder Volume App",
+            f"Integrating {config.name} with Cinder Volume App",
         )
         self.deployment = deployment
         self.config = config
@@ -199,7 +200,9 @@ class IntegrateWithCinderVolumeStep(BaseStep):
             self.update_status(status, "integration created successfully")
             return Result(ResultType.COMPLETED)
         except Exception as e:
-            LOG.error(f"Failed to integrate {self.config.name} with Cinder Volume App: {e}")
+            LOG.error(
+                f"Failed to integrate {self.config.name} with Cinder Volume App: {e}"
+            )
             return Result(ResultType.FAILED, str(e))
 
 

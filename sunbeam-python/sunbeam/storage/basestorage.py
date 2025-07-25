@@ -11,7 +11,7 @@ from rich.console import Console
 
 from sunbeam.core.common import BaseStep, SunbeamException, run_plan
 from sunbeam.core.deployment import Deployment
-from sunbeam.core.juju import JujuHelper, JujuException, ApplicationNotFoundException
+from sunbeam.core.juju import ApplicationNotFoundException, JujuException, JujuHelper
 from sunbeam.features.interface.v1.base import BaseRegisterable
 
 LOG = logging.getLogger(__name__)
@@ -162,14 +162,13 @@ class StorageBackendService:
             raise StorageBackendException(f"Failed to remove backend: {e}") from e
 
     def list_backends(self) -> List[StorageBackendInfo]:
-        """
-        List all deployed storage backends.
-        
+        """List all deployed storage backends.
+
         A storage backend is identified by either:
         1. Having a relation to cinder-volume
         2. Being the cinder-volume application itself
         3. Having a well-known storage backend charm name pattern (legacy support)
-        
+
         Returns:
             List of StorageBackendInfo objects for all detected storage backends
         """
@@ -188,7 +187,7 @@ class StorageBackendService:
                 apps = {}
 
             backends = []
-            
+
             # First check for cinder-volume itself
             if "cinder-volume" in apps:
                 app_name = "cinder-volume"
@@ -202,24 +201,28 @@ class StorageBackendService:
                     config=app_info.get("charm-config", {}),
                 )
                 backends.append(backend_info)
-            
+
             # Then check all applications for storage backends
             for app_name, app_info in apps.items():
                 # Skip cinder-volume as we already added it
                 if app_name == "cinder-volume":
                     continue
-                    
+
                 charm_name = app_info.get("charm", "")
-                
+
                 # Check if this is a storage backend using our detection logic
                 if self._is_storage_backend(charm_name, app_name):
-                    backend_type = self._get_backend_type_from_charm(charm_name, app_name)
-                    
+                    backend_type = self._get_backend_type_from_charm(
+                        charm_name, app_name
+                    )
+
                     # Skip if we couldn't determine the backend type
                     if backend_type == "unknown":
-                        LOG.debug(f"Skipping storage backend with unknown type: {app_name}")
+                        LOG.debug(
+                            f"Skipping storage backend with unknown type: {app_name}"
+                        )
                         continue
-                        
+
                     # Create backend info
                     backend_info = StorageBackendInfo(
                         name=app_name,
@@ -234,7 +237,9 @@ class StorageBackendService:
 
         except Exception as e:
             LOG.error(f"Failed to list storage backends: {e}")
-            raise StorageBackendException(f"Failed to list storage backends: {e}") from e
+            raise StorageBackendException(
+                f"Failed to list storage backends: {e}"
+            ) from e
 
     def backend_exists(self, backend_name: str) -> bool:
         """Check if a backend exists."""
@@ -245,136 +250,135 @@ class StorageBackendService:
             return False
 
     def _normalize_charm_name(self, charm_name: str) -> str:
-        """
-        Normalize charm name by removing local: prefix and version suffix.
-        
+        """Normalize charm name by removing local: prefix and version suffix.
+
         Args:
             charm_name: The charm name to normalize
-            
+
         Returns:
             Normalized charm name without local: prefix or version suffix
         """
         if not charm_name:
             return ""
-            
+
         # Remove local: prefix if present
         if charm_name.startswith("local:"):
             charm_name = charm_name[6:]
-            
+
         # Remove version suffix (e.g., "-9", "-7")
         if "-" in charm_name:
             parts = charm_name.split("-")
             if parts[-1].isdigit():
                 return "-".join(parts[:-1])
-                
+
         return charm_name
-        
+
     def _has_relation_to_cinder_volume(self, app_name: str) -> bool:
-        """
-        Check if an application has a relation to cinder-volume.
-        
+        """Check if an application has a relation to cinder-volume.
+
         Args:
             app_name: The Juju application name to check
-            
+
         Returns:
             True if the application is related to cinder-volume, False otherwise
         """
         try:
             # Get the application info including its relations
-            app_info = self.juju_helper.get_application(app_name, self.model)
-            
+            app_status = self.juju_helper.get_application(app_name, self.model)
+
             # Check if this app is related to cinder-volume
-            for relation in app_info.get('relations', []):
-                if relation.get('endpoint', {}).get('application') == 'cinder-volume':
-                    return True
-                    
+            # AppStatus has relations attribute that contains relation info
+            if hasattr(app_status, "relations") and app_status.relations:
+                for relation_name, relation_info in app_status.relations.items():
+                    # Check if any relation connects to cinder-volume
+                    if "cinder-volume" in str(relation_info):
+                        return True
+
             # Also check if this is the cinder-volume application itself
-            if app_name == 'cinder-volume':
+            if app_name == "cinder-volume":
                 return True
-                
+
         except Exception as e:
             LOG.warning(f"Error checking relations for {app_name}: {e}")
-            
+
         return False
-        
+
     def _get_backend_type_from_charm(self, charm_name: str, app_name: str = "") -> str:
-        """
-        Determine backend type from charm name and optionally application name.
-        
+        """Determine backend type from charm name and optionally application name.
+
         Args:
             charm_name: The Juju charm name
             app_name: Optional application name for fallback detection
-            
+
         Returns:
             Backend type as a string (e.g., "hitachi", "ceph", etc.)
         """
         # First try to get backend type from the charm name
         normalized_charm = self._normalize_charm_name(charm_name).lower()
-        
+
         # Map known charm name patterns to backend types
         charm_patterns = {
-            'hitachi': 'hitachi',
-            'ceph': 'ceph',
-            'netapp': 'netapp',
-            'pure': 'pure',
-            'cinder-volume': 'cinder-volume'
+            "hitachi": "hitachi",
+            "ceph": "ceph",
+            "netapp": "netapp",
+            "pure": "pure",
+            "cinder-volume": "cinder-volume",
         }
-        
+
         # Check for known patterns in the charm name
         for pattern, backend_type in charm_patterns.items():
             if pattern in normalized_charm:
                 return backend_type
-                
+
         # Fall back to checking the application name if provided
         if app_name:
             app_name = app_name.lower()
             for pattern, backend_type in charm_patterns.items():
                 if pattern in app_name:
                     return backend_type
-                    
+
         # Default to 'unknown' if no patterns match
-        return 'unknown'
-    
+        return "unknown"
+
     def _is_storage_backend(self, charm_name: str, app_name: str) -> bool:
-        """
-        Check if an application is a storage backend.
-        
+        """Check if an application is a storage backend.
+
         A storage backend is identified by either:
         1. Having a relation to cinder-volume
         2. Being the cinder-volume application itself
         3. Having a well-known storage backend charm name pattern (legacy support)
-        
+
         Args:
             charm_name: The Juju charm name
             app_name: The Juju application name
-            
+
         Returns:
             True if the application is a storage backend, False otherwise
         """
         # First check if this is the cinder-volume application
-        if app_name == 'cinder-volume':
+        if app_name == "cinder-volume":
             return True
-            
+
         # Check if the app has a relation to cinder-volume
         if app_name and self._has_relation_to_cinder_volume(app_name):
             return True
-            
+
         # Legacy: Check for well-known storage backend charm patterns
         normalized_charm = self._normalize_charm_name(charm_name).lower()
         known_backend_patterns = [
-            'cinder-volume-',  # e.g., cinder-volume-ceph
-            'cinder-',         # other cinder-* charms
-            'storage-',        # storage-* charms
-            'ceph-',           # ceph-* charms
-            'hitachi-',        # hitachi-* charms
-            'netapp-',         # netapp-* charms
-            'pure-'            # pure-* charms
+            "cinder-volume-",  # e.g., cinder-volume-ceph
+            "cinder-",  # other cinder-* charms
+            "storage-",  # storage-* charms
+            "ceph-",  # ceph-* charms
+            "hitachi-",  # hitachi-* charms
+            "netapp-",  # netapp-* charms
+            "pure-",  # pure-* charms
         ]
-        
+
         # Check if charm name matches any known pattern
         if any(pattern in normalized_charm for pattern in known_backend_patterns):
             return True
-            
+
         return False
 
     def get_backend_config(self, backend_name: str) -> Dict[str, Any]:
@@ -385,25 +389,34 @@ class StorageBackendService:
 
             LOG.info(f"Getting configuration for backend '{backend_name}'")
             config = self.juju_helper.get_app_config(backend_name, model=self.model)
-            return config
+            return dict(config)
 
         except Exception as e:
             LOG.error(f"Failed to get config for backend '{backend_name}': {e}")
             raise StorageBackendException(f"Failed to get backend config: {e}") from e
 
-    def set_backend_config(self, backend_name: str, config_updates: Dict[str, Any]) -> None:
+    def set_backend_config(
+        self, backend_name: str, config_updates: Dict[str, Any]
+    ) -> None:
         """Set configuration options for a storage backend."""
         try:
             if not self.backend_exists(backend_name):
                 raise BackendNotFoundException(f"Backend '{backend_name}' not found")
 
             LOG.info(f"Setting configuration for backend '{backend_name}'")
-            console.print(f"[blue]Updating configuration for backend '{backend_name}'...[/blue]")
+            console.print(
+                f"[blue]Updating configuration for backend '{backend_name}'...[/blue]"
+            )
 
             # Apply configuration updates
-            self.juju_helper.set_app_config(backend_name, config_updates, model=self.model)
+            self.juju_helper.set_app_config(
+                backend_name, config_updates, model=self.model
+            )
 
-            console.print(f"[green]Configuration updated successfully for '{backend_name}'[/green]")
+            console.print(
+                f"[green]Configuration updated successfully for "
+                f"'{backend_name}'[/green]"
+            )
 
         except Exception as e:
             LOG.error(f"Failed to set config for backend '{backend_name}': {e}")
@@ -416,12 +429,18 @@ class StorageBackendService:
                 raise BackendNotFoundException(f"Backend '{backend_name}' not found")
 
             LOG.info(f"Resetting configuration for backend '{backend_name}'")
-            console.print(f"[blue]Resetting configuration for backend '{backend_name}'...[/blue]")
+            console.print(
+                f"[blue]Resetting configuration for backend '{backend_name}'...[/blue]"
+            )
 
             # Reset configuration keys to default
-            self.juju_helper.reset_app_config(backend_name, config_keys, model=self.model)
+            self.juju_helper.reset_app_config(
+                backend_name, config_keys, model=self.model
+            )
 
-            console.print(f"[green]Configuration reset successfully for '{backend_name}'[/green]")
+            console.print(
+                f"[green]Configuration reset successfully for '{backend_name}'[/green]"
+            )
 
         except Exception as e:
             LOG.error(f"Failed to reset config for backend '{backend_name}': {e}")
@@ -431,29 +450,31 @@ class StorageBackendService:
         """Get the configuration schema for a charm dynamically."""
         try:
             LOG.info(f"Getting configuration schema for charm '{charm_name}'")
-            
+
             # Use juju show-charm to get charm metadata including config options
             try:
                 result = self.juju_helper.cli("show-charm", charm_name)
                 charm_info = result
-                
+
                 # Extract config options from charm metadata
                 config_options = {}
                 if isinstance(charm_info, dict) and "config" in charm_info:
                     config_section = charm_info["config"]
                     if "options" in config_section:
                         config_options = config_section["options"]
-                
+
                 return config_options
-                
+
             except Exception as e:
                 LOG.warning(f"Failed to get charm schema via show-charm: {e}")
                 # Fallback: try to get schema from deployed application
                 return self._get_config_schema_from_app(charm_name)
-                    
+
         except Exception as e:
             LOG.error(f"Failed to get charm config schema for '{charm_name}': {e}")
-            raise StorageBackendException(f"Failed to get charm config schema: {e}") from e
+            raise StorageBackendException(
+                f"Failed to get charm config schema: {e}"
+            ) from e
 
     def _get_config_schema_from_app(self, charm_name: str) -> Dict[str, Any]:
         """Fallback method to get config schema from a deployed application."""
@@ -461,20 +482,21 @@ class StorageBackendService:
             # Find an application using this charm
             apps = self.list_backends()
             target_app = None
-            
+
             for backend in apps:
                 if charm_name in backend.charm:
                     target_app = backend.name
                     break
-            
+
             if not target_app:
                 LOG.warning(f"No deployed application found for charm '{charm_name}'")
                 return {}
-            
+
             # Get the current config which includes schema information
             config = self.juju_helper.get_app_config(target_app, model=self.model)
-            
-            # Extract schema information from config (Juju includes type and description info)
+
+            # Extract schema information from config
+            # (Juju includes type and description info)
             schema = {}
             for key, value in config.items():
                 if isinstance(value, dict) and "description" in value:
@@ -483,9 +505,9 @@ class StorageBackendService:
                         "description": value.get("description", ""),
                         "default": value.get("default"),
                     }
-            
+
             return schema
-            
+
         except Exception as e:
             LOG.warning(f"Failed to get config schema from deployed app: {e}")
             return {}
@@ -503,18 +525,22 @@ class StorageBackendService:
                 if backend.name == backend_name:
                     charm_name = backend.charm
                     break
-            
+
             if not charm_name:
-                raise BackendNotFoundException(f"Could not determine charm for backend '{backend_name}'")
-            
+                raise BackendNotFoundException(
+                    f"Could not determine charm for backend '{backend_name}'"
+                )
+
             # Get the configuration schema for this charm
             config_schema = self.get_charm_config_schema(charm_name)
-            
+
             return config_schema
 
         except Exception as e:
             LOG.error(f"Failed to get config options for backend '{backend_name}': {e}")
-            raise StorageBackendException(f"Failed to get backend config options: {e}") from e
+            raise StorageBackendException(
+                f"Failed to get backend config options: {e}"
+            ) from e
 
 
 class StorageBackendBase(BaseRegisterable):
@@ -549,45 +575,47 @@ class StorageBackendBase(BaseRegisterable):
 
     def commands(
         self, conditions: Mapping[str, str | bool] = {}
-    ) -> Dict[str, List[click.Command]]:
-        """
-        Return commands for registration under storage group.
-        
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        """Return commands for registration under storage group.
+
         Returns:
-            A dictionary mapping command group names to lists of click.Command objects.
-            The command groups are: 'add', 'remove', 'list', 'config'.
+            A dictionary mapping command group names to lists of command dictionaries.
+            Each command dict has 'name' and 'command' keys as expected by
+            BaseRegisterable.
         """
         # Create config subcommands with appropriate names
         config_cmds = []
-        
+
         # View config command
         view_cmd = self._create_config_command()
         view_cmd.name = "view"
         view_cmd.help = f"View {self.display_name} backend configuration"
-        config_cmds.append(view_cmd)
-        
+        config_cmds.append({"name": "view", "command": view_cmd})
+
         # Set config command
         set_cmd = self._create_set_config_command()
         set_cmd.name = "set"
         set_cmd.help = f"Set {self.display_name} backend configuration"
-        config_cmds.append(set_cmd)
-        
+        config_cmds.append({"name": "set", "command": set_cmd})
+
         # Reset config command
         reset_cmd = self._create_reset_config_command()
         reset_cmd.name = "reset"
         reset_cmd.help = f"Reset {self.display_name} backend configuration"
-        config_cmds.append(reset_cmd)
-        
+        config_cmds.append({"name": "reset", "command": reset_cmd})
+
         # Config options command
         options_cmd = self._create_config_options_command()
         options_cmd.name = "options"
-        options_cmd.help = f"List available configuration options for {self.display_name} backend"
-        config_cmds.append(options_cmd)
-        
+        options_cmd.help = (
+            f"List available configuration options for {self.display_name} backend"
+        )
+        config_cmds.append({"name": "options", "command": options_cmd})
+
         return {
-            "add": [self._create_add_command()],
-            "remove": [self._create_remove_command()],
-            "config": config_cmds
+            "add": [{"name": self.name, "command": self._create_add_command()}],
+            "remove": [{"name": self.name, "command": self._create_remove_command()}],
+            "config": config_cmds,
         }
 
     def _prompt_for_config(self) -> Dict[str, Any]:
@@ -678,6 +706,7 @@ class StorageBackendBase(BaseRegisterable):
 
     def _create_config_command(self) -> click.Command:
         """Create the config command for this backend."""
+
         @click.command(name=self.name)
         @click.argument("backend_name")
         @click.pass_context
@@ -686,71 +715,98 @@ class StorageBackendBase(BaseRegisterable):
             deployment = ctx.obj
             service = self._get_service(deployment)
             console = Console()
-            
+
             try:
                 config = service.get_backend_config(backend_name)
-                console.print(f"\n[bold]Configuration for {self.name} backend '{backend_name}':[/bold]")
-                
+                console.print(
+                    f"\n[bold]Configuration for {self.name} backend "
+                    f"'{backend_name}':[/bold]"
+                )
+
                 from rich.table import Table
+
                 table = Table(show_header=True, header_style="bold magenta")
                 table.add_column("Key", style="cyan")
                 table.add_column("Value", style="green")
                 table.add_column("Type", style="yellow")
-                
+
                 for key, value in config.items():
                     # Mask sensitive values
-                    display_value = "***" if any(sensitive in key.lower() for sensitive in ["password", "secret", "key"]) else str(value)
+                    display_value = (
+                        "***"
+                        if any(
+                            sensitive in key.lower()
+                            for sensitive in ["password", "secret", "key"]
+                        )
+                        else str(value)
+                    )
                     table.add_row(key, display_value, type(value).__name__)
-                
+
                 console.print(table)
-                
+
             except Exception as e:
-                console.print(f"[red]✗ Failed to get {self.name} backend config: {e}[/red]")
+                console.print(
+                    f"[red]✗ Failed to get {self.name} backend config: {e}[/red]"
+                )
                 raise click.ClickException(str(e))
-        
+
         return config_backend
 
     def _create_set_config_command(self) -> click.Command:
         """Create the set-config command for this backend."""
+
         @click.command(name=self.name)
         @click.argument("backend_name")
         @click.argument("config_pairs", nargs=-1, required=True)
         @click.pass_context
         def set_config_backend(ctx, backend_name: str, config_pairs: tuple):
             """Set backend configuration options.
-            
-            Usage: sunbeam storage set-config {backend} {backend_name} key1=value1 [key2=value2 ...]
+
+            Usage: sunbeam storage set-config {backend} {backend_name} \
+                   key1=value1 [key2=value2 ...]
             """
             deployment = ctx.obj
             service = self._get_service(deployment)
             console = Console()
-            
+
             try:
                 # Parse key=value pairs
                 config_updates = {}
                 for pair in config_pairs:
-                    if '=' not in pair:
-                        raise click.ClickException(f"Invalid format '{pair}'. Use key=value format.")
-                    key, value = pair.split('=', 1)  # Split only on first '=' to handle values with '='
+                    if "=" not in pair:
+                        raise click.ClickException(
+                            f"Invalid format '{pair}'. Use key=value format."
+                        )
+                    key, value = pair.split(
+                        "=", 1
+                    )  # Split only on first '=' to handle values with '='
                     config_updates[key] = value
-                
+
                 if not config_updates:
-                    raise click.ClickException("No configuration pairs provided. Use key=value format.")
-                
+                    raise click.ClickException(
+                        "No configuration pairs provided. Use key=value format."
+                    )
+
                 service.set_backend_config(backend_name, config_updates)
-                
+
                 # Display what was set
-                pairs_str = ', '.join([f"{k}={v}" for k, v in config_updates.items()])
-                console.print(f"[green]✓ Set {pairs_str} for {self.name} backend '{backend_name}'[/green]")
-                
+                pairs_str = ", ".join([f"{k}={v}" for k, v in config_updates.items()])
+                console.print(
+                    f"[green]✓ Set {pairs_str} for {self.name} backend "
+                    f"'{backend_name}'[/green]"
+                )
+
             except Exception as e:
-                console.print(f"[red]✗ Failed to set {self.name} backend config: {e}[/red]")
+                console.print(
+                    f"[red]✗ Failed to set {self.name} backend config: {e}[/red]"
+                )
                 raise click.ClickException(str(e))
-        
+
         return set_config_backend
 
     def _create_reset_config_command(self) -> click.Command:
         """Create the reset-config command for this backend."""
+
         @click.command(name=self.name)
         @click.argument("backend_name")
         @click.argument("keys", nargs=-1, required=True)
@@ -760,51 +816,66 @@ class StorageBackendBase(BaseRegisterable):
             deployment = ctx.obj
             service = self._get_service(deployment)
             console = Console()
-            
+
             try:
                 service.reset_backend_config(backend_name, list(keys))
-                console.print(f"[green]✓ Reset {', '.join(keys)} for {self.name} backend '{backend_name}'[/green]")
-                
+                console.print(
+                    f"[green]✓ Reset {', '.join(keys)} for {self.name} backend "
+                    f"'{backend_name}'[/green]"
+                )
+
             except Exception as e:
-                console.print(f"[red]✗ Failed to reset {self.name} backend config: {e}[/red]")
+                console.print(
+                    f"[red]✗ Failed to reset {self.name} backend config: {e}[/red]"
+                )
                 raise click.ClickException(str(e))
-        
+
         return reset_config_backend
 
     def _create_config_options_command(self) -> click.Command:
         """Create the config-options command for this backend."""
+
         @click.command(name=self.name)
         @click.argument("backend_name", required=False)
         @click.pass_context
-        def config_options_backend(ctx, backend_name: str = None):
+        def config_options_backend(ctx, backend_name: str | None = None):
             """List available configuration options for backend."""
             deployment = ctx.obj
             service = self._get_service(deployment)
             console = Console()
-            
+
             try:
-                options = service.get_backend_config_options(backend_name or f"cinder-volume-{self.name}")
-                console.print(f"\n[bold]Available configuration options for {self.name} backend:[/bold]")
-                
+                options = service.get_backend_config_options(
+                    backend_name or f"cinder-volume-{self.name}"
+                )
+                console.print(
+                    f"\n[bold]Available configuration options for "
+                    f"{self.name} backend:[/bold]"
+                )
+
                 from rich.table import Table
+
                 table = Table(show_header=True, header_style="bold magenta")
                 table.add_column("Option", style="cyan")
                 table.add_column("Type", style="yellow")
                 table.add_column("Default", style="green")
                 table.add_column("Description", style="white")
-                
+
                 for option, details in options.items():
                     table.add_row(
                         option,
                         details.get("type", "string"),
                         str(details.get("default", "")),
-                        details.get("description", "")
+                        details.get("description", ""),
                     )
-                
+
                 console.print(table)
-                
+
             except Exception as e:
-                console.print(f"[red]✗ Failed to get {self.name} backend config options: {e}[/red]")
+                console.print(
+                    f"[red]✗ Failed to get {self.name} backend config "
+                    f"options: {e}[/red]"
+                )
                 raise click.ClickException(str(e))
-        
+
         return config_options_backend

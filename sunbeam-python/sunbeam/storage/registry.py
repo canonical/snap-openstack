@@ -45,7 +45,7 @@ class StorageBackendRegistry:
         for path in sunbeam_storage_backends.iterdir():
             if not path.is_file() or not path.name.endswith(".py"):
                 continue
-            
+
             module_name = path.stem
             try:
                 LOG.debug(f"Loading storage backend module: {module_name}")
@@ -93,7 +93,9 @@ class StorageBackendRegistry:
             "add": click.Group("add", help="Add storage backends"),
             "remove": click.Group("remove", help="Remove storage backends"),
             "list": click.Group("list", help="List storage backends"),
-            "config": click.Group("config", help="Manage storage backend configuration"),
+            "config": click.Group(
+                "config", help="Manage storage backend configuration"
+            ),
         }
 
         # Add the general 'list all' command
@@ -107,7 +109,10 @@ class StorageBackendRegistry:
                 all_backends = service.list_backends()
                 if format == "json":
                     import json
-                    console.print(json.dumps([b.dict() for b in all_backends], indent=2))
+
+                    console.print(
+                        json.dumps([b.dict() for b in all_backends], indent=2)
+                    )
                 else:
                     self._display_backends_table(all_backends)
             except Exception as e:
@@ -119,8 +124,22 @@ class StorageBackendRegistry:
                 backend_commands = backend.commands()
                 for group_name, command_list in backend_commands.items():
                     if group_name in groups:
-                        for command in command_list:
-                            groups[group_name].add_command(command)
+                        for command_dict in command_list:
+                            # Extract the actual command object from the dict
+                            if (
+                                isinstance(command_dict, dict)
+                                and "command" in command_dict
+                            ):
+                                command_obj = command_dict["command"]
+                                groups[group_name].add_command(command_obj)
+                            elif isinstance(command_dict, click.Command):
+                                # Fallback for old format - direct command objects
+                                groups[group_name].add_command(command_dict)
+                            else:
+                                LOG.warning(
+                                    f"Invalid command format for {backend.name}: "
+                                    f"{command_dict}"
+                                )
             except Exception as e:
                 LOG.warning(
                     f"Failed to register commands for backend {backend.name}: {e}"
