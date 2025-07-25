@@ -88,89 +88,48 @@ class StorageBackendRegistry:
         """Register all backend commands with the storage CLI group."""
         self._load_backends()
 
-        # Create subgroups for add, remove, list, and config management
-        add_group = click.Group("add", help="Add storage backends")
-        remove_group = click.Group("remove", help="Remove storage backends")
-        list_group = click.Group("list", help="List storage backends")
-        config_group = click.Group("config", help="Manage storage backend configuration")
+        # Define command groups to be created
+        groups = {
+            "add": click.Group("add", help="Add storage backends"),
+            "remove": click.Group("remove", help="Remove storage backends"),
+            "list": click.Group("list", help="List storage backends"),
+            "config": click.Group("config", help="Manage storage backend configuration"),
+        }
 
-        # Add the general list command
-        @list_group.command("all", help="List all storage backends")
+        # Add the general 'list all' command
+        @groups["list"].command("all", help="List all storage backends")
         @click.option("--format", type=click.Choice(["table", "json"]), default="table")
         @click.pass_obj
         def list_all(deployment: Deployment, format: str):
             """List all deployed storage backends."""
             try:
-                # Use service directly to list all backends
                 service = StorageBackendService(deployment)
                 all_backends = service.list_backends()
-
                 if format == "json":
                     import json
-
-                    console.print(
-                        json.dumps([b.dict() for b in all_backends], indent=2)
-                    )
+                    console.print(json.dumps([b.dict() for b in all_backends], indent=2))
                 else:
                     self._display_backends_table(all_backends)
-
             except Exception as e:
                 raise click.ClickException(str(e))
 
         # Register backend-specific commands
         for backend in self._backends.values():
             try:
-                commands = backend.commands()
-
-                # Register add commands
-                if "storage.add" in commands:
-                    for cmd_info in commands["storage.add"]:
-                        add_group.add_command(cmd_info["command"])
-
-                # Register remove commands
-                if "storage.remove" in commands:
-                    for cmd_info in commands["storage.remove"]:
-                        remove_group.add_command(cmd_info["command"])
-
-                # Register list commands
-                if "storage.list" in commands:
-                    for cmd_info in commands["storage.list"]:
-                        list_group.add_command(cmd_info["command"])
-
-                # Register all config-related commands under the config group
-                config_command_types = [
-                    "storage.config",
-                    "storage.set-config", 
-                    "storage.reset-config",
-                    "storage.config-options"
-                ]
-                
-                for cmd_type in config_command_types:
-                    if cmd_type in commands:
-                        for cmd_info in commands[cmd_type]:
-                            # Create subcommands with appropriate names
-                            cmd = cmd_info["command"]
-                            if cmd_type == "storage.config":
-                                cmd.name = "view"  # sunbeam storage config view hitachi backend_name
-                            elif cmd_type == "storage.set-config":
-                                cmd.name = "set"   # sunbeam storage config set hitachi backend_name key=value
-                            elif cmd_type == "storage.reset-config":
-                                cmd.name = "reset" # sunbeam storage config reset hitachi backend_name keys...
-                            elif cmd_type == "storage.config-options":
-                                cmd.name = "options" # sunbeam storage config options hitachi [backend_name]
-                            
-                            config_group.add_command(cmd)
-
+                backend_commands = backend.commands()
+                for group_name, command_list in backend_commands.items():
+                    if group_name in groups:
+                        for command in command_list:
+                            groups[group_name].add_command(command)
             except Exception as e:
                 LOG.warning(
                     f"Failed to register commands for backend {backend.name}: {e}"
                 )
 
-        # Add subgroups to main storage group
-        storage_group.add_command(add_group)
-        storage_group.add_command(remove_group)
-        storage_group.add_command(list_group)
-        storage_group.add_command(config_group)
+        # Add all populated groups to the main storage group
+        for group in groups.values():
+            if group.commands:
+                storage_group.add_command(group)
 
     def _display_backends_table(self, backends: List[StorageBackendInfo]) -> None:
         """Display backends in a formatted table."""

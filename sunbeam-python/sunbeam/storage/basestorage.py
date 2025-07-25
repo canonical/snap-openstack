@@ -162,25 +162,68 @@ class StorageBackendService:
             raise StorageBackendException(f"Failed to remove backend: {e}") from e
 
     def list_backends(self) -> List[StorageBackendInfo]:
-        """List all deployed storage backends."""
+        """
+        List all deployed storage backends.
+        
+        A storage backend is identified by either:
+        1. Having a relation to cinder-volume
+        2. Being the cinder-volume application itself
+        3. Having a well-known storage backend charm name pattern (legacy support)
+        
+        Returns:
+            List of StorageBackendInfo objects for all detected storage backends
+        """
         try:
-            status = self.juju_helper.get_model_status(self.model)
-            # Handle both dict and Status object types
-            if hasattr(status, "get"):
-                apps = status.get("applications", {})
-            elif isinstance(status, dict):
-                apps = status.get("applications", {})
-            else:
+            # Get all applications in the model
+            apps = {}
+            try:
+                status = self.juju_helper.get_model_status(self.model)
+                # Handle both dict and Status object types
+                if hasattr(status, "applications"):
+                    apps = status.applications
+                elif isinstance(status, dict):
+                    apps = status.get("applications", {})
+            except Exception as e:
+                LOG.warning(f"Error getting model status: {e}")
                 apps = {}
 
             backends = []
-            for app_name, app_info in apps.items():
-                # Check if this is a storage backend by charm name
+            
+            # First check for cinder-volume itself
+            if "cinder-volume" in apps:
+                app_name = "cinder-volume"
+                app_info = apps[app_name]
                 charm_name = app_info.get("charm", "")
+                backend_info = StorageBackendInfo(
+                    name=app_name,
+                    backend_type="cinder-volume",
+                    status=app_info.get("status", {}).get("status", "unknown"),
+                    charm=charm_name,
+                    config=app_info.get("charm-config", {}),
+                )
+                backends.append(backend_info)
+            
+            # Then check all applications for storage backends
+            for app_name, app_info in apps.items():
+                # Skip cinder-volume as we already added it
+                if app_name == "cinder-volume":
+                    continue
+                    
+                charm_name = app_info.get("charm", "")
+                
+                # Check if this is a storage backend using our detection logic
                 if self._is_storage_backend(charm_name, app_name):
+                    backend_type = self._get_backend_type_from_charm(charm_name, app_name)
+                    
+                    # Skip if we couldn't determine the backend type
+                    if backend_type == "unknown":
+                        LOG.debug(f"Skipping storage backend with unknown type: {app_name}")
+                        continue
+                        
+                    # Create backend info
                     backend_info = StorageBackendInfo(
                         name=app_name,
-                        backend_type=self._get_backend_type_from_charm(charm_name, app_name),
+                        backend_type=backend_type,
                         status=app_info.get("status", {}).get("status", "unknown"),
                         charm=charm_name,
                         config=app_info.get("charm-config", {}),
@@ -190,8 +233,8 @@ class StorageBackendService:
             return backends
 
         except Exception as e:
-            LOG.error(f"Failed to list backends: {e}")
-            raise StorageBackendException(f"Failed to list backends: {e}") from e
+            LOG.error(f"Failed to list storage backends: {e}")
+            raise StorageBackendException(f"Failed to list storage backends: {e}") from e
 
     def backend_exists(self, backend_name: str) -> bool:
         """Check if a backend exists."""
@@ -201,51 +244,138 @@ class StorageBackendService:
         except Exception:
             return False
 
-    def _get_backend_type(self, app_name: str) -> str:
-        """Determine backend type from application name."""
-        if "hitachi" in app_name:
-            return "hitachi"
-        elif "ceph" in app_name:
-            return "ceph"
-        else:
-            return "unknown"
+    def _normalize_charm_name(self, charm_name: str) -> str:
+        """
+        Normalize charm name by removing local: prefix and version suffix.
+        
+        Args:
+            charm_name: The charm name to normalize
+            
+        Returns:
+            Normalized charm name without local: prefix or version suffix
+        """
+        if not charm_name:
+            return ""
+            
+        # Remove local: prefix if present
+        if charm_name.startswith("local:"):
+            charm_name = charm_name[6:]
+            
+        # Remove version suffix (e.g., "-9", "-7")
+        if "-" in charm_name:
+            parts = charm_name.split("-")
+            if parts[-1].isdigit():
+                return "-".join(parts[:-1])
+                
+        return charm_name
+        
+    def _has_relation_to_cinder_volume(self, app_name: str) -> bool:
+        """
+        Check if an application has a relation to cinder-volume.
+        
+        Args:
+            app_name: The Juju application name to check
+            
+        Returns:
+            True if the application is related to cinder-volume, False otherwise
+        """
+        try:
+            # Get the application info including its relations
+            app_info = self.juju_helper.get_application(app_name, self.model)
+            
+            # Check if this app is related to cinder-volume
+            for relation in app_info.get('relations', []):
+                if relation.get('endpoint', {}).get('application') == 'cinder-volume':
+                    return True
+                    
+            # Also check if this is the cinder-volume application itself
+            if app_name == 'cinder-volume':
+                return True
+                
+        except Exception as e:
+            LOG.warning(f"Error checking relations for {app_name}: {e}")
+            
+        return False
+        
+    def _get_backend_type_from_charm(self, charm_name: str, app_name: str = "") -> str:
+        """
+        Determine backend type from charm name and optionally application name.
+        
+        Args:
+            charm_name: The Juju charm name
+            app_name: Optional application name for fallback detection
+            
+        Returns:
+            Backend type as a string (e.g., "hitachi", "ceph", etc.)
+        """
+        # First try to get backend type from the charm name
+        normalized_charm = self._normalize_charm_name(charm_name).lower()
+        
+        # Map known charm name patterns to backend types
+        charm_patterns = {
+            'hitachi': 'hitachi',
+            'ceph': 'ceph',
+            'netapp': 'netapp',
+            'pure': 'pure',
+            'cinder-volume': 'cinder-volume'
+        }
+        
+        # Check for known patterns in the charm name
+        for pattern, backend_type in charm_patterns.items():
+            if pattern in normalized_charm:
+                return backend_type
+                
+        # Fall back to checking the application name if provided
+        if app_name:
+            app_name = app_name.lower()
+            for pattern, backend_type in charm_patterns.items():
+                if pattern in app_name:
+                    return backend_type
+                    
+        # Default to 'unknown' if no patterns match
+        return 'unknown'
     
     def _is_storage_backend(self, charm_name: str, app_name: str) -> bool:
-        """Check if an application is a storage backend."""
-        # Known storage backend charms
-        storage_charms = [
-            "cinder-volume",
-            "cinder-volume-hitachi", 
-            "cinder-volume-ceph",
-            "cinder-volume-netapp",
-            "cinder-volume-pure"
+        """
+        Check if an application is a storage backend.
+        
+        A storage backend is identified by either:
+        1. Having a relation to cinder-volume
+        2. Being the cinder-volume application itself
+        3. Having a well-known storage backend charm name pattern (legacy support)
+        
+        Args:
+            charm_name: The Juju charm name
+            app_name: The Juju application name
+            
+        Returns:
+            True if the application is a storage backend, False otherwise
+        """
+        # First check if this is the cinder-volume application
+        if app_name == 'cinder-volume':
+            return True
+            
+        # Check if the app has a relation to cinder-volume
+        if app_name and self._has_relation_to_cinder_volume(app_name):
+            return True
+            
+        # Legacy: Check for well-known storage backend charm patterns
+        normalized_charm = self._normalize_charm_name(charm_name).lower()
+        known_backend_patterns = [
+            'cinder-volume-',  # e.g., cinder-volume-ceph
+            'cinder-',         # other cinder-* charms
+            'storage-',        # storage-* charms
+            'ceph-',           # ceph-* charms
+            'hitachi-',        # hitachi-* charms
+            'netapp-',         # netapp-* charms
+            'pure-'            # pure-* charms
         ]
         
-        # Check by charm name
-        for storage_charm in storage_charms:
-            if charm_name == storage_charm or charm_name.startswith(storage_charm):
-                return True
-        
-        # Also check by application name patterns for legacy compatibility
-        if app_name.startswith("cinder-volume"):
+        # Check if charm name matches any known pattern
+        if any(pattern in normalized_charm for pattern in known_backend_patterns):
             return True
             
         return False
-    
-    def _get_backend_type_from_charm(self, charm_name: str, app_name: str) -> str:
-        """Determine backend type from charm name and application name."""
-        if "hitachi" in charm_name or "hitachi" in app_name:
-            return "hitachi"
-        elif "ceph" in charm_name or "ceph" in app_name:
-            return "ceph"
-        elif "netapp" in charm_name or "netapp" in app_name:
-            return "netapp"
-        elif "pure" in charm_name or "pure" in app_name:
-            return "pure"
-        elif charm_name == "cinder-volume":
-            return "cinder-volume"
-        else:
-            return "unknown"
 
     def get_backend_config(self, backend_name: str) -> Dict[str, Any]:
         """Get the current configuration of a storage backend."""
@@ -419,25 +549,45 @@ class StorageBackendBase(BaseRegisterable):
 
     def commands(
         self, conditions: Mapping[str, str | bool] = {}
-    ) -> Dict[str, List[Dict[str, Any]]]:
-        """Return commands for registration under storage group."""
+    ) -> Dict[str, List[click.Command]]:
+        """
+        Return commands for registration under storage group.
+        
+        Returns:
+            A dictionary mapping command group names to lists of click.Command objects.
+            The command groups are: 'add', 'remove', 'list', 'config'.
+        """
+        # Create config subcommands with appropriate names
+        config_cmds = []
+        
+        # View config command
+        view_cmd = self._create_config_command()
+        view_cmd.name = "view"
+        view_cmd.help = f"View {self.display_name} backend configuration"
+        config_cmds.append(view_cmd)
+        
+        # Set config command
+        set_cmd = self._create_set_config_command()
+        set_cmd.name = "set"
+        set_cmd.help = f"Set {self.display_name} backend configuration"
+        config_cmds.append(set_cmd)
+        
+        # Reset config command
+        reset_cmd = self._create_reset_config_command()
+        reset_cmd.name = "reset"
+        reset_cmd.help = f"Reset {self.display_name} backend configuration"
+        config_cmds.append(reset_cmd)
+        
+        # Config options command
+        options_cmd = self._create_config_options_command()
+        options_cmd.name = "options"
+        options_cmd.help = f"List available configuration options for {self.display_name} backend"
+        config_cmds.append(options_cmd)
+        
         return {
-            "storage.add": [{"name": self.name, "command": self._create_add_command()}],
-            "storage.remove": [
-                {"name": self.name, "command": self._create_remove_command()}
-            ],
-            "storage.config": [
-                {"name": self.name, "command": self._create_config_command()}
-            ],
-            "storage.set-config": [
-                {"name": self.name, "command": self._create_set_config_command()}
-            ],
-            "storage.reset-config": [
-                {"name": self.name, "command": self._create_reset_config_command()}
-            ],
-            "storage.config-options": [
-                {"name": self.name, "command": self._create_config_options_command()}
-            ],
+            "add": [self._create_add_command()],
+            "remove": [self._create_remove_command()],
+            "config": config_cmds
         }
 
     def _prompt_for_config(self) -> Dict[str, Any]:
