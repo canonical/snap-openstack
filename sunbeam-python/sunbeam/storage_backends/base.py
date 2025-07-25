@@ -1,12 +1,11 @@
 # SPDX-FileCopyrightText: 2025 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
-import abc
 import logging
 from typing import Any, Dict, List, Mapping
 
 import click
-import pydantic
+from pydantic import BaseModel, Field
 from rich.console import Console
 
 from sunbeam.core.common import BaseStep, SunbeamException, run_plan
@@ -42,10 +41,10 @@ class BackendValidationException(StorageBackendException):
     pass
 
 
-class StorageBackendConfig(pydantic.BaseModel):
+class StorageBackendConfig(BaseModel):
     """Base configuration model for storage backends."""
 
-    name: str = pydantic.Field(..., description="Backend name")
+    name: str = Field(..., description="Backend name")
 
     class Config:
         """Pydantic configuration for StorageBackendConfig."""
@@ -53,7 +52,7 @@ class StorageBackendConfig(pydantic.BaseModel):
         extra = "allow"  # Allow backend-specific fields
 
 
-class StorageBackendInfo(pydantic.BaseModel):
+class StorageBackendInfo(BaseModel):
     """Information about a deployed storage backend."""
 
     name: str
@@ -169,7 +168,7 @@ class StorageBackendService:
             return "unknown"
 
 
-class StorageBackendBase(BaseRegisterable, abc.ABC):
+class StorageBackendBase(BaseRegisterable):
     """Base class for storage backends following sunbeam patterns."""
 
     name: str = "base"
@@ -185,68 +184,10 @@ class StorageBackendBase(BaseRegisterable, abc.ABC):
             self.service = StorageBackendService(deployment)
         return self.service
 
-    @abc.abstractmethod
-    def get_config_model(self) -> type[StorageBackendConfig]:
-        """Return the configuration model for this backend."""
-        pass
-
-    @abc.abstractmethod
-    def validate_config(self, config: StorageBackendConfig) -> None:
-        """Validate backend-specific configuration."""
-        pass
-
-    @abc.abstractmethod
-    def deploy_backend(
-        self, deployment: Deployment, config: StorageBackendConfig
-    ) -> None:
-        """Deploy the storage backend."""
-        pass
-
-    def add_backend(self, deployment: Deployment, **kwargs) -> None:
-        """Add the storage backend."""
-        try:
-            # Create and validate configuration
-            config_model = self.get_config_model()
-            config = config_model(**kwargs)
-            self.validate_config(config)
-
-            # Get service and add backend
-            service = self._get_service(deployment)
-            service.add_backend(self.name, config)
-
-            # Deploy backend-specific components
-            self.deploy_backend(deployment, config)
-
-            console.print(
-                f"[green]{self.display_name} '{config.name}' added successfully[/green]"
-            )
-
-        except Exception as e:
-            LOG.error(f"Failed to add {self.name} backend: {e}")
-            raise
-
-    def remove_backend(self, deployment: Deployment, backend_name: str) -> None:
-        """Remove the storage backend."""
-        try:
-            service = self._get_service(deployment)
-            service.remove_backend(backend_name)
-
-        except Exception as e:
-            LOG.error(f"Failed to remove {self.name} backend: {e}")
-            raise
-
-    def list_backends(self, deployment: Deployment) -> List[StorageBackendInfo]:
-        """List all backends of this type."""
-        try:
-            service = self._get_service(deployment)
-            all_backends = service.list_backends()
-
-            # Filter by backend type
-            return [b for b in all_backends if b.backend_type == self.name]
-
-        except Exception as e:
-            LOG.error(f"Failed to list {self.name} backends: {e}")
-            raise
+    @property
+    def config_class(self) -> type[StorageBackendConfig]:
+        """Return the configuration class for this backend."""
+        return StorageBackendConfig
 
     def commands(
         self, conditions: Mapping[str, str | bool] = {}
@@ -259,12 +200,34 @@ class StorageBackendBase(BaseRegisterable, abc.ABC):
             ],
         }
 
+    def _prompt_for_config(self) -> Dict[str, Any]:
+        """Prompt user for backend configuration. Override in subclasses."""
+        return {}
+
+    def _create_add_plan(
+        self, deployment: Deployment, config: Any, local_charm: str = ""
+    ) -> List[BaseStep]:
+        """Create a plan for adding a storage backend. Override in subclasses."""
+        return []
+
+    def _create_remove_plan(
+        self, deployment: Deployment, backend_name: str
+    ) -> List[BaseStep]:
+        """Create a plan for removing a storage backend. Override in subclasses."""
+        return []
+
     def _create_add_command(self) -> click.Command:
         """Create the add command for this backend."""
 
         @click.command(name=self.name)
+        @click.option(
+            "--local-charm",
+            type=click.Path(exists=True, dir_okay=True, file_okay=True),
+            help="""Path to local charm directory or .charm file for
+            development (overrides charm store)""",
+        )
         @click.pass_context
-        def add_backend(ctx):
+        def add_backend(ctx, local_charm):
             """Add a storage backend."""
             deployment = ctx.obj
             if not isinstance(deployment, Deployment):
@@ -277,7 +240,7 @@ class StorageBackendBase(BaseRegisterable, abc.ABC):
                 config = self.config_class(**config_data)
 
                 # Create and run deployment plan with interactive steps
-                plan = self._create_add_plan(deployment, config)
+                plan = self._create_add_plan(deployment, config, local_charm)
                 run_plan(plan, console)
 
                 console.print(
@@ -322,20 +285,3 @@ class StorageBackendBase(BaseRegisterable, abc.ABC):
                 raise click.ClickException(str(e))
 
         return remove_backend
-
-    @abc.abstractmethod
-    def _prompt_for_config(self) -> Dict[str, Any]:
-        """Prompt user for backend configuration."""
-        pass
-
-    @abc.abstractmethod
-    def _create_add_plan(self, deployment: Deployment, config: Any) -> List[BaseStep]:
-        """Create a plan for adding a storage backend."""
-        pass
-
-    @abc.abstractmethod
-    def _create_remove_plan(
-        self, deployment: Deployment, backend_name: str
-    ) -> List[BaseStep]:
-        """Create a plan for removing a storage backend."""
-        pass

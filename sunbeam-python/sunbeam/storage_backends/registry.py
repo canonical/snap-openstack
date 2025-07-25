@@ -12,7 +12,11 @@ from rich.table import Table
 
 import sunbeam.storage_backends
 from sunbeam.core.deployment import Deployment
-from sunbeam.storage_backends.base import StorageBackendBase, StorageBackendInfo
+from sunbeam.storage_backends.base import (
+    StorageBackendBase,
+    StorageBackendInfo,
+    StorageBackendService,
+)
 
 LOG = logging.getLogger(__name__)
 console = Console()
@@ -22,7 +26,7 @@ _STORAGE_BACKENDS: Dict[str, StorageBackendBase] = {}
 
 
 class StorageBackendRegistry:
-    """Registry for managing storage backends following sunbeam patterns."""
+    """Registry for managing storage backends."""
 
     def __init__(self):
         self._backends: Dict[str, StorageBackendBase] = {}
@@ -98,10 +102,9 @@ class StorageBackendRegistry:
         def list_all(deployment: Deployment, format: str):
             """List all deployed storage backends."""
             try:
-                all_backends = []
-                for backend in self._backends.values():
-                    backend_list = backend.list_backends(deployment)
-                    all_backends.extend(backend_list)
+                # Use service directly to list all backends
+                service = StorageBackendService(deployment)
+                all_backends = service.list_backends()
 
                 if format == "json":
                     import json

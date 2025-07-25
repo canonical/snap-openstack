@@ -13,14 +13,13 @@ from rich.console import Console
 from sunbeam.core.common import BaseStep
 from sunbeam.core.deployment import Deployment
 from sunbeam.storage_backends.base import (
-    BackendValidationException,
     StorageBackendBase,
     StorageBackendConfig,
 )
 from sunbeam.storage_backends.steps import (
     CheckBackendExistsStep,
     DeployCharmStep,
-    IntegrateWithCinderStep,
+    IntegrateWithCinderVolumeStep,
     RemoveBackendStep,
     ValidateBackendExistsStep,
     ValidateConfigStep,
@@ -57,56 +56,40 @@ class HitachiConfig(StorageBackendConfig):
 
 
 class HitachiBackend(StorageBackendBase):
+    """Hitachi VSP storage backend implementation."""
+
     name = "hitachi"
     display_name = "Hitachi VSP Storage Backend"
 
-    @staticmethod
-    def _validate_ip_or_fqdn(value: str) -> str:
-        """Validate IP address or FQDN."""
-        # Try to validate as an IP address
-        try:
-            ipaddress.ip_address(value)
-            return value
-        except ValueError:
-            pass  # Not an IP, check for FQDN next
-
-        # Regex to validate FQDN
-        fqdn_regex = re.compile(
-            r"^(?=.{1,253}$)(?!-)([A-Za-z0-9-]{1,63}\.)+[A-Za-z]{2,63}\.?$"
-        )
-        if fqdn_regex.match(value):
-            return value
-
-        raise BackendValidationException(f"{value} is not a valid IP address or FQDN.")
-
-    def get_config_model(self) -> type[StorageBackendConfig]:
-        """Return the configuration model for Hitachi backend."""
+    @property
+    def config_class(self) -> type[HitachiConfig]:
+        """Return the configuration class for Hitachi backend."""
         return HitachiConfig
 
-    def validate_config(self, config: StorageBackendConfig) -> None:
-        """Validate Hitachi-specific configuration."""
-        if not isinstance(config, HitachiConfig):
-            raise BackendValidationException(
-                "Invalid configuration type for Hitachi backend"
+    @staticmethod
+    def _validate_ip_or_fqdn(value: str) -> bool:
+        """Validate IP address or FQDN."""
+        try:
+            ipaddress.ip_address(value)
+            return True
+        except ValueError:
+            # Check if it's a valid FQDN
+            fqdn_pattern = (
+                r"^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?"
+                r"(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$"
             )
-
-        # Additional validation can be added here
-        if not config.serial:
-            raise BackendValidationException("Array serial number is required")
-
-        if not config.pools:
-            raise BackendValidationException("Storage pools are required")
+            return bool(re.match(fqdn_pattern, value))
 
     def _create_add_plan(
-        self, deployment: Deployment, config: HitachiConfig
+        self, deployment: Deployment, config: HitachiConfig, local_charm: str = ""
     ) -> list[BaseStep]:
         """Create a plan for adding a Hitachi storage backend."""
         return [
             ValidateHitachiConfigStep(config),
             CheckBackendExistsStep(deployment, config.name),
-            DeployHitachiCharmStep(deployment, config),
+            DeployHitachiCharmStep(deployment, config, local_charm),
+            IntegrateWithCinderVolumeStep(deployment, config),
             WaitForHitachiReadyStep(deployment, config),
-            IntegrateWithCinderStep(deployment, config),
         ]
 
     def _create_remove_plan(
@@ -120,15 +103,17 @@ class HitachiBackend(StorageBackendBase):
 
     def _prompt_for_config(self) -> Dict[str, Any]:
         """Prompt user for Hitachi backend configuration."""
-        name = click.prompt("Backend name", default="hitachi-vsp")
-        serial = click.prompt("Array serial")
-        pools = click.prompt("Pools (comma separated)")
+        console.print("[bold]Hitachi VSP Storage Backend Configuration[/bold]")
+
+        name = click.prompt("Backend name", type=str).lower()
+        serial = click.prompt("Array serial number", type=str)
+        pools = click.prompt("Storage pools (comma separated)", type=str)
         protocol = click.prompt(
             "Protocol", type=click.Choice(["FC", "iSCSI"]), default="FC"
         )
-        san_ip = click.prompt("Management IP/FQDN")
-        san_username = click.prompt("SAN Username", default="maintenance")
-        san_password = click.prompt("SAN Password", hide_input=True)
+        san_ip = click.prompt("Management IP/FQDN", type=str, value_proc=self._validate_ip_or_fqdn)
+        san_username = click.prompt("SAN username", type=str, default="maintenance")
+        san_password = click.prompt("SAN password", type=str, hide_input=True)
 
         return {
             "name": name,
@@ -149,19 +134,26 @@ class ValidateHitachiConfigStep(ValidateConfigStep):
         super().__init__(config)
         self.name = "Validate Hitachi Configuration"
         self.description = f"Validating Hitachi VSP configuration for {config.name}"
+        # TODO: Validate not allready instsalled
+        #       Validate cinder-volume is installed and ready
+        
 
 
 class DeployHitachiCharmStep(DeployCharmStep):
     """Step to deploy Hitachi VSP charm."""
 
-    def __init__(self, deployment: Deployment, config: HitachiConfig):
+    def __init__(
+        self, deployment: Deployment, config: HitachiConfig, local_charm: str = ""
+    ):
         charm_config = {
             "san-ip": config.san_ip,
             "san-login": config.san_username,
             "san-password": config.san_password,
             "protocol": config.protocol.lower(),
         }
-        super().__init__(deployment, config, "cinder-volume-hitachi", charm_config)
+        super().__init__(
+            deployment, config, "cinder-volume-hitachi", charm_config, local_charm
+        )
 
 
 class WaitForHitachiReadyStep(WaitForReadyStep):

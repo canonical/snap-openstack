@@ -107,26 +107,36 @@ class DeployCharmStep(BaseStep):
         config: StorageBackendConfig,
         charm_name: str,
         charm_config: Dict[str, Any],
+        local_charm_path: str,
     ):
+        charm_source = local_charm_path if local_charm_path else charm_name
         super().__init__(
-            "Deploy Charm", f"Deploying {charm_name} charm for {config.name}"
+            "Deploy Charm", f"Deploying {charm_source} charm for {config.name}"
         )
         self.deployment = deployment
         self.config = config
         self.charm_name = charm_name
         self.charm_config = charm_config
+        self.local_charm_path = local_charm_path
 
     def run(self, status: Status | None = None) -> Result:
         """Deploy the charm."""
         try:
-            self.update_status(status, f"deploying {self.charm_name}...")
+            charm_source = (
+                self.local_charm_path if self.local_charm_path else self.charm_name
+            )
+            self.update_status(status, f"deploying {charm_source}...")
             service = StorageBackendService(self.deployment)
+
+            # Use trust=True for local charms (files or directories)
+            trust = bool(self.local_charm_path)
 
             service.juju_helper.deploy(
                 self.config.name,
-                self.charm_name,
+                charm_source,  # Use local path if provided, otherwise charm name
                 service.model,
                 config=self.charm_config,
+                trust=trust,
             )
 
             self.update_status(status, "charm deployed successfully")
@@ -166,12 +176,12 @@ class WaitForReadyStep(BaseStep):
             return Result(ResultType.FAILED, str(e))
 
 
-class IntegrateWithCinderStep(BaseStep):
+class IntegrateWithCinderVolumeStep(BaseStep):
     """Step to integrate storage backend with Cinder."""
 
     def __init__(self, deployment: Deployment, config: StorageBackendConfig):
         super().__init__(
-            "Integrate with Cinder", f"Integrating {config.name} with Cinder"
+            "Integrate with Cinder", f"Integrating {config.name} with Cinder volume"
         )
         self.deployment = deployment
         self.config = config
@@ -179,17 +189,17 @@ class IntegrateWithCinderStep(BaseStep):
     def run(self, status: Status | None = None) -> Result:
         """Integrate with Cinder."""
         try:
-            self.update_status(status, "creating integration with Cinder...")
+            self.update_status(status, "creating integration with Cinder volume...")
             service = StorageBackendService(self.deployment)
 
             service.juju_helper.integrate(
-                service.model, self.config.name, "cinder", "storage-backend"
+                service.model, self.config.name, "cinder-volume", "storage-backend"
             )
 
             self.update_status(status, "integration created successfully")
             return Result(ResultType.COMPLETED)
         except Exception as e:
-            LOG.error(f"Failed to integrate {self.config.name} with Cinder: {e}")
+            LOG.error(f"Failed to integrate {self.config.name} with cinder-volume: {e}")
             return Result(ResultType.FAILED, str(e))
 
 
