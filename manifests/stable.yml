@@ -33,6 +33,8 @@ core:
           snap-channel: 2024.1/stable
       sunbeam-machine:
         channel: 2024.1/stable
+      epa-orchestrator:
+        channel: 2024.1/stable
       microceph:
         channel: squid/stable
         config:

@@ -23,6 +23,7 @@ CONSUL_CHANNEL = "1.19/edge"
 TEMPEST_CHANNEL = "2024.1/stable"
 K8S_CHANNEL = "1.32/stable"
 LXD_CHANNEL = "5.21/stable"
+SUNBEAM_EPA_ORCHESTRATOR_CHANNEL = "2024.1/edge"
 
 # List of charms with default channels
 OPENSTACK_CHARMS_K8S = {
@@ -56,6 +57,7 @@ MACHINE_CHARMS = {
     "self-signed-certificates": CERT_AUTH_CHANNEL,
     "cinder-volume": OPENSTACK_CHANNEL,
     "cinder-volume-ceph": OPENSTACK_CHANNEL,
+    "epa-orchestrator": SUNBEAM_EPA_ORCHESTRATOR_CHANNEL,
 }
 
 
@@ -211,7 +213,12 @@ DEPLOY_SUNBEAM_MACHINE_TFVAR_MAP: VarMap = {
             "channel": "charm_channel",
             "revision": "charm_revision",
             "config": "charm_config",
-        }
+        },
+        "epa-orchestrator": {
+            "channel": "charm_epa_orchestrator_channel",
+            "revision": "charm_epa_orchestrator_revision",
+            "config": "charm_epa_orchestrator_config",
+        },
     }
 }
 DEPLOY_CINDER_VOLUME_TFVAR_MAP: VarMap = {

@@ -37,6 +37,8 @@ core:
           snap-channel: 2024.1/edge
       sunbeam-machine:
         channel: 2024.1/edge
+      epa-orchestrator:
+        channel: 2024.1/edge
       microceph:
         channel: squid/edge
         config:

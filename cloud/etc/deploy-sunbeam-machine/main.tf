@@ -31,3 +31,32 @@ resource "juju_application" "sunbeam-machine" {
   endpoint_bindings = var.endpoint_bindings
 
 }
+
+resource "juju_application" "epa_orchestrator" {
+  name  = "epa-orchestrator"
+  model = var.machine_model
+
+  charm {
+    name     = "epa-orchestrator"
+    channel  = var.charm_epa_orchestrator_channel
+    revision = var.charm_epa_orchestrator_revision
+    base     = "ubuntu@24.04"
+  }
+
+  config            = var.charm_epa_orchestrator_config
+  endpoint_bindings = var.epa_orchestrator_endpoint_bindings
+}
+
+resource "juju_integration" "epa-orchestrator-to-sunbeam-machine" {
+  model = var.machine_model
+
+  application {
+    name     = juju_application.epa_orchestrator.name
+    endpoint = "sunbeam-machine"
+  }
+
+  application {
+    name     = juju_application.sunbeam-machine.name
+    endpoint = "sunbeam-machine"
+  }
+}

@@ -180,6 +180,7 @@ class AddMachineUnitsStep(BaseStep):
         model: str,
         banner: str = "",
         description: str = "",
+        subordinate_applications: list[str] | None = None,
     ):
         super().__init__(banner, description)
         self.client = client
@@ -191,6 +192,7 @@ class AddMachineUnitsStep(BaseStep):
         self.application = application
         self.model = model
         self.to_deploy: set[str] = set()
+        self.subordinate_applications = subordinate_applications or []
 
     def get_unit_timeout(self) -> int:
         """Return unit timeout in seconds."""
@@ -277,7 +279,7 @@ class AddMachineUnitsStep(BaseStep):
             LOG.warning(str(e))
             return Result(ResultType.FAILED, str(e))
 
-        apps = [self.application]
+        apps = [self.application, *self.subordinate_applications]
         status_queue: queue.Queue[str] = queue.Queue(maxsize=len(apps))
         task = update_status_background(self, apps, status_queue, status)
         accepted_status = self.get_accepted_unit_status()

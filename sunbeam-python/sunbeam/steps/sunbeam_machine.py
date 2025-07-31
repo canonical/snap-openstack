@@ -22,6 +22,7 @@ SUNBEAM_MACHINE_APP_TIMEOUT = 180  # 3 minutes, managing the application should 
 SUNBEAM_MACHINE_UNIT_TIMEOUT = (
     1200  # 20 minutes, adding / removing units can take a long time
 )
+SUBORDINATE_APPLICATIONS = ["epa-orchestrator"]
 
 
 class DeploySunbeamMachineApplicationStep(DeployMachineApplicationStep):
@@ -62,6 +63,10 @@ class DeploySunbeamMachineApplicationStep(DeployMachineApplicationStep):
         return {
             "endpoint_bindings": [
                 {"space": self.deployment.get_space(Networks.MANAGEMENT)},
+                {
+                    "endpoint": "sunbeam-machine",
+                    "space": self.deployment.get_space(Networks.INTERNAL),
+                },
             ],
             "charm_config": {
                 "http_proxy": self.proxy_settings.get("HTTP_PROXY", ""),
@@ -90,6 +95,7 @@ class AddSunbeamMachineUnitsStep(AddMachineUnitsStep):
             model,
             "Add Sunbeam-machine unit(s)",
             "Adding Sunbeam Machine unit to machine(s)",
+            subordinate_applications=["epa-orchestrator"],
         )
 
     def get_unit_timeout(self) -> int:
@@ -136,7 +142,7 @@ class DestroySunbeamMachineApplicationStep(DestroyMachineApplicationStep):
             jhelper,
             manifest,
             CONFIG_KEY,
-            [APPLICATION],
+            [*SUBORDINATE_APPLICATIONS, APPLICATION],
             model,
             "Destroy Sunbeam Machine",
             "Destroying Sunbeam Machine",
