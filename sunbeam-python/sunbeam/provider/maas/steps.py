@@ -5,12 +5,14 @@ import ast
 import builtins
 import copy
 import ipaddress
+import json
 import logging
+import re
 import ssl
 import textwrap
 import typing
 from pathlib import Path
-from typing import Sequence
+from typing import Sequence, Tuple
 
 import tenacity
 from rich.console import Console
@@ -27,6 +29,7 @@ from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import NodeNotExistInClusterException
 from sunbeam.commands.configure import (
     CLOUD_CONFIG_SECTION,
+    PCI_CONFIG_SECTION,
     VARIABLE_DEFAULTS,
     SetHypervisorUnitsOptionsStep,
     ext_net_questions,
@@ -53,6 +56,7 @@ from sunbeam.core.manifest import Manifest
 from sunbeam.core.steps import CreateLoadBalancerIPPoolsStep
 from sunbeam.core.terraform import TerraformHelper
 from sunbeam.lazy import LazyImport
+from sunbeam.provider.common import nic_utils
 from sunbeam.steps import clusterd
 from sunbeam.steps.cluster_status import ClusterStatusStep
 from sunbeam.steps.clusterd import APPLICATION as CLUSTERD_APPLICATION
@@ -2131,3 +2135,176 @@ class MaasCreateLoadBalancerIPPoolsStep(CreateLoadBalancerIPPoolsStep):
         )
 
         return {self.deployment.public_ip_pool: public_metallb_range}
+
+
+class MaasConfigSRIOVStep(BaseStep):
+    """Prompt user for SR-IOV configuration."""
+
+    def __init__(
+        self,
+        deployment: maas_deployment.MaasDeployment,
+        client: Client,
+        jhelper: JujuHelper,
+        model: str,
+        manifest: Manifest | None = None,
+        accept_defaults: bool = False,
+    ):
+        super().__init__("SR-IOV Settings", "Configure SR-IOV")
+        self.client = client
+        self.maas_client = maas_client.MaasClient.from_deployment(deployment)
+        self.jhelper = jhelper
+        self.model = model
+        self.manifest = manifest
+        self.accept_defaults = accept_defaults
+        self.variables: dict = {}
+
+    def prompt(
+        self,
+        console: Console | None = None,
+        show_hint: bool = False,
+    ) -> None:
+        """Determines if the step can take input from the user.
+
+        Prompts are used by Steps to gather the necessary input prior to
+        running the step. Steps should not expect that the prompt will be
+        available and should provide a reasonable default where possible.
+        """
+
+    def has_prompts(self) -> bool:
+        """Returns true if the step has prompts that it can ask the user.
+
+        :return: True if the step can ask the user for prompts,
+                 False otherwise
+        """
+        return False
+
+    def _get_compute_machines(self) -> list:
+        return maas_client.list_machines(
+            self.maas_client, tags=maas_deployment.RoleTags.COMPUTE.value
+        )
+
+    def _get_sriov_nics_from_maas_tags(self, machine: dict) -> dict:
+        # Retrieve nics that contain one of the following tags:
+        # * sriov:physnet1
+        # * sriov:no-physnet
+        # * sriov-hw-offload:physnet1
+        # * sriov-hw-offload:no-physnet
+        #
+        # At the moment, the snap automatically configures the Neutron
+        # sr-iov agent for nics that do not support hardware offloading.
+        # As such, we don't really need to make the distinction between
+        # sriov and sriov-hw-offload nics. However, this function will
+        # accept "sriov-hw-offload" in case we decide to handle those
+        # tagged nics differently.
+        sriov_nics = {}
+        pattern = r"^sriov(?:-hw-offload)?:([\w_-]+)$"
+        for nic in machine["nics"]:
+            for tag in nic["tags"]:
+                groups = re.findall(pattern, tag)
+                if not groups or len(groups) > 1:
+                    continue
+                physnet = groups[0]
+                if physnet in ("none", "null", "no-physnet"):
+                    physnet = None
+                sriov_nics[nic["name"]] = {
+                    "name": nic["name"],
+                    "physnet": physnet,
+                    "mac_address": nic["mac_address"],
+                }
+        return sriov_nics
+
+    def _get_pci_config(
+        self, compute_machines: list[dict]
+    ) -> Tuple[list[dict], dict[str, list]]:
+        pci_whitelist: list[dict] = []
+        excluded_devices: dict[str, list] = {}
+
+        if self.manifest:
+            if (
+                self.manifest.core.config.pci
+                and self.manifest.core.config.pci.device_specs
+            ):
+                pci_whitelist = copy.deepcopy(
+                    self.manifest.core.config.pci.device_specs
+                )
+                LOG.debug("PCI whitelist from manifest: %s", pci_whitelist)
+            if (
+                self.manifest.core.config.pci
+                and self.manifest.core.config.pci.excluded_devices
+            ):
+                excluded_devices = copy.deepcopy(
+                    self.manifest.core.config.pci.excluded_devices
+                )
+                LOG.debug("PCI exclude list from manifest: %s", excluded_devices)
+
+        for machine in compute_machines:
+            sriov_tagged_nics = self._get_sriov_nics_from_maas_tags(machine)
+
+            node_name = machine["hostname"]
+            # nics reported by the compute-hypervisor snap.
+            snap_nics = nic_utils.fetch_nics(
+                self.client, node_name, self.jhelper, self.model
+            )
+
+            for snap_nic in snap_nics["nics"]:
+                nic_name = snap_nic["name"]
+                if not (snap_nic["product_id"] and snap_nic["vendor_id"]):
+                    LOG.debug("Ignoring nic, not a PCI device: %s", snap_nic["name"])
+                    continue
+
+                if nic_name in sriov_tagged_nics:
+                    # whitelisted through maas tag
+                    nic_utils.whitelist_sriov_nic(
+                        node_name,
+                        snap_nic,
+                        pci_whitelist,
+                        excluded_devices,
+                        sriov_tagged_nics[nic_name]["physnet"],
+                    )
+                else:
+                    # Add to the per-node exclusion list.
+                    nic_utils.exclude_sriov_nic(
+                        node_name, snap_nic, pci_whitelist, excluded_devices
+                    )
+
+        return pci_whitelist, excluded_devices
+
+    def run(self, status: Status | None = None) -> Result:
+        """Apply individual hypervisor settings."""
+        self.update_status(status, "setting PCI configuration")
+
+        compute_machines = self._get_compute_machines()
+
+        pci_whitelist, excluded_devices = self._get_pci_config(compute_machines)
+        self.variables["pci_whitelist"] = pci_whitelist
+        self.variables["excluded_devices"] = excluded_devices
+        sunbeam.core.questions.write_answers(
+            self.client, PCI_CONFIG_SECTION, self.variables
+        )
+
+        for machine in compute_machines:
+            node_name = machine["hostname"]
+            node_excluded_devices = excluded_devices.get(node_name) or []
+            LOG.debug("PCI excluded devices [%s]: %s", node_name, node_excluded_devices)
+
+            app = "openstack-hypervisor"
+            action_cmd = "set-hypervisor-local-settings"
+
+            node = self.client.cluster.get_node_info(node_name)
+            machine_id = str(node.get("machineid"))
+            unit = self.jhelper.get_unit_from_machine(app, machine_id, self.model)
+            try:
+                self.jhelper.run_action(
+                    unit,
+                    self.model,
+                    action_cmd,
+                    action_params={
+                        "pci-excluded-devices": json.dumps(node_excluded_devices),
+                    },
+                )
+            except (ActionFailedException, TimeoutError):
+                msg = f"Unable to set hypervisor {node_name} configuration"
+                LOG.error(msg, exc_info=True)
+                return Result(ResultType.FAILED, msg)
+
+        return Result(ResultType.COMPLETED)

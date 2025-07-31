@@ -85,6 +85,7 @@ from sunbeam.provider.maas.steps import (
     MaasAddMachinesToClusterdStep,
     MaasBootstrapJujuStep,
     MaasClusterStatusStep,
+    MaasConfigSRIOVStep,
     MaasConfigureMicrocephOSDStep,
     MaasCreateLoadBalancerIPPoolsStep,
     MaasDeployInfraMachinesStep,
@@ -250,6 +251,7 @@ class MaasProvider(ProviderBase):
         cluster.add_command(remove_node)
         cluster.add_command(destroy_deployment_cmd)
         configure.add_command(configure_cmd)
+        configure.add_command(configure_sriov)
         deployment.add_command(machine)
         machine.add_command(list_machines_cmd)
         machine.add_command(show_machine_cmd)
@@ -1664,3 +1666,51 @@ def destroy_deployment_cmd(
     plan.append(CleanTerraformPlansStep(deployment))
     run_plan(plan, console, no_hint=False)
     click.echo("Deployment destroyed.")
+
+
+@click.command("sriov")
+@click.option("-a", "--accept-defaults", help="Accept all defaults.", is_flag=True)
+@click.option(
+    "-m",
+    "--manifest",
+    "manifest_path",
+    help="Manifest file.",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+)
+@click_option_show_hints
+@click.pass_context
+def configure_sriov(
+    ctx: click.Context,
+    manifest_path: Path | None = None,
+    accept_defaults: bool = False,
+    show_hints: bool = False,
+) -> None:
+    """Configure SR-IOV."""
+    deployment: MaasDeployment = ctx.obj
+    client = deployment.get_client()
+    manifest = deployment.get_manifest(manifest_path)
+    jhelper = JujuHelper(deployment.juju_controller)
+
+    admin_credentials = retrieve_admin_credentials(jhelper, OPENSTACK_MODEL)
+    admin_credentials["OS_INSECURE"] = "true"
+
+    tfhelper_hypervisor = deployment.get_tfhelper("hypervisor-plan")
+
+    plan: list[BaseStep] = [
+        MaasConfigSRIOVStep(
+            deployment,
+            client,
+            jhelper,
+            deployment.openstack_machines_model,
+            manifest,
+            accept_defaults,
+        ),
+        ReapplyHypervisorTerraformPlanStep(
+            client,
+            tfhelper_hypervisor,
+            jhelper,
+            manifest,
+            model=deployment.openstack_machines_model,
+        ),
+    ]
+    run_plan(plan, console, show_hints)

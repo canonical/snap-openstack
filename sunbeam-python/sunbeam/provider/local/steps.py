@@ -8,6 +8,7 @@ from functools import cache
 from typing import Any
 
 from rich.console import Console
+from rich.status import Status
 
 import sunbeam.core.questions
 from sunbeam import utils
@@ -15,11 +16,18 @@ from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import ClusterServiceUnavailableException
 from sunbeam.commands.configure import (
     CLOUD_CONFIG_SECTION,
+    PCI_CONFIG_SECTION,
     SetHypervisorUnitsOptionsStep,
 )
-from sunbeam.core.common import SunbeamException
-from sunbeam.core.juju import JujuHelper
+from sunbeam.core.common import (
+    BaseStep,
+    Result,
+    ResultType,
+    SunbeamException,
+)
+from sunbeam.core.juju import ActionFailedException, JujuHelper
 from sunbeam.core.manifest import Manifest
+from sunbeam.provider.common import nic_utils
 from sunbeam.steps import hypervisor
 from sunbeam.steps.cluster_status import ClusterStatusStep
 from sunbeam.steps.clusterd import CLUSTERD_PORT
@@ -66,17 +74,6 @@ class LocalSetHypervisorUnitsOptionsStep(SetHypervisorUnitsOptionsStep):
         """Returns true if the step has prompts that it can ask the user."""
         return True
 
-    def _fetch_nics(self) -> dict:
-        """Fetch nics from hypervisor."""
-        name = self.names[0]  # always only one name in local mode
-        node = self.client.cluster.get_node_info(name)
-        machine_id = str(node.get("machineid"))
-        unit = self.jhelper.get_unit_from_machine(
-            "openstack-hypervisor", machine_id, self.model
-        )
-        action_result = self.jhelper.run_action(unit, self.model, "list-nics")
-        return json.loads(action_result.get("result", "{}"))
-
     def prompt_for_nic(self, console: Console | None = None) -> str | None:
         """Prompt user for nic to use and do some validation."""
         if console:
@@ -85,7 +82,9 @@ class LocalSetHypervisorUnitsOptionsStep(SetHypervisorUnitsOptionsStep):
             context = contextlib.nullcontext()
 
         with context:
-            nics = self._fetch_nics()
+            nics = nic_utils.fetch_nics(
+                self.client, self.names[0], self.jhelper, self.model
+            )
 
         all_nics: list[dict] | None = nics.get("nics")
         candidate_nics: list[str] | None = nics.get("candidates")
@@ -255,3 +254,286 @@ class LocalClusterStatusStep(ClusterStatusStep):
             node_status["clusterd-status"] = microcluster_status.get(node_name, {}).get(
                 "status"
             )
+
+
+def sriov_questions():
+    return {
+        "configure_sriov": sunbeam.core.questions.ConfirmQuestion(
+            "Configure SR-IOV?",
+            default_value=False,
+            description=(
+                "This allows specifying a list of SR-IOV devices that "
+                "will be exposed to Openstack instances."
+            ),
+        ),
+    }
+
+
+class LocalConfigSRIOVStep(BaseStep):
+    """Prompt user for SR-IOV configuration."""
+
+    def __init__(
+        self,
+        client: Client,
+        node_name: str,
+        jhelper: JujuHelper,
+        model: str,
+        manifest: Manifest | None = None,
+        accept_defaults: bool = False,
+        show_initial_prompt: bool = True,
+    ):
+        super().__init__("SR-IOV Settings", "Configure SR-IOV")
+        self.client = client
+        self.node_name = node_name
+        self.jhelper = jhelper
+        self.model = model
+        self.manifest = manifest
+        self.accept_defaults = accept_defaults
+        self.variables: dict = {}
+        # Avoid the "Configure SR-IOV?" question if the user
+        # specifically asked for this.
+        self.show_initial_prompt = show_initial_prompt
+
+    def prompt(
+        self,
+        console: Console | None = None,
+        show_hint: bool = False,
+    ) -> None:
+        """Determines if the step can take input from the user.
+
+        Prompts are used by Steps to gather the necessary input prior to
+        running the step. Steps should not expect that the prompt will be
+        available and should provide a reasonable default where possible.
+        """
+        if not console:
+            LOG.info("No console available, skipping prompt.")
+            return
+
+        self.variables = sunbeam.core.questions.load_answers(
+            self.client, PCI_CONFIG_SECTION
+        )
+
+        pci_whitelist: list[dict] = []
+        excluded_devices: dict[str, list] = {}
+
+        if self.manifest:
+            if (
+                self.manifest.core.config.pci
+                and self.manifest.core.config.pci.device_specs
+            ):
+                pci_whitelist = self.manifest.core.config.pci.device_specs
+                LOG.debug("PCI whitelist from manifest: %s", pci_whitelist)
+            if (
+                self.manifest.core.config.pci
+                and self.manifest.core.config.pci.excluded_devices
+            ):
+                excluded_devices = self.manifest.core.config.pci.excluded_devices
+                LOG.debug("PCI exclude list from manifest: %s", excluded_devices)
+
+        previous_pci_whitelist = self.variables.get("pci_whitelist") or []
+        previous_excluded_devices = self.variables.get("excluded_devices") or {}
+
+        LOG.debug("PCI whitelist from previous answers: %s", previous_pci_whitelist)
+        LOG.debug(
+            "PCI exclude list from previous answers: %s", previous_excluded_devices
+        )
+
+        if self.node_name not in excluded_devices:
+            excluded_devices[self.node_name] = []
+
+        if self.accept_defaults:
+            LOG.debug(
+                "Received '--accept-defaults', ignoring previous "
+                "answers and applying the manifest configuration."
+            )
+        else:
+            for device_spec in previous_pci_whitelist:
+                if device_spec not in pci_whitelist:
+                    pci_whitelist.append(device_spec)
+            for node in previous_excluded_devices:
+                if node not in excluded_devices:
+                    excluded_devices[node] = previous_excluded_devices[node]
+                else:
+                    for excluded_device in previous_excluded_devices[node]:
+                        if excluded_device not in excluded_devices[node]:
+                            excluded_devices[node].append(excluded_device)
+
+            self._do_prompt(pci_whitelist, excluded_devices, show_hint)
+
+        LOG.info("Updated PCI device whitelist: %s", pci_whitelist)
+        LOG.info("Updated PCI device exclusion list: %s", excluded_devices)
+
+        self.variables["pci_whitelist"] = pci_whitelist
+        self.variables["excluded_devices"] = excluded_devices
+
+        sunbeam.core.questions.write_answers(
+            self.client, PCI_CONFIG_SECTION, self.variables
+        )
+
+    def _do_prompt(
+        self,
+        pci_whitelist: list[dict],
+        excluded_devices: dict[str, list],
+        show_hint: bool = False,
+    ):
+        sriov_bank = sunbeam.core.questions.QuestionBank(
+            questions=sriov_questions(),
+            console=console,
+            preseed=None,
+            previous_answers=self.variables,
+            accept_defaults=self.accept_defaults,
+            show_hint=show_hint,
+        )
+        nics = nic_utils.fetch_nics(
+            self.client, self.node_name, self.jhelper, self.model
+        )
+
+        pci_address_map: dict[str, str] = {}
+        sriov_nics = []
+        for nic in nics["nics"]:
+            nic_name = nic["name"]
+            pci_address = nic["pci_address"]
+
+            if not nic["sriov_available"]:
+                LOG.debug("The nic does not support SR-IOV: %s", nic_name)
+                continue
+            if not pci_address:
+                LOG.debug("No nic PCI address: %s", nic_name)
+                continue
+            if pci_address in pci_address_map:
+                # We'll filter out interfaces that have duplicate PCI addresses,
+                # keeping only the first occurrence.
+                #
+                # For example, Mellanox ConnectX 6 will create one representor
+                # network function for each VF, having the same address as the PF.
+                #
+                # Bus info          Device          Class      Description
+                # ========================================================
+                # pci@0000:03:00.0  enp3s0f0np0     network    ConnectX-6 Dx
+                # pci@0000:03:00.1  enp3s0f1np1     network    ConnectX-6 Dx
+                # pci@0000:03:00.2  enp3s0f0v0      network    ConnectX Family mlx5 VF
+                # pci@0000:03:00.3  enp3s0f0v1      network    ConnectX Family mlx5 VF
+                # ...
+                # pci@0000:03:00.0  enp3s0f0r0      network    Ethernet interface
+                # pci@0000:03:00.0  enp3s0f0r1      network    Ethernet interface
+                LOG.debug(
+                    "Duplicate PCI address: %s, interface names: %s %s.",
+                    pci_address,
+                    nic_name,
+                    pci_address_map[pci_address],
+                )
+                continue
+
+            pci_address_map[pci_address] = nic_name
+            sriov_nics.append(nic)
+
+        if sriov_nics:
+            if self.show_initial_prompt:
+                configure_sriov = sriov_bank.configure_sriov.ask()
+            else:
+                configure_sriov = True
+
+            if configure_sriov:
+                self._show_sriov_nics(
+                    console, sriov_nics, pci_whitelist, excluded_devices
+                )
+
+                for nic in sriov_nics:
+                    nic_str_repr = self._get_nic_str_repr(nic)
+                    whitelisted, physnet = nic_utils.is_sriov_nic_whitelisted(
+                        self.node_name, nic, pci_whitelist, excluded_devices
+                    )
+
+                    question = f"Add network adapter to PCI whitelist? {nic_str_repr} "
+                    should_whitelist = sunbeam.core.questions.ConfirmQuestion(
+                        question, default_value=whitelisted
+                    ).ask()
+                    if not should_whitelist:
+                        nic_utils.exclude_sriov_nic(
+                            self.node_name, nic, pci_whitelist, excluded_devices
+                        )
+                        continue
+
+                    question = (
+                        f"Specify the physical network for {nic_str_repr} "
+                        "or pass 'no-physnet' if using hardware offloading with "
+                        "overlay networks"
+                    )
+                    physnet = sunbeam.core.questions.PromptQuestion(
+                        question,
+                        default_value=physnet,
+                    ).ask()
+                    nic_utils.whitelist_sriov_nic(
+                        self.node_name, nic, pci_whitelist, excluded_devices, physnet
+                    )
+
+        else:
+            LOG.info("No SR-IOV devics detected, skipping SR-IOV configuration.")
+
+    def _get_nic_str_repr(self, nic: dict):
+        """Get the nic string representation."""
+        vendor = nic.get("vendor_name") or nic.get("vendor_id") or "Unknown vendor"
+        product = nic.get("product_name") or nic.get("product_id") or "Unknown product"
+        name = nic.get("name") or "Unknown ifname"
+        return f"{vendor} {product} ({name})"
+
+    def _show_sriov_nics(
+        self,
+        console: Console,
+        sriov_nics: list[dict],
+        pci_whitelist: list[dict],
+        excluded_devices: dict[str, list],
+    ):
+        if not sriov_nics:
+            return
+
+        console.print("Found the following SR-IOV capable devices:")
+
+        for nic in sriov_nics:
+            whitelisted, physnet = nic_utils.is_sriov_nic_whitelisted(
+                self.node_name, nic, pci_whitelist, excluded_devices
+            )
+            checkbox = "X" if whitelisted else " "
+            nic_str_repr = self._get_nic_str_repr(nic)
+
+            nic_info = f"  \\[{checkbox}] {nic_str_repr} \\[physnet: {physnet}]"
+            console.print(nic_info)
+
+    def has_prompts(self) -> bool:
+        """Returns true if the step has prompts that it can ask the user.
+
+        :return: True if the step can ask the user for prompts,
+                 False otherwise
+        """
+        return True
+
+    def run(self, status: Status | None = None) -> Result:
+        """Apply individual hypervisor settings."""
+        app = "openstack-hypervisor"
+        action_cmd = "set-hypervisor-local-settings"
+        name = self.node_name
+
+        self.update_status(status, f"setting PCI configuration for {name}")
+
+        excluded_devices = self.variables.get("excluded_devices") or {}
+        node_excluded_devices = excluded_devices.get(name) or []
+        LOG.debug("PCI excluded devices [%s]: %s", name, node_excluded_devices)
+
+        node = self.client.cluster.get_node_info(name)
+        self.machine_id = str(node.get("machineid"))
+        unit = self.jhelper.get_unit_from_machine(app, self.machine_id, self.model)
+        try:
+            self.jhelper.run_action(
+                unit,
+                self.model,
+                action_cmd,
+                action_params={
+                    "pci-excluded-devices": json.dumps(node_excluded_devices),
+                },
+            )
+        except (ActionFailedException, TimeoutError):
+            msg = f"Unable to set hypervisor {name} configuration"
+            LOG.error(msg, exc_info=True)
+            return Result(ResultType.FAILED, msg)
+
+        return Result(ResultType.COMPLETED)
