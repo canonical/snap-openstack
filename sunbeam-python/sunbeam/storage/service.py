@@ -42,40 +42,47 @@ class StorageBackendService:
         """List all Terraform-managed storage backends.
 
         Returns:
-            List of StorageBackendInfo objects for all Terraform-managed storage backends
+            List of StorageBackendInfo objects for all Terraform-managed
+            storage backends
         """
         backends = []
-        
+
         try:
             client = self.deployment.get_client()
             current_config = read_config(client, self._tfvar_config_key)
-            
+
             # Check both new format (backend-specific keys) and legacy format
             # Look for all keys ending with "_backends" (e.g., "hitachi_backends")
-            backend_keys = [key for key in current_config.keys() if key.endswith("_backends")]
-            
+            backend_keys = [
+                key for key in current_config.keys() if key.endswith("_backends")
+            ]
+
             # Process new format (backend-specific keys)
             for backend_key in backend_keys:
-                backend_type = backend_key.replace("_backends", "")  # Extract backend type from key
+                backend_type = backend_key.replace(
+                    "_backends", ""
+                )  # Extract backend type from key
                 for backend_name, backend_config in current_config[backend_key].items():
                     try:
                         backend = StorageBackendInfo(
                             name=backend_name,
                             backend_type=backend_type,
-                            status="active",  # Terraform-managed backends are considered active
+                            status="active",  # Terraform-managed backends are active
                             charm=f"cinder-volume-{backend_type}",  # Infer charm name
-                            config=backend_config.get("charm_config", {})
+                            config=backend_config.get("charm_config", {}),
                         )
                         backends.append(backend)
                     except Exception as e:
-                        LOG.warning(f"Error processing Terraform backend {backend_name}: {e}")
+                        LOG.warning(
+                            f"Error processing Terraform backend {backend_name}: {e}"
+                        )
                         continue
-            
+
         except ConfigItemNotFoundException:
             LOG.debug("No Terraform storage backend configuration found in clusterd")
         except Exception as e:
             LOG.warning(f"Error reading Terraform backends from clusterd: {e}")
-        
+
         return backends
 
     def backend_exists(self, backend_name: str, backend_type: str) -> bool:
@@ -83,10 +90,10 @@ class StorageBackendService:
         try:
             client = self.deployment.get_client()
             current_config = read_config(client, self._tfvar_config_key)
-            
+
             # Check new format (backend-specific keys)
             backend_key = f"{backend_type}_backends"  # e.g., "hitachi_backends"
-        
+
             if backend_key in current_config:
                 return backend_name in current_config[backend_key]
             else:
@@ -94,7 +101,9 @@ class StorageBackendService:
         except ConfigItemNotFoundException:
             return False
 
-    def get_backend_config(self, backend_name: str, backend_type: str) -> Dict[str, Any]:
+    def get_backend_config(
+        self, backend_name: str, backend_type: str
+    ) -> Dict[str, Any]:
         """Get the current configuration of a storage backend."""
         try:
             if not self.backend_exists(backend_name, backend_type):
@@ -103,14 +112,17 @@ class StorageBackendService:
             # Get configuration from Terraform state
             client = self.deployment.get_client()
             current_config = read_config(client, self._tfvar_config_key)
-            
+
             # Check new format (backend-specific keys only)
             backend_key = f"{backend_type}_backends"  # e.g., "hitachi_backends"
-            
-            if backend_key in current_config and backend_name in current_config[backend_key]:
+
+            if (
+                backend_key in current_config
+                and backend_name in current_config[backend_key]
+            ):
                 backend_config = current_config[backend_key][backend_name]
                 return backend_config.get("charm_config", {})
-            
+
             # Backend not found in new format
             raise BackendNotFoundException(f"Backend '{backend_name}' not found")
 
@@ -148,7 +160,9 @@ class StorageBackendService:
             LOG.error(f"Failed to set config for backend '{backend_name}': {e}")
             raise StorageBackendException(f"Failed to set backend config: {e}") from e
 
-    def reset_backend_config(self, backend_name: str, backend_type: str, config_keys: List[str]) -> None:
+    def reset_backend_config(
+        self, backend_name: str, backend_type: str, config_keys: List[str]
+    ) -> None:
         """Reset configuration options to their default values for a storage backend."""
         try:
             if not self.backend_exists(backend_name, backend_type):
