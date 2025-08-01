@@ -178,9 +178,7 @@ class StorageBackendRegistry:
                         console.print(
                             "\n[yellow]Available configuration fields:[/yellow]"
                         )
-                        fields = getattr(config_class, "model_fields", None) or getattr(
-                            config_class, "__fields__", {}
-                        )
+                        fields = getattr(config_class, "model_fields", {})
                         for field_name, field in fields.items():
                             is_required = getattr(
                                 field,
@@ -408,27 +406,14 @@ class StorageBackendRegistry:
         else:
             console.print(table)
             console.print(
-                f"[green]✅ Configuration displayed for "
+                f"[green]Configuration displayed for "
                 f"{backend.display_name} backend '{backend_name}'[/green]"
             )
 
     def _get_field_descriptions(self, config_class) -> dict:
         """Extract field descriptions from config class."""
         field_descriptions = {}
-        if hasattr(config_class, "__fields__"):
-            # Pydantic v1 style
-            for field_name, field_info in config_class.__fields__.items():
-                if hasattr(field_info, "field_info") and hasattr(
-                    field_info.field_info, "description"
-                ):
-                    field_descriptions[field_name] = (
-                        field_info.field_info.description or "No description available"
-                    )
-                elif hasattr(field_info, "description"):
-                    field_descriptions[field_name] = (
-                        field_info.description or "No description available"
-                    )
-        elif hasattr(config_class, "model_fields"):
+        if hasattr(config_class, "model_fields"):
             # Pydantic v2 style
             for field_name, field_info in config_class.model_fields.items():
                 field_descriptions[field_name] = getattr(
@@ -487,7 +472,7 @@ class StorageBackendRegistry:
             run_plan(plan, console)
 
             console.print(
-                f"[green]✅ Configuration updated for "
+                f"[green]Configuration updated for "
                 f"{backend.display_name} backend '{backend_name}'[/green]"
             )
 
@@ -519,7 +504,7 @@ class StorageBackendRegistry:
             run_plan(plan, console)
 
             console.print(
-                f"[green]✅ Configuration reset for "
+                f"[green]Configuration reset for "
                 f"{backend.display_name} backend '{backend_name}'[/green]"
             )
 
@@ -535,7 +520,9 @@ class StorageBackendRegistry:
 
         # Show basic configuration options from the backend's config class
         config_class = backend.config_class
-        if hasattr(config_class, "__fields__"):
+        # Use model_fields for Pydantic v2
+        fields = getattr(config_class, "model_fields", {})
+        if fields:
             from rich.table import Table
 
             table = Table(show_header=True, header_style="bold blue")
@@ -544,7 +531,7 @@ class StorageBackendRegistry:
             table.add_column("Default", style="yellow")
             table.add_column("Description", style="white")
 
-            for field_name, field_info in config_class.__fields__.items():
+            for field_name, field_info in fields.items():
                 if field_name == "name":  # Skip the base name field
                     continue
 
@@ -618,7 +605,3 @@ class StorageBackendRegistry:
             )
 
         console.print(table)
-
-
-# Global registry instance
-storage_backend_registry = StorageBackendRegistry()

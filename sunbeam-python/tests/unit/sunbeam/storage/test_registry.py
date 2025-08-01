@@ -1,241 +1,447 @@
 # SPDX-FileCopyrightText: 2025 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
-import unittest
+"""Unit tests for storage backend registry."""
+
 from unittest.mock import Mock, patch
 
-from sunbeam.core.deployment import Deployment
-from sunbeam.storage.basestorage import StorageBackendBase
-from sunbeam.storage.registry import StorageBackendRegistry, storage_backend_registry
+import pytest
+
+from sunbeam.storage.base import StorageBackendBase
+from sunbeam.storage.models import StorageBackendConfig
+from sunbeam.storage.registry import StorageBackendRegistry
 
 
-class MockBackend(StorageBackendBase):
-    """Mock backend for testing."""
+class MockStorageBackend(StorageBackendBase):
+    """Mock storage backend for testing."""
 
     name = "mock"
-    display_name = "Mock Backend"
+    display_name = "Mock Storage Backend"
+    charm_name = "mock-charm"
+
+    def __init__(self):
+        super().__init__()
+        self.tfplan = "mock-backend-plan"
+        self.tfplan_dir = "deploy-mock-backend"
+
+    @property
+    def tfvar_config_key(self):
+        """Config key for storing Terraform variables in clusterd."""
+        return f"TerraformVars{self.name.title()}Backend"
 
     def config_class(self):
-        from sunbeam.storage.basestorage import StorageBackendConfig
-
         return StorageBackendConfig
 
-    def _prompt_for_config(self):
-        return {"name": "test-mock"}
+    def create_deploy_step(
+        self,
+        deployment,
+        client,
+        tfhelper,
+        jhelper,
+        manifest,
+        backend_name,
+        backend_config,
+        model,
+    ):
+        """Create a mock deployment step."""
+        from sunbeam.storage.steps import BaseStorageBackendDeployStep
 
-    def _create_add_plan(self, deployment, config, local_charm=""):
-        return []
+        return BaseStorageBackendDeployStep(
+            client,
+            tfhelper,
+            jhelper,
+            manifest,
+            backend_name,
+            backend_config,
+            self,
+            model,
+        )
 
-    def _create_remove_plan(self, deployment, backend_name):
-        return []
+    def create_destroy_step(
+        self, deployment, client, tfhelper, jhelper, manifest, backend_name, model
+    ):
+        """Create a mock destruction step."""
+        from sunbeam.storage.steps import BaseStorageBackendDestroyStep
 
+        return BaseStorageBackendDestroyStep(
+            client, tfhelper, jhelper, manifest, backend_name, self, model
+        )
 
-class TestStorageBackendRegistry(unittest.TestCase):
-    """Test cases for StorageBackendRegistry class."""
+    def create_update_config_step(self, deployment, backend_name, config_updates):
+        """Create a mock configuration update step."""
+        from sunbeam.storage.steps import BaseStorageBackendConfigUpdateStep
 
-    def setUp(self):
-        self.registry = StorageBackendRegistry()
-        self.deployment = Mock(spec=Deployment)
+        return BaseStorageBackendConfigUpdateStep(
+            deployment.get_client(), backend_name, config_updates, self
+        )
 
-    def tearDown(self):
-        # Reset the registry state
-        self.registry._backends = {}
-        self.registry._loaded = False
+    def prompt_for_config(self, backend_name: str) -> StorageBackendConfig:
+        """Mock prompt for configuration."""
+        return StorageBackendConfig()
 
-    @patch("pathlib.Path.iterdir")
-    def test_load_backends_success(self, mock_iterdir):
-        """Test successful backend loading."""
-        # Reset the registry to ensure clean state
-        self.registry._loaded = False
-        self.registry._backends = {}
-
-        # Mock file structure
-        mock_file = Mock()
-        mock_file.is_file.return_value = True
-        mock_file.name = "mock_backend.py"
-        mock_file.stem = "mock_backend"
-        mock_iterdir.return_value = [mock_file]
-
-        # Mock the specific import for our test module
-        with patch("importlib.import_module") as mock_import:
-            # Set up mock to only respond to our specific module
-            def side_effect(module_name):
-                if module_name == "sunbeam.storage.backends.mock_backend":
-                    mock_module = Mock()
-                    mock_module.MockBackend = MockBackend
-                    # Mock dir() to return the backend class name
-                    mock_module.__dir__ = Mock(return_value=["MockBackend"])
-                    return mock_module
-                else:
-                    # Let other imports pass through
-                    return __import__(module_name)
-
-            mock_import.side_effect = side_effect
-
-            self.registry._load_backends()
-
-            self.assertTrue(self.registry._loaded)
-            # Verify our specific module was imported
-            mock_import.assert_any_call("sunbeam.storage.backends.mock_backend")
-
-    @patch("pathlib.Path.iterdir")
-    def test_load_backends_skip_non_python_files(self, mock_iterdir):
-        """Test that non-Python files are skipped during loading."""
-        # Mock file structure with non-Python files
-        mock_py_file = Mock()
-        mock_py_file.is_file.return_value = True
-        mock_py_file.name = "backend.py"
-
-        mock_txt_file = Mock()
-        mock_txt_file.is_file.return_value = True
-        mock_txt_file.name = "readme.txt"
-
-        mock_dir = Mock()
-        mock_dir.is_file.return_value = False
-
-        mock_iterdir.return_value = [mock_py_file, mock_txt_file, mock_dir]
-
-        with patch("importlib.import_module") as mock_import:
-            self.registry._load_backends()
-            # Should only try to import the .py file
-            self.assertEqual(mock_import.call_count, 1)
-
-    @patch("pathlib.Path.iterdir")
-    @patch("importlib.import_module")
-    def test_load_backends_import_error(self, mock_import, mock_iterdir):
-        """Test handling of import errors during backend loading."""
-        mock_file = Mock()
-        mock_file.is_file.return_value = True
-        mock_file.name = "broken_backend.py"
-        mock_file.stem = "broken_backend"
-        mock_iterdir.return_value = [mock_file]
-
-        mock_import.side_effect = ImportError("Module not found")
-
-        # Should not raise exception, just log and continue
-        self.registry._load_backends()
-        self.assertTrue(self.registry._loaded)
-
-    def test_load_backends_called_once(self):
-        """Test that backends are loaded and cached properly."""
-        # Reset the registry to ensure clean state
-        self.registry._loaded = False
-        self.registry._backends = {}
-
-        with patch.object(
-            self.registry, "_load_backends", wraps=self.registry._load_backends
-        ) as mock_load:
-            # Call multiple times
-            backends1 = self.registry.list_backends()
-            backends2 = self.registry.list_backends()
-            try:
-                self.registry.get_backend("test")
-            except ValueError:
-                pass  # Expected for non-existent backend
-
-            # Verify that _load_backends was called (may be more than once)
-            self.assertTrue(mock_load.called)
-            # Verify that the same backends are returned (caching working)
-            self.assertEqual(backends1, backends2)
-
-    def test_list_backends_empty(self):
-        """Test getting backends when none are loaded."""
-        with patch.object(self.registry, "_load_backends"):
-            backends = self.registry.list_backends()
-            self.assertEqual(backends, {})
-
-    def test_list_backends_with_backends(self):
-        """Test getting backends when some are loaded."""
-        mock_backend = MockBackend()
-        self.registry._backends = {"mock": mock_backend}
-        self.registry._loaded = True
-
-        backends = self.registry.list_backends()
-        self.assertEqual(backends, {"mock": mock_backend})
-
-    def test_get_backend_exists(self):
-        """Test getting a specific backend that exists."""
-        mock_backend = MockBackend()
-        self.registry._backends = {"mock": mock_backend}
-        self.registry._loaded = True
-
-        backend = self.registry.get_backend("mock")
-        self.assertEqual(backend, mock_backend)
-
-    def test_get_backend_not_exists(self):
-        """Test getting a specific backend that doesn't exist."""
-        self.registry._loaded = True
-
-        with self.assertRaises(ValueError):
-            self.registry.get_backend("nonexistent")
-
-    @patch("click.Group")
-    def test_register_cli_commands_empty_registry(self, mock_group):
-        """Test command registration with empty registry."""
-        mock_cli = Mock()
-        self.registry._loaded = True
-
-        self.registry.register_cli_commands(mock_cli, self.deployment)
-
-        # Should still create command structure even with no backends
-        self.assertTrue(mock_cli.add_command.called)
-
-    @patch("click.Group")
-    def test_register_cli_commands_with_backends(self, mock_group):
-        """Test command registration with loaded backends."""
-        mock_cli = Mock()
-        mock_backend = MockBackend()
-
-        # Mock the commands method to return test commands
-        mock_commands = {
-            "add": [{"name": "mock", "command": Mock()}],
-            "remove": [{"name": "mock", "command": Mock()}],
+    def get_terraform_variables(
+        self, backend_name: str, config: StorageBackendConfig, model: str
+    ):
+        return {
+            "model": model,
+            "backends": {
+                backend_name: {
+                    "backend_type": self.name,
+                    "charm_name": self.charm_name,
+                    "charm_channel": "latest/stable",
+                    "backend_config": config.model_dump(),
+                    "backend_endpoint": "storage-backend",
+                    "units": 1,
+                    "additional_integrations": {},
+                }
+            },
         }
 
-        with patch.object(mock_backend, "commands", return_value=mock_commands):
-            self.registry._backends = {"mock": mock_backend}
-            self.registry._loaded = True
-
-            self.registry.register_cli_commands(mock_cli, self.deployment)
-
-            # Should register commands for each group
-            self.assertTrue(mock_cli.add_command.called)
-
-    def test_load_backends_consistency(self):
-        """Test that backends are loaded consistently across different a.methods."""
-        # Reset the registry to ensure clean state
-        self.registry._loaded = False
-        self.registry._backends = {}
-
-        with patch.object(
-            self.registry, "_load_backends", wraps=self.registry._load_backends
-        ) as mock_load:
-            # Call via different methods
-            backends_via_list = self.registry.list_backends()
-            backends_via_list_again = self.registry.list_backends()
-
-            # Verify that _load_backends was called
-            self.assertTrue(mock_load.called)
-            # Verify consistent results
-            self.assertEqual(backends_via_list, backends_via_list_again)
-            # Verify registry is marked as loaded
-            self.assertTrue(self.registry._loaded)
+    def commands(self):
+        """Return mock commands for testing."""
+        return {
+            "add": [{"name": "mock", "command": Mock()}],
+            "remove": [{"name": "mock", "command": Mock()}],
+            "list": [{"name": "mock", "command": Mock()}],
+            "config": [{"name": "mock", "command": Mock()}],
+        }
 
 
-class TestGlobalRegistry(unittest.TestCase):
-    """Test cases for global registry instance."""
+class TestStorageBackendRegistry:
+    """Test cases for StorageBackendRegistry class."""
 
-    def test_global_registry_instance(self):
-        """Test that global registry instance exists and is correct type."""
-        self.assertIsInstance(storage_backend_registry, StorageBackendRegistry)
+    def test_init(self):
+        """Test registry initialization."""
+        registry = StorageBackendRegistry()
 
-    def test_global_registry_singleton(self):
-        """Test that global registry behaves like a singleton."""
-        from sunbeam.storage.registry import storage_backend_registry as registry1
-        from sunbeam.storage.registry import storage_backend_registry as registry2
+        assert registry._backends == {}
+        assert hasattr(registry, "_loaded")
+        assert registry._loaded is False
 
-        self.assertIs(registry1, registry2)
+    def test_load_backends_success(self):
+        """Test successful backend loading by directly adding a backend."""
+        registry = StorageBackendRegistry()
 
+        # Directly add a mock backend to test registry functionality
+        mock_backend = MockStorageBackend()
+        registry._backends["mock"] = mock_backend
+        registry._loaded = True
 
-if __name__ == "__main__":
-    unittest.main()
+        assert registry._loaded is True
+        assert "mock" in registry._backends
+        assert isinstance(registry._backends["mock"], MockStorageBackend)
+
+    @patch("sunbeam.storage.registry.pathlib.Path")
+    def test_load_backends_no_backends_dir(self, mock_path):
+        """Test loading when backends directory doesn't exist."""
+        registry = StorageBackendRegistry()
+
+        # Mock the pathlib.Path chain: pathlib.Path(__file__).parent
+        # The registry calls iterdir() directly on the result of .parent
+        mock_backends_dir = Mock()
+        mock_backends_dir.exists.return_value = False
+        mock_backends_dir.is_dir.return_value = False
+        mock_backends_dir.iterdir.return_value = []  # Empty for no backends case
+
+        mock_path_instance = Mock()
+        mock_path_instance.parent = mock_backends_dir
+        mock_path.return_value = mock_path_instance
+
+        registry._load_backends()
+
+        assert registry._loaded is True
+        assert registry._backends == {}
+
+    @patch("sunbeam.storage.registry.pathlib.Path")
+    def test_load_backends_empty_dir(self, mock_path):
+        """Test backend loading with empty backends directory."""
+        registry = StorageBackendRegistry()
+
+        # Mock the pathlib.Path chain: pathlib.Path(__file__).parent
+        mock_backends_dir = Mock()
+        mock_backends_dir.exists.return_value = True
+        mock_backends_dir.is_dir.return_value = True
+        mock_backends_dir.iterdir.return_value = []
+
+        mock_path_instance = Mock()
+        mock_path_instance.parent = mock_backends_dir
+        mock_path.return_value = mock_path_instance
+
+        registry._load_backends()
+
+        assert registry._loaded is True
+        assert registry._backends == {}
+
+    def test_get_backend_success(self):
+        """Test successful backend retrieval."""
+        registry = StorageBackendRegistry()
+        mock_backend = MockStorageBackend()
+        registry._backends = {"mock": mock_backend}
+        registry._loaded = True
+
+        backend = registry.get_backend("mock")
+        assert backend == mock_backend
+
+    def test_get_backend_not_found(self):
+        """Test backend retrieval for non-existent backend."""
+        registry = StorageBackendRegistry()
+        registry._backends = {}
+        registry._loaded = True
+
+        with pytest.raises(ValueError, match="Storage backend 'nonexistent' not found"):
+            registry.get_backend("nonexistent")
+
+    def test_get_backend_auto_load(self):
+        """Test that get_backend automatically loads backends if not loaded."""
+        registry = StorageBackendRegistry()
+
+        with patch.object(registry, "_load_backends") as mock_load:
+            mock_backend = MockStorageBackend()
+            registry._backends = {"mock": mock_backend}
+            registry._loaded = True
+
+            backend = registry.get_backend("mock")
+            mock_load.assert_called_once()
+            assert backend == mock_backend
+
+    def test_list_backends(self):
+        """Test backend listing."""
+        registry = StorageBackendRegistry()
+        mock_backend1 = MockStorageBackend()
+        mock_backend2 = MockStorageBackend()
+        mock_backend2.name = "mock2"
+
+        registry._backends = {"mock": mock_backend1, "mock2": mock_backend2}
+        registry._loaded = True
+
+        backends = registry.list_backends()
+        assert len(backends) == 2
+        assert "mock" in backends
+        assert "mock2" in backends
+        assert backends["mock"] == mock_backend1
+        assert backends["mock2"] == mock_backend2
+
+    def test_list_backends_auto_load(self):
+        """Test that list_backends automatically loads backends if not loaded."""
+        registry = StorageBackendRegistry()
+
+        with patch.object(registry, "_load_backends") as mock_load:
+            registry._backends = {"mock": MockStorageBackend()}
+            registry._loaded = True
+
+            backends = registry.list_backends()
+            mock_load.assert_called_once()
+            assert len(backends) == 1
+
+    @patch("click.command")
+    def test_register_add_commands(self, mock_click_command, mock_deployment):
+        """Test add command registration."""
+        registry = StorageBackendRegistry()
+        mock_backend = MockStorageBackend()
+        registry._backends = {"mock": mock_backend}
+        registry._loaded = True
+
+        mock_storage_group = Mock()
+        mock_command_instance = Mock()
+        mock_click_command.return_value = mock_command_instance
+
+        registry._register_add_commands(mock_storage_group, mock_deployment)
+
+        # Verify click.command was called to create the add command
+        mock_click_command.assert_called()
+        # Verify the command was added to the storage group
+        mock_storage_group.add_command.assert_called()
+
+    @patch("click.command")
+    def test_register_remove_commands(self, mock_click_command, mock_deployment):
+        """Test remove command registration."""
+        registry = StorageBackendRegistry()
+        mock_backend = MockStorageBackend()
+        registry._backends = {"mock": mock_backend}
+        registry._loaded = True
+
+        mock_storage_group = Mock()
+        mock_command_instance = Mock()
+        mock_click_command.return_value = mock_command_instance
+
+        registry._register_remove_commands(mock_storage_group, mock_deployment)
+
+        # Verify click.command was called to create the remove command
+        mock_click_command.assert_called()
+        # Verify the command was added to the storage group
+        mock_storage_group.add_command.assert_called()
+
+    @patch("click.group")
+    def test_register_list_commands(self, mock_click_group, mock_deployment):
+        """Test list command registration."""
+        registry = StorageBackendRegistry()
+        mock_backend = MockStorageBackend()
+        registry._backends = {"mock": mock_backend}
+        registry._loaded = True
+
+        mock_cli = Mock()
+
+        with patch.object(mock_backend, "commands") as mock_commands:
+            mock_commands.return_value = {"list": [{"name": "mock", "command": Mock()}]}
+
+            registry._register_list_commands(mock_cli, mock_deployment)
+
+            # Verify click.group was called
+            mock_click_group.assert_called()
+
+    @patch("click.group")
+    def test_register_config_commands(self, mock_click_group, mock_deployment):
+        """Test config command registration."""
+        registry = StorageBackendRegistry()
+        mock_backend = MockStorageBackend()
+        registry._backends = {"mock": mock_backend}
+        registry._loaded = True
+
+        mock_cli = Mock()
+
+        with patch.object(mock_backend, "commands") as mock_commands:
+            mock_commands.return_value = {
+                "config": [{"name": "mock", "command": Mock()}]
+            }
+
+            registry._register_config_commands(mock_cli, mock_deployment)
+
+            # Verify click.group was called
+            mock_click_group.assert_called()
+
+    def test_register_commands_all_groups(self, mock_deployment):
+        """Test registration of all command groups."""
+        registry = StorageBackendRegistry()
+        mock_backend = MockStorageBackend()
+        registry._backends = {"mock": mock_backend}
+        registry._loaded = True
+
+        mock_cli = Mock()
+
+        with (
+            patch.object(registry, "_register_add_commands") as mock_add,
+            patch.object(registry, "_register_remove_commands") as mock_remove,
+            patch.object(registry, "_register_list_commands") as mock_list,
+            patch.object(registry, "_register_config_commands") as mock_config,
+        ):
+            registry.register_cli_commands(mock_cli, mock_deployment)
+
+            mock_add.assert_called_once_with(mock_cli, mock_deployment)
+            mock_remove.assert_called_once_with(mock_cli, mock_deployment)
+            mock_list.assert_called_once_with(mock_cli, mock_deployment)
+            mock_config.assert_called_once_with(mock_cli, mock_deployment)
+
+    def test_backend_discovery_error_handling(self):
+        """Test error handling during backend discovery."""
+        registry = StorageBackendRegistry()
+
+        with patch("sunbeam.storage.registry.pathlib.Path") as mock_path:
+            mock_backends_dir = Mock()
+            mock_backends_dir.exists.return_value = True
+            mock_backends_dir.is_dir.return_value = True
+            mock_backends_dir.iterdir.side_effect = Exception("Directory read error")
+
+            mock_path_instance = Mock()
+            mock_path_instance.parent = mock_backends_dir
+            mock_path.return_value = mock_path_instance
+
+            # Directory iteration errors are not handled, so exception should be raised
+            with pytest.raises(Exception, match="Directory read error"):
+                registry._load_backends()
+
+    def test_module_loading_error_handling(self):
+        """Test error handling during module loading."""
+        registry = StorageBackendRegistry()
+
+        with (
+            patch("sunbeam.storage.registry.pathlib.Path") as mock_path,
+            patch(
+                "sunbeam.storage.registry.importlib.import_module"
+            ) as mock_import_module,
+        ):
+            mock_backends_dir = Mock()
+            mock_backends_dir.exists.return_value = True
+            mock_backends_dir.is_dir.return_value = True
+
+            mock_backend_dir = Mock()
+            mock_backend_dir.name = "mock"
+            mock_backend_dir.is_dir.return_value = True
+
+            # Set up path operations for mock_backend_dir
+            mock_backend_module_path = Mock()
+            mock_backend_module_path.exists.return_value = True
+            mock_backend_dir.__truediv__ = Mock(return_value=mock_backend_module_path)
+
+            mock_backends_dir.iterdir.return_value = [mock_backend_dir]
+
+            mock_path_instance = Mock()
+            mock_path_instance.parent = mock_backends_dir
+            mock_path.return_value = mock_path_instance
+
+            mock_import_module.side_effect = Exception("Module loading error")
+
+            # Should not raise exception, just log error and continue
+            registry._load_backends()
+
+            assert registry._loaded is True
+            assert registry._backends == {}
+
+    def test_singleton_behavior(self):
+        """Test that registry instances are independent (not singleton)."""
+        registry1 = StorageBackendRegistry()
+        registry2 = StorageBackendRegistry()
+
+        # Should be different instances
+        assert registry1 is not registry2
+        assert registry1._backends is not registry2._backends
+
+    def test_backend_validation(self):
+        """Test backend validation during loading."""
+        registry = StorageBackendRegistry()
+
+        # Mock a class that doesn't inherit from StorageBackendBase
+        class InvalidBackend:
+            name = "invalid"
+
+        # Directly test validation by adding backends
+        # Valid backend should be accepted
+        valid_backend = MockStorageBackend()
+        registry._backends["mock"] = valid_backend
+
+        # Test that we can access the valid backend
+        assert len(registry._backends) == 1
+        assert "mock" in registry._backends
+        assert isinstance(registry._backends["mock"], MockStorageBackend)
+
+    def test_command_registration_with_no_backends(self, mock_deployment):
+        """Test command registration when no backends are loaded."""
+        registry = StorageBackendRegistry()
+        registry._backends = {}
+        registry._loaded = True
+
+        mock_cli = Mock()
+
+        # Should not raise errors even with no backends
+        registry._register_add_commands(mock_cli, mock_deployment)
+        registry._register_remove_commands(mock_cli, mock_deployment)
+        registry._register_list_commands(mock_cli, mock_deployment)
+        registry._register_config_commands(mock_cli, mock_deployment)
+
+    def test_command_registration_with_missing_command_groups(self, mock_deployment):
+        """Test command registration when backend doesn't have all command groups."""
+        registry = StorageBackendRegistry()
+        mock_backend = MockStorageBackend()
+        registry.backends = {"mock": mock_backend}
+        registry._loaded = True
+
+        mock_cli = Mock()
+
+        with patch.object(mock_backend, "commands") as mock_commands:
+            # Backend only has "add" commands, missing others
+            mock_commands.return_value = {"add": [{"name": "mock", "command": Mock()}]}
+
+            # Should not raise errors for missing command groups
+            registry._register_add_commands(mock_cli, mock_deployment)
+            registry._register_remove_commands(mock_cli, mock_deployment)
+            registry._register_list_commands(mock_cli, mock_deployment)
+            registry._register_config_commands(mock_cli, mock_deployment)

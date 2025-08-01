@@ -17,7 +17,7 @@ from sunbeam.storage.models import (
     StorageBackendException,
     StorageBackendInfo,
 )
-from sunbeam.storage.registry import StorageBackendRegistry, storage_backend_registry
+from sunbeam.storage.registry import StorageBackendRegistry
 from sunbeam.storage.service import StorageBackendService
 
 __all__ = [
@@ -30,5 +30,4 @@ __all__ = [
     "BackendAlreadyExistsException",
     "BackendValidationException",
     "StorageBackendRegistry",
-    "storage_backend_registry",
 ]
