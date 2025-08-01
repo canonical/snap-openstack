@@ -20,6 +20,7 @@ from sunbeam.commands import plans as plans_cmd
 from sunbeam.commands import prepare_node as prepare_node_cmds
 from sunbeam.commands import proxy as proxy_cmds
 from sunbeam.commands import sso as sso_cmd
+from sunbeam.commands import storage as storage_cmds
 from sunbeam.commands import utils as utils_cmds
 from sunbeam.core import deployments as deployments_jobs
 from sunbeam.provider import commands as provider_cmds
@@ -113,6 +114,7 @@ def main():
     cli.add_command(launch_cmds.launch)
     cli.add_command(openrc_cmds.openrc)
     cli.add_command(dasboard_url_cmds.dashboard_url)
+    cli.add_command(storage_cmds.storage)
 
     # Add identity group
     cli.add_command(identity_group)
@@ -159,6 +161,9 @@ def main():
     cli.add_command(juju)
     juju.add_command(juju_cmds.register_controller)
     juju.add_command(juju_cmds.unregister_controller)
+
+    # Register storage backend commands
+    storage_cmds.register_storage_commands(deployment)
 
     # Register the features after all groups,commands are registered
     deployment.get_feature_manager().register(cli, deployment)
