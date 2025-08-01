@@ -17,8 +17,8 @@ from sunbeam.storage.models import (
     StorageBackendException,
     StorageBackendInfo,
 )
-from sunbeam.storage.service import StorageBackendService
 from sunbeam.storage.registry import StorageBackendRegistry, storage_backend_registry
+from sunbeam.storage.service import StorageBackendService
 
 __all__ = [
     "StorageBackendBase",

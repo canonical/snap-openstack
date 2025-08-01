@@ -9,7 +9,6 @@ from pydantic import BaseModel, Field
 
 from sunbeam.core.common import SunbeamException
 
-
 # =============================================================================
 # Exceptions
 # =============================================================================
