@@ -38,7 +38,8 @@ def register_storage_commands(deployment: Deployment) -> None:
     commands dynamically based on available backends.
     """
     try:
-        StorageBackendRegistry().register_cli_commands(storage, deployment)
+        registry = StorageBackendRegistry()
+        registry.register_cli_commands(storage, deployment)
         LOG.debug("Storage backend commands registered successfully")
     except Exception as e:
         LOG.error(f"Failed to register storage backend commands: {e}")

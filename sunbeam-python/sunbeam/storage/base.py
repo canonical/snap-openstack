@@ -4,6 +4,7 @@
 """Storage backend base class with integrated Terraform functionality."""
 
 import logging
+import re
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -54,6 +55,45 @@ class ConcreteStorageBackendDestroyStep(BaseStorageBackendDestroyStep):
 
 LOG = logging.getLogger(__name__)
 console = Console()
+
+# Juju application name validation pattern
+# Based on Juju's naming rules: must start with letter, contain only
+# letters, numbers, hyphens. Cannot end with hyphen, cannot have
+# consecutive hyphens, cannot have numbers after final hyphen
+JUJU_APP_NAME_PATTERN = re.compile(r"^[a-z]([a-z0-9]*(-[a-z0-9]*)*)?$")
+
+
+def validate_juju_application_name(name: str) -> bool:
+    """Validate that a name is a valid Juju application name.
+
+    Args:
+        name: The application name to validate
+
+    Returns:
+        True if valid, False otherwise
+    """
+    if not name:
+        return False
+
+    # Check basic pattern
+    if not JUJU_APP_NAME_PATTERN.match(name):
+        return False
+
+    # Additional checks for edge cases
+    if name.endswith("-"):
+        return False
+
+    if "--" in name:
+        return False
+
+    # Check that numbers don't appear after the final hyphen
+    if "-" in name:
+        parts = name.split("-")
+        last_part = parts[-1]
+        if any(char.isdigit() for char in last_part):
+            return False
+
+    return True
 
 
 class StorageBackendBase(BaseRegisterable, ABC):
@@ -201,6 +241,17 @@ class StorageBackendBase(BaseRegisterable, ABC):
         console: Console,
     ) -> None:
         """Add a storage backend using Terraform deployment."""
+        # Validate backend name follows Juju application naming rules
+        if not validate_juju_application_name(backend_name):
+            raise click.ClickException(
+                f"Invalid backend name '{backend_name}'. "
+                f"Backend names must be valid Juju application names: "
+                f"start with a letter, contain only lowercase letters, numbers,"
+                f"and hyphens, cannot end with hyphen, cannot"
+                f"have consecutive hyphens, and cannot have numbers"
+                f"after the final hyphen."
+            )
+
         if self.backend_exists(deployment, backend_name):
             raise BackendAlreadyExistsException(
                 f"Backend '{backend_name}' already exists"
@@ -292,11 +343,18 @@ class StorageBackendBase(BaseRegisterable, ABC):
 
         run_plan(plan, console)
 
-    def _get_backend_type(self, app_name: str) -> str:
-        """Determine backend type from application name."""
-        if "hitachi" in app_name:
+    def _get_backend_type(self, charm_name: str) -> str:
+        """Determine backend type from charm name.
+
+        Args:
+            charm_name: The charm name (e.g., 'cinder-volume-hitachi')
+
+        Returns:
+            Backend type string
+        """
+        if "hitachi" in charm_name:
             return "hitachi"
-        elif "ceph" in app_name:
+        elif "ceph" in charm_name:
             return "ceph"
         else:
             return "unknown"
@@ -395,6 +453,7 @@ class StorageBackendBase(BaseRegisterable, ABC):
         """Convert user config to charm-specific config. Override in subclasses."""
         raise NotImplementedError("Subclasses must implement _get_backend_config")
 
+    @abstractmethod
     def get_terraform_variables(
         self, backend_name: str, config: StorageBackendConfig, model: str
     ) -> Dict[str, Any]:
@@ -404,10 +463,18 @@ class StorageBackendBase(BaseRegisterable, ABC):
     def get_field_mapping(self) -> Dict[str, str]:
         """Get mapping from config fields to charm config options.
 
-        Override in subclasses.
+        Maps Pydantic field names (with underscores) to charm config option
+        names (with hyphens). Uses the config_class to automatically generate
+        the mapping from Pydantic model fields.
         """
-        raise NotImplementedError("Subclasses must implement get_field_mapping")
+        config_class = self.config_class
+        # Use model_fields for Pydantic v2
+        model_fields = getattr(config_class, "model_fields", {})
+        field_names = model_fields.keys() if model_fields else []
 
+        return {key: key.replace("_", "-") for key in field_names}
+
+    @abstractmethod
     def prompt_for_config(self, backend_name: str) -> StorageBackendConfig:
         """Prompt user for backend-specific configuration. Override in subclasses."""
         raise NotImplementedError("Subclasses must implement prompt_for_config")

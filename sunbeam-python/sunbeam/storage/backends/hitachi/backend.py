@@ -10,6 +10,9 @@ import typing
 from typing import Any, Dict
 
 import click
+
+# Import pydantic Field directly
+from pydantic import Field
 from rich.console import Console
 
 from sunbeam.core.common import BaseStep, Result, ResultType
@@ -25,15 +28,14 @@ from sunbeam.storage.steps import (
     BaseStorageBackendDestroyStep,
 )
 
-# Import pydantic components from the models module
-try:
-    from pydantic import Field
-except ImportError:
-    # Fallback if pydantic is not directly available
-    from sunbeam.storage.models import Field
-
 LOG = logging.getLogger(__name__)
 console = Console()
+
+# Regex pattern for validating FQDN (Fully Qualified Domain Name)
+FQDN_PATTERN = (
+    r"^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?"
+    r"(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$"
+)
 
 
 class HitachiConfig(StorageBackendConfig):
@@ -575,10 +577,7 @@ class HitachiBackend(StorageBackendBase):
             return value
         except ValueError:
             # If not a valid IP, check if it's a valid FQDN
-            if re.match(
-                r"^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$",
-                value,
-            ):
+            if re.match(FQDN_PATTERN, value):
                 return value
             raise click.BadParameter("Must be a valid IP address or FQDN")
 
