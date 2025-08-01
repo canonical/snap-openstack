@@ -424,6 +424,7 @@ def test_deploy_simple(jhelper, juju):
         num_units=1,
         base="ubuntu@24.04",
         to=None,
+        trust=False,
     )
 
 
@@ -438,6 +439,7 @@ def test_deploy_all_args(jhelper, juju):
         to=["0"],
         config={"foo": "bar"},
         base="ubuntu@22.04",
+        trust=False,
     )
     juju.deploy.assert_called_with(
         "charm",
@@ -448,6 +450,7 @@ def test_deploy_all_args(jhelper, juju):
         num_units=2,
         base="ubuntu@22.04",
         to=["0"],
+        trust=False,
     )
 
 
