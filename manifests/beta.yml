@@ -89,6 +89,13 @@ features:
       charms:
         barbican-k8s:
           channel: 2024.1/beta
+  shared-filesystem:
+    software:
+      charms:
+        manila-k8s:
+          channel: 2024.1/beta
+        manila-cephfs-k8s:
+          channel: 2024.1/beta
   telemetry:
     software:
       charms:
