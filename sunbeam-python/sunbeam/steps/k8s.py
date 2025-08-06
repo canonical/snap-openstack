@@ -1686,3 +1686,80 @@ class PatchCoreDNSStep(BaseStep):
             return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.COMPLETED)
+
+
+class PatchServiceExternalTrafficStep(BaseStep):
+    """Patch service external traffic policy to Local.
+
+    This is a workaround for LP#2111922.
+    Using externalTrafficPolicy will force metallb to announce
+    from nodes hosting the pods of the deployment. Since Juju does
+    not support HA on k8s, only the node hosting the Juju pod will be
+    eligible to announce the service IP. This will that the connection
+    isn't broken when new k8s node join, as the mac address will not change
+    uncontrollably.
+    """
+
+    def __init__(
+        self,
+        deployment: Deployment,
+        service_name: str,
+        namespace: str,
+    ):
+        super().__init__(
+            "Patch Service Traffic announcement",
+            "Patching Service Traffic announcement",
+        )
+        self.deployment = deployment
+        self.client = deployment.get_client()
+        self.service_name = service_name
+        self.namespace = namespace
+
+    def is_skip(self, status: Status | None = None) -> Result:
+        """Determines if the step should be skipped or not.
+
+        :return: ResultType.SKIPPED if the Step should be skipped,
+                 ResultType.COMPLETED or ResultType.FAILED otherwise
+        """
+        try:
+            self.kube = get_kube_client(
+                self.client,
+                self.namespace,
+            )
+        except KubeClientError as e:
+            LOG.debug("Failed to create k8s client", exc_info=True)
+            return Result(ResultType.FAILED, str(e))
+
+        try:
+            service = self.kube.get(core_v1.Service, name=self.service_name)
+            if service.spec is None or service.spec.externalTrafficPolicy == "Local":
+                return Result(ResultType.SKIPPED)
+        except l_exceptions.ApiError as e:
+            LOG.debug("Failed to get service", exc_info=True)
+            return Result(ResultType.FAILED, str(e))
+        return Result(ResultType.COMPLETED)
+
+    def run(self, status: Status | None = None) -> Result:
+        """Run the step to completion."""
+        try:
+            service = self.kube.get(core_v1.Service, name=self.service_name)
+            if service.spec is None:
+                LOG.debug("Service has no spec")
+                return Result(ResultType.FAILED, "Service has no spec")
+
+            service.spec.externalTrafficPolicy = "Local"
+            self.kube.patch(
+                core_v1.Service,
+                name=self.service_name,
+                namespace=self.namespace,
+                obj={
+                    "spec": {
+                        "externalTrafficPolicy": "Local",
+                    }
+                },
+            )
+        except (l_exceptions.ApiError, K8SError) as e:
+            LOG.debug("Failed to patch service", exc_info=True)
+            return Result(ResultType.FAILED, str(e))
+
+        return Result(ResultType.COMPLETED)

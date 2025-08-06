@@ -32,6 +32,7 @@ from sunbeam.steps.k8s import (
     EnsureL2AdvertisementByHostStep,
     KubeClientError,
     PatchCoreDNSStep,
+    PatchServiceExternalTrafficStep,
     StoreK8SKubeConfigStep,
     _get_kube_client,
     _get_machines_space_ips,
@@ -1095,3 +1096,95 @@ class TestPatchCoreDNSStep(unittest.TestCase):
         assert result.result_type == ResultType.FAILED
         self.jhelper.get_leader_unit.assert_called_once()
         self.jhelper.run_cmd_on_machine_unit_payload.assert_not_called()
+
+
+class TestPatchServiceExternalTrafficStep(unittest.TestCase):
+    def setUp(self):
+        self.deployment = Mock()
+        self.deployment.get_client.return_value = Mock()
+        self.client = self.deployment.get_client()
+        self.service_name = "test-service"
+        self.namespace = "test-namespace"
+        self.step = PatchServiceExternalTrafficStep(
+            self.deployment, self.service_name, self.namespace
+        )
+        self.kube = Mock()
+        self.step.kube = self.kube
+
+    def test_is_skip_external_traffic_policy_already_local(self):
+        service = Mock()
+        service.spec = Mock()
+        service.spec.externalTrafficPolicy = "Local"
+        with patch("sunbeam.steps.k8s.get_kube_client", return_value=self.kube):
+            self.kube.get.return_value = service
+            result = self.step.is_skip()
+        assert result.result_type == ResultType.SKIPPED
+
+    def test_is_skip_external_traffic_policy_not_local(self):
+        service = Mock()
+        service.spec = Mock()
+        service.spec.externalTrafficPolicy = "Cluster"
+        with patch("sunbeam.steps.k8s.get_kube_client", return_value=self.kube):
+            self.kube.get.return_value = service
+            result = self.step.is_skip()
+        assert result.result_type == ResultType.COMPLETED
+
+    def test_is_skip_service_has_no_spec(self):
+        service = Mock()
+        service.spec = None
+        with patch("sunbeam.steps.k8s.get_kube_client", return_value=self.kube):
+            self.kube.get.return_value = service
+            result = self.step.is_skip()
+        assert result.result_type == ResultType.SKIPPED
+
+    def test_is_skip_kube_client_error(self):
+        with patch(
+            "sunbeam.steps.k8s.get_kube_client", side_effect=KubeClientError("fail")
+        ):
+            result = self.step.is_skip()
+        assert result.result_type == ResultType.FAILED
+
+    def test_is_skip_api_error(self):
+        api_error = lightkube.core.exceptions.ApiError.__new__(
+            lightkube.core.exceptions.ApiError
+        )
+        with patch("sunbeam.steps.k8s.get_kube_client", return_value=self.kube):
+            self.kube.get.side_effect = api_error
+            result = self.step.is_skip()
+        assert result.result_type == ResultType.FAILED
+
+    def test_run_success(self):
+        service = Mock()
+        service.spec = Mock()
+        service.spec.externalTrafficPolicy = "Cluster"
+        with patch.object(self.step, "kube") as kube_mock:
+            kube_mock.get.return_value = service
+            kube_mock.patch.return_value = None
+            result = self.step.run(None)
+        kube_mock.get.assert_called_once_with(
+            lightkube.resources.core_v1.Service, name=self.service_name
+        )
+        kube_mock.patch.assert_called_once()
+        assert result.result_type == ResultType.COMPLETED
+
+    def test_run_service_has_no_spec(self):
+        service = Mock()
+        service.spec = None
+        with patch.object(self.step, "kube") as kube_mock:
+            kube_mock.get.return_value = service
+            result = self.step.run(None)
+        assert result.result_type == ResultType.FAILED
+        assert "Service has no spec" in result.message
+
+    def test_run_patch_api_error(self):
+        service = Mock()
+        service.spec = Mock()
+        service.spec.externalTrafficPolicy = "Cluster"
+        api_error = lightkube.core.exceptions.ApiError.__new__(
+            lightkube.core.exceptions.ApiError
+        )
+        with patch.object(self.step, "kube") as kube_mock:
+            kube_mock.get.return_value = service
+            kube_mock.patch.side_effect = api_error
+            result = self.step.run(None)
+        assert result.result_type == ResultType.FAILED
