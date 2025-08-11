@@ -29,6 +29,33 @@ class MockStorageBackend(StorageBackendBase):
         """Config key for storing Terraform variables in clusterd."""
         return f"TerraformVars{self.name.title()}Backend"
 
+    def register_add_cli(self, add):
+        """Mock CLI registration."""
+        pass
+
+    def register_cli(
+        self, remove, config_show, config_set, config_reset, config_options, deployment
+    ):
+        """Mock CLI registration."""
+        pass
+
+    def get_terraform_variables(self, backend_name, config, model):
+        """Mock Terraform variables."""
+        return {
+            "model": model,
+            "mock_backends": {
+                backend_name: {
+                    "backend_type": self.name,
+                    "charm_name": self.charm_name,
+                    "charm_channel": "latest/stable",
+                    "backend_config": config.model_dump(),
+                    "backend_endpoint": "storage-backend",
+                    "units": 1,
+                    "additional_integrations": {},
+                }
+            },
+        }
+
     def create_deploy_step(
         self,
         deployment,
@@ -41,7 +68,8 @@ class MockStorageBackend(StorageBackendBase):
         model,
     ):
         """Create a mock deployment step."""
-        return BaseStorageBackendDeployStep(
+        return MockDeployStep(
+            deployment,
             client,
             tfhelper,
             jhelper,
@@ -56,37 +84,19 @@ class MockStorageBackend(StorageBackendBase):
         self, deployment, client, tfhelper, jhelper, manifest, backend_name, model
     ):
         """Create a mock destruction step."""
-        return BaseStorageBackendDestroyStep(
-            client, tfhelper, jhelper, manifest, backend_name, self, model
+        return MockDestroyStep(
+            deployment, client, tfhelper, jhelper, manifest, backend_name, self, model
         )
 
     def create_update_config_step(self, deployment, backend_name, config_updates):
         """Create a mock configuration update step."""
         return BaseStorageBackendConfigUpdateStep(
-            deployment.get_client(), backend_name, config_updates, self
+            deployment, self, backend_name, config_updates
         )
 
     def prompt_for_config(self, backend_name: str) -> StorageBackendConfig:
         """Mock prompt for configuration."""
-        return StorageBackendConfig()
-
-    def get_terraform_variables(
-        self, backend_name: str, config: StorageBackendConfig, model: str
-    ):
-        return {
-            "model": model,
-            "backends": {
-                backend_name: {
-                    "backend_type": self.name,
-                    "charm_name": self.charm_name,
-                    "charm_channel": "latest/stable",
-                    "backend_config": config.model_dump(),
-                    "backend_endpoint": "storage-backend",
-                    "units": 1,
-                    "additional_integrations": {},
-                }
-            },
-        }
+        return StorageBackendConfig(name=backend_name)
 
     def get_field_mapping(self):
         """Return field mapping for mock backend."""
@@ -195,7 +205,7 @@ class TestBaseStorageBackendDeployStep:
         tfvars = call_args[1]["override_tfvars"]
 
         assert "model" in tfvars
-        assert "backends" in tfvars
+        assert "mock_backends" in tfvars
         assert tfvars["model"] == "openstack"
 
     def test_get_application_timeout(
@@ -469,43 +479,6 @@ class TestBaseStorageBackendConfigUpdateStep:
         assert "Update Mock Storage Backend" in step.name
         assert "test-backend" in step.description
 
-    def test_is_reset_operation_false(self, mock_deployment):
-        """Test reset operation detection for normal update."""
-        backend_instance = MockStorageBackend()
-        backend_name = "test-backend"
-        config_updates = {"key1": "value1", "key2": "value2"}
-
-        step = BaseStorageBackendConfigUpdateStep(
-            mock_deployment, backend_instance, backend_name, config_updates
-        )
-
-        assert step.is_reset_operation() is False
-
-    def test_is_reset_operation_true(self, mock_deployment):
-        """Test reset operation detection for reset operation."""
-        backend_instance = MockStorageBackend()
-        backend_name = "test-backend"
-        config_updates = {"_reset_keys": ["key1", "key2"]}
-
-        step = BaseStorageBackendConfigUpdateStep(
-            mock_deployment, backend_instance, backend_name, config_updates
-        )
-
-        assert step.is_reset_operation() is True
-
-    def test_get_reset_keys(self, mock_deployment):
-        """Test reset keys retrieval."""
-        backend_instance = MockStorageBackend()
-        backend_name = "test-backend"
-        config_updates = {"_reset_keys": ["key1", "key2"]}
-
-        step = BaseStorageBackendConfigUpdateStep(
-            mock_deployment, backend_instance, backend_name, config_updates
-        )
-
-        keys = step.get_reset_keys()
-        assert keys == ["key1", "key2"]
-
     @patch("sunbeam.storage.steps.read_config")
     @patch("sunbeam.storage.steps.update_config")
     def test_run_update_operation(
@@ -604,37 +577,6 @@ class TestBaseStorageBackendConfigUpdateStep:
                         "key2": "value2",
                     }
                 }
-            }
-        }
-        assert updated_config == expected_config
-
-    def test_handle_reset_operation(self, mock_deployment):
-        """Test reset operation handling."""
-        backend_instance = MockStorageBackend()
-        backend_name = "test-backend"
-        config_updates = {"_reset_keys": ["key1"]}
-
-        step = BaseStorageBackendConfigUpdateStep(
-            mock_deployment, backend_instance, backend_name, config_updates
-        )
-
-        current_config = {
-            "mock_backends": {
-                "test-backend": {
-                    "charm_config": {
-                        "key1": "value1",
-                        "key2": "value2",
-                        "key3": "value3",
-                    }
-                }
-            }
-        }
-        updated_config = step.handle_reset_operation(current_config)
-
-        # key1 should be removed, others should remain
-        expected_config = {
-            "mock_backends": {
-                "test-backend": {"charm_config": {"key2": "value2", "key3": "value3"}}
             }
         }
         assert updated_config == expected_config

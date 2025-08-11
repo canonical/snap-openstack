@@ -5,9 +5,3 @@
 
 This package contains implementations of various storage backends for Sunbeam.
 """
-
-from sunbeam.storage.backends.hitachi import HitachiBackend
-
-__all__ = [
-    "HitachiBackend",
-]

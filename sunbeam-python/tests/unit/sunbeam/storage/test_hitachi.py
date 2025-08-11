@@ -29,6 +29,9 @@ class TestHitachiConfig:
             hitachi_storage_id="123456",
             hitachi_pools="pool1,pool2",
             san_ip="192.168.1.100",
+            protocol="FC",
+            san_username="testuser",
+            san_password="testpassword",
         )
 
         assert config.name == "hitachi-backend-1"
@@ -36,6 +39,8 @@ class TestHitachiConfig:
         assert config.hitachi_pools == "pool1,pool2"
         assert config.san_ip == "192.168.1.100"
         assert config.protocol == "FC"  # Default value
+        assert config.san_username == "testuser"
+        assert config.san_password == "testpassword"
 
     def test_valid_config_full(self):
         """Test creating valid full Hitachi configuration."""
@@ -45,6 +50,8 @@ class TestHitachiConfig:
             hitachi_pools="pool1,pool2",
             san_ip="192.168.1.100",
             protocol="iSCSI",
+            san_username="testuser",
+            san_password="testpassword",
         )
 
         assert config.name == "hitachi-backend-1"
@@ -52,6 +59,8 @@ class TestHitachiConfig:
         assert config.hitachi_pools == "pool1,pool2"
         assert config.san_ip == "192.168.1.100"
         assert config.protocol == "iSCSI"
+        assert config.san_username == "testuser"
+        assert config.san_password == "testpassword"
 
     def test_config_with_iscsi_protocol(self):
         """Test configuration with iSCSI protocol."""
@@ -61,9 +70,13 @@ class TestHitachiConfig:
             hitachi_pools="pool1",
             san_ip="192.168.1.100",
             protocol="iSCSI",
+            san_username="testuser",
+            san_password="testpassword",
         )
 
         assert config.protocol == "iSCSI"
+        assert config.san_username == "testuser"
+        assert config.san_password == "testpassword"
 
     def test_config_validation_missing_required_fields(self):
         """Test validation errors for missing required fields."""
@@ -90,6 +103,9 @@ class TestHitachiConfig:
             hitachi_storage_id="123456",
             hitachi_pools="pool1",
             san_ip="192.168.1.100",
+            protocol="FC",
+            san_username="testuser",
+            san_password="testpassword",
         )
         assert config.san_ip == "192.168.1.100"
 
@@ -100,6 +116,9 @@ class TestHitachiConfig:
             hitachi_storage_id="123456",
             hitachi_pools="pool1",
             san_ip="storage.example.com",
+            protocol="FC",
+            san_username="testuser",
+            san_password="testpassword",
         )
         assert config.san_ip == "storage.example.com"
 
@@ -113,6 +132,8 @@ class TestHitachiConfig:
                 hitachi_pools="pool1",
                 san_ip="192.168.1.100",
                 protocol=protocol,
+                san_username="testuser",
+                san_password="testpassword",
             )
             assert config.protocol == protocol
 
@@ -123,6 +144,9 @@ class TestHitachiConfig:
             hitachi_storage_id="123456",
             hitachi_pools="pool1",
             san_ip="192.168.1.100",
+            protocol="FC",
+            san_username="testuser",
+            san_password="testpassword",
         )
 
         data = config.model_dump()
@@ -131,6 +155,8 @@ class TestHitachiConfig:
         assert data["hitachi_pools"] == "pool1"
         assert data["san_ip"] == "192.168.1.100"
         assert data["protocol"] == "FC"
+        assert data["san_username"] == "testuser"
+        assert data["san_password"] == "testpassword"
 
     def test_config_inheritance(self):
         """Test that HitachiConfig inherits from StorageBackendConfig."""
@@ -139,6 +165,9 @@ class TestHitachiConfig:
             hitachi_storage_id="123456",
             hitachi_pools="pool1",
             san_ip="192.168.1.100",
+            protocol="FC",
+            san_username="testuser",
+            san_password="testpassword",
         )
 
         assert isinstance(config, StorageBackendConfig)
@@ -191,6 +220,9 @@ class TestHitachiBackend:
             hitachi_storage_id="123456",
             hitachi_pools="pool1,pool2",
             san_ip="192.168.1.100",
+            protocol="FC",
+            san_username="testuser",
+            san_password="testpassword",
         )
 
         variables = backend.get_terraform_variables(
@@ -205,36 +237,16 @@ class TestHitachiBackend:
         backend_config = variables["hitachi_backends"]["hitachi-backend-1"]
         assert "charm_config" in backend_config
 
-        # Verify charm config contains the expected fields
+        # Verify charm config contains the expected fields (excluding credentials)
         charm_config = backend_config["charm_config"]
         assert charm_config["hitachi-storage-id"] == "123456"
         assert charm_config["hitachi-pools"] == "pool1,pool2"
         assert charm_config["san-ip"] == "192.168.1.100"
-
-    def test_get_backend_config_filtering(self):
-        """Test backend configuration filtering."""
-        backend = HitachiBackend()
-        config = HitachiConfig(
-            name="hitachi-backend-1",
-            hitachi_storage_id="123456",
-            hitachi_pools="pool1,pool2",
-            san_ip="192.168.1.100",
-            protocol="iSCSI",  # Non-default value
-        )
-
-        backend_config = backend._get_backend_config(config)
-
-        # Should include non-default values
-        assert "hitachi-storage-id" in backend_config
-        assert "hitachi-pools" in backend_config
-        assert "san-ip" in backend_config
-        assert "protocol" in backend_config  # Non-default value
-
-        # Verify actual values
-        assert backend_config["hitachi-storage-id"] == "123456"
-        assert backend_config["hitachi-pools"] == "pool1,pool2"
-        assert backend_config["san-ip"] == "192.168.1.100"
-        assert backend_config["protocol"] == "iSCSI"
+        # Protocol field is excluded when it matches default value
+        assert "protocol" not in charm_config
+        # Credentials should not be in charm config - they go in secrets
+        assert "san-username" not in charm_config
+        assert "san-password" not in charm_config
 
     def test_should_include_config_value(self):
         """Test configuration value inclusion logic."""
@@ -260,15 +272,6 @@ class TestHitachiBackend:
         # None values should not be included
         assert not backend._should_include_config_value("optional-field", None, None)
 
-    def test_commands(self):
-        """Test command registration structure."""
-        backend = HitachiBackend()
-        commands = backend.commands()
-
-        assert isinstance(commands, dict)
-        # Current implementation returns empty dict
-        assert commands == {}
-
     def test_create_deploy_step(
         self, mock_deployment, mock_client, mock_tfhelper, mock_jhelper, mock_manifest
     ):
@@ -279,6 +282,9 @@ class TestHitachiBackend:
             hitachi_storage_id="123456",
             hitachi_pools="pool1",
             san_ip="192.168.1.100",
+            protocol="FC",
+            san_username="testuser",
+            san_password="testpassword",
         )
 
         step = backend.create_deploy_step(
@@ -395,6 +401,8 @@ class TestHitachiSteps:
             hitachi_pools="pool1,pool2",
             san_ip="192.168.1.100",
             protocol="FC",
+            san_username="testuser",
+            san_password="testpassword",
         )
 
         step = HitachiDeployStep(
@@ -428,6 +436,8 @@ class TestHitachiSteps:
             hitachi_pools="pool1,pool2",
             san_ip="192.168.1.100",
             protocol="FC",
+            san_username="testuser",
+            san_password="testpassword",
         )
 
         step = HitachiDeployStep(
@@ -489,10 +499,10 @@ class TestHitachiSteps:
         assert step.backend_instance == backend_instance
         assert step.config_updates == config_updates
 
-    def test_hitachi_deploy_step_hooks(
+    def test_hitachi_deploy_step_creation(
         self, mock_deployment, mock_client, mock_tfhelper, mock_jhelper, mock_manifest
     ):
-        """Test Hitachi deploy step hooks."""
+        """Test Hitachi deploy step creation."""
         backend_instance = HitachiBackend()
         backend_name = "hitachi-backend-1"
         model = "openstack"
@@ -503,6 +513,8 @@ class TestHitachiSteps:
             hitachi_pools="pool1",
             san_ip="192.168.1.100",
             protocol="FC",
+            san_username="testuser",
+            san_password="testpassword",
         )
 
         step = HitachiDeployStep(
@@ -517,14 +529,15 @@ class TestHitachiSteps:
             model,
         )
 
-        # Test hooks don't raise errors
-        step.pre_deploy_hook()
-        step.post_deploy_hook()
+        # Test that step was created successfully
+        assert step is not None
+        assert step.backend_name == backend_name
+        assert step.backend_instance == backend_instance
 
-    def test_hitachi_destroy_step_hooks(
+    def test_hitachi_destroy_step_creation(
         self, mock_deployment, mock_client, mock_tfhelper, mock_jhelper, mock_manifest
     ):
-        """Test Hitachi destroy step hooks."""
+        """Test Hitachi destroy step creation."""
         backend_instance = HitachiBackend()
         backend_name = "hitachi-backend-1"
         model = "openstack"
@@ -540,12 +553,13 @@ class TestHitachiSteps:
             model,
         )
 
-        # Test hooks don't raise errors
-        step.pre_destroy_hook()
-        step.post_destroy_hook()
+        # Test that step was created successfully
+        assert step is not None
+        assert step.backend_name == backend_name
+        assert step.backend_instance == backend_instance
 
-    def test_hitachi_update_config_step_hooks(self, mock_deployment):
-        """Test Hitachi update config step hooks."""
+    def test_hitachi_update_config_step_creation(self, mock_deployment):
+        """Test Hitachi update config step creation."""
         backend_instance = HitachiBackend()
         backend_name = "hitachi-backend-1"
         config_updates = {"san-ip": "192.168.1.101"}
@@ -554,6 +568,8 @@ class TestHitachiSteps:
             mock_deployment, backend_instance, backend_name, config_updates
         )
 
-        # Test hooks don't raise errors
-        step.pre_update_hook()
-        step.post_update_hook()
+        # Test that step was created successfully
+        assert step is not None
+        assert step.backend_name == backend_name
+        assert step.backend_instance == backend_instance
+        assert step.config_updates == config_updates

@@ -6,10 +6,28 @@ variable "machine_model" {
   type        = string
 }
 
+variable "charm_hitachi_name" {
+  description = "Name of the Hitachi charm"
+  type        = string
+  default     = "cinder-volume-hitachi"
+}
+
+variable "charm_hitachi_base" {
+  description = "Base for the Hitachi charm"
+  type        = string
+  default     = "ubuntu@24.04"
+}
+
 variable "charm_hitachi_channel" {
   description = "Operator channel for Hitachi backend deployment"
   type        = string
   default     = "latest/edge"
+}
+
+variable "charm_hitachi_endpoint" {
+  description = "Endpoint name for Hitachi backend integration"
+  type        = string
+  default     = "cinder-volume"
 }
 
 variable "charm_hitachi_revision" {

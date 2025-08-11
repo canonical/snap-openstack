@@ -8,7 +8,6 @@ import pytest
 from sunbeam.clusterd.service import ConfigItemNotFoundException
 from sunbeam.storage.models import (
     BackendNotFoundException,
-    StorageBackendException,
 )
 from sunbeam.storage.service import StorageBackendService
 
@@ -41,6 +40,7 @@ class TestStorageBackendService:
     def test_list_backends_success(self, mock_deployment, sample_clusterd_config):
         """Test successful backend listing."""
         import json
+        from unittest.mock import Mock, patch
 
         mock_client = mock_deployment.get_client.return_value
         # read_config expects JSON string, not dict
@@ -48,16 +48,29 @@ class TestStorageBackendService:
             sample_clusterd_config["TerraformVarsStorageBackends"]
         )
 
-        service = StorageBackendService(mock_deployment)
-        backends = service.list_backends()
+        # Mock JujuHelper and model status for dynamic status resolution
+        with patch("sunbeam.storage.service.JujuHelper") as mock_juju_helper:
+            # Create mock status objects
+            mock_app_status = Mock()
+            mock_app_status.app_status.current = "active"
+            mock_app_status.charm = "ch:amd64/jammy/cinder-volume-hitachi-123"
 
-        assert len(backends) == 1
-        assert backends[0].name == "test-backend"
-        assert backends[0].backend_type == "hitachi"
-        assert (
-            backends[0].status == "active"
-        )  # Service returns 'active' for Terraform-managed backends
-        assert backends[0].charm == "cinder-volume-hitachi"
+            mock_model_status = Mock()
+            # App name is set to backend_name directly in Terraform
+            mock_model_status.apps = {"test-backend": mock_app_status}
+
+            mock_juju_instance = Mock()
+            mock_juju_instance.get_model_status.return_value = mock_model_status
+            mock_juju_helper.return_value = mock_juju_instance
+
+            service = StorageBackendService(mock_deployment)
+            backends = service.list_backends()
+
+            assert len(backends) == 1
+            assert backends[0].name == "test-backend"
+            assert backends[0].backend_type == "hitachi"
+            assert backends[0].status == "active"
+            assert backends[0].charm == "ch:amd64/jammy/cinder-volume-hitachi-123"
 
     def test_list_backends_no_config(self, mock_deployment):
         """Test backend listing when no configuration exists."""
@@ -181,74 +194,6 @@ class TestStorageBackendService:
         with pytest.raises(BackendNotFoundException):
             service.get_backend_config("test-backend", "hitachi")
 
-    def test_set_backend_config_success(self, mock_deployment, sample_clusterd_config):
-        """Test successful backend configuration update."""
-        import json
-
-        mock_client = mock_deployment.get_client.return_value
-        mock_client.cluster.get_config.return_value = json.dumps(
-            sample_clusterd_config["TerraformVarsStorageBackends"]
-        )
-
-        service = StorageBackendService(mock_deployment)
-        # set_backend_config doesn't raise exceptions for existing backends
-        service.set_backend_config("test-backend", "hitachi", {"new-option": "value"})
-
-        # Test passes if no exception is raised
-
-    def test_set_backend_config_not_found(
-        self, mock_deployment, sample_clusterd_config
-    ):
-        """Test backend configuration update for non-existent backend."""
-        import json
-
-        mock_client = mock_deployment.get_client.return_value
-        mock_client.cluster.get_config.return_value = json.dumps(
-            sample_clusterd_config["TerraformVarsStorageBackends"]
-        )
-
-        service = StorageBackendService(mock_deployment)
-
-        with pytest.raises(BackendNotFoundException):
-            service.set_backend_config(
-                "nonexistent-backend", "hitachi", {"new-option": "value"}
-            )
-
-    def test_reset_backend_config_success(
-        self, mock_deployment, sample_clusterd_config
-    ):
-        """Test successful backend configuration reset."""
-        import json
-
-        mock_client = mock_deployment.get_client.return_value
-        mock_client.cluster.get_config.return_value = json.dumps(
-            sample_clusterd_config["TerraformVarsStorageBackends"]
-        )
-
-        service = StorageBackendService(mock_deployment)
-        # reset_backend_config doesn't raise exceptions for existing backends
-        service.reset_backend_config("test-backend", "hitachi", ["hitachi-storage-id"])
-
-        # Test passes if no exception is raised
-
-    def test_reset_backend_config_not_found(
-        self, mock_deployment, sample_clusterd_config
-    ):
-        """Test configuration reset for non-existent backend."""
-        import json
-
-        mock_client = mock_deployment.get_client.return_value
-        mock_client.cluster.get_config.return_value = json.dumps(
-            sample_clusterd_config["TerraformVarsStorageBackends"]
-        )
-
-        service = StorageBackendService(mock_deployment)
-
-        with pytest.raises(BackendNotFoundException):
-            service.reset_backend_config(
-                "nonexistent-backend", "hitachi", ["hitachi-storage-id"]
-            )
-
     def test_error_handling_client_exception(self, mock_deployment):
         """Test error handling when client raises exception."""
         mock_client = mock_deployment.get_client.return_value
@@ -259,15 +204,3 @@ class TestStorageBackendService:
         # The service logs the error but returns empty list instead of raising exception
         backends = service.list_backends()
         assert backends == []
-
-    def test_error_handling_set_config_exception(
-        self, mock_deployment, sample_clusterd_config
-    ):
-        """Test error handling when set config raises exception."""
-        mock_client = mock_deployment.get_client.return_value
-        mock_client.cluster.get_config.side_effect = Exception("Config error")
-
-        service = StorageBackendService(mock_deployment)
-
-        with pytest.raises(StorageBackendException):
-            service.set_backend_config("test-backend", "hitachi", {"key": "value"})

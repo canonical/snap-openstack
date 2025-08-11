@@ -10,6 +10,8 @@ import pytest
 from sunbeam.clusterd.client import Client
 from sunbeam.core.manifest import Manifest
 from sunbeam.core.terraform import TerraformHelper
+from sunbeam.storage.base import StorageBackendBase
+from sunbeam.storage.models import StorageBackendConfig
 
 
 @pytest.fixture
@@ -66,7 +68,7 @@ def sample_backend_config():
     """Sample backend configuration for testing."""
     return {
         "model": "openstack",
-        "backends": {
+        "hitachi_backends": {
             "test-backend": {
                 "backend_type": "hitachi",
                 "charm_name": "cinder-volume-hitachi",
@@ -124,6 +126,7 @@ def mock_storage_backend():
             self.tfplan = "mock-backend-plan"
             self.tfplan_dir = "deploy-mock-backend"
 
+        @property
         def config_class(self):
             return StorageBackendConfig
 
@@ -132,7 +135,7 @@ def mock_storage_backend():
         ):
             return {
                 "model": model,
-                "backends": {
+                "mock_backends": {
                     backend_name: {
                         "backend_type": self.name,
                         "charm_name": self.charm_name,
@@ -244,5 +247,25 @@ def mock_storage_backend():
                 "list": [{"name": "mock", "command": Mock()}],
                 "config": [{"name": "mock", "command": Mock()}],
             }
+
+        def register_add_cli(self, add):
+            """Mock CLI registration."""
+            pass
+
+        def register_cli(
+            self,
+            remove,
+            config_show,
+            config_set,
+            config_reset,
+            config_options,
+            deployment,
+        ):
+            """Mock CLI registration."""
+            pass
+
+        def prompt_for_config(self, backend_name: str) -> StorageBackendConfig:
+            """Mock prompt for configuration."""
+            return StorageBackendConfig(name=backend_name)
 
     return MockStorageBackend()

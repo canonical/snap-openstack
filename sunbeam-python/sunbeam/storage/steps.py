@@ -32,6 +32,76 @@ LOG = logging.getLogger(__name__)
 console = Console()
 
 
+class ValidateStoragePrerequisitesStep(BaseStep):
+    """Validate that Sunbeam is bootstrapped and storage role is deployed."""
+
+    def __init__(self, deployment: Deployment, client: Client, jhelper: JujuHelper):
+        super().__init__(
+            "Validate storage prerequisites",
+            "Checking Sunbeam bootstrap and storage role deployment",
+        )
+        self.deployment = deployment
+        self.client = client
+        self.jhelper = jhelper
+        self.OPENSTACK_MACHINE_MODEL = self.deployment.openstack_machines_model
+
+    def run(self, status: Status | None = None) -> Result:
+        """Validate storage backend prerequisites."""
+        try:
+            # 1. Check if Sunbeam is bootstrapped
+            is_bootstrapped = self.client.cluster.check_sunbeam_bootstrapped()
+            if not is_bootstrapped:
+                return Result(
+                    ResultType.FAILED,
+                    "Deployment not bootstrapped. Please run\n"
+                    "'sunbeam cluster bootstrap' first.",
+                )
+
+            # 2. Check if OpenStack model exists
+            if not self.jhelper.model_exists(self.OPENSTACK_MACHINE_MODEL):
+                return Result(
+                    ResultType.FAILED,
+                    f"OpenStack model '{self.OPENSTACK_MACHINE_MODEL}' not found. "
+                    "Please deploy OpenStack first with\n"
+                    "'sunbeam configure --openstack'.",
+                )
+
+            # 3. Check if storage role is deployed (at least one storage node)
+            storage_nodes = self.client.cluster.list_nodes_by_role("storage")
+            if not storage_nodes:
+                return Result(
+                    ResultType.FAILED,
+                    "No storage role found. Please add storage nodes to the cluster "
+                    "before deploying storage backends.",
+                )
+
+            # 4. Check if cinder-volume application exists in OpenStack model
+            try:
+                cinder_volume_app = self.jhelper.get_application(
+                    "cinder-volume", self.OPENSTACK_MACHINE_MODEL
+                )
+                if not cinder_volume_app:
+                    return Result(
+                        ResultType.FAILED,
+                        "cinder-volume application not found in OpenStack model. "
+                        "Please deploy OpenStack storage services first.",
+                    )
+            except Exception as e:
+                LOG.debug(f"Failed to check cinder-volume application: {e}")
+                return Result(
+                    ResultType.FAILED,
+                    "Unable to verify cinder-volume application. "
+                    "Please ensure OpenStack storage services are deployed.",
+                )
+
+            console.print("✓ All storage prerequisites validated successfully")
+            return Result(ResultType.COMPLETED)
+
+        except Exception as e:
+            LOG.error(f"Failed to validate storage prerequisites: {e}")
+            return Result(ResultType.FAILED, str(e))
+
+
 class BaseStorageBackendDeployStep(BaseStep, ABC):
     """Base class for storage backend deployment steps.
 
@@ -78,24 +148,31 @@ class BaseStorageBackendDeployStep(BaseStep, ABC):
     def run(self, status: Status | None = None) -> Result:
         """Deploy the storage backend using Terraform."""
         try:
+            # Ensure fresh Juju credentials and Terraform env before applying
+            try:
+                self.deployment.reload_tfhelpers()
+            except Exception as cred_err:
+                LOG.debug(f"Failed to reload credentials/env: {cred_err}")
+
             # Get Terraform variables for this backend (contains a single backend entry)
             tf_vars = self.get_terraform_variables()
 
             # Merge with existing backends so we don't overwrite them
+            backend_key = f"{self.backend_instance.name}_backends"
             try:
                 current_tfvars = read_config(
                     self.client, self.backend_instance.tfvar_config_key
                 )
                 current_backends = (
-                    current_tfvars.get("hitachi_backends", {}) if current_tfvars else {}
+                    current_tfvars.get(backend_key, {}) if current_tfvars else {}
                 )
             except Exception:
                 current_backends = {}
 
-            # The new backend map is at tf_vars["hitachi_backends"]
-            new_backends = tf_vars.get("hitachi_backends", {})
+            # The new backend map is at tf_vars[backend_key]
+            new_backends = tf_vars.get(backend_key, {})
             merged_backends = {**current_backends, **new_backends}
-            tf_vars["hitachi_backends"] = merged_backends
+            tf_vars[backend_key] = merged_backends
 
             # Update Terraform variables and apply with merged map
             self.tfhelper.update_tfvars_and_apply_tf(
@@ -199,6 +276,12 @@ class BaseStorageBackendDestroyStep(BaseStep, ABC):
         without modifying the configuration.
         """
         try:
+            # Ensure fresh Juju credentials and Terraform env before destroying/applying
+            try:
+                self.deployment.reload_tfhelpers()
+            except Exception as cred_err:
+                LOG.debug(f"Failed to reload credentials/env: {cred_err}")
+
             # First, read and validate the current configuration
             try:
                 current_config = read_config(
@@ -289,7 +372,7 @@ class BaseStorageBackendDestroyStep(BaseStep, ABC):
                         tf_vars = current_config.copy()
                         LOG.info(
                             f"Writing Terraform variables with backends: "
-                            f"{list(tf_vars.get('hitachi_backends', {}).keys())}"
+                            f"{list(tf_vars.get(backend_key, {}).keys())}"
                         )
 
                         self.tfhelper.write_tfvars(tf_vars)
@@ -360,73 +443,6 @@ class BaseStorageBackendConfigUpdateStep(BaseStep, ABC):
         self.client = deployment.get_client()
         self.tfhelper = deployment.get_tfhelper(backend_instance.tfplan)
 
-    def is_reset_operation(self) -> bool:
-        """Check if this is a reset operation."""
-        return "_reset_keys" in self.config_updates
-
-    def get_reset_keys(self) -> list[str]:
-        """Get the keys to reset. Only valid if is_reset_operation() returns True."""
-        return self.config_updates.get("_reset_keys", [])
-
-    def handle_reset_operation(self, current_config: Dict[str, Any]) -> Dict[str, Any]:
-        """Handle reset operation. Override for custom reset logic.
-
-        Args:
-            current_config: Current backend configuration
-
-        Returns:
-            Updated configuration with reset keys set to their default values
-        """
-        reset_keys = self.get_reset_keys()
-
-        # Check new format (backend-specific keys only)
-        backend_key = (
-            f"{self.backend_instance.name}_backends"  # e.g., "hitachi_backends"
-        )
-
-        if (
-            backend_key in current_config
-            and self.backend_name in current_config[backend_key]
-        ):
-            backend_config = current_config[backend_key][self.backend_name]
-        else:
-            return current_config
-
-        if "charm_config" in backend_config:
-            # Get default values from the backend's config class
-            config_class = self.backend_instance.config_class
-
-            # Create a minimal instance with defaults to get default values
-            # We need to provide required fields to create the instance
-            try:
-                # Try to create instance with minimal required fields
-                # Use only the base StorageBackendConfig fields
-                default_instance = config_class(name="dummy")
-            except Exception:
-                # If that fails, try to get defaults from field definitions
-                default_instance = None
-
-            for key in reset_keys:
-                if default_instance and hasattr(default_instance, key):
-                    # Set to default value from pydantic model instance
-                    default_value = getattr(default_instance, key)
-                    backend_config["charm_config"][key] = default_value
-                else:
-                    # Try to get default from field definition
-                    model_fields = getattr(config_class, "model_fields", {})
-                    field_info = model_fields.get(key)
-                    if (
-                        field_info
-                        and hasattr(field_info, "default")
-                        and field_info.default is not None
-                    ):
-                        backend_config["charm_config"][key] = field_info.default
-                    else:
-                        # If no default available, remove the key
-                        backend_config["charm_config"].pop(key, None)
-
-        return current_config
-
     def handle_update_operation(self, current_config: Dict[str, Any]) -> Dict[str, Any]:
         """Handle configuration update operation. Override for custom update logic.
 
@@ -480,18 +496,20 @@ class BaseStorageBackendConfigUpdateStep(BaseStep, ABC):
                     ResultType.FAILED, f"Backend {self.backend_name} not found"
                 )
 
-            # Handle reset or update operation
-            if self.is_reset_operation():
-                current_config = self.handle_reset_operation(current_config)
-                operation_type = "reset"
-            else:
-                current_config = self.handle_update_operation(current_config)
-                operation_type = "update"
+            # Handle update operation
+            current_config = self.handle_update_operation(current_config)
+            operation_type = "update"
 
             # Save updated configuration and apply with updated tfvars
             update_config(
                 self.client, self.backend_instance.tfvar_config_key, current_config
             )
+
+            # Ensure fresh Juju credentials and Terraform env before applying
+            try:
+                self.deployment.reload_tfhelpers()
+            except Exception as cred_err:
+                LOG.debug(f"Failed to reload credentials/env: {cred_err}")
 
             # Write the updated tfvars and apply
             self.tfhelper.write_tfvars(current_config)

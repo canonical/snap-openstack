@@ -11,6 +11,7 @@ from rich.console import Console
 from sunbeam.clusterd.service import ConfigItemNotFoundException
 from sunbeam.core.common import read_config
 from sunbeam.core.deployment import Deployment
+from sunbeam.core.juju import JujuHelper
 
 from .models import (
     BackendNotFoundException,
@@ -39,11 +40,11 @@ class StorageBackendService:
         return model
 
     def list_backends(self) -> List[StorageBackendInfo]:
-        """List all Terraform-managed storage backends.
+        """List all Terraform-managed storage backends with dynamic status.
 
         Returns:
             List of StorageBackendInfo objects for all Terraform-managed
-            storage backends
+            storage backends with real-time status and charm information
         """
         backends = []
 
@@ -51,24 +52,32 @@ class StorageBackendService:
             client = self.deployment.get_client()
             current_config = read_config(client, self._tfvar_config_key)
 
-            # Check both new format (backend-specific keys) and legacy format
+            # Get JujuHelper for status queries
+            jhelper = JujuHelper(self.deployment.juju_controller)
+
             # Look for all keys ending with "_backends" (e.g., "hitachi_backends")
             backend_keys = [
                 key for key in current_config.keys() if key.endswith("_backends")
             ]
 
-            # Process new format (backend-specific keys)
             for backend_key in backend_keys:
-                backend_type = backend_key.replace(
-                    "_backends", ""
-                )  # Extract backend type from key
+                backend_type = backend_key.replace("_backends", "")
                 for backend_name, backend_config in current_config[backend_key].items():
                     try:
+                        # Get actual application name from Terraform config
+                        # In Terraform, the application name
+                        # is set to backend_name directly
+                        app_name = backend_config.get("application_name", backend_name)
+
+                        # Query actual status and charm from Juju
+                        status = self._get_application_status(jhelper, app_name)
+                        charm_name = self._get_application_charm(jhelper, app_name)
+
                         backend = StorageBackendInfo(
                             name=backend_name,
                             backend_type=backend_type,
-                            status="active",  # Terraform-managed backends are active
-                            charm=f"cinder-volume-{backend_type}",  # Infer charm name
+                            status=status,
+                            charm=charm_name,
                             config=backend_config.get("charm_config", {}),
                         )
                         backends.append(backend)
@@ -85,103 +94,118 @@ class StorageBackendService:
 
         return backends
 
-    def backend_exists(self, backend_name: str, backend_type: str) -> bool:
-        """Check if a backend exists in Terraform configuration."""
+    def _get_application_status(self, jhelper: JujuHelper, app_name: str) -> str:
+        """Get application status from Juju.
+
+        Args:
+            jhelper: JujuHelper instance for Juju operations
+            app_name: Name of the Juju application
+
+        Returns:
+            Application status string or "unknown" if not found
+        """
+        try:
+            # Get model status using JujuHelper.get_model_status()
+            model_status = jhelper.get_model_status(
+                self.deployment.openstack_machines_model
+            )
+
+            # Check if application exists in the model
+            if app_name in model_status.apps:
+                app_status = model_status.apps[app_name]
+                return app_status.app_status.current
+
+            return "not-found"
+        except Exception as e:
+            LOG.debug(f"Failed to get status for application {app_name}: {e}")
+            return "unknown"
+
+    def _get_application_charm(self, jhelper: JujuHelper, app_name: str) -> str:
+        """Get charm name from Juju.
+
+        Args:
+            jhelper: JujuHelper instance for Juju operations
+            app_name: Name of the Juju application
+
+        Returns:
+            Charm name or fallback name if not found
+        """
+        try:
+            # Get model status using JujuHelper.get_model_status()
+            model_status = jhelper.get_model_status(
+                self.deployment.openstack_machines_model
+            )
+
+            # Check if application exists in the model
+            if app_name in model_status.apps:
+                app_status = model_status.apps[app_name]
+                charm_url = app_status.charm
+                return charm_url
+
+            return "Not Found"
+
+        except Exception as e:
+            LOG.debug(f"Failed to get charm for application {app_name}: {e}")
+            return "Unknown"
+
+    def _load_backend_tfvars(self) -> Dict[str, Any]:
+        """Safely load storage backend Terraform variables from clusterd.
+
+        Returns an empty dict if the config item does not exist.
+        """
         try:
             client = self.deployment.get_client()
-            current_config = read_config(client, self._tfvar_config_key)
-
-            # Check new format (backend-specific keys)
-            backend_key = f"{backend_type}_backends"  # e.g., "hitachi_backends"
-
-            if backend_key in current_config:
-                return backend_name in current_config[backend_key]
-            else:
-                return False
+            return read_config(client, self._tfvar_config_key)
         except ConfigItemNotFoundException:
-            return False
+            return {}
+
+    def _iter_backend_items(self, tfvars: Dict[str, Any], backend_type: str):
+        """Yield (name, config) pairs for a given backend_type."""
+        typed_key = f"{backend_type}_backends"
+        typed_map = tfvars.get(typed_key, {}) or {}
+        if isinstance(typed_map, dict):
+            for name, cfg in typed_map.items():
+                yield name, cfg
+
+    def _get_backend_entry(
+        self, tfvars: Dict[str, Any], backend_type: str, backend_name: str
+    ) -> Dict[str, Any] | None:
+        """Return the backend config entry if found, else None."""
+        for name, cfg in self._iter_backend_items(tfvars, backend_type):
+            if name == backend_name:
+                return cfg
+        return None
+
+    def backend_exists(self, backend_name: str, backend_type: str) -> bool:
+        """Check if a backend exists in Terraform configuration."""
+        tfvars = self._load_backend_tfvars()
+        return self._get_backend_entry(tfvars, backend_type, backend_name) is not None
 
     def get_backend_config(
         self, backend_name: str, backend_type: str
     ) -> Dict[str, Any]:
         """Get the current configuration of a storage backend."""
         try:
-            if not self.backend_exists(backend_name, backend_type):
+            tfvars = self._load_backend_tfvars()
+            entry = self._get_backend_entry(tfvars, backend_type, backend_name)
+            if not entry:
                 raise BackendNotFoundException(f"Backend '{backend_name}' not found")
 
-            # Get configuration from Terraform state
-            client = self.deployment.get_client()
-            current_config = read_config(client, self._tfvar_config_key)
+            # Return the full backend configuration, not just charm_config
+            # This includes credentials that can be masked by the display logic
+            full_config = dict(entry)
 
-            # Check new format (backend-specific keys only)
-            backend_key = f"{backend_type}_backends"  # e.g., "hitachi_backends"
+            # Merge charm_config into the top level for backward compatibility
+            charm_config = entry.get("charm_config", {})
+            full_config.update(charm_config)
 
-            if (
-                backend_key in current_config
-                and backend_name in current_config[backend_key]
-            ):
-                backend_config = current_config[backend_key][backend_name]
-                return backend_config.get("charm_config", {})
+            # Remove the charm_config key to avoid showing it as a separate field
+            full_config.pop("charm_config", None)
 
-            # Backend not found in new format
-            raise BackendNotFoundException(f"Backend '{backend_name}' not found")
+            return full_config
 
         except BackendNotFoundException:
-            # Re-raise BackendNotFoundException as-is
             raise
         except Exception as e:
             LOG.error(f"Failed to get config for backend '{backend_name}': {e}")
             raise StorageBackendException(f"Failed to get backend config: {e}") from e
-
-    def set_backend_config(
-        self, backend_name: str, backend_type: str, config_updates: Dict[str, Any]
-    ) -> None:
-        """Set configuration options for a storage backend."""
-        try:
-            if not self.backend_exists(backend_name, backend_type):
-                raise BackendNotFoundException(f"Backend '{backend_name}' not found")
-
-            LOG.info(f"Setting configuration for backend '{backend_name}'")
-            console.print(
-                f"[blue]Updating configuration for backend '{backend_name}'...[/blue]"
-            )
-
-            # This will be handled by the backend's update_backend_config method
-            # via Terraform, so this is a placeholder for the service interface
-            console.print(
-                f"[green]Configuration updated successfully for "
-                f"'{backend_name}'[/green]"
-            )
-
-        except BackendNotFoundException:
-            # Re-raise BackendNotFoundException as-is
-            raise
-        except Exception as e:
-            LOG.error(f"Failed to set config for backend '{backend_name}': {e}")
-            raise StorageBackendException(f"Failed to set backend config: {e}") from e
-
-    def reset_backend_config(
-        self, backend_name: str, backend_type: str, config_keys: List[str]
-    ) -> None:
-        """Reset configuration options to their default values for a storage backend."""
-        try:
-            if not self.backend_exists(backend_name, backend_type):
-                raise BackendNotFoundException(f"Backend '{backend_name}' not found")
-
-            LOG.info(f"Resetting configuration for backend '{backend_name}'")
-            console.print(
-                f"[blue]Resetting configuration for backend '{backend_name}'...[/blue]"
-            )
-
-            # This will be handled by the backend's reset_backend_config method
-            # via Terraform, so this is a placeholder for the service interface
-            console.print(
-                f"[green]Configuration reset successfully for '{backend_name}'[/green]"
-            )
-
-        except BackendNotFoundException:
-            # Re-raise BackendNotFoundException as-is
-            raise
-        except Exception as e:
-            LOG.error(f"Failed to reset config for backend '{backend_name}': {e}")
-            raise StorageBackendException(f"Failed to reset backend config: {e}") from e

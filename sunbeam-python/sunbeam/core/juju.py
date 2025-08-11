@@ -453,7 +453,6 @@ class JujuHelper:
         to: list[str] | None = None,
         config: dict | None = None,
         base: str = JUJU_BASE,
-        trust: bool = False,
     ):
         """Deploy an application."""
         with self._model(model) as juju:
@@ -466,7 +465,6 @@ class JujuHelper:
                 num_units=num_units,
                 base=base,
                 to=to,
-                trust=trust,
             )
 
     def remove_application(

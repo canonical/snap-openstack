@@ -179,10 +179,10 @@ resource "juju_application" "hitachi_backends" {
   units = 1
 
   charm {
-    name     = "cinder-volume-hitachi"
+    name     = var.charm_hitachi_name
     channel  = var.charm_hitachi_channel
     revision = var.charm_hitachi_revision
-    base     = "ubuntu@24.04"
+    base     = var.charm_hitachi_base
   }
 
   config = merge({
@@ -212,11 +212,11 @@ resource "juju_integration" "hitachi_to_cinder_volume" {
 
   application {
     name     = juju_application.hitachi_backends[each.key].name
-    endpoint = "cinder-volume"
+    endpoint = var.charm_hitachi_endpoint
   }
 
   application {
     name     = "cinder-volume"
-    endpoint = "cinder-volume"
+    endpoint = var.charm_hitachi_endpoint
   }
 }

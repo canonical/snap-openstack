@@ -29,6 +29,7 @@ class MockStorageBackend(StorageBackendBase):
         """Config key for storing Terraform variables in clusterd."""
         return f"TerraformVars{self.name.title()}Backend"
 
+    @property
     def config_class(self):
         return StorageBackendConfig
 
@@ -44,47 +45,96 @@ class MockStorageBackend(StorageBackendBase):
         model,
     ):
         """Create a mock deployment step."""
-        from sunbeam.storage.steps import BaseStorageBackendDeployStep
+        # Use test-specific mock step if available; otherwise base class
+        try:
+            from sunbeam.storage.steps import MockDeployStep  # type: ignore
 
-        return BaseStorageBackendDeployStep(
-            client,
-            tfhelper,
-            jhelper,
-            manifest,
-            backend_name,
-            backend_config,
-            self,
-            model,
-        )
+            return MockDeployStep(
+                deployment,
+                client,
+                tfhelper,
+                jhelper,
+                manifest,
+                backend_name,
+                backend_config,
+                self,
+                model,
+            )
+        except Exception:
+            from sunbeam.storage.steps import BaseStorageBackendDeployStep
+
+            return BaseStorageBackendDeployStep(
+                deployment,
+                client,
+                tfhelper,
+                jhelper,
+                manifest,
+                backend_name,
+                backend_config,
+                self,
+                model,
+            )
 
     def create_destroy_step(
         self, deployment, client, tfhelper, jhelper, manifest, backend_name, model
     ):
         """Create a mock destruction step."""
-        from sunbeam.storage.steps import BaseStorageBackendDestroyStep
+        # Use test-specific mock step if available; otherwise base class
+        try:
+            from sunbeam.storage.steps import MockDestroyStep  # type: ignore
 
-        return BaseStorageBackendDestroyStep(
-            client, tfhelper, jhelper, manifest, backend_name, self, model
-        )
+            return MockDestroyStep(
+                deployment,
+                client,
+                tfhelper,
+                jhelper,
+                manifest,
+                backend_name,
+                self,
+                model,
+            )
+        except Exception:
+            from sunbeam.storage.steps import BaseStorageBackendDestroyStep
+
+            return BaseStorageBackendDestroyStep(
+                deployment,
+                client,
+                tfhelper,
+                jhelper,
+                manifest,
+                backend_name,
+                self,
+                model,
+            )
 
     def create_update_config_step(self, deployment, backend_name, config_updates):
         """Create a mock configuration update step."""
         from sunbeam.storage.steps import BaseStorageBackendConfigUpdateStep
 
         return BaseStorageBackendConfigUpdateStep(
-            deployment.get_client(), backend_name, config_updates, self
+            deployment, self, backend_name, config_updates
         )
 
     def prompt_for_config(self, backend_name: str) -> StorageBackendConfig:
         """Mock prompt for configuration."""
-        return StorageBackendConfig()
+        return StorageBackendConfig(name=backend_name)
+
+    def register_add_cli(self, add):
+        """Mock CLI registration."""
+        pass
+
+    def register_cli(
+        self, remove, config_show, config_set, config_reset, config_options, deployment
+    ):
+        """Mock CLI registration."""
+        pass
 
     def get_terraform_variables(
         self, backend_name: str, config: StorageBackendConfig, model: str
     ):
         return {
             "model": model,
-            "backends": {
+            "mock_backends": {
                 backend_name: {
                     "backend_type": self.name,
                     "charm_name": self.charm_name,
@@ -136,16 +186,12 @@ class TestStorageBackendRegistry:
         """Test loading when backends directory doesn't exist."""
         registry = StorageBackendRegistry()
 
-        # Mock the pathlib.Path chain: pathlib.Path(__file__).parent
-        # The registry calls iterdir() directly on the result of .parent
+        # Mock the pathlib.Path chain:
+        # pathlib.Path(sunbeam.storage.backends.__file__).parent
         mock_backends_dir = Mock()
-        mock_backends_dir.exists.return_value = False
-        mock_backends_dir.is_dir.return_value = False
         mock_backends_dir.iterdir.return_value = []  # Empty for no backends case
 
-        mock_path_instance = Mock()
-        mock_path_instance.parent = mock_backends_dir
-        mock_path.return_value = mock_path_instance
+        mock_path.return_value.parent = mock_backends_dir
 
         registry._load_backends()
 
@@ -157,15 +203,12 @@ class TestStorageBackendRegistry:
         """Test backend loading with empty backends directory."""
         registry = StorageBackendRegistry()
 
-        # Mock the pathlib.Path chain: pathlib.Path(__file__).parent
+        # Mock the pathlib.Path chain:
+        # pathlib.Path(sunbeam.storage.backends.__file__).parent
         mock_backends_dir = Mock()
-        mock_backends_dir.exists.return_value = True
-        mock_backends_dir.is_dir.return_value = True
         mock_backends_dir.iterdir.return_value = []
 
-        mock_path_instance = Mock()
-        mock_path_instance.parent = mock_backends_dir
-        mock_path.return_value = mock_path_instance
+        mock_path.return_value.parent = mock_backends_dir
 
         registry._load_backends()
 
@@ -233,81 +276,75 @@ class TestStorageBackendRegistry:
             mock_load.assert_called_once()
             assert len(backends) == 1
 
-    @patch("click.command")
-    def test_register_add_commands(self, mock_click_command, mock_deployment):
-        """Test add command registration."""
+    def test_register_add_commands_via_backend(self, mock_deployment):
+        """Test that add commands are registered via backend.register_add_cli()."""
         registry = StorageBackendRegistry()
         mock_backend = MockStorageBackend()
         registry._backends = {"mock": mock_backend}
         registry._loaded = True
 
         mock_storage_group = Mock()
-        mock_command_instance = Mock()
-        mock_click_command.return_value = mock_command_instance
 
-        registry._register_add_commands(mock_storage_group, mock_deployment)
+        with patch.object(mock_backend, "register_add_cli") as mock_register_add:
+            registry.register_cli_commands(mock_storage_group, mock_deployment)
 
-        # Verify click.command was called to create the add command
-        mock_click_command.assert_called()
-        # Verify the command was added to the storage group
-        mock_storage_group.add_command.assert_called()
+            # Verify that the backend's register_add_cli method was called
+            mock_register_add.assert_called_once()
+            # Verify that groups were added to the storage group
+            assert mock_storage_group.add_command.call_count >= 4
 
-    @patch("click.command")
-    def test_register_remove_commands(self, mock_click_command, mock_deployment):
-        """Test remove command registration."""
+    def test_register_remove_commands_via_backend(self, mock_deployment):
+        """Test that remove commands are registered via backend.register_cli()."""
         registry = StorageBackendRegistry()
         mock_backend = MockStorageBackend()
         registry._backends = {"mock": mock_backend}
         registry._loaded = True
 
         mock_storage_group = Mock()
-        mock_command_instance = Mock()
-        mock_click_command.return_value = mock_command_instance
 
-        registry._register_remove_commands(mock_storage_group, mock_deployment)
+        with patch.object(mock_backend, "register_cli") as mock_register_cli:
+            registry.register_cli_commands(mock_storage_group, mock_deployment)
 
-        # Verify click.command was called to create the remove command
-        mock_click_command.assert_called()
-        # Verify the command was added to the storage group
-        mock_storage_group.add_command.assert_called()
+            # Verify that the backend's register_cli method was called
+            mock_register_cli.assert_called_once()
+            # Verify that groups were added to the storage group
+            assert mock_storage_group.add_command.call_count >= 4
 
-    @patch("click.group")
-    def test_register_list_commands(self, mock_click_group, mock_deployment):
-        """Test list command registration."""
+    def test_register_list_commands_includes_all(self, mock_deployment):
+        """Test that list commands include the 'all' command."""
         registry = StorageBackendRegistry()
         mock_backend = MockStorageBackend()
         registry._backends = {"mock": mock_backend}
         registry._loaded = True
 
-        mock_cli = Mock()
+        mock_storage_group = Mock()
 
-        with patch.object(mock_backend, "commands") as mock_commands:
-            mock_commands.return_value = {"list": [{"name": "mock", "command": Mock()}]}
+        with patch("sunbeam.storage.registry.StorageBackendService"):
+            registry.register_cli_commands(mock_storage_group, mock_deployment)
 
-            registry._register_list_commands(mock_cli, mock_deployment)
+            # Verify that groups were added to the storage group
+            assert mock_storage_group.add_command.call_count >= 4
 
-            # Verify click.group was called
-            mock_click_group.assert_called()
-
-    @patch("click.group")
-    def test_register_config_commands(self, mock_click_group, mock_deployment):
-        """Test config command registration."""
+    def test_register_config_commands_includes_subgroups(self, mock_deployment):
+        """Test that config commands include show, set, reset, options subgroups."""
         registry = StorageBackendRegistry()
         mock_backend = MockStorageBackend()
         registry._backends = {"mock": mock_backend}
         registry._loaded = True
 
-        mock_cli = Mock()
+        mock_storage_group = Mock()
 
-        with patch.object(mock_backend, "commands") as mock_commands:
-            mock_commands.return_value = {
-                "config": [{"name": "mock", "command": Mock()}]
-            }
+        with patch.object(mock_backend, "register_cli") as mock_register_cli:
+            registry.register_cli_commands(mock_storage_group, mock_deployment)
 
-            registry._register_config_commands(mock_cli, mock_deployment)
-
-            # Verify click.group was called
-            mock_click_group.assert_called()
+            # Verify that the backend's register_cli method was called with config
+            # subgroups
+            mock_register_cli.assert_called_once()
+            # The call should include the config subgroups as arguments
+            call_args = mock_register_cli.call_args[0]
+            assert (
+                len(call_args) >= 5
+            )  # remove_group, config_show, config_set, config_reset, config_options
 
     def test_register_commands_all_groups(self, mock_deployment):
         """Test registration of all command groups."""
@@ -319,35 +356,39 @@ class TestStorageBackendRegistry:
         mock_cli = Mock()
 
         with (
-            patch.object(registry, "_register_add_commands") as mock_add,
-            patch.object(registry, "_register_remove_commands") as mock_remove,
-            patch.object(registry, "_register_list_commands") as mock_list,
-            patch.object(registry, "_register_config_commands") as mock_config,
+            patch.object(mock_backend, "register_add_cli") as mock_add,
+            patch.object(mock_backend, "register_cli") as mock_register_cli,
         ):
             registry.register_cli_commands(mock_cli, mock_deployment)
 
-            mock_add.assert_called_once_with(mock_cli, mock_deployment)
-            mock_remove.assert_called_once_with(mock_cli, mock_deployment)
-            mock_list.assert_called_once_with(mock_cli, mock_deployment)
-            mock_config.assert_called_once_with(mock_cli, mock_deployment)
+            # Verify that backend CLI registration methods were called
+            mock_add.assert_called_once()
+            mock_register_cli.assert_called_once()
+
+            # Verify that the CLI groups were added to the storage group
+            assert (
+                mock_cli.add_command.call_count >= 4
+            )  # add, remove, list, config groups
 
     def test_backend_discovery_error_handling(self):
         """Test error handling during backend discovery."""
         registry = StorageBackendRegistry()
 
-        with patch("sunbeam.storage.registry.pathlib.Path") as mock_path:
+        with (
+            patch("sunbeam.storage.registry.importlib.import_module"),
+            patch("sunbeam.storage.registry.pathlib.Path") as mock_path,
+        ):
             mock_backends_dir = Mock()
-            mock_backends_dir.exists.return_value = True
-            mock_backends_dir.is_dir.return_value = True
             mock_backends_dir.iterdir.side_effect = Exception("Directory read error")
 
-            mock_path_instance = Mock()
-            mock_path_instance.parent = mock_backends_dir
-            mock_path.return_value = mock_path_instance
+            mock_path.return_value.parent = mock_backends_dir
 
-            # Directory iteration errors are not handled, so exception should be raised
-            with pytest.raises(Exception, match="Directory read error"):
-                registry._load_backends()
+            # Registry should handle directory iteration gracefully
+            registry._load_backends()
+
+            # Should still mark as loaded even with directory errors
+            assert registry._loaded is True
+            assert registry._backends == {}
 
     def test_module_loading_error_handling(self):
         """Test error handling during module loading."""
@@ -374,9 +415,7 @@ class TestStorageBackendRegistry:
 
             mock_backends_dir.iterdir.return_value = [mock_backend_dir]
 
-            mock_path_instance = Mock()
-            mock_path_instance.parent = mock_backends_dir
-            mock_path.return_value = mock_path_instance
+            mock_path.return_value.parent = mock_backends_dir
 
             mock_import_module.side_effect = Exception("Module loading error")
 
@@ -422,26 +461,36 @@ class TestStorageBackendRegistry:
         mock_cli = Mock()
 
         # Should not raise errors even with no backends
-        registry._register_add_commands(mock_cli, mock_deployment)
-        registry._register_remove_commands(mock_cli, mock_deployment)
-        registry._register_list_commands(mock_cli, mock_deployment)
-        registry._register_config_commands(mock_cli, mock_deployment)
+        with patch("sunbeam.storage.registry.StorageBackendService"):
+            registry.register_cli_commands(mock_cli, mock_deployment)
 
-    def test_command_registration_with_missing_command_groups(self, mock_deployment):
-        """Test command registration when backend doesn't have all command groups."""
+            # Should still create the basic command groups
+            assert mock_cli.add_command.call_count >= 4
+
+    def test_command_registration_with_backend_errors(self, mock_deployment):
+        """Test command registration when backend registration fails."""
         registry = StorageBackendRegistry()
         mock_backend = MockStorageBackend()
-        registry.backends = {"mock": mock_backend}
+        registry._backends = {"mock": mock_backend}
         registry._loaded = True
 
         mock_cli = Mock()
 
-        with patch.object(mock_backend, "commands") as mock_commands:
-            # Backend only has "add" commands, missing others
-            mock_commands.return_value = {"add": [{"name": "mock", "command": Mock()}]}
+        with (
+            patch.object(
+                mock_backend,
+                "register_add_cli",
+                side_effect=Exception("Registration error"),
+            ),
+            patch.object(
+                mock_backend,
+                "register_cli",
+                side_effect=Exception("Registration error"),
+            ),
+            patch("sunbeam.storage.registry.StorageBackendService"),
+        ):
+            # Should not raise errors even if backend registration fails
+            registry.register_cli_commands(mock_cli, mock_deployment)
 
-            # Should not raise errors for missing command groups
-            registry._register_add_commands(mock_cli, mock_deployment)
-            registry._register_remove_commands(mock_cli, mock_deployment)
-            registry._register_list_commands(mock_cli, mock_deployment)
-            registry._register_config_commands(mock_cli, mock_deployment)
+            # Should still create the basic command groups
+            assert mock_cli.add_command.call_count >= 4

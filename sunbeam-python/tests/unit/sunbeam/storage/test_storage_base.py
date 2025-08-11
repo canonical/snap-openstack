@@ -26,6 +26,7 @@ class MockStorageBackend(StorageBackendBase):
         """Config key for storing Terraform variables in clusterd."""
         return f"TerraformVars{self.name.title()}Backend"
 
+    @property
     def config_class(self):
         return StorageBackendConfig
 
@@ -34,7 +35,7 @@ class MockStorageBackend(StorageBackendBase):
     ):
         return {
             "model": model,
-            "backends": {
+            "mock_backends": {
                 backend_name: {
                     "backend_type": self.name,
                     "charm_name": self.charm_name,
@@ -113,6 +114,16 @@ class MockStorageBackend(StorageBackendBase):
             deployment, self, backend_name, config_updates
         )
 
+    def register_add_cli(self, add):
+        """Mock CLI registration."""
+        pass
+
+    def register_cli(
+        self, remove, config_show, config_set, config_reset, config_options, deployment
+    ):
+        """Mock CLI registration."""
+        pass
+
 
 class TestStorageBackendBase:
     """Test cases for StorageBackendBase class."""
@@ -135,7 +146,7 @@ class TestStorageBackendBase:
     def test_config_class(self):
         """Test configuration class retrieval."""
         backend = MockStorageBackend()
-        config_class = backend.config_class()
+        config_class = backend.config_class
         assert config_class == StorageBackendConfig
 
     def test_get_terraform_variables(self):
@@ -146,11 +157,11 @@ class TestStorageBackendBase:
         variables = backend.get_terraform_variables("test-backend", config, "openstack")
 
         assert "model" in variables
-        assert "backends" in variables
+        assert "mock_backends" in variables
         assert variables["model"] == "openstack"
-        assert "test-backend" in variables["backends"]
+        assert "test-backend" in variables["mock_backends"]
 
-        backend_config = variables["backends"]["test-backend"]
+        backend_config = variables["mock_backends"]["test-backend"]
         assert backend_config["backend_type"] == "mock"
         assert backend_config["charm_name"] == "mock-charm"
         assert backend_config["charm_channel"] == "stable"
@@ -176,25 +187,6 @@ class TestStorageBackendBase:
         # Should not call constructor again
         assert mock_service_class.call_count == 1
 
-    def test_get_backend_type(self):
-        """Test backend type extraction from app name."""
-        backend = MockStorageBackend()
-
-        # Test with standard app name
-        backend_type = backend._get_backend_type("cinder-volume-mock-backend1")
-        assert backend_type == "unknown"
-
-        # Test with app name matching backend name
-        backend_type = backend._get_backend_type("mock-backend1")
-        assert backend_type == "unknown"
-
-        # Test with known backend types
-        backend_type = backend._get_backend_type("cinder-volume-hitachi-backend1")
-        assert backend_type == "hitachi"
-
-        backend_type = backend._get_backend_type("cinder-volume-ceph")
-        assert backend_type == "ceph"
-
     def test_prompt_for_config(self, mock_deployment):
         """Test configuration prompting (base implementation)."""
         backend = MockStorageBackend()
@@ -203,27 +195,6 @@ class TestStorageBackendBase:
         config = backend.prompt_for_config("test-backend")
         assert isinstance(config, StorageBackendConfig)
         assert config.name == "test-backend"
-
-    def test_create_add_plan(self, mock_deployment):
-        """Test add plan creation (base implementation)."""
-        backend = MockStorageBackend()
-        config = StorageBackendConfig(name="test-backend")
-
-        # Base implementation should return list with TerraformInitStep and
-        # ConcreteStorageBackendDeployStep
-        plan = backend._create_add_plan(mock_deployment, config)
-        assert isinstance(plan, list)
-        assert len(plan) == 2
-
-    def test_create_remove_plan(self, mock_deployment):
-        """Test remove plan creation (base implementation)."""
-        backend = MockStorageBackend()
-
-        # Base implementation should return list with TerraformInitStep and
-        # ConcreteStorageBackendDestroyStep
-        plan = backend._create_remove_plan(mock_deployment, "test-backend")
-        assert isinstance(plan, list)
-        assert len(plan) == 2
 
     def test_abstract_methods_not_implemented(self):
         """Test that abstract methods raise NotImplementedError in base class."""

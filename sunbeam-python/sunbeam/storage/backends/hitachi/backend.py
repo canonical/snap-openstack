@@ -6,16 +6,22 @@
 import ipaddress
 import logging
 import re
-import typing
-from typing import Any, Dict
+from typing import Any, Dict, Literal
 
 import click
+
+try:
+    import yaml as _yaml  # type: ignore
+
+    yaml: Any = _yaml
+except Exception:  # yaml optional; handle gracefully at runtime
+    yaml = None
 
 # Import pydantic Field directly
 from pydantic import Field
 from rich.console import Console
 
-from sunbeam.core.common import BaseStep, Result, ResultType
+from sunbeam.core.common import BaseStep
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import JujuHelper
 from sunbeam.core.manifest import Manifest
@@ -56,6 +62,11 @@ class HitachiConfig(StorageBackendConfig):
         ..., description="Comma-separated list of DP pool names/IDs"
     )
     san_ip: str = Field(..., description="Hitachi VSP management IP or hostname")
+    san_username: str = Field(..., description="SAN management username")
+    san_password: str = Field(..., description="SAN management password")
+    protocol: Literal["FC", "iSCSI"] = Field(
+        ..., description="Front-end protocol (FC or iSCSI)"
+    )
 
     # Backend configuration
     volume_backend_name: str = Field(
@@ -64,9 +75,6 @@ class HitachiConfig(StorageBackendConfig):
     backend_availability_zone: str = Field(
         default="", description="Availability zone to associate with this backend"
     )
-
-    # Protocol selection
-    protocol: str = Field(default="FC", description="Front-end protocol (FC or iSCSI)")
 
     # Optional host-group / zoning controls
     hitachi_target_ports: str = Field(
@@ -264,13 +272,6 @@ class HitachiConfig(StorageBackendConfig):
         default="", description="Juju secret URI for mirror REST credentials"
     )
 
-    # Credential fields for secret creation (not sent to charm)
-    san_username: str = Field(
-        default="", description="SAN username for secret creation"
-    )
-    san_password: str = Field(
-        default="", description="SAN password for secret creation"
-    )
     chap_username: str = Field(
         default="", description="CHAP username for secret creation"
     )
@@ -321,108 +322,67 @@ class HitachiBackend(StorageBackendBase):
     def get_field_mapping(self) -> Dict[str, str]:
         """Get mapping from config fields to charm config options.
 
-        Maps Pydantic field names (with underscores) to charm config option
-        names (with hyphens).
+        Default mapping is underscore->hyphen for all Pydantic fields. For the
+        Hitachi backend we need to exclude fields that should NOT be sent to
+        the charm (credentials, secrets, and meta fields like name). This keeps
+        mapping maintenance minimal and future-proof while ensuring we do not
+        leak sensitive values via charm config.
         """
-        return {
-            # Mandatory connection parameters
-            "hitachi_storage_id": "hitachi-storage-id",
-            "hitachi_pools": "hitachi-pools",
-            "san_ip": "san-ip",
-            # Backend configuration
-            "volume_backend_name": "volume-backend-name",
-            "backend_availability_zone": "backend-availability-zone",
-            # Protocol selection
-            "protocol": "protocol",
-            # Optional host-group / zoning controls
-            "hitachi_target_ports": "hitachi-target-ports",
-            "hitachi_compute_target_ports": "hitachi-compute-target-ports",
-            "hitachi_ldev_range": "hitachi-ldev-range",
-            "hitachi_zoning_request": "hitachi-zoning-request",
-            # Copy & replication tuning
-            "hitachi_copy_speed": "hitachi-copy-speed",
-            "hitachi_copy_check_interval": "hitachi-copy-check-interval",
-            "hitachi_async_copy_check_interval": "hitachi-async-copy-check-interval",
-            # iSCSI authentication
-            "use_chap_auth": "use-chap-auth",
-            # Array ranges and controls
-            "hitachi_discard_zero_page": "hitachi-discard-zero-page",
-            "hitachi_exec_retry_interval": "hitachi-exec-retry-interval",
-            "hitachi_extend_timeout": "hitachi-extend-timeout",
-            "hitachi_group_create": "hitachi-group-create",
-            "hitachi_group_delete": "hitachi-group-delete",
-            "hitachi_group_name_format": "hitachi-group-name-format",
-            "hitachi_host_mode_options": "hitachi-host-mode-options",
-            "hitachi_lock_timeout": "hitachi-lock-timeout",
-            "hitachi_lun_retry_interval": "hitachi-lun-retry-interval",
-            "hitachi_lun_timeout": "hitachi-lun-timeout",
-            "hitachi_port_scheduler": "hitachi-port-scheduler",
-            # Mirror/replication settings
-            "hitachi_mirror_compute_target_ports": (
-                "hitachi-mirror-compute-target-ports"
-            ),
-            "hitachi_mirror_ldev_range": "hitachi-mirror-ldev-range",
-            "hitachi_mirror_pair_target_number": "hitachi-mirror-pair-target-number",
-            "hitachi_mirror_pool": "hitachi-mirror-pool",
-            "hitachi_mirror_rest_api_ip": "hitachi-mirror-rest-api-ip",
-            "hitachi_mirror_rest_api_port": "hitachi-mirror-rest-api-port",
-            "hitachi_mirror_rest_pair_target_ports": (
-                "hitachi-mirror-rest-pair-target-ports"
-            ),
-            "hitachi_mirror_snap_pool": "hitachi-mirror-snap-pool",
-            "hitachi_mirror_ssl_cert_path": "hitachi-mirror-ssl-cert-path",
-            "hitachi_mirror_ssl_cert_verify": "hitachi-mirror-ssl-cert-verify",
-            "hitachi_mirror_storage_id": "hitachi-mirror-storage-id",
-            "hitachi_mirror_target_ports": "hitachi-mirror-target-ports",
-            "hitachi_mirror_use_chap_auth": "hitachi-mirror-use-chap-auth",
-            # Replication settings
-            "hitachi_pair_target_number": "hitachi-pair-target-number",
-            "hitachi_path_group_id": "hitachi-path-group-id",
-            "hitachi_quorum_disk_id": "hitachi-quorum-disk-id",
-            "hitachi_replication_copy_speed": "hitachi-replication-copy-speed",
-            "hitachi_replication_number": "hitachi-replication-number",
-            "hitachi_replication_status_check_long_interval": (
-                "hitachi-replication-status-check-long-interval"
-            ),
-            "hitachi_replication_status_check_short_interval": (
-                "hitachi-replication-status-check-short-interval"
-            ),
-            "hitachi_replication_status_check_timeout": (
-                "hitachi-replication-status-check-timeout"
-            ),
-            # REST API settings
-            "hitachi_rest_another_ldev_mapped_retry_timeout": (
-                "hitachi-rest-another-ldev-mapped-retry-timeout"
-            ),
-            "hitachi_rest_connect_timeout": "hitachi-rest-connect-timeout",
-            "hitachi_rest_disable_io_wait": "hitachi-rest-disable-io-wait",
-            "hitachi_rest_get_api_response_timeout": (
-                "hitachi-rest-get-api-response-timeout"
-            ),
-            "hitachi_rest_job_api_response_timeout": (
-                "hitachi-rest-job-api-response-timeout"
-            ),
-            "hitachi_rest_keep_session_loop_interval": (
-                "hitachi-rest-keep-session-loop-interval"
-            ),
-            "hitachi_rest_pair_target_ports": "hitachi-rest-pair-target-ports",
-            "hitachi_rest_server_busy_timeout": "hitachi-rest-server-busy-timeout",
-            "hitachi_rest_tcp_keepalive": "hitachi-rest-tcp-keepalive",
-            "hitachi_rest_tcp_keepcnt": "hitachi-rest-tcp-keepcnt",
-            "hitachi_rest_tcp_keepidle": "hitachi-rest-tcp-keepidle",
-            "hitachi_rest_tcp_keepintvl": "hitachi-rest-tcp-keepintvl",
-            "hitachi_rest_timeout": "hitachi-rest-timeout",
-            "hitachi_restore_timeout": "hitachi-restore-timeout",
-            # Snapshot settings
-            "hitachi_snap_pool": "hitachi-snap-pool",
-            "hitachi_state_transition_timeout": "hitachi-state-transition-timeout",
+        # Start from the base automatic mapping
+        mapping = super().get_field_mapping()
+
+        # Exclude fields that are not charm config options
+        exclude = {
+            # meta
+            "name",
+            # primary array credentials
+            "san_username",
+            "san_password",
+            # CHAP credentials
+            "chap_username",
+            "chap_password",
+            # mirror CHAP credentials
+            "hitachi_mirror_chap_username",
+            "hitachi_mirror_chap_password",
+            # mirror REST credentials
+            "hitachi_mirror_rest_username",
+            "hitachi_mirror_rest_password",
+            # juju secret URIs
+            "san_credentials_secret",
+            "chap_credentials_secret",
+            "hitachi_mirror_chap_credentials_secret",
+            "hitachi_mirror_rest_credentials_secret",
         }
 
-    def commands(
-        self, conditions: typing.Mapping[str, str | bool] = {}
-    ) -> dict[str, list[dict[typing.Any, typing.Any]]]:
-        """Return command mapping for this backend."""
-        return {}
+        return {k: v for k, v in mapping.items() if k not in exclude}
+
+    # -------- Provider-style CLI registration --------
+    def register_add_cli(self, add: click.Group) -> None:
+        """Register 'sunbeam storage add hitachi'.
+
+        Delegates to HitachiCLI class.
+        """
+        from sunbeam.storage.backends.hitachi.cli import HitachiCLI
+
+        cli = HitachiCLI(self)
+        cli.register_add_cli(add)
+
+    def register_cli(
+        self,
+        remove: click.Group,
+        config_show: click.Group,
+        config_set: click.Group,
+        config_options: click.Group,
+        deployment: Deployment,
+    ) -> None:
+        """Register management commands for Hitachi backend.
+
+        Delegates to HitachiCLI class.
+        """
+        from sunbeam.storage.backends.hitachi.cli import HitachiCLI
+
+        cli = HitachiCLI(self)
+        cli.register_cli(remove, config_show, config_set, config_options, deployment)
 
     def get_terraform_variables(
         self, backend_name: str, config: StorageBackendConfig, model: str
@@ -444,28 +404,18 @@ class HitachiBackend(StorageBackendBase):
             "hitachi_mirror_rest_password",
         }
 
-        # Use the same filtering logic as _get_backend_config to only send
-        # explicitly set values
-        charm_config = {}
-        default_config = HitachiConfig(
-            name="dummy",
-            hitachi_storage_id="dummy",
-            hitachi_pools="dummy",
-            san_ip="dummy",
+        # Filter config using the internal function, excluding credential fields
+        charm_config = self._filter_config_for_charm(
+            config_dict, field_mapping, exclude_fields=credential_fields
         )
-        default_dict = default_config.model_dump()
-
-        for key, value in config_dict.items():
-            # Skip credential fields - they will be handled as secrets
-            if key not in credential_fields and key in field_mapping:
-                # Only include explicitly set values (non-default, non-empty)
-                if self._should_include_config_value(key, value, default_dict.get(key)):
-                    charm_config[field_mapping[key]] = value
 
         # Build Terraform variables to match the plan's expected format
         tfvars = {
             "machine_model": model,
+            "charm_hitachi_name": self.charm_name,
+            "charm_hitachi_base": self.charm_base,
             "charm_hitachi_channel": self.charm_channel,
+            "charm_hitachi_endpoint": self.backend_endpoint,
             "charm_hitachi_revision": self.charm_revision,
             "hitachi_backends": {
                 backend_name: {
@@ -497,15 +447,26 @@ class HitachiBackend(StorageBackendBase):
 
         return tfvars
 
-    def _get_backend_config(self, config: StorageBackendConfig) -> Dict[str, Any]:
-        """Convert user config to charm-specific config.
+    def _filter_config_for_charm(
+        self,
+        config_dict: Dict[str, Any],
+        field_mapping: Dict[str, str],
+        exclude_fields: set | None = None,
+    ) -> Dict[str, Any]:
+        """Filter configuration dictionary for charm deployment.
 
         Only includes explicitly set values (non-default, non-empty) to avoid
         sending unnecessary configuration to the charm.
+
+        Args:
+            config_dict: Configuration dictionary to filter
+            field_mapping: Mapping from config keys to charm config keys
+            exclude_fields: Set of fields to exclude from filtering
+
+        Returns:
+            Filtered charm configuration dictionary
         """
-        # Get all field values, including defaults
-        config_dict = config.model_dump()
-        field_mapping = self.get_field_mapping()
+        exclude_fields = exclude_fields or set()
 
         # Get default values for comparison
         default_config = HitachiConfig(
@@ -513,13 +474,20 @@ class HitachiBackend(StorageBackendBase):
             hitachi_storage_id="dummy",
             hitachi_pools="dummy",
             san_ip="dummy",
+            san_username="dummy",
+            san_password="dummy",  # noqa: S106
+            protocol="FC",
         )
         default_dict = default_config.model_dump()
 
         charm_config = {}
         for key, value in config_dict.items():
+            # Skip excluded fields
+            if key in exclude_fields:
+                continue
+
             if key in field_mapping:
-                # Skip if this is a default value or empty/None
+                # Only include explicitly set values (non-default, non-empty)
                 if self._should_include_config_value(key, value, default_dict.get(key)):
                     charm_config[field_mapping[key]] = value
 
@@ -759,44 +727,10 @@ class HitachiDeployStep(BaseStorageBackendDeployStep):
             self.backend_name, self.backend_config, self.model
         )
 
-    def pre_deploy_hook(self, status=None) -> Result:
-        """Pre-deployment hook for Hitachi-specific setup."""
-        LOG.info(f"Preparing to deploy Hitachi backend {self.backend_name}")
-        return Result(ResultType.COMPLETED)
-
-    def post_deploy_hook(self, status=None) -> Result:
-        """Post-deployment hook for Hitachi-specific setup."""
-        LOG.info(f"Hitachi backend {self.backend_name} deployed successfully")
-        return Result(ResultType.COMPLETED)
-
 
 class HitachiDestroyStep(BaseStorageBackendDestroyStep):
     """Destroy Hitachi storage backend using base step class."""
 
-    def pre_destroy_hook(self, status=None) -> Result:
-        """Pre-destruction hook for Hitachi-specific cleanup."""
-        LOG.info(f"Preparing to destroy Hitachi backend {self.backend_name}")
-        return Result(ResultType.COMPLETED)
-
-    def post_destroy_hook(self, status=None) -> Result:
-        """Post-destruction hook for Hitachi-specific cleanup."""
-        LOG.info(f"Hitachi backend {self.backend_name} destroyed successfully")
-        return Result(ResultType.COMPLETED)
-
 
 class HitachiUpdateConfigStep(BaseStorageBackendConfigUpdateStep):
     """Update Hitachi storage backend configuration using base step class."""
-
-    def pre_update_hook(self, status=None) -> Result:
-        """Pre-update hook for Hitachi-specific validation."""
-        LOG.info(
-            f"Preparing to update Hitachi backend {self.backend_name} configuration"
-        )
-        return Result(ResultType.COMPLETED)
-
-    def post_update_hook(self, status=None) -> Result:
-        """Post-update hook for Hitachi-specific validation."""
-        LOG.info(
-            f"Hitachi backend {self.backend_name} configuration updated successfully"
-        )
-        return Result(ResultType.COMPLETED)
