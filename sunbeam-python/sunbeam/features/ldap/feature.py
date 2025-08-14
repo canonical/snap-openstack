@@ -168,7 +168,7 @@ class UpdateLDAPDomainStep(BaseStep, JujuStepHelper):
         charm_name = "keystone-ldap-{}".format(self.charm_config["domain-name"])
         apps = ["keystone", charm_name]
         LOG.debug(f"Application monitored for readiness: {apps}")
-        status_queue: queue.Queue[str] = queue.Queue(maxsize=len(apps))
+        status_queue: queue.Queue[str] = queue.Queue()
         task = update_status_background(self, apps, status_queue, status)
         try:
             self.jhelper.wait_until_active(
@@ -238,7 +238,7 @@ class AddLDAPDomainStep(BaseStep, JujuStepHelper):
         charm_name = "keystone-ldap-{}".format(self.charm_config["domain-name"])
         apps = ["keystone", charm_name]
         LOG.debug(f"Application monitored for readiness: {apps}")
-        status_queue: queue.Queue[str] = queue.Queue(maxsize=len(apps))
+        status_queue: queue.Queue[str] = queue.Queue()
         task = update_status_background(self, apps, status_queue, status)
         try:
             self.jhelper.wait_until_active(

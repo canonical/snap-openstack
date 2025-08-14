@@ -565,7 +565,7 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
         apps = list(set(apps) - set(self.remove_blocked_apps_from_features()))
 
         LOG.debug(f"Applications monitored for readiness: {apps}")
-        status_queue: queue.Queue[str] = queue.Queue(maxsize=len(apps))
+        status_queue: queue.Queue[str] = queue.Queue()
         task = update_status_background(self, apps, status_queue, status)
         try:
             self.jhelper.wait_until_active(
@@ -663,7 +663,7 @@ class ReapplyOpenStackTerraformPlanStep(BaseStep, JujuStepHelper):
         if not storage_nodes:
             apps.remove("cinder")
         LOG.debug(f"Application monitored for readiness: {apps}")
-        status_queue: queue.Queue[str] = queue.Queue(maxsize=len(apps))
+        status_queue: queue.Queue[str] = queue.Queue()
         task = update_status_background(self, apps, status_queue, status)
         try:
             self.jhelper.wait_until_active(

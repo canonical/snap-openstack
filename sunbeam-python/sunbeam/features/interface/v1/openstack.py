@@ -476,7 +476,7 @@ class UpgradeOpenStackApplicationStep(BaseStep, JujuStepHelper):
         except TerraformException as e:
             LOG.exception(f"Error upgrading feature {self.feature.name}")
             return Result(ResultType.FAILED, str(e))
-        status_queue: queue.Queue[str] = queue.Queue(maxsize=len(apps))
+        status_queue: queue.Queue[str] = queue.Queue()
         task = update_status_background(self, apps, status_queue, status)
         try:
             self.jhelper.wait_until_desired_status(
@@ -570,7 +570,7 @@ class EnableOpenStackApplicationStep(
 
         apps = self.feature.set_application_names(self.deployment)
         LOG.debug(f"Application monitored for readiness: {apps}")
-        status_queue: queue.Queue[str] = queue.Queue(maxsize=len(apps))
+        status_queue: queue.Queue[str] = queue.Queue()
         task = update_status_background(self, apps, status_queue, status)
         try:
             self.jhelper.wait_until_desired_status(
@@ -694,7 +694,7 @@ class WaitForApplicationsStep(BaseStep):
     def run(self, status: Status | None = None) -> Result:
         """Wait for applications to be idle."""
         LOG.debug(f"Application monitored for readiness: {self.apps}")
-        status_queue: queue.Queue[str] = queue.Queue(maxsize=len(self.apps))
+        status_queue: queue.Queue[str] = queue.Queue()
         task = update_status_background(self, self.apps, status_queue, status)
         try:
             self.jhelper.wait_until_desired_status(
