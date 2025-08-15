@@ -175,6 +175,11 @@ class EnableMaintenance(MaintenanceCommand):
                     self.node,
                     self.deployment,
                 ),
+                checks.ReplicasRedundancyCheck(
+                    self.node,
+                    self.deployment,
+                    force=self.force,
+                ),
             ]
 
         run_preflight_checks(preflight_checks, console)

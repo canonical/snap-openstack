@@ -25,6 +25,7 @@ from sunbeam.core.k8s import (
     K8S_DEFAULT_JUJU_CONTROLLER_NAMESPACE,
     K8S_DQLITE_SVC_NAME,
     fetch_pods,
+    fetch_pods_for_eviction,
     find_node,
 )
 from sunbeam.core.openstack import OPENSTACK_MODEL
@@ -44,8 +45,10 @@ from sunbeam.steps.k8s import (
 
 if typing.TYPE_CHECKING:
     import lightkube.core.client as l_client
+    import lightkube.resources.apps_v1 as l_apps
 else:
     l_client = LazyImport("lightkube.core.client")
+    l_apps = LazyImport("lightkube.resources.apps_v1")
 from sunbeam.steps.microceph import APPLICATION as _MICROCEPH_APPLICATION
 
 console = Console()
@@ -524,6 +527,75 @@ class K8sDqliteRedundancyCheck(Check):
             LOG.debug("%s", str(e))
             return False
         return "active" == status
+
+
+class ReplicasRedundancyCheck(Check):
+    """Check if the k8s resource has enough replicas."""
+
+    def __init__(
+        self,
+        node: str,
+        deployment: Deployment,
+        force: bool = False,
+    ):
+        super().__init__(
+            "Check if the k8s resource enough replicas.",
+            "Checking if the k8s resource has enough replicas.",
+        )
+        self.node = node
+        self.force = force
+        self.deployment = deployment
+
+    def run(self) -> bool:
+        """Check if the k8s resource has enough replicas."""
+        try:
+            kube_client = get_kube_client(self.deployment.get_client())
+        except KubeClientError:
+            self.message = "failed to get k8s client"
+            return False
+
+        resources = []
+        for pod in fetch_pods_for_eviction(kube_client, self.node):
+            if pod.metadata is None:
+                continue
+            namespace = pod.metadata.namespace or "*"
+            for owner in pod.metadata.ownerReferences or []:
+                if owner.kind == "ReplicaSet":
+                    kind = l_apps.ReplicaSet  # type: ignore
+                elif owner.kind == "Deployment":
+                    kind = l_apps.Deployment  # type: ignore
+                elif owner.kind == "StatefulSet":
+                    kind = l_apps.StatefulSet  # type: ignore
+                else:
+                    continue
+
+                r = kube_client.get(kind, owner.name, namespace=namespace)
+                if not (r.spec and r.status):
+                    continue
+                desired_replicas = r.spec.replicas or 1
+                ready_replicas = r.status.readyReplicas or 0
+                if ready_replicas <= 1:
+                    LOG.warning(
+                        "%s (%s) has %d out of %d left",
+                        owner.name,
+                        kind,
+                        ready_replicas,
+                        desired_replicas,
+                    )
+                    resources.append(f"{owner.name} ({kind})")
+
+        if not resources:
+            return True
+
+        if self.force:
+            LOG.debug("Ignore issue: k8s resource does not have enough replicas")
+            return True
+
+        self.message = (
+            "cannot enable maintenance mode because the following resources do not"
+            f" have enough replicas [{''.join(resources)}]."
+        )
+        return False
 
 
 class NoJujuControllerPodCheck(Check):
