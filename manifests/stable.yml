@@ -91,6 +91,13 @@ features:
       charms:
         barbican-k8s:
           channel: 2024.1/stable
+  shared-filesystem:
+    software:
+      charms:
+        manila-k8s:
+          channel: 2024.1/stable
+        manila-cephfs-k8s:
+          channel: 2024.1/stable
   telemetry:
     software:
       charms:
