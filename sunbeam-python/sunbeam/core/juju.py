@@ -31,7 +31,7 @@ from snaphelpers import Snap
 
 from sunbeam import utils
 from sunbeam.clusterd.client import Client
-from sunbeam.core.common import SunbeamException
+from sunbeam.core.common import STATUS_NOT_READY, STATUS_READY, SunbeamException
 from sunbeam.versions import JUJU_BASE
 
 LOG = logging.getLogger(__name__)
@@ -42,7 +42,7 @@ JUJU_CONTROLLER_KEY = "JujuController"
 ACCOUNT_FILE = "account.yaml"
 OWNER_TAG_PREFIX = "user-"
 
-MODEL_DELAY = 5
+MODEL_DELAY = 10
 
 T = TypeVar("T")
 
@@ -1274,15 +1274,12 @@ class JujuHelper:
         :agent_status: Desired agent status list.
         :workload_status_message: List of desired workload status messages.
         :timeout: Waiting timeout in seconds.
-        :queue: An queue to use for status updates. If provided,
-                its maxsize should be at least the number of applications.
+        :queue: An queue to use for status updates.
         """
         if status is None:
             wl_status = {"active"}
         else:
             wl_status = set(status)
-        if queue is not None and queue.maxsize < len(apps):
-            raise ValueError("Queue size should be at least the number of applications")
         LOG.debug("Waiting for apps %r to be %r", apps, wl_status)
         app_params = {}
         for app in apps:
@@ -1312,7 +1309,7 @@ class JujuHelper:
                 expected_status,
                 expected_agent_status,
                 expected_workload_status_message,
-            ) in app_params.copy().items():
+            ) in app_params.items():
                 if JujuHelper._is_desired_status_achieved(
                     status.apps[app],
                     unit_list,
@@ -1320,15 +1317,11 @@ class JujuHelper:
                     expected_agent_status,
                     expected_workload_status_message,
                 ):
-                    LOG.debug(
-                        "Application %r is in expected status %r",
-                        app,
-                        expected_status,
-                    )
                     if queue is not None:
-                        queue.put_nowait(app)
-                    app_params.pop(app, None)
+                        queue.put_nowait((STATUS_READY, app))
                 else:
+                    if queue is not None:
+                        queue.put_nowait((STATUS_NOT_READY, app))
                     ready = False
             return ready
 

@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-import queue
 from unittest.mock import MagicMock, Mock, patch
 
 import jubilant
@@ -685,15 +684,6 @@ class TestJujuActionHelper:
                 "fake-action",
                 {"p1": "v1", "p2": "v2"},
             )
-
-
-def test_wait_until_desired_status_invalid_queue(jhelper: jujulib.JujuHelper):
-    status_queue: queue.Queue[str] = queue.Queue(1)
-
-    with pytest.raises(ValueError):
-        jhelper.wait_until_desired_status(
-            "test-model", ["app1", "app2"], queue=status_queue
-        )
 
 
 def test_wait_until_desired_status_timeout(jhelper: jujulib.JujuHelper, juju):
