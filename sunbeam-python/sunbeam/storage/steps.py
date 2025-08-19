@@ -12,16 +12,29 @@ import logging
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Dict
 
+import tenacity
 from rich.console import Console
 from rich.status import Status
 
 from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import ConfigItemNotFoundException
-from sunbeam.core.common import BaseStep, Result, ResultType, read_config, update_config
+from sunbeam.core.common import (
+    BaseStep,
+    Result,
+    ResultType,
+    friendly_terraform_lock_retry_callback,
+    read_config,
+    update_config,
+)
 from sunbeam.core.deployment import Deployment
-from sunbeam.core.juju import JujuHelper
+from sunbeam.core.juju import (
+    ControllerNotFoundException,
+    ControllerNotReachableException,
+    JujuException,
+    JujuHelper,
+)
 from sunbeam.core.manifest import Manifest
-from sunbeam.core.terraform import TerraformHelper
+from sunbeam.core.terraform import TerraformHelper, TerraformStateLockedException
 
 from .models import BackendNotFoundException, StorageBackendConfig
 
@@ -45,9 +58,63 @@ class ValidateStoragePrerequisitesStep(BaseStep):
         self.jhelper = jhelper
         self.OPENSTACK_MACHINE_MODEL = self.deployment.openstack_machines_model
 
+    def _check_juju_authentication(self) -> Result:
+        """Check if the current user is authenticated with Juju."""
+        try:
+            # Use the existing JujuHelper to check authentication
+            # If we can list models, we're authenticated
+            models = self.jhelper.models()
+            LOG.debug(
+                f"Juju authentication check successful, found {len(models)} models"
+            )
+            return Result(ResultType.COMPLETED)
+
+        except ControllerNotFoundException:
+            return Result(
+                ResultType.FAILED,
+                "Juju controller not found. Please ensure Sunbeam is bootstrapped:\n"
+                "'sunbeam cluster bootstrap'",
+            )
+        except ControllerNotReachableException:
+            return Result(
+                ResultType.FAILED,
+                "Juju controller not reachable. Please check network connectivity\n"
+                "or re-authenticate with 'sunbeam utils juju-login'",
+            )
+        except JujuException as e:
+            # Check if it's an authentication-related error
+            error_msg = str(e).lower()
+            if any(
+                keyword in error_msg
+                for keyword in [
+                    "not logged in",
+                    "authentication",
+                    "unauthorized",
+                    "permission denied",
+                    "please enter password",
+                ]
+            ):
+                return Result(
+                    ResultType.FAILED,
+                    "Not authenticated with Juju controller. Please run:\n"
+                    "'sunbeam utils juju-login'\n"
+                    "or authenticate manually with 'juju login'",
+                )
+            else:
+                return Result(ResultType.FAILED, f"Juju operation failed: {e}")
+        except Exception as e:
+            return Result(
+                ResultType.FAILED, f"Failed to check Juju authentication: {e}"
+            )
+
     def run(self, status: Status | None = None) -> Result:
         """Validate storage backend prerequisites."""
         try:
+            # 0. Check Juju authentication first
+            auth_result = self._check_juju_authentication()
+            if auth_result.result_type != ResultType.COMPLETED:
+                return auth_result
+
             # 1. Check if Sunbeam is bootstrapped
             is_bootstrapped = self.client.cluster.check_sunbeam_bootstrapped()
             if not is_bootstrapped:
@@ -145,6 +212,16 @@ class BaseStorageBackendDeployStep(BaseStep, ABC):
         """
         pass
 
+    @tenacity.retry(
+        wait=tenacity.wait_fixed(60),
+        stop=tenacity.stop_after_delay(300),
+        retry=tenacity.retry_if_exception_type(TerraformStateLockedException),
+        retry_error_callback=friendly_terraform_lock_retry_callback,
+        before_sleep=lambda retry_state: console.print(
+            f"Terraform state locked, retrying in 60 seconds... "
+            f"(attempt {retry_state.attempt_number}/5)"
+        ),
+    )
     def run(self, status: Status | None = None) -> Result:
         """Deploy the storage backend using Terraform."""
         try:
@@ -188,6 +265,9 @@ class BaseStorageBackendDeployStep(BaseStep, ABC):
             )
             return Result(ResultType.COMPLETED)
 
+        except TerraformStateLockedException as e:
+            # Bubble up to trigger retry
+            raise e
         except Exception as e:
             LOG.error(
                 f"Failed to deploy {self.backend_instance.display_name} "
@@ -267,6 +347,16 @@ class BaseStorageBackendDestroyStep(BaseStep, ABC):
         except ConfigItemNotFoundException:
             return True
 
+    @tenacity.retry(
+        wait=tenacity.wait_fixed(60),
+        stop=tenacity.stop_after_delay(300),
+        retry=tenacity.retry_if_exception_type(TerraformStateLockedException),
+        retry_error_callback=friendly_terraform_lock_retry_callback,
+        before_sleep=lambda retry_state: console.print(
+            f"Terraform state locked, retrying in 60 seconds... "
+            f"(attempt {retry_state.attempt_number}/5)"
+        ),
+    )
     def run(self, status: Status | None = None) -> Result:
         """Run the destroy step atomically.
 
@@ -405,6 +495,9 @@ class BaseStorageBackendDestroyStep(BaseStep, ABC):
             )
             return Result(ResultType.COMPLETED)
 
+        except TerraformStateLockedException as e:
+            # Bubble up to trigger retry
+            raise e
         except Exception as e:
             LOG.error(
                 f"Failed to destroy {self.backend_instance.display_name} "
@@ -475,6 +568,16 @@ class BaseStorageBackendConfigUpdateStep(BaseStep, ABC):
 
         return current_config
 
+    @tenacity.retry(
+        wait=tenacity.wait_fixed(60),
+        stop=tenacity.stop_after_delay(300),
+        retry=tenacity.retry_if_exception_type(TerraformStateLockedException),
+        retry_error_callback=friendly_terraform_lock_retry_callback,
+        before_sleep=lambda retry_state: console.print(
+            f"Terraform state locked, retrying in 60 seconds... "
+            f"(attempt {retry_state.attempt_number}/5)"
+        ),
+    )
     def run(self, status: Status | None = None) -> Result:
         """Update the storage backend configuration using Terraform."""
         # Read current configuration
@@ -528,6 +631,9 @@ class BaseStorageBackendConfigUpdateStep(BaseStep, ABC):
                 f"Configuration not found for backend {self.backend_name}",
             )
 
+        except TerraformStateLockedException as e:
+            # Bubble up to trigger retry
+            raise e
         except Exception as e:
             LOG.error(
                 f"Failed to update {self.backend_instance.display_name} "
