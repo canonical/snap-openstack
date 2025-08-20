@@ -375,6 +375,10 @@ def delete_config(client: Client, key: str):
     client.cluster.delete_config(key)
 
 
+STATUS_READY = "ready"
+STATUS_NOT_READY = "not_ready"
+
+
 class _UpdateStatusThread(threading.Thread):
     """Thread to update status in the background."""
 
@@ -401,13 +405,17 @@ class _UpdateStatusThread(threading.Thread):
         """Check if the thread is stopped."""
         return self._stop_event.is_set()
 
+    def _nb_active_apps(self, apps: dict[str, int]) -> int:
+        """Only count apps with count 4+."""
+        return sum(1 for count in apps.values() if count >= 4)
+
     def run(self):
         """Run the thread."""
         if self.status is None:
             LOG.debug("No status provided, skipping background status update")
             return
         LOG.debug("Starting background status update thread")
-        apps = dict.fromkeys(self.applications, False)
+        apps = dict.fromkeys(self.applications, 0)
         nb_apps = len(self.applications)
         message = (
             self.step.status
@@ -425,15 +433,18 @@ class _UpdateStatusThread(threading.Thread):
                 )
                 return
             try:
-                app = self.queue.get(timeout=15)
+                status, app = self.queue.get(timeout=15)
             except queue.Empty:
                 continue
             if app not in apps:
                 LOG.debug("Received an unexpected app %s", app)
                 self.queue.task_done()
                 continue
-            apps[app] = True
-            nb_active_apps = sum(apps.values())
+            if status == STATUS_READY:
+                apps[app] += 1
+            else:
+                apps[app] = 0
+            nb_active_apps = self._nb_active_apps(apps)
             self.status.update(
                 message.format(nb_active_apps=nb_active_apps, nb_apps=nb_apps)
             )
