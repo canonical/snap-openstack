@@ -1,11 +1,10 @@
 # SPDX-FileCopyrightText: 2023 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
-import asyncio
 import subprocess
 import tempfile
 from pathlib import Path
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import Mock, patch
 
 import pexpect
 import pytest
@@ -21,24 +20,9 @@ TEST_OFFER_INTERFACES = [
 ]
 
 
-@pytest.fixture(autouse=True)
-def mock_run_sync(mocker):
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-
-    def run_sync(coro):
-        return loop.run_until_complete(coro)
-
-    mocker.patch("sunbeam.steps.juju.run_sync", run_sync)
-    yield
-    loop.close()
-
-
 @pytest.fixture()
 def jhelper():
-    yield AsyncMock()
+    yield Mock()
 
 
 @pytest.fixture()
@@ -69,14 +53,14 @@ class TestWriteJujuStatusStep:
         assert result.result_type == ResultType.SKIPPED
 
     def test_run(self, jhelper):
-        jhelper.get_model_status_full.return_value = {
+        jhelper.get_model_status.return_value = {
             "applications": {"controller": {"status": "active"}}
         }
         with tempfile.NamedTemporaryFile() as tmpfile:
             step = juju.WriteJujuStatusStep(jhelper, "openstack", Path(tmpfile.name))
             result = step.run()
 
-        jhelper.get_model_status_full.assert_called_once()
+        jhelper.get_model_status.assert_called_once()
         assert result.result_type == ResultType.COMPLETED
 
 
@@ -566,7 +550,7 @@ class TestScaleJujuStep:
 
 @pytest.fixture
 def add_juju_space_step() -> juju.AddJujuSpaceStep:
-    jhelper = AsyncMock()
+    jhelper = Mock()
     model = "test-model"
     space = "test-space"
     subnets = ["10.0.0.0/24", "192.168.0.0/24"]
@@ -616,54 +600,6 @@ class TestAddJujuSpaceStep:
         )
 
 
-@pytest.fixture
-def bind_juju_application_step() -> juju.BindJujuApplicationStep:
-    jhelper = AsyncMock()
-    model = "test-model"
-    app = "test-app"
-    space = "test-space"
-    return juju.BindJujuApplicationStep(jhelper, model, app, space)
-
-
-class TestBindJujuApplicationStep:
-    def test_is_skip_when_bindings_are_different(
-        self, bind_juju_application_step: juju.BindJujuApplicationStep
-    ):
-        step = bind_juju_application_step
-        current_bindings = {"endpoint1": "test-space", "endpoint2": "other-space"}
-        step.jhelper.get_application_bindings.return_value = current_bindings
-        result = step.is_skip()
-        assert result.result_type == ResultType.COMPLETED
-
-    def test_is_skip_when_no_change_to_make(
-        self, bind_juju_application_step: juju.BindJujuApplicationStep
-    ):
-        step = bind_juju_application_step
-        current_bindings = {"endpoint1": "test-space", "endpoint2": "test-space"}
-        step.jhelper.get_application_bindings.return_value = current_bindings
-        result = step.is_skip()
-        step.jhelper.get_application_bindings.assert_called_once_with(
-            "test-model", "test-app"
-        )
-        assert result.result_type == ResultType.SKIPPED
-
-    def test_run(self, bind_juju_application_step: juju.BindJujuApplicationStep):
-        step = bind_juju_application_step
-        step._bindings = {"endpoint1": "test-space", "endpoint2": "test-space"}
-        step.run()
-
-    def test_run_when_merge_bindings_fails(
-        self, bind_juju_application_step: juju.BindJujuApplicationStep
-    ):
-        step = bind_juju_application_step
-        step.jhelper.merge_bindings.side_effect = juju.JujuException(
-            "Failed to merge bindings"
-        )
-        step._bindings = {"endpoint1": "test-space", "endpoint2": "test-space"}
-        result = step.run()
-        assert result.result_type == ResultType.FAILED
-
-
 class TestUnregisterJujuControllerStep:
     def test_is_skip(self, mocker, tmp_path):
         step = juju.UnregisterJujuController("testcontroller", tmp_path)
@@ -700,13 +636,23 @@ class TestUnregisterJujuControllerStep:
 
 class TestRemoveSaasApplicationsStep:
     def test_is_skip(self, jhelper):
-        jhelper.get_model_status.return_value = {
-            "remote-applications": {
-                "test-1": {"offer-url": "admin/offering_model.test-1"},
-                "test-2": {"endpoints": [{"interface": "grafana_dashboard"}]},
-                "test-3": {"endpoints": [{"interface": "identity_credentials"}]},
+        jhelper.get_model_status.return_value = Mock(
+            app_endpoints={
+                "test-1": Mock(url="admin/offering_model.test-1", endpoints={}),
+                "test-2": Mock(
+                    url="admin/other-model.test-1",
+                    endpoints={
+                        "grafana-dashboard": Mock(interface="grafana_dashboard")
+                    },
+                ),
+                "test-3": Mock(
+                    url="admin/other-model.test-2",
+                    endpoints={
+                        "keystone-credentials": Mock(interface="identity_credentials")
+                    },
+                ),
             }
-        }
+        )
         step = juju.RemoveSaasApplicationsStep(
             jhelper,
             "test",
@@ -718,15 +664,25 @@ class TestRemoveSaasApplicationsStep:
         assert result.result_type == ResultType.COMPLETED
 
     def test_is_skip_given_remote_app(self, jhelper):
-        jhelper.get_model_status.return_value = {
-            "remote-applications": {
-                "test-1": {"offer-url": "admin/offering_model.test-1"},
-                "test-2": {"endpoints": [{"interface": "grafana_dashboard"}]},
-                "test-3": {"endpoints": [{"interface": "identity_credentials"}]},
-                "test-4": {"offer-url": "admin/offering_model.test-4"},
-                "test-5": {"offer-url": "admin/offering_model.test-5"},
+        jhelper.get_model_status.return_value = Mock(
+            app_endpoints={
+                "test-1": Mock(url="admin/offering_model.test-1", endpoints={}),
+                "test-2": Mock(
+                    url="admin/other-model.test-1",
+                    endpoints={
+                        "grafana-dashboard": Mock(interface="grafana_dashboard")
+                    },
+                ),
+                "test-3": Mock(
+                    url="admin/other-model.test-2",
+                    endpoints={
+                        "keystone-credentials": Mock(interface="identity_credentials")
+                    },
+                ),
+                "test-4": Mock(url="admin/offering_model.test-4", endpoints={}),
+                "test-5": Mock(url="admin/offering_model.test-5", endpoints={}),
             }
-        }
+        )
         step = juju.RemoveSaasApplicationsStep(
             jhelper,
             "test",
@@ -739,7 +695,7 @@ class TestRemoveSaasApplicationsStep:
         assert result.result_type == ResultType.COMPLETED
 
     def test_is_skip_no_remote_app(self, jhelper):
-        jhelper.get_model_status.return_value = {}
+        jhelper.get_model_status.return_value = Mock(app_endpoints={})
         step = juju.RemoveSaasApplicationsStep(
             jhelper,
             "test",
@@ -750,12 +706,17 @@ class TestRemoveSaasApplicationsStep:
         assert result.result_type == ResultType.SKIPPED
 
     def test_is_skip_no_saas_app(self, jhelper):
-        jhelper.get_model_status.return_value = {
-            "remote-applications": {
-                "test-1": {"offer-url": "admin/offering_model.test-1"},
-                "test-3": {"endpoints": [{"interface": "identity_credentials"}]},
+        jhelper.get_model_status.return_value = Mock(
+            app_endpoints={
+                "test-1": Mock(url="admin/offering_model.test-1", endpoints={}),
+                "test-3": Mock(
+                    url="admin/other-model.test-2",
+                    endpoints={
+                        "keystone-credentials": Mock(interface="identity_credentials")
+                    },
+                ),
             }
-        }
+        )
         step = juju.RemoveSaasApplicationsStep(
             jhelper,
             "test",

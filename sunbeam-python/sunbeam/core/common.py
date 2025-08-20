@@ -1,12 +1,13 @@
 # SPDX-FileCopyrightText: 2023 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
-import asyncio
 import enum
 import ipaddress
 import json
 import logging
 import os
+import queue
+import threading
 from pathlib import Path
 from typing import Any, Sequence, Type, TypeVar
 
@@ -374,49 +375,85 @@ def delete_config(client: Client, key: str):
     client.cluster.delete_config(key)
 
 
-async def update_status_background(
-    step,
-    applications: list[str],
-    queue: asyncio.queues.Queue,
-    status: Status | None = None,
-) -> asyncio.Task:
-    """Update status in the background.
+class _UpdateStatusThread(threading.Thread):
+    """Thread to update status in the background."""
 
-    If status is None, return a no-op task.
-    """
-    if status is None:
-        return asyncio.create_task(asyncio.sleep(0))
-    apps = dict.fromkeys(applications, False)
-    nb_apps = len(applications)
-    message = (
-        step.status + "waiting for services to come online ({nb_active_apps}/{nb_apps})"
-    )
+    def __init__(
+        self,
+        step,
+        applications: list[str],
+        queue: queue.Queue,
+        status: Status | None = None,
+    ):
+        super().__init__(target=self.run, name="UpdateStatusThread", daemon=True)
+        self._stop_event = threading.Event()
+        self.step = step
+        self.applications = applications
+        self.queue = queue
+        self.status = status
 
-    async def _update_status_background_coro():
+    def stop(self):
+        """Stop the thread."""
+        LOG.debug("Stopping background status update thread")
+        self._stop_event.set()
+
+    def stopped(self) -> bool:
+        """Check if the thread is stopped."""
+        return self._stop_event.is_set()
+
+    def run(self):
+        """Run the thread."""
+        if self.status is None:
+            LOG.debug("No status provided, skipping background status update")
+            return
+        LOG.debug("Starting background status update thread")
+        apps = dict.fromkeys(self.applications, False)
+        nb_apps = len(self.applications)
+        message = (
+            self.step.status
+            + "waiting for services to come online ({nb_active_apps}/{nb_apps})"
+        )
         nb_active_apps = 0
-        status.update(message.format(nb_active_apps=nb_active_apps, nb_apps=nb_apps))
+        self.status.update(
+            message.format(nb_active_apps=nb_active_apps, nb_apps=nb_apps)
+        )
         while nb_active_apps < nb_apps:
-            try:
-                app = await queue.get()
-                if app not in apps:
-                    LOG.debug("Received an unexpected app %s", app)
-                    queue.task_done()
-                    continue
-                apps[app] = True
-                nb_active_apps = sum(apps.values())
-                status.update(
-                    message.format(nb_active_apps=nb_active_apps, nb_apps=nb_apps)
-                )
-                queue.task_done()
-            except asyncio.CancelledError:
+            if self.stopped():
                 LOG.debug(
                     "Cancelling status update, not ready applications: %s",
                     ", ".join(app for app, ready in apps.items() if not ready),
                 )
-                break
-        status.update(step.status + "all services are online")
+                return
+            try:
+                app = self.queue.get(timeout=15)
+            except queue.Empty:
+                continue
+            if app not in apps:
+                LOG.debug("Received an unexpected app %s", app)
+                self.queue.task_done()
+                continue
+            apps[app] = True
+            nb_active_apps = sum(apps.values())
+            self.status.update(
+                message.format(nb_active_apps=nb_active_apps, nb_apps=nb_apps)
+            )
+            self.queue.task_done()
+        self.status.update(self.step.status + "all services are online")
 
-    return asyncio.create_task(_update_status_background_coro())
+
+def update_status_background(
+    step,
+    applications: list[str],
+    queue: queue.Queue,
+    status: Status | None = None,
+) -> _UpdateStatusThread:
+    """Update status in the background.
+
+    If status is None, return a no-op task.
+    """
+    updater = _UpdateStatusThread(step, applications, queue, status)
+    updater.start()
+    return updater
 
 
 def str_presenter(dumper: yaml.Dumper | yaml.SafeDumper, data: str) -> yaml.ScalarNode:

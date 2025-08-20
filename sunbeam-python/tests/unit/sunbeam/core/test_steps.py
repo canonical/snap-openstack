@@ -1,35 +1,19 @@
 # SPDX-FileCopyrightText: 2023 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
-import asyncio
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import Mock, patch
 
 import pytest
 import tenacity
 
 from sunbeam.core.common import ResultType
-from sunbeam.core.juju import ApplicationNotFoundException, TimeoutException
+from sunbeam.core.juju import ApplicationNotFoundException
 from sunbeam.core.steps import (
     AddMachineUnitsStep,
     DeployMachineApplicationStep,
     RemoveMachineUnitsStep,
 )
 from sunbeam.core.terraform import TerraformException, TerraformStateLockedException
-
-
-@pytest.fixture(autouse=True)
-def mock_run_sync(mocker):
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-
-    def run_sync(coro):
-        return loop.run_until_complete(coro)
-
-    mocker.patch("sunbeam.core.steps.run_sync", run_sync)
-    yield
-    loop.close()
 
 
 @pytest.fixture()
@@ -49,7 +33,7 @@ def tfhelper():
 
 @pytest.fixture()
 def jhelper():
-    yield AsyncMock()
+    yield Mock()
 
 
 @pytest.fixture()
@@ -146,7 +130,7 @@ class TestDeployMachineApplicationStep:
         tfconfig = "tfconfig"
         machines = ["1", "2"]
         model = "model1"
-        application = Mock(units=[Mock(machine=Mock(id=m)) for m in machines])
+        application = Mock(units={f"app/{m}": Mock(machine=m) for m in machines})
         jhelper.get_application.return_value = application
 
         step = DeployMachineApplicationStep(
@@ -167,6 +151,7 @@ class TestDeployMachineApplicationStep:
     def test_run_tf_apply_failed(
         self, deployment, cclient, tfhelper, jhelper, manifest
     ):
+        jhelper.get_application.return_value = Mock(units={"app/1": Mock(machine=1)})
         tfhelper.update_tfvars_and_apply_tf.side_effect = TerraformException(
             "apply failed..."
         )
@@ -190,6 +175,7 @@ class TestDeployMachineApplicationStep:
     def test_run_tf_apply_locked(
         self, deployment, cclient, tfhelper, jhelper, manifest
     ):
+        jhelper.get_application.return_value = Mock(units={"app/1": Mock(machine=1)})
         tfhelper.update_tfvars_and_apply_tf.side_effect = [
             TerraformStateLockedException("apply failed..."),
             None,
@@ -214,7 +200,8 @@ class TestDeployMachineApplicationStep:
     def test_run_waiting_timed_out(
         self, deployment, cclient, tfhelper, jhelper, manifest
     ):
-        jhelper.wait_application_ready.side_effect = TimeoutException("timed out")
+        jhelper.get_application.return_value = Mock(units={"app/1": Mock(machine=1)})
+        jhelper.wait_application_ready.side_effect = TimeoutError("timed out")
 
         step = DeployMachineApplicationStep(
             deployment,
@@ -239,6 +226,7 @@ class TestAddMachineUnitsStep:
         cclient.cluster.list_nodes.return_value = [
             {"name": "machine1", "machineid": "1"}
         ]
+        jhelper.get_application.return_value = Mock(units={})
         step = AddMachineUnitsStep(
             cclient, "machine1", jhelper, "tfconfig", "app1", "model1"
         )
@@ -281,7 +269,7 @@ class TestAddMachineUnitsStep:
         cclient.cluster.list_nodes.return_value = [
             {"name": "machine1", "machineid": id}
         ]
-        jhelper.get_application.return_value = Mock(units=[Mock(machine=Mock(id=id))])
+        jhelper.get_application.return_value = Mock(units={"app1/0": Mock(machine=id)})
 
         step = AddMachineUnitsStep(
             cclient, "machine1", jhelper, "tfconfig", "app1", "model1"
@@ -315,7 +303,7 @@ class TestAddMachineUnitsStep:
         assert result.message == "Application missing..."
 
     def test_run_timeout(self, cclient, jhelper, read_config):
-        jhelper.wait_until_desired_status.side_effect = TimeoutException("timed out")
+        jhelper.wait_until_desired_status.side_effect = TimeoutError("timed out")
 
         step = AddMachineUnitsStep(
             cclient, "machine1", jhelper, "tfconfig", "app1", "model1"
@@ -331,7 +319,7 @@ class TestRemoveMachineUnitStep:
     def test_is_skip(self, cclient, jhelper):
         id = "1"
         cclient.cluster.list_nodes.return_value = [{"name": "node-0", "machineid": id}]
-        jhelper.get_application.return_value = Mock(units=[Mock(machine=Mock(id=id))])
+        jhelper.get_application.return_value = Mock(units={"app1/0": Mock(machine=id)})
 
         step = RemoveMachineUnitsStep(
             cclient, "node-0", jhelper, "tfconfig", "app1", "model1"
@@ -345,6 +333,7 @@ class TestRemoveMachineUnitStep:
     def test_is_skip_node_missing(self, cclient, jhelper):
         cclient.cluster.list_nodes.return_value = [{"name": "node-0", "machineid": 1}]
 
+        jhelper.get_application.return_value = Mock(units={"app1/0": Mock()})
         step = RemoveMachineUnitsStep(
             cclient, "node-1", jhelper, "tfconfig", "app1", "model1"
         )
@@ -369,7 +358,7 @@ class TestRemoveMachineUnitStep:
 
     def test_is_skip_unit_missing(self, cclient, jhelper):
         cclient.cluster.list_nodes.return_value = [{"name": "node-0", "machineid": 1}]
-        jhelper.get_application.return_value = Mock(units=[])
+        jhelper.get_application.return_value = Mock(units={})
 
         step = RemoveMachineUnitsStep(
             cclient, "node-0", jhelper, "tfconfig", "app1", "model1"
@@ -404,7 +393,7 @@ class TestRemoveMachineUnitStep:
         assert result.message == "Application missing..."
 
     def test_run_timeout(self, cclient, jhelper, read_config):
-        jhelper.wait_application_ready.side_effect = TimeoutException("timed out")
+        jhelper.wait_application_ready.side_effect = TimeoutError("timed out")
 
         step = RemoveMachineUnitsStep(
             cclient, "node-0", jhelper, "tfconfig", "app1", "model1"

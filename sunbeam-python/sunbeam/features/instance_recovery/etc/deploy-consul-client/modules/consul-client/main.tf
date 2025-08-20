@@ -7,7 +7,7 @@ terraform {
   required_providers {
     juju = {
       source  = "juju/juju"
-      version = "= 0.17.1"
+      version = "= 0.20.0"
     }
   }
 }
@@ -16,7 +16,6 @@ resource "juju_application" "consul-client" {
   name  = var.name
   trust = false
   model = var.principal-application-model
-  units = 0
 
   charm {
     name     = "consul-client"

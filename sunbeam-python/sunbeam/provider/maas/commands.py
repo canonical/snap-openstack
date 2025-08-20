@@ -57,7 +57,6 @@ from sunbeam.core.juju import (
     CONTROLLER_APPLICATION,
     CONTROLLER_MODEL,
     JujuHelper,
-    run_sync,
 )
 from sunbeam.core.manifest import AddManifestStep
 from sunbeam.core.openstack import OPENSTACK_MODEL
@@ -353,8 +352,8 @@ def bootstrap(
     proxy_from_user = get_step_message(plan_results, PromptForProxyStep)
     if (
         isinstance(proxy_from_user, dict)
-        and (proxy := proxy_from_user.get("proxy", {}))  # noqa: W503
-        and proxy.get("proxy_required")  # noqa: W503
+        and (proxy := proxy_from_user.get("proxy", {}))
+        and proxy.get("proxy_required")
     ):
         proxy_settings = {
             p.upper(): v
@@ -421,7 +420,7 @@ def bootstrap(
         console.print("Controller should have been saved in previous step.")
         sys.exit(1)
 
-    jhelper = JujuHelper(deployment.get_connected_controller())
+    jhelper = JujuHelper(deployment.juju_controller)
     plan2: list[BaseStep] = []
     plan2.append(
         AddJujuModelStep(
@@ -537,8 +536,8 @@ def deploy(
 
     if (
         deployment.clusterd_address is None
-        or deployment.juju_account is None  # noqa: W503
-        or deployment.juju_controller is None  # noqa: W503
+        or deployment.juju_account is None
+        or deployment.juju_controller is None
     ):
         LOG.error(
             "Clusterd address: %r, Juju account: %r, Juju controller: %r",
@@ -554,12 +553,7 @@ def deploy(
     deployment_location = deployment_path(Snap())
     deployments = DeploymentsConfig.load(deployment_location)
     maas_client = MaasClient.from_deployment(deployment)
-    try:
-        controller = deployment.get_connected_controller()
-    except OSError as e:
-        console.print(f"Could not connect to controller: {e}")
-        sys.exit(1)
-    jhelper = JujuHelper(controller)
+    jhelper = JujuHelper(deployment.juju_controller)
     clusterd_plan = [
         MaasSaveClusterdCredentialsStep(jhelper, deployment.name, deployments)
     ]
@@ -853,8 +847,8 @@ def configure_cmd(
     LOG.debug(f"Manifest used for deployment - core: {manifest.core}")
     LOG.debug(f"Manifest used for deployment - features: {manifest.features}")
 
-    jhelper = JujuHelper(deployment.get_connected_controller())
-    if not run_sync(jhelper.model_exists(OPENSTACK_MODEL)):
+    jhelper = JujuHelper(deployment.juju_controller)
+    if not jhelper.model_exists(OPENSTACK_MODEL):
         LOG.error(f"Expected model {OPENSTACK_MODEL} missing")
         raise click.ClickException("Please run `sunbeam cluster bootstrap` first")
     admin_credentials = retrieve_admin_credentials(jhelper, OPENSTACK_MODEL)
@@ -932,7 +926,7 @@ def configure_cmd(
 def list_nodes(ctx: click.Context, format: str, show_hints: bool) -> None:
     """List nodes in the custer."""
     deployment: MaasDeployment = ctx.obj
-    jhelper = JujuHelper(deployment.get_connected_controller())
+    jhelper = JujuHelper(deployment.juju_controller)
     step = MaasClusterStatusStep(deployment, jhelper)
     results = run_plan([step], console, show_hints)
     msg = get_step_message(results, MaasClusterStatusStep)
@@ -1414,7 +1408,7 @@ def remove_node(ctx: click.Context, name: str, force: bool, show_hints: bool) ->
     """Remove a node from the cluster."""
     deployment: MaasDeployment = ctx.obj
     client = deployment.get_client()
-    jhelper = JujuHelper(deployment.get_connected_controller())
+    jhelper = JujuHelper(deployment.juju_controller)
 
     preflight_checks = [
         LocalShareCheck(),
@@ -1571,7 +1565,7 @@ def destroy_deployment_cmd(
     jhelper = None
     manifest = deployment.get_manifest(manifest_path)
     try:
-        jhelper = JujuHelper(deployment.get_connected_controller())
+        jhelper = JujuHelper(deployment.juju_controller)
         hypervisor_tfhelper = deployment.get_tfhelper("hypervisor-plan")
         sunbeam_machine_tfhelper = deployment.get_tfhelper("sunbeam-machine-plan")
 
@@ -1654,6 +1648,4 @@ def destroy_deployment_cmd(
     )
     plan.append(CleanTerraformPlansStep(deployment))
     run_plan(plan, console, no_hint=False)
-    if jhelper:
-        run_sync(jhelper.controller.disconnect())
     click.echo("Deployment destroyed.")

@@ -5,7 +5,7 @@ import click
 from packaging.version import Version
 
 from sunbeam.core.deployment import Deployment
-from sunbeam.core.juju import JujuHelper, run_sync
+from sunbeam.core.juju import JujuHelper
 from sunbeam.core.manifest import CharmManifest, FeatureConfig, SoftwareConfig
 from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.features.interface.v1.base import ConfigType, FeatureRequirement
@@ -78,10 +78,8 @@ class SecretsFeature(OpenStackControlPlaneFeature):
 
     def is_vault_application_active(self, jhelper: JujuHelper) -> bool:
         """Check if Vault application is active."""
-        model = run_sync(jhelper.get_model(OPENSTACK_MODEL))
-        application = run_sync(jhelper.get_application("vault", model))
-        status = application.status
-        run_sync(model.disconnect())
+        application = jhelper.get_application("vault", OPENSTACK_MODEL)
+        status = application.app_status.current
         if status == "active":
             return True
         return False
@@ -91,7 +89,7 @@ class SecretsFeature(OpenStackControlPlaneFeature):
     ) -> None:
         """Handler to perform tasks before enabling the feature."""
         super().pre_enable(deployment, config, show_hints)
-        jhelper = JujuHelper(deployment.get_connected_controller())
+        jhelper = JujuHelper(deployment.juju_controller)
         if not self.is_vault_application_active(jhelper):
             raise click.ClickException("Cannot enable secrets as Vault is not active.")
 

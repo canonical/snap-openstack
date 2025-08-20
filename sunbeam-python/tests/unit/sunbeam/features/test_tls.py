@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import Mock, patch
 
 import click
 import pytest
@@ -22,7 +22,7 @@ def cclient():
 
 @pytest.fixture()
 def jhelper():
-    yield AsyncMock()
+    yield Mock()
 
 
 @pytest.fixture()
@@ -74,15 +74,6 @@ class TestAddCACertsToKeystoneStep:
         jhelper.run_action.assert_called_once()
         assert result.result_type == ResultType.SKIPPED
 
-    def test_is_skip_when_action_returns_failed_return_code(self, jhelper):
-        name = "cabundle"
-        jhelper.run_action.return_value = {"return-code": 2}
-        step = tls.AddCACertsToKeystoneStep(jhelper, name, "fake-cert", "fake-chain")
-        result = step.is_skip()
-
-        jhelper.run_action.assert_called_once()
-        assert result.result_type == ResultType.FAILED
-
     def test_is_skip_when_action_failed(self, jhelper):
         name = "cabundle"
         jhelper.run_action.side_effect = ActionFailedException("action failed...")
@@ -112,15 +103,6 @@ class TestAddCACertsToKeystoneStep:
         result = step.run()
 
         assert result.result_type == ResultType.COMPLETED
-
-    def test_run_when_action_returns_failed_return_code(self, jhelper):
-        name = "cabundle"
-        jhelper.run_action.return_value = {"return-code": 2}
-        step = tls.AddCACertsToKeystoneStep(jhelper, name, "fake-cert", "fake-chain")
-        result = step.run()
-
-        jhelper.run_action.assert_called_once()
-        assert result.result_type == ResultType.FAILED
 
     def test_run_when_action_failed(self, jhelper):
         name = "cabundle"
@@ -164,15 +146,6 @@ class TestRemoveCACertsFromKeystoneStep:
         jhelper.run_action.assert_called_once()
         assert result.result_type == ResultType.SKIPPED
 
-    def test_is_skip_when_action_returns_failed_return_code(self, jhelper):
-        name = "cabundle"
-        jhelper.run_action.return_value = {"return-code": 2}
-        step = tls.RemoveCACertsFromKeystoneStep(jhelper, name, name)
-        result = step.is_skip()
-
-        jhelper.run_action.assert_called_once()
-        assert result.result_type == ResultType.FAILED
-
     def test_is_skip_when_action_failed(self, jhelper):
         name = "cabundle"
         jhelper.run_action.side_effect = ActionFailedException("action failed...")
@@ -202,15 +175,6 @@ class TestRemoveCACertsFromKeystoneStep:
         result = step.run()
 
         assert result.result_type == ResultType.COMPLETED
-
-    def test_run_when_action_returns_failed_return_code(self, jhelper):
-        name = "cabundle"
-        jhelper.run_action.return_value = {"return-code": 2}
-        step = tls.RemoveCACertsFromKeystoneStep(jhelper, name, name)
-        result = step.run()
-
-        jhelper.run_action.assert_called_once()
-        assert result.result_type == ResultType.FAILED
 
     def test_run_when_action_failed(self, jhelper):
         name = "cabundle"

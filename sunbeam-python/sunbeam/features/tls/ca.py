@@ -33,7 +33,6 @@ from sunbeam.core.juju import (
     ActionFailedException,
     JujuHelper,
     LeaderNotFoundException,
-    run_sync,
 )
 from sunbeam.core.manifest import (
     AddManifestStep,
@@ -91,8 +90,8 @@ def get_outstanding_certificate_requests(
     Raises LeaderNotFoundException, ActionFailedException.
     """
     action_cmd = "get-outstanding-certificate-requests"
-    unit = run_sync(jhelper.get_leader_unit(app, model))
-    action_result = run_sync(jhelper.run_action(unit, model, action_cmd))
+    unit = jhelper.get_leader_unit(app, model)
+    action_result = jhelper.run_action(unit, model, action_cmd)
     return action_result
 
 
@@ -204,7 +203,7 @@ class ConfigureCAStep(BaseStep):
         """Run configure steps."""
         action_cmd = "provide-certificate"
         try:
-            unit = run_sync(self.jhelper.get_leader_unit(self.app, self.model))
+            unit = self.jhelper.get_leader_unit(self.app, self.model)
         except LeaderNotFoundException as e:
             LOG.debug(f"Unable to get {self.app} leader")
             return Result(ResultType.FAILED, str(e))
@@ -227,8 +226,8 @@ class ConfigureCAStep(BaseStep):
 
             LOG.debug(f"Running action {action_cmd} with params {action_params}")
             try:
-                action_result = run_sync(
-                    self.jhelper.run_action(unit, self.model, action_cmd, action_params)
+                action_result = self.jhelper.run_action(
+                    unit, self.model, action_cmd, action_params
                 )
             except ActionFailedException as e:
                 LOG.debug(f"Running action {action_cmd} on {unit} failed")
@@ -396,7 +395,7 @@ class CaTlsFeature(TlsFeature):
         app = CA_APP_NAME
         model = OPENSTACK_MODEL
         action_cmd = "get-outstanding-certificate-requests"
-        jhelper = JujuHelper(deployment.get_connected_controller())
+        jhelper = JujuHelper(deployment.juju_controller)
         try:
             action_result = get_outstanding_certificate_requests(app, model, jhelper)
         except LeaderNotFoundException as e:
@@ -467,7 +466,7 @@ class CaTlsFeature(TlsFeature):
         if ca is None or ca_chain is None:
             raise click.ClickException("CA and CA Chain not configured")
 
-        jhelper = JujuHelper(deployment.get_connected_controller())
+        jhelper = JujuHelper(deployment.juju_controller)
         plan = [
             AddManifestStep(client, manifest_path),
             ConfigureCAStep(

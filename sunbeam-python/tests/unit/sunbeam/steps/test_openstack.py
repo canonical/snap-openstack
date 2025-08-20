@@ -1,10 +1,9 @@
 # SPDX-FileCopyrightText: 2023 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
-import asyncio
 import json
 import unittest
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 import tenacity
@@ -14,7 +13,6 @@ from sunbeam.core.common import ResultType
 from sunbeam.core.juju import (
     ApplicationNotFoundException,
     JujuWaitException,
-    TimeoutException,
 )
 from sunbeam.core.k8s import (
     METALLB_ADDRESS_POOL_ANNOTATION,
@@ -43,21 +41,6 @@ TOPOLOGY = "single"
 MODEL = "test-model"
 
 
-@pytest.fixture(autouse=True)
-def mock_run_sync(mocker):
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-
-    def run_sync(coro):
-        return loop.run_until_complete(coro)
-
-    mocker.patch("sunbeam.steps.openstack.run_sync", run_sync)
-    yield
-    loop.close()
-
-
 class TestDeployControlPlaneStep(unittest.TestCase):
     def __init__(self, methodName: str = "runTest") -> None:
         super().__init__(methodName)
@@ -65,7 +48,7 @@ class TestDeployControlPlaneStep(unittest.TestCase):
         self.snap = patch("sunbeam.core.k8s.Snap", self.snap_mock)
 
     def setUp(self):
-        self.jhelper = AsyncMock()
+        self.jhelper = Mock()
         self.jhelper.run_action.return_value = {}
         self.tfhelper = Mock()
         self.manifest = MagicMock()
@@ -99,6 +82,7 @@ class TestDeployControlPlaneStep(unittest.TestCase):
 
     def test_run_pristine_installation(self):
         self.snap_mock().config.get.return_value = "k8s"
+        self.jhelper.get_application_names.return_value = ["app1"]
         self.jhelper.get_application.side_effect = ApplicationNotFoundException(
             "not found"
         )
@@ -138,7 +122,8 @@ class TestDeployControlPlaneStep(unittest.TestCase):
 
     def test_run_waiting_timed_out(self):
         self.snap_mock().config.get.return_value = "k8s"
-        self.jhelper.wait_until_active.side_effect = TimeoutException("timed out")
+        self.jhelper.get_application_names.return_value = ["app1"]
+        self.jhelper.wait_until_active.side_effect = TimeoutError("timed out")
 
         step = DeployControlPlaneStep(
             self.deployment,
@@ -156,6 +141,7 @@ class TestDeployControlPlaneStep(unittest.TestCase):
 
     def test_run_unit_in_error_state(self):
         self.snap_mock().config.get.return_value = "k8s"
+        self.jhelper.get_application_names.return_value = ["app1"]
         self.jhelper.wait_until_active.side_effect = JujuWaitException(
             "Unit in error: placement/0"
         )
@@ -596,13 +582,14 @@ class TestReapplyOpenStackTerraformPlanStep(unittest.TestCase):
         )
         self.read_config.start()
         self.tfhelper = Mock()
-        self.jhelper = AsyncMock()
+        self.jhelper = Mock()
         self.manifest = Mock()
 
     def tearDown(self):
         self.read_config.stop()
 
     def test_run(self):
+        self.jhelper.get_application_names.return_value = ["placement", "nova-compute"]
         step = ReapplyOpenStackTerraformPlanStep(
             self.client, self.tfhelper, self.jhelper, self.manifest
         )
@@ -626,7 +613,8 @@ class TestReapplyOpenStackTerraformPlanStep(unittest.TestCase):
         assert result.message == "apply failed..."
 
     def test_run_waiting_timed_out(self):
-        self.jhelper.wait_until_active.side_effect = TimeoutException("timed out")
+        self.jhelper.get_application_names.return_value = ["placement", "nova-compute"]
+        self.jhelper.wait_until_active.side_effect = TimeoutError("timed out")
 
         step = ReapplyOpenStackTerraformPlanStep(
             self.client, self.tfhelper, self.jhelper, self.manifest
@@ -638,6 +626,7 @@ class TestReapplyOpenStackTerraformPlanStep(unittest.TestCase):
         assert result.message == "timed out"
 
     def test_run_unit_in_error_state(self):
+        self.jhelper.get_application_names.return_value = ["placement", "nova-compute"]
         self.jhelper.wait_until_active.side_effect = JujuWaitException(
             "Unit in error: placement/0"
         )

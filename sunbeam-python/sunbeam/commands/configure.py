@@ -17,7 +17,6 @@ from sunbeam.core.juju import (
     ActionFailedException,
     JujuHelper,
     LeaderNotFoundException,
-    run_sync,
 )
 from sunbeam.core.manifest import Manifest
 from sunbeam.core.terraform import (
@@ -196,17 +195,14 @@ def retrieve_admin_credentials(jhelper: JujuHelper, model: str) -> dict:
     action_cmd = "get-admin-account"
 
     try:
-        unit = run_sync(jhelper.get_leader_unit(app, model))
+        unit = jhelper.get_leader_unit(app, model)
     except LeaderNotFoundException:
         raise click.ClickException(f"Unable to get {app} leader")
 
     try:
-        action_result = run_sync(jhelper.run_action(unit, model, action_cmd))
-    except ActionFailedException as e:
+        action_result = jhelper.run_action(unit, model, action_cmd)
+    except (ActionFailedException, TimeoutError) as e:
         LOG.debug(f"Running action {action_cmd} on {unit} failed: {str(e)}")
-        raise click.ClickException("Unable to retrieve openrc from Keystone service")
-
-    if action_result.get("return-code", 0) > 1:
         raise click.ClickException("Unable to retrieve openrc from Keystone service")
 
     params = {
@@ -222,15 +218,11 @@ def retrieve_admin_credentials(jhelper: JujuHelper, model: str) -> dict:
 
     action_cmd = "list-ca-certs"
     try:
-        action_result = run_sync(jhelper.run_action(unit, model, action_cmd))
+        action_result = jhelper.run_action(unit, model, action_cmd)
     except ActionFailedException as e:
         LOG.debug(f"Running action {action_cmd} on {unit} failed: {str(e)}")
         raise click.ClickException("Unable to retrieve CA certs from Keystone service")
 
-    if action_result.get("return-code", 0) > 1:
-        raise click.ClickException("Unable to retrieve CA certs from Keystone service")
-
-    action_result.pop("return-code")
     ca_bundle = []
     for name, certs in action_result.items():
         # certs = json.loads(certs)
@@ -601,23 +593,19 @@ class SetHypervisorUnitsOptionsStep(BaseStep):
                 continue
             node = self.client.cluster.get_node_info(name)
             self.machine_id = str(node.get("machineid"))
-            model = run_sync(self.jhelper.get_model(self.model))
-            unit = run_sync(
-                self.jhelper.get_unit_from_machine(app, self.machine_id, model)
-            )
-            action_result = run_sync(
+            unit = self.jhelper.get_unit_from_machine(app, self.machine_id, self.model)
+            try:
                 self.jhelper.run_action(
-                    unit.entity_id,
+                    unit,
                     self.model,
                     action_cmd,
                     action_params={
                         "external-nic": nic,
                     },
                 )
-            )
-            run_sync(model.disconnect())
-            if action_result.get("return-code", 0) > 1:
+            except (ActionFailedException, TimeoutError):
                 _message = f"Unable to set hypervisor {name!r} configuration"
+                LOG.debug(_message, exc_info=True)
                 return Result(ResultType.FAILED, _message)
         return Result(ResultType.COMPLETED)
 

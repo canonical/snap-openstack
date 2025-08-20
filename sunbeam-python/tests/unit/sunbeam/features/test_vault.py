@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock, Mock
 
 import pytest
 
@@ -11,7 +11,6 @@ from sunbeam.core.juju import (
     ActionFailedException,
     JujuSecretNotFound,
     LeaderNotFoundException,
-    TimeoutException,
 )
 from sunbeam.features.vault.feature import (
     AuthorizeVaultCharmStep,
@@ -29,7 +28,7 @@ class TestVaultHelper:
         command_result = {}
         vault_command_output = {"return-code": 0, "stdout": json.dumps(command_result)}
 
-        jhelper = AsyncMock()
+        jhelper = Mock()
         jhelper.run_cmd_on_unit_payload.return_value = vault_command_output
         vhelper = VaultHelper(jhelper)
 
@@ -41,7 +40,7 @@ class TestVaultHelper:
         command_result = {}
         vault_command_output = {"return-code": 0, "stdout": json.dumps(command_result)}
 
-        jhelper = AsyncMock()
+        jhelper = Mock()
         jhelper.run_cmd_on_unit_payload.return_value = vault_command_output
         vhelper = VaultHelper(jhelper)
 
@@ -53,7 +52,7 @@ class TestVaultHelper:
         error_message = "Vault already initialized"
         vault_command_output = {"return-code": 1, "stderr": error_message}
 
-        jhelper = AsyncMock()
+        jhelper = Mock()
         jhelper.run_cmd_on_unit_payload.return_value = vault_command_output
         vhelper = VaultHelper(jhelper)
 
@@ -69,7 +68,7 @@ class TestVaultHelper:
         command_result = {}
         vault_command_output = {"return-code": 0, "stdout": json.dumps(command_result)}
 
-        jhelper = AsyncMock()
+        jhelper = Mock()
         jhelper.run_cmd_on_unit_payload.return_value = vault_command_output
         vhelper = VaultHelper(jhelper)
 
@@ -83,7 +82,7 @@ class TestVaultHelper:
         error_message = "Vault is not initialized"
         vault_command_output = {"return-code": 1, "stderr": error_message}
 
-        jhelper = AsyncMock()
+        jhelper = Mock()
         jhelper.run_cmd_on_unit_payload.return_value = vault_command_output
         vhelper = VaultHelper(jhelper)
 
@@ -99,7 +98,7 @@ class TestVaultHelper:
         command_result = {}
         vault_command_output = {"return-code": 0, "stdout": json.dumps(command_result)}
 
-        jhelper = AsyncMock()
+        jhelper = Mock()
         jhelper.run_cmd_on_unit_payload.return_value = vault_command_output
         vhelper = VaultHelper(jhelper)
 
@@ -113,7 +112,7 @@ class TestVaultHelper:
         error_message = "Vault is not initialized"
         vault_command_output = {"return-code": 1, "stderr": error_message}
 
-        jhelper = AsyncMock()
+        jhelper = Mock()
         jhelper.run_cmd_on_unit_payload.return_value = vault_command_output
         vhelper = VaultHelper(jhelper)
 
@@ -127,7 +126,7 @@ class TestVaultInitStep:
     def test_is_skip(self):
         vault_status = {"initialized": False}
 
-        jhelper = AsyncMock()
+        jhelper = Mock()
         step = VaultInitStep(jhelper, 1, 1)
         step.vhelper = MagicMock()
         step.vhelper.get_vault_status.return_value = vault_status
@@ -139,7 +138,7 @@ class TestVaultInitStep:
     def test_is_skip_when_already_initialized(self):
         vault_status = {"initialized": True}
 
-        jhelper = AsyncMock()
+        jhelper = Mock()
         step = VaultInitStep(jhelper, 1, 1)
         step.vhelper = MagicMock()
         step.vhelper.get_vault_status.return_value = vault_status
@@ -150,7 +149,7 @@ class TestVaultInitStep:
 
     def test_is_skip_when_vault_leader_not_found(self):
         error_message = "Vault leader not found"
-        jhelper = AsyncMock()
+        jhelper = Mock()
         step = VaultInitStep(jhelper, 1, 1)
         step.vhelper = MagicMock()
         step.vhelper.get_vault_status.side_effect = LeaderNotFoundException(
@@ -177,7 +176,7 @@ class TestVaultInitStep:
             "root_token": "fake-root-token",
         }
 
-        jhelper = AsyncMock()
+        jhelper = Mock()
         step = VaultInitStep(jhelper, 1, 1)
         step.leader_unit = "leader_unit"
         step.vhelper = MagicMock()
@@ -190,7 +189,7 @@ class TestVaultInitStep:
 
     def test_run_when_vault_command_failed(self):
         error_message = "Vault command execution failed."
-        jhelper = AsyncMock()
+        jhelper = Mock()
         step = VaultInitStep(jhelper, 1, 1)
         step.leader_unit = "leader_unit"
         step.vhelper = MagicMock()
@@ -206,9 +205,11 @@ class TestVaultInitStep:
 
 class TestVaultUnsealStep:
     def _set_mock_units(self):
-        self.units = [MagicMock(), MagicMock(), MagicMock()]
-        for index, unit in enumerate(self.units):
-            unit.name = f"vault/{index}"
+        self.units = {
+            "vault/0": MagicMock(),
+            "vault/1": MagicMock(),
+            "vault/2": MagicMock(),
+        }
 
     @pytest.mark.parametrize(
         "vault_unseal_status, expected_message",
@@ -240,7 +241,7 @@ class TestVaultUnsealStep:
         vault_status = {"sealed": True}
         self._set_mock_units()
 
-        jhelper = AsyncMock()
+        jhelper = Mock()
         jhelper.get_leader_unit.return_value = "vault/0"
         jhelper.get_application.return_value = MagicMock(units=self.units)
 
@@ -326,7 +327,7 @@ class TestVaultUnsealStep:
         vault_leader_status = {"sealed": False}
         self._set_mock_units()
 
-        jhelper = AsyncMock()
+        jhelper = Mock()
         jhelper.get_leader_unit.return_value = "vault/0"
         jhelper.get_application.return_value = MagicMock(units=self.units)
 
@@ -344,13 +345,12 @@ class TestVaultUnsealStep:
         unseal_key = "fake-unseal-key"
         vault_status = {"sealed": True}
         self._set_mock_units()
-        self.units = [MagicMock()]
-        self.units[0].name = "vault/0"
+        self.units = {"vault/0": MagicMock()}
 
         vault_unseal_status = {"sealed": False, "t": 3, "progress": 0}
         expected_message = "Vault unseal operation status: completed"
 
-        jhelper = AsyncMock()
+        jhelper = Mock()
         jhelper.get_leader_unit.return_value = "vault/0"
         jhelper.get_application.return_value = MagicMock(units=self.units)
 
@@ -370,7 +370,7 @@ class TestAuthorizeVaultCharmStep:
         token = "fake_root_token"
         vault_cmd_output = {"auth": {"client_token": "fake_token"}}
 
-        jhelper = AsyncMock()
+        jhelper = Mock()
         jhelper.get_secret_by_name.side_effect = JujuSecretNotFound()
         jhelper.add_secret.return_vaule = "secret:fakesecret"
         jhelper.grant_secret.return_value = True
@@ -394,7 +394,7 @@ class TestAuthorizeVaultCharmStep:
         error_message = "Vault leader not found"
         token = "fake_root_token"
 
-        jhelper = AsyncMock()
+        jhelper = Mock()
         jhelper.get_leader_unit.side_effect = LeaderNotFoundException(error_message)
 
         step = AuthorizeVaultCharmStep(jhelper, token)
@@ -414,7 +414,7 @@ class TestAuthorizeVaultCharmStep:
         token = "fake_root_token"
         # vault_cmd_output = {"auth": {"client_token": "fake_token"}}
 
-        jhelper = AsyncMock()
+        jhelper = Mock()
         """
         jhelper.get_secret_by_name.side_effect = JujuSecretNotFound()
         jhelper.add_secret.return_vaule = "secret:fakesecret"
@@ -444,7 +444,7 @@ class TestAuthorizeVaultCharmStep:
         token = "fake_root_token"
         vault_cmd_output = {"auth": {"client_token": "fake_token"}}
 
-        jhelper = AsyncMock()
+        jhelper = Mock()
         jhelper.get_secret_by_name.side_effect = JujuSecretNotFound()
         jhelper.add_secret.return_vaule = "secret:fakesecret"
         jhelper.grant_secret.return_value = True
@@ -465,35 +465,11 @@ class TestAuthorizeVaultCharmStep:
         assert result.result_type == ResultType.FAILED
         assert result.message == error_message
 
-    def test_run_when_action_command_returns_error_code(self):
-        token = "fake_root_token"
-        vault_cmd_output = {"auth": {"client_token": "fake_token"}}
-
-        jhelper = AsyncMock()
-        jhelper.get_secret_by_name.side_effect = JujuSecretNotFound()
-        jhelper.add_secret.return_vaule = "secret:fakesecret"
-        jhelper.grant_secret.return_value = True
-        jhelper.remove_secret.return_value = True
-        jhelper.run_action.return_value = {"return-code": 2}
-
-        step = AuthorizeVaultCharmStep(jhelper, token)
-        step.vhelper = MagicMock()
-        step.vhelper.create_token.return_value = vault_cmd_output
-
-        result = step.run()
-
-        jhelper.get_secret_by_name.assert_called_once()
-        jhelper.add_secret.assert_called_once()
-        jhelper.grant_secret.assert_called_once()
-        jhelper.remove_secret.assert_called_once()
-        jhelper.run_action.assert_called_once()
-        assert result.result_type == ResultType.FAILED
-
     def test_run_when_secret_already_exists(self):
         token = "fake_root_token"
         vault_cmd_output = {"auth": {"client_token": "fake_token"}}
 
-        jhelper = AsyncMock()
+        jhelper = Mock()
         jhelper.get_secret_by_name.return_value = "secret:fakesecret"
         jhelper.add_secret.return_vaule = "secret:fakesecret"
         jhelper.grant_secret.return_value = True
@@ -518,15 +494,17 @@ class TestAuthorizeVaultCharmStep:
 
 class TestVaultStatusStep:
     def _set_mock_units(self):
-        self.units = [MagicMock(), MagicMock(), MagicMock()]
-        for index, unit in enumerate(self.units):
-            unit.name = f"vault/{index}"
+        self.units = {
+            "vault/0": MagicMock(),
+            "vault/1": MagicMock(),
+            "vault/2": MagicMock(),
+        }
 
     def test_run(self):
         vault_status = {"initialized": True, "sealed": False}
         self._set_mock_units()
 
-        jhelper = AsyncMock()
+        jhelper = Mock()
         jhelper.get_application.return_value = MagicMock(units=self.units)
 
         step = VaultStatusStep(jhelper)
@@ -537,7 +515,7 @@ class TestVaultStatusStep:
 
         expected_vault_status = {}
         for unit in self.units:
-            expected_vault_status[unit.name] = vault_status
+            expected_vault_status[unit] = vault_status
         assert result.result_type == ResultType.COMPLETED
         assert result.message == json.dumps(expected_vault_status)
 
@@ -545,12 +523,12 @@ class TestVaultStatusStep:
         error_message = "timed out"
         self._set_mock_units()
 
-        jhelper = AsyncMock()
+        jhelper = Mock()
         jhelper.get_application.return_value = MagicMock(units=self.units)
 
         step = VaultStatusStep(jhelper)
         step.vhelper = MagicMock()
-        step.vhelper.get_vault_status.side_effect = TimeoutException(error_message)
+        step.vhelper.get_vault_status.side_effect = TimeoutError(error_message)
 
         result = step.run()
 

@@ -21,15 +21,15 @@ def retrieve_dashboard_url(jhelper: juju.JujuHelper) -> str:
     app = "horizon"
     action_cmd = "get-dashboard-url"
     try:
-        unit = juju.run_sync(jhelper.get_leader_unit(app, model))
+        unit = jhelper.get_leader_unit(app, model)
     except juju.LeaderNotFoundException:
         raise ValueError(f"Unable to get {app} leader")
-    action_result = juju.run_sync(jhelper.run_action(unit, model, action_cmd))
-    if action_result.get("return-code", 0) > 1:
+    try:
+        action_result = jhelper.run_action(unit, model, action_cmd)
+    except juju.ActionFailedException:
         _message = "Unable to retrieve URL from Horizon service"
         raise ValueError(_message)
-    else:
-        return action_result["url"]
+    return action_result["url"]
 
 
 @click.command()
@@ -40,7 +40,7 @@ def dashboard_url(ctx: click.Context) -> None:
     preflight_checks = []
     preflight_checks.append(VerifyBootstrappedCheck(deployment.get_client()))
     run_preflight_checks(preflight_checks, console)
-    jhelper = juju.JujuHelper(deployment.get_connected_controller())
+    jhelper = juju.JujuHelper(deployment.juju_controller)
 
     with console.status("Retrieving dashboard URL from Horizon service ... "):
         try:

@@ -26,7 +26,6 @@ from sunbeam.core.juju import (
     JujuHelper,
     LeaderNotFoundException,
     UnitNotFoundException,
-    run_sync,
 )
 from sunbeam.core.manifest import CharmManifest, FeatureConfig, Manifest, SoftwareConfig
 from sunbeam.core.openstack import OPENSTACK_MODEL
@@ -57,6 +56,7 @@ VALIDATION_FEATURE_DEPLOY_TIMEOUT = (
     60 * 60
 )  # 60 minutes in seconds, tempest can take some time to initialized
 SUPPORTED_TEMPEST_CONFIG = {"schedule"}
+SUPPORTED_ROLES = ("compute", "control", "storage", "network")
 
 
 class Profile(pydantic.BaseModel):
@@ -149,6 +149,17 @@ class Config(pydantic.BaseModel):
         return schedule
 
 
+def get_enabled_roles(deployment) -> str:
+    """Detect enabled roles in the cluster and return as comma-separated string."""
+    client = deployment.get_client()
+    roles = []
+    for role in SUPPORTED_ROLES:
+        nodes = client.cluster.list_nodes_by_role(role)
+        if nodes:
+            roles.append(role)
+    return ",".join(roles)
+
+
 def parse_config_args(args: list[str]) -> dict[str, str]:
     """Parse key=value args into a valid dictionary of key: values.
 
@@ -191,6 +202,7 @@ class ConfigureValidationStep(BaseStep):
         tfhelper: TerraformHelper,
         manifest: Manifest,
         tfvar_config: str,
+        deployment: Deployment | None = None,
     ):
         super().__init__(
             "Configure validation feature",
@@ -201,6 +213,7 @@ class ConfigureValidationStep(BaseStep):
         self.tfhelper = tfhelper
         self.manifest = manifest
         self.tfvar_config = tfvar_config
+        self.deployment = deployment
 
     def run(self, status: Status | None = None) -> Result:
         """Execute step using terraform."""
@@ -208,12 +221,17 @@ class ConfigureValidationStep(BaseStep):
             # See ValidationFeature.manifest_attributes_tfvar_map
             charms = self.tfhelper.tfvar_map["charms"]
             tempest_k8s_config_var = charms["tempest-k8s"]["config"]
-            if self.config_changes.schedule is None:
-                override_tfvars = {}
-            else:
-                override_tfvars = {
-                    tempest_k8s_config_var: {"schedule": self.config_changes.schedule}
-                }
+            roles = get_enabled_roles(self.deployment)
+            LOG.info(f"OpenStack roles enabled for Tempest: {roles}")
+            override_tfvars: dict[str, Any] = {}
+            if self.config_changes.schedule is not None or roles:
+                override_tfvars[tempest_k8s_config_var] = {}
+                if self.config_changes.schedule is not None:
+                    override_tfvars[tempest_k8s_config_var]["schedule"] = (
+                        self.config_changes.schedule
+                    )
+                if roles:
+                    override_tfvars[tempest_k8s_config_var]["roles"] = roles
             self.tfhelper.update_tfvars_and_apply_tf(
                 self.client,
                 self.manifest,
@@ -263,7 +281,11 @@ class ValidationFeature(OpenStackControlPlaneFeature):
         self, deployment: Deployment, config: FeatureConfig
     ) -> dict:
         """Set terraform variables to enable the application."""
-        return {"enable-validation": True}
+        roles = get_enabled_roles(deployment)
+        return {
+            "enable-validation": True,
+            "tempest-config": {"roles": roles},
+        }
 
     def set_tfvars_on_disable(self, deployment: Deployment) -> dict:
         """Set terraform variables to disable the application."""
@@ -293,26 +315,24 @@ class ValidationFeature(OpenStackControlPlaneFeature):
 
     def _get_tempest_leader_unit(self, deployment: Deployment) -> str:
         """Return the leader unit of tempest application."""
-        jhelper = JujuHelper(deployment.get_connected_controller())
+        jhelper = JujuHelper(deployment.juju_controller)
         with console.status(f"Retrieving {TEMPEST_APP_NAME}'s unit name."):
             app = TEMPEST_APP_NAME
             model = OPENSTACK_MODEL
             try:
-                unit = run_sync(jhelper.get_leader_unit(app, model))
+                unit = jhelper.get_leader_unit(app, model)
             except (ApplicationNotFoundException, LeaderNotFoundException) as e:
                 raise click.ClickException(str(e))
             return unit
 
     def _get_tempest_absolute_model_name(self, deployment: Deployment) -> str:
         """Return the absolute model name where the tempest unit resides."""
-        jhelper = JujuHelper(deployment.get_connected_controller())
+        jhelper = JujuHelper(deployment.juju_controller)
         with console.status(
             f"Retrieving the absolute model name for {TEMPEST_APP_NAME}'s unit."
         ):
             try:
-                model_name = run_sync(
-                    jhelper.get_model_name_with_owner(OPENSTACK_MODEL)
-                )
+                model_name = jhelper.get_model_name_with_owner(OPENSTACK_MODEL)
             except (ApplicationNotFoundException, LeaderNotFoundException) as e:
                 raise click.ClickException(str(e))
             return f"{deployment.controller}:{model_name}"
@@ -326,16 +346,14 @@ class ValidationFeature(OpenStackControlPlaneFeature):
     ) -> dict[str, Any]:
         """Run the charm's action."""
         unit = self._get_tempest_leader_unit(deployment)
-        jhelper = JujuHelper(deployment.get_connected_controller())
+        jhelper = JujuHelper(deployment.juju_controller)
         with console.status(progress_message):
             try:
-                action_result = run_sync(
-                    jhelper.run_action(
-                        unit,
-                        OPENSTACK_MODEL,
-                        action_name,
-                        action_params or {},
-                    )
+                action_result = jhelper.run_action(
+                    unit,
+                    OPENSTACK_MODEL,
+                    action_name,
+                    action_params or {},
                 )
             except (ActionFailedException, UnitNotFoundException) as e:
                 LOG.debug(
@@ -496,6 +514,7 @@ class ValidationFeature(OpenStackControlPlaneFeature):
                     tfhelper,
                     self.manifest,
                     self.get_tfvar_config_key(),
+                    deployment,
                 ),
             ],
             console,

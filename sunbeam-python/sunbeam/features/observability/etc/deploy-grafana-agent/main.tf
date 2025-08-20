@@ -7,7 +7,7 @@ terraform {
   required_providers {
     juju = {
       source  = "juju/juju"
-      version = "= 0.17.1"
+      version = "= 0.20.0"
     }
   }
 }
@@ -16,7 +16,6 @@ resource "juju_application" "grafana-agent" {
   name  = "grafana-agent"
   trust = false
   model = var.principal-application-model
-  units = 0
 
   charm {
     name     = "grafana-agent"
@@ -55,6 +54,7 @@ resource "juju_integration" "grafana-agent-to-cos-prometheus" {
 
   application {
     offer_url = var.receive-remote-write-offer-url
+    endpoint  = "receive-remote-write"
   }
 }
 

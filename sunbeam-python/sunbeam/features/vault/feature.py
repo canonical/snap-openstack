@@ -44,8 +44,6 @@ from sunbeam.core.juju import (
     JujuHelper,
     JujuStepHelper,
     LeaderNotFoundException,
-    TimeoutException,
-    run_sync,
 )
 from sunbeam.core.manifest import (
     AddManifestStep,
@@ -92,15 +90,13 @@ class VaultHelper:
         self, unit: str, cmd: list, env: dict[str, str] | None = None
     ):
         cmd_str = " ".join(cmd)
-        res = run_sync(
-            self.jhelper.run_cmd_on_unit_payload(
-                unit,
-                OPENSTACK_MODEL,
-                cmd_str,
-                VAULT_CONTAINER_NAME,
-                env,
-                VAULT_COMMAND_TIMEOUT,
-            )
+        res = self.jhelper.run_cmd_on_unit_payload(
+            unit,
+            OPENSTACK_MODEL,
+            cmd_str,
+            VAULT_CONTAINER_NAME,
+            env,
+            VAULT_COMMAND_TIMEOUT,
         )
         return res
 
@@ -108,7 +104,7 @@ class VaultHelper:
         """Return Vault status.
 
         Raises LeaderNotFoundException if leader does not exist.
-        Raises TimeoutException or JujuException if failed to run
+        Raises TimeoutError or JujuException if failed to run
         command on juju unit.
         """
         cmd = [
@@ -127,7 +123,7 @@ class VaultHelper:
         """Initialize vault.
 
         Raises LeaderNotFoundException if leader does not exist.
-        Raises TimeoutException or JujuException if failed to run
+        Raises TimeoutError or JujuException if failed to run
         command on juju unit.
         Raises VaultCommandFailedException if vault command execution failed.
         """
@@ -154,7 +150,7 @@ class VaultHelper:
         """Unseal vault.
 
         Raises LeaderNotFoundException if leader does not exist.
-        Raises TimeoutException or JujuException if failed to run
+        Raises TimeoutError or JujuException if failed to run
         command on juju unit.
         Raises VaultCommandFailedException if vault command execution failed.
         """
@@ -179,7 +175,7 @@ class VaultHelper:
         """Create token.
 
         Raises LeaderNotFoundException if leader does not exist.
-        Raises TimeoutException or JujuException if failed to run
+        Raises TimeoutError or JujuException if failed to run
         command on juju unit.
         Raises VaultCommandFailedException if vault command execution failed.
         """
@@ -220,8 +216,8 @@ class VaultInitStep(BaseStep):
                 ResultType.COMPLETED or ResultType.FAILED otherwise
         """
         try:
-            self.leader_unit = run_sync(
-                self.jhelper.get_leader_unit(VAULT_APPLICATION_NAME, OPENSTACK_MODEL)
+            self.leader_unit = self.jhelper.get_leader_unit(
+                VAULT_APPLICATION_NAME, OPENSTACK_MODEL
             )
             res = self.vhelper.get_vault_status(self.leader_unit)
             if res.get("initialized") is True:
@@ -230,7 +226,7 @@ class VaultInitStep(BaseStep):
         except LeaderNotFoundException as e:
             LOG.debug(f"Failed to get {VAULT_APPLICATION_NAME} leader", exc_info=True)
             return Result(ResultType.FAILED, str(e))
-        except TimeoutException as e:
+        except TimeoutError as e:
             LOG.debug("Timeout running vault status", exc_info=True)
             return Result(ResultType.FAILED, str(e))
         except JujuException as e:
@@ -252,7 +248,7 @@ class VaultInitStep(BaseStep):
         except LeaderNotFoundException as e:
             LOG.debug(f"Failed to get {VAULT_APPLICATION_NAME} leader", exc_info=True)
             return Result(ResultType.FAILED, str(e))
-        except TimeoutException as e:
+        except TimeoutError as e:
             LOG.debug("Timeout running vault init", exc_info=True)
             return Result(ResultType.FAILED, str(e))
         except JujuException as e:
@@ -308,18 +304,14 @@ class VaultUnsealStep(BaseStep):
         """
         unseal_status = {}
 
-        model = None
+        model = OPENSTACK_MODEL
+
         try:
-            model = run_sync(self.jhelper.get_model(OPENSTACK_MODEL))
             # Run vault unseal on leader unit
-            leader_unit = run_sync(
-                self.jhelper.get_leader_unit(VAULT_APPLICATION_NAME, OPENSTACK_MODEL)
-            )
-            application = run_sync(
-                self.jhelper.get_application(VAULT_APPLICATION_NAME, model)
-            )
+            leader_unit = self.jhelper.get_leader_unit(VAULT_APPLICATION_NAME, model)
+            application = self.jhelper.get_application(VAULT_APPLICATION_NAME, model)
             non_leader_units = [
-                unit.name for unit in application.units if unit.name != leader_unit
+                unit for unit in application.units if unit != leader_unit
             ]
 
             vault_status = self.vhelper.get_vault_status(leader_unit)
@@ -346,7 +338,7 @@ class VaultUnsealStep(BaseStep):
                         # charm updates its status on update-status hook trigger.
                         # Without this change, it will be too soon on some occassions
                         # for the next unseal command to act on non-leader units.
-                        run_sync(
+                        (
                             self.jhelper.wait_until_desired_status(
                                 OPENSTACK_MODEL,
                                 [VAULT_APPLICATION_NAME],
@@ -387,7 +379,7 @@ class VaultUnsealStep(BaseStep):
         except ApplicationNotFoundException as e:
             LOG.debug(f"Failed to get info on {VAULT_APPLICATION_NAME}", exc_info=True)
             return Result(ResultType.FAILED, str(e))
-        except TimeoutException as e:
+        except TimeoutError as e:
             LOG.debug("Timeout running vault unseal", exc_info=True)
             return Result(ResultType.FAILED, str(e))
         except JujuException as e:
@@ -396,9 +388,6 @@ class VaultUnsealStep(BaseStep):
         except VaultCommandFailedException as e:
             LOG.debug("Failed to run vault unseal", exc_info=True)
             return Result(ResultType.FAILED, str(e))
-        finally:
-            if model:
-                run_sync(model.disconnect())
 
 
 class AuthorizeVaultCharmStep(BaseStep, JujuStepHelper):
@@ -417,69 +406,56 @@ class AuthorizeVaultCharmStep(BaseStep, JujuStepHelper):
         :return: ResultType.COMPLETED or ResultType.FAILED
         """
         try:
-            leader_unit = run_sync(
-                self.jhelper.get_leader_unit(VAULT_APPLICATION_NAME, OPENSTACK_MODEL)
+            leader_unit = self.jhelper.get_leader_unit(
+                VAULT_APPLICATION_NAME, OPENSTACK_MODEL
             )
             # Create temporary token
             res = self.vhelper.create_token(leader_unit, self.token)
             client_token = res.get("auth", {}).get("client_token")
 
             if self.check_secret_exists(OPENSTACK_MODEL, self.tmp_secret_name):
-                run_sync(
-                    self.jhelper.remove_secret(OPENSTACK_MODEL, self.tmp_secret_name)
-                )
+                self.jhelper.remove_secret(OPENSTACK_MODEL, self.tmp_secret_name)
 
             # Add generated token as a juju secret
-            secret = run_sync(
-                self.jhelper.add_secret(
-                    OPENSTACK_MODEL,
-                    self.tmp_secret_name,
-                    {"token": client_token},
-                    "Temporary token for Vault charm authorization",
-                )
+            secret = self.jhelper.add_secret(
+                OPENSTACK_MODEL,
+                self.tmp_secret_name,
+                {"token": client_token},
+                "Temporary token for Vault charm authorization",
             )
 
             # Grant secret access to the vault application
-            run_sync(
-                self.jhelper.grant_secret(
-                    OPENSTACK_MODEL, self.tmp_secret_name, VAULT_APPLICATION_NAME
-                )
+            self.jhelper.grant_secret(
+                OPENSTACK_MODEL, self.tmp_secret_name, VAULT_APPLICATION_NAME
             )
             LOG.debug(f"Created secret: {secret}")
 
             # Run authorize-charm action on vault leader unit
             action_cmd = "authorize-charm"
             action_params = {"secret-id": secret}
-            action_result = run_sync(
-                self.jhelper.run_action(
-                    leader_unit, OPENSTACK_MODEL, action_cmd, action_params
-                )
+            action_result = self.jhelper.run_action(
+                leader_unit, OPENSTACK_MODEL, action_cmd, action_params
             )
 
             # Remove the juju secret
-            run_sync(self.jhelper.remove_secret(OPENSTACK_MODEL, self.tmp_secret_name))
+            self.jhelper.remove_secret(OPENSTACK_MODEL, self.tmp_secret_name)
 
             LOG.debug(f"Result from action {action_cmd}: {action_result}")
-            if action_result.get("return-code", 0) > 1:
-                return Result(
-                    ResultType.FAILED,
-                    f"Action {action_cmd} on {leader_unit} returned error",
-                )
 
         except LeaderNotFoundException as e:
             LOG.debug(f"Failed to get {VAULT_APPLICATION_NAME} leader", exc_info=True)
             return Result(ResultType.FAILED, str(e))
-        except TimeoutException as e:
+        except TimeoutError as e:
             LOG.debug("Timeout running vault token create", exc_info=True)
-            return Result(ResultType.FAILED, str(e))
-        except JujuException as e:
-            LOG.debug("Failed to run vault token create", exc_info=True)
             return Result(ResultType.FAILED, str(e))
         except VaultCommandFailedException as e:
             LOG.debug("Failed to run vault token create", exc_info=True)
             return Result(ResultType.FAILED, str(e))
         except ActionFailedException as e:
             LOG.debug(f"Running action {action_cmd} on {leader_unit} failed")
+            return Result(ResultType.FAILED, str(e))
+        except JujuException as e:
+            LOG.debug("Failed to run vault token create", exc_info=True)
             return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.COMPLETED)
@@ -499,29 +475,24 @@ class VaultStatusStep(BaseStep):
         :return: ResultType.COMPLETED or ResultType.FAILED
         """
         consolidated_status = {}
-        model = None
         try:
-            model = run_sync(self.jhelper.get_model(OPENSTACK_MODEL))
-            application = run_sync(
-                self.jhelper.get_application(VAULT_APPLICATION_NAME, model)
+            application = self.jhelper.get_application(
+                VAULT_APPLICATION_NAME, OPENSTACK_MODEL
             )
             for unit in application.units:
-                vault_status = self.vhelper.get_vault_status(unit.name)
-                consolidated_status[unit.name] = vault_status
+                vault_status = self.vhelper.get_vault_status(unit)
+                consolidated_status[unit] = vault_status
 
             return Result(ResultType.COMPLETED, json.dumps(consolidated_status))
         except ApplicationNotFoundException as e:
             LOG.debug(f"Failed to get info on {VAULT_APPLICATION_NAME}", exc_info=True)
             return Result(ResultType.FAILED, str(e))
-        except TimeoutException as e:
+        except TimeoutError as e:
             LOG.debug("Timeout running vault unseal", exc_info=True)
             return Result(ResultType.FAILED, str(e))
         except JujuException as e:
             LOG.debug("Failed to run vault unseal", exc_info=True)
             return Result(ResultType.FAILED, str(e))
-        finally:
-            if model:
-                run_sync(model.disconnect())
 
 
 class VaultFeature(OpenStackControlPlaneFeature):
@@ -577,7 +548,7 @@ class VaultFeature(OpenStackControlPlaneFeature):
     ) -> None:
         """Run plans to enable feature."""
         tfhelper = deployment.get_tfhelper(self.tfplan)
-        jhelper = JujuHelper(deployment.get_connected_controller())
+        jhelper = JujuHelper(deployment.juju_controller)
 
         plan: list[BaseStep] = []
         if self.user_manifest:
@@ -640,7 +611,7 @@ class VaultFeature(OpenStackControlPlaneFeature):
 
         self.enable_feature(deployment, FeatureConfig(), show_hints)
 
-        jhelper = JujuHelper(deployment.get_connected_controller())
+        jhelper = JujuHelper(deployment.juju_controller)
         if dev_mode:
             client = deployment.get_client()
 
@@ -708,7 +679,7 @@ class VaultFeature(OpenStackControlPlaneFeature):
         format: str,
     ):
         """Initialize Vault."""
-        jhelper = JujuHelper(deployment.get_connected_controller())
+        jhelper = JujuHelper(deployment.juju_controller)
         plan = [VaultInitStep(jhelper, key_shares, key_threshold)]
         plan_results = run_plan(plan, console)
 
@@ -747,7 +718,7 @@ class VaultFeature(OpenStackControlPlaneFeature):
         if unseal_key == "-":
             unseal_key = get_stdin_reopen_tty()
 
-        jhelper = JujuHelper(deployment.get_connected_controller())
+        jhelper = JujuHelper(deployment.juju_controller)
         plan = [VaultUnsealStep(jhelper, unseal_key)]
         plan_results = run_plan(plan, console)
         click.echo(get_step_message(plan_results, VaultUnsealStep))
@@ -763,7 +734,7 @@ class VaultFeature(OpenStackControlPlaneFeature):
         if root_token == "-":
             root_token = get_stdin_reopen_tty()
 
-        jhelper = JujuHelper(deployment.get_connected_controller())
+        jhelper = JujuHelper(deployment.juju_controller)
         plan = [AuthorizeVaultCharmStep(jhelper, root_token)]
         run_plan(plan, console)
         click.echo("Vault charm is authorized.")
@@ -779,7 +750,7 @@ class VaultFeature(OpenStackControlPlaneFeature):
     @pass_method_obj
     def vault_status(self, deployment: Deployment, format: str):
         """Vault status."""
-        jhelper = JujuHelper(deployment.get_connected_controller())
+        jhelper = JujuHelper(deployment.juju_controller)
         plan = [VaultStatusStep(jhelper)]
         plan_results = run_plan(plan, console)
 

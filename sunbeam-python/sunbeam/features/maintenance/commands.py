@@ -79,7 +79,7 @@ def enable(
     show_hints: bool = False,
 ) -> None:
     """Enable maintenance mode for node."""
-    jhelper = JujuHelper(deployment.get_connected_controller())
+    jhelper = JujuHelper(deployment.juju_controller)
 
     node_status = get_node_status(
         deployment=deployment,
@@ -246,7 +246,7 @@ def disable(
     show_hints: bool = False,
 ) -> None:
     """Disable maintenance mode for node."""
-    jhelper = JujuHelper(deployment.get_connected_controller())
+    jhelper = JujuHelper(deployment.juju_controller)
 
     node_status = get_node_status(
         deployment=deployment,

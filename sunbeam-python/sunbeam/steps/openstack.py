@@ -1,10 +1,10 @@
 # SPDX-FileCopyrightText: 2023 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
-import asyncio
 import copy
 import logging
 import math
+import queue
 import typing
 
 import tenacity
@@ -33,8 +33,6 @@ from sunbeam.core.juju import (
     JujuHelper,
     JujuStepHelper,
     JujuWaitException,
-    TimeoutException,
-    run_sync,
 )
 from sunbeam.core.k8s import CREDENTIAL_SUFFIX, K8SHelper
 from sunbeam.core.manifest import Manifest
@@ -451,16 +449,16 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
         enabling the feature.
         """
         apps_to_remove = []
-        model = run_sync(self.jhelper.get_model(self.model))
         for app_name in APPS_BLOCKED_WHEN_FEATURE_ENABLED:
             try:
-                app = run_sync(self.jhelper.get_application(app_name, model))
-                LOG.debug(f"Application status for {app_name}: {app.status}")
-                if app.status != "active":
+                app = self.jhelper.get_application(app_name, self.model)
+                LOG.debug(
+                    f"Application status for {app_name}: {app.app_status.current}"
+                )
+                if app.app_status.current != "active":
                     apps_to_remove.append(app)
             except ApplicationNotFoundException:
                 pass
-        run_sync(model.disconnect())
 
         return apps_to_remove
 
@@ -560,30 +558,27 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
             LOG.exception("Error configuring cloud")
             return Result(ResultType.FAILED, str(e))
 
-        apps = run_sync(self.jhelper.get_application_names(self.model))
+        apps = self.jhelper.get_application_names(self.model)
         if not extra_tfvars.get("enable-cinder-volume"):
             # Cinder will be blocked in this case
             apps.remove("cinder")
         apps = list(set(apps) - set(self.remove_blocked_apps_from_features()))
 
         LOG.debug(f"Applications monitored for readiness: {apps}")
-        queue: asyncio.queues.Queue[str] = asyncio.queues.Queue(maxsize=len(apps))
-        task = run_sync(update_status_background(self, apps, queue, status))
+        status_queue: queue.Queue[str] = queue.Queue(maxsize=len(apps))
+        task = update_status_background(self, apps, status_queue, status)
         try:
-            run_sync(
-                self.jhelper.wait_until_active(
-                    self.model,
-                    apps,
-                    timeout=OPENSTACK_DEPLOY_TIMEOUT,
-                    queue=queue,
-                )
+            self.jhelper.wait_until_active(
+                self.model,
+                apps,
+                timeout=OPENSTACK_DEPLOY_TIMEOUT,
+                queue=status_queue,
             )
-        except (JujuWaitException, TimeoutException) as e:
+        except (JujuWaitException, TimeoutError) as e:
             LOG.warning(str(e))
             return Result(ResultType.FAILED, str(e))
         finally:
-            if not task.done():
-                task.cancel()
+            task.stop()
 
         return Result(ResultType.COMPLETED)
 
@@ -664,27 +659,24 @@ class ReapplyOpenStackTerraformPlanStep(BaseStep, JujuStepHelper):
 
         storage_nodes = self.client.cluster.list_nodes_by_role("storage")
         # Remove cinder from apps to wait on if no storage nodes
-        apps = run_sync(self.jhelper.get_application_names(self.model))
+        apps = self.jhelper.get_application_names(self.model)
         if not storage_nodes:
             apps.remove("cinder")
         LOG.debug(f"Application monitored for readiness: {apps}")
-        queue: asyncio.queues.Queue[str] = asyncio.queues.Queue(maxsize=len(apps))
-        task = run_sync(update_status_background(self, apps, queue, status))
+        status_queue: queue.Queue[str] = queue.Queue(maxsize=len(apps))
+        task = update_status_background(self, apps, status_queue, status)
         try:
-            run_sync(
-                self.jhelper.wait_until_active(
-                    self.model,
-                    apps,
-                    timeout=OPENSTACK_DEPLOY_TIMEOUT,
-                    queue=queue,
-                )
+            self.jhelper.wait_until_active(
+                self.model,
+                apps,
+                timeout=OPENSTACK_DEPLOY_TIMEOUT,
+                queue=status_queue,
             )
-        except (JujuWaitException, TimeoutException) as e:
+        except (JujuWaitException, TimeoutError) as e:
             LOG.debug(str(e))
             return Result(ResultType.FAILED, str(e))
         finally:
-            if not task.done():
-                task.cancel()
+            task.stop()
 
         return Result(ResultType.COMPLETED)
 
@@ -925,7 +917,7 @@ class DestroyControlPlaneStep(BaseStep):
         except TerraformException:
             LOG.debug("Failed to pull state", exc_info=True)
 
-        self._has_juju_resources = run_sync(self.jhelper.model_exists(self._MODEL))
+        self._has_juju_resources = self.jhelper.model_exists(self._MODEL)
 
         if not self._has_tf_resources and not self._has_juju_resources:
             return Result(ResultType.SKIPPED)
@@ -949,30 +941,22 @@ class DestroyControlPlaneStep(BaseStep):
         timeout_factor = 0.8
 
         try:
-            run_sync(
-                self.jhelper.wait_model_gone(
-                    OPENSTACK_MODEL, int(OPENSTACK_DESTROY_TIMEOUT * timeout_factor)
-                )
+            self.jhelper.wait_model_gone(
+                OPENSTACK_MODEL, int(OPENSTACK_DESTROY_TIMEOUT * timeout_factor)
             )
-        except TimeoutException:
+        except TimeoutError:
             LOG.debug(
                 "Timeout waiting for model to be removed, trying through provider sdk"
             )
-            if not run_sync(self.jhelper.model_exists(self._MODEL)):
+            if not self.jhelper.model_exists(self._MODEL):
                 return Result(ResultType.COMPLETED)
-            run_sync(
-                self.jhelper.destroy_model(
-                    self._MODEL, destroy_storage=True, force=True
-                )
-            )
+            self.jhelper.destroy_model(self._MODEL, destroy_storage=True, force=True)
             try:
-                run_sync(
-                    self.jhelper.wait_model_gone(
-                        OPENSTACK_MODEL,
-                        int(OPENSTACK_DESTROY_TIMEOUT * (1 - timeout_factor)),
-                    )
+                self.jhelper.wait_model_gone(
+                    OPENSTACK_MODEL,
+                    int(OPENSTACK_DESTROY_TIMEOUT * (1 - timeout_factor)),
                 )
-            except TimeoutException:
+            except TimeoutError:
                 return Result(
                     ResultType.FAILED,
                     "Timeout waiting for model to be removed, please check manually",

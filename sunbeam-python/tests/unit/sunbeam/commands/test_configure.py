@@ -1,32 +1,16 @@
 # SPDX-FileCopyrightText: 2023 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
-import asyncio
 from pathlib import Path
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import Mock, patch
 
 import pytest
 
 import sunbeam.commands.configure as configure
-import sunbeam.core.questions
-import sunbeam.utils
+import sunbeam.core
 from sunbeam.core.common import ResultType
+from sunbeam.core.juju import ActionFailedException
 from sunbeam.core.terraform import TerraformException
-
-
-@pytest.fixture(autouse=True)
-def mock_run_sync(mocker):
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-
-    def run_sync(coro):
-        return loop.run_until_complete(coro)
-
-    mocker.patch("sunbeam.commands.configure.run_sync", run_sync)
-    yield
-    loop.close()
 
 
 @pytest.fixture()
@@ -54,65 +38,12 @@ def question_bank():
 
 @pytest.fixture()
 def jhelper():
-    yield AsyncMock()
+    yield Mock()
 
 
 @pytest.fixture()
 def tfhelper():
     yield Mock(path=Path())
-
-
-class SetHypervisorCharmConfigStep:
-    def test_is_skip(self, cclient, jhelper):
-        step = configure.SetHypervisorCharmConfigStep(
-            cclient, jhelper, Path("/tmp/dummypath"), "test-model"
-        )
-        result = step.is_skip()
-        assert result.result_type == ResultType.COMPLETED
-
-    def test_run_remote_access(self, load_answers, jhelper, cclient):
-        load_answers.return_value = {
-            "user": {"remote_access_location": "remote"},
-            "external_network": {"physical_network": "physnet1"},
-        }
-        step = configure.SetHypervisorCharmConfigStep(
-            cclient, jhelper, Path("/tmp/dummypath"), "test-model"
-        )
-        step.run()
-        jhelper.set_application_config.assert_called_once_with(
-            "controller",
-            "openstack-hypervisor",
-            {
-                "enable-gateway": "True",
-                "external-bridge": "br-ex",
-                "external-bridge-address": "0.0.0.0/0",
-                "physnet-name": "physnet1",
-            },
-        )
-
-    def test_run_remote_access_local(self, load_answers, jhelper, cclient):
-        load_answers.return_value = {
-            "user": {"remote_access_location": "local"},
-            "external_network": {
-                "gateway": "10.0.0.1",
-                "cidr": "10.0.0.0/16",
-                "physical_network": "physnet1",
-            },
-        }
-        step = configure.SetHypervisorCharmConfigStep(
-            cclient, jhelper, Path("/tmp/dummypath"), "test-model"
-        )
-        step.run()
-        jhelper.set_application_config.assert_called_once_with(
-            "controller",
-            "openstack-hypervisor",
-            {
-                "enable-gateway": "False",
-                "external-bridge": "br-ex",
-                "external-bridge-address": "10.0.0.1/16",
-                "physnet-name": "physnet1",
-            },
-        )
 
 
 class TestUserQuestions:
@@ -295,10 +226,7 @@ class TestTerraformDemoInitStep:
 
 class TestSetLocalHypervisorOptions:
     def test_run(self, cclient, jhelper):
-        jhelper.run_action.return_value = {"return-code": 0}
-        unit_mock = Mock()
-        unit_mock.entity_id = "openstack-hypervisor/0"
-        jhelper.get_unit_from_machine.return_value = unit_mock
+        jhelper.get_unit_from_machine.return_value = "openstack-hypervisor/0"
         step = configure.SetHypervisorUnitsOptionsStep(
             cclient, "maas0.local", jhelper, "test-model"
         )
@@ -313,7 +241,7 @@ class TestSetLocalHypervisorOptions:
         assert result.result_type == ResultType.COMPLETED
 
     def test_run_fail(self, cclient, jhelper):
-        jhelper.run_action.return_value = {"return-code": 2}
+        jhelper.run_action.side_effect = ActionFailedException("Action failed")
         jhelper.get_leader_unit.return_value = "openstack-hypervisor/0"
         step = configure.SetHypervisorUnitsOptionsStep(
             cclient, "maas0.local", jhelper, "test-model"
