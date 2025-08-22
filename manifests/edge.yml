@@ -86,6 +86,13 @@ features:
       charms:
         watcher-k8s:
           channel: 2024.1/edge
+  shared-filesystem:
+    software:
+      charms:
+        manila-k8s:
+          channel: 2024.1/edge
+        manila-cephfs-k8s:
+          channel: 2024.1/edge
   secrets:
     software:
       charms:

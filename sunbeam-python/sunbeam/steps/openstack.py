@@ -394,6 +394,9 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
             model_with_owner = self.get_model_name_with_owner(self.machine_model)
             tfvars["enable-ceph"] = True
             tfvars["ceph-offer-url"] = f"{model_with_owner}.{microceph.APPLICATION}"
+            tfvars["ceph-nfs-offer-url"] = (
+                f"{model_with_owner}.{microceph.NFS_OFFER_NAME}"
+            )
             tfvars["ceph-osd-replication-count"] = microceph.ceph_replica_scale(
                 len(storage_nodes)
             )
