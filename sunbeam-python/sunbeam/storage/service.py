@@ -47,50 +47,70 @@ class StorageBackendService:
             storage backends with real-time status and charm information
         """
         backends = []
+        client = self.deployment.get_client()
+        jhelper = JujuHelper(self.deployment.juju_controller)
 
-        try:
-            client = self.deployment.get_client()
-            current_config = read_config(client, self._tfvar_config_key)
+        # Get all available backend types from registry
+        from .registry import StorageBackendRegistry
 
-            # Get JujuHelper for status queries
-            jhelper = JujuHelper(self.deployment.juju_controller)
+        registry = StorageBackendRegistry()
+        available_backends = registry.get_backends()
 
-            # Look for all keys ending with "_backends" (e.g., "hitachi_backends")
-            backend_keys = [
-                key for key in current_config.keys() if key.endswith("_backends")
-            ]
+        # Search each backend type's individual config key
+        for backend_type, backend_instance in available_backends.items():
+            try:
+                # Each backend stores config in its
+                # own key: TerraformVarsStorageBackends{Type}
+                backend_config_key = backend_instance.tfvar_config_key
+                LOG.debug(
+                    f"Searching for {backend_type} backends in config key: "
+                    f"{backend_config_key}"
+                )
 
-            for backend_key in backend_keys:
-                backend_type = backend_key.replace("_backends", "")
-                for backend_name, backend_config in current_config[backend_key].items():
-                    try:
-                        # Get actual application name from Terraform config
-                        # In Terraform, the application name
-                        # is set to backend_name directly
-                        app_name = backend_config.get("application_name", backend_name)
+                current_config = read_config(client, backend_config_key)
 
-                        # Query actual status and charm from Juju
-                        status = self._get_application_status(jhelper, app_name)
-                        charm_name = self._get_application_charm(jhelper, app_name)
+                # Look for backend-specific keys (e.g., "hitachi_backends",
+                # "purestorage_backends")
+                backend_key = f"{backend_type}_backends"
 
-                        backend = StorageBackendInfo(
-                            name=backend_name,
-                            backend_type=backend_type,
-                            status=status,
-                            charm=charm_name,
-                            config=backend_config.get("charm_config", {}),
-                        )
-                        backends.append(backend)
-                    except Exception as e:
-                        LOG.warning(
-                            f"Error processing Terraform backend {backend_name}: {e}"
-                        )
-                        continue
+                if backend_key in current_config:
+                    for backend_name, backend_config in current_config[
+                        backend_key
+                    ].items():
+                        try:
+                            # Get actual application name from Terraform config
+                            app_name = backend_config.get(
+                                "application_name", backend_name
+                            )
 
-        except ConfigItemNotFoundException:
-            LOG.debug("No Terraform storage backend configuration found in clusterd")
-        except Exception as e:
-            LOG.warning(f"Error reading Terraform backends from clusterd: {e}")
+                            # Query actual status and charm from Juju
+                            status = self._get_application_status(jhelper, app_name)
+                            charm_name = self._get_application_charm(jhelper, app_name)
+
+                            backend = StorageBackendInfo(
+                                name=backend_name,
+                                backend_type=backend_type,
+                                status=status,
+                                charm=charm_name,
+                                config=backend_config.get("charm_config", {}),
+                            )
+                            backends.append(backend)
+                            LOG.debug(f"Found {backend_type} backend: {backend_name}")
+                        except Exception as e:
+                            LOG.warning(
+                                f"Error processing {backend_type}"
+                                f"backend {backend_name}: {e}"
+                            )
+                            continue
+                else:
+                    LOG.debug(f"No {backend_key} found in config for {backend_type}")
+
+            except ConfigItemNotFoundException:
+                LOG.debug(f"No configuration found for {backend_type} backends")
+                continue
+            except Exception as e:
+                LOG.warning(f"Error reading {backend_type} backends from clusterd: {e}")
+                continue
 
         return backends
 
@@ -148,15 +168,33 @@ class StorageBackendService:
             LOG.debug(f"Failed to get charm for application {app_name}: {e}")
             return "Unknown"
 
-    def _load_backend_tfvars(self) -> Dict[str, Any]:
+    def _load_backend_tfvars(self, backend_type: str) -> Dict[str, Any]:
         """Safely load storage backend Terraform variables from clusterd.
 
-        Returns an empty dict if the config item does not exist.
+        Args:
+            backend_type: The backend type (e.g., 'hitachi', 'purestorage')
+
+        Returns:
+            Dict containing the backend configuration, empty dict if not found.
         """
         try:
+            # Get the backend instance to access its config key
+            from .registry import StorageBackendRegistry
+
+            registry = StorageBackendRegistry()
+            available_backends = registry.get_backends()
+
+            if backend_type not in available_backends:
+                return {}
+
+            backend_instance = available_backends[backend_type]
+            backend_config_key = backend_instance.tfvar_config_key
+
             client = self.deployment.get_client()
-            return read_config(client, self._tfvar_config_key)
+            return read_config(client, backend_config_key)
         except ConfigItemNotFoundException:
+            return {}
+        except Exception:
             return {}
 
     def _iter_backend_items(self, tfvars: Dict[str, Any], backend_type: str):
@@ -168,9 +206,10 @@ class StorageBackendService:
                 yield name, cfg
 
     def _get_backend_entry(
-        self, tfvars: Dict[str, Any], backend_type: str, backend_name: str
+        self, backend_type: str, backend_name: str
     ) -> Dict[str, Any] | None:
         """Return the backend config entry if found, else None."""
+        tfvars = self._load_backend_tfvars(backend_type)
         for name, cfg in self._iter_backend_items(tfvars, backend_type):
             if name == backend_name:
                 return cfg
@@ -178,16 +217,14 @@ class StorageBackendService:
 
     def backend_exists(self, backend_name: str, backend_type: str) -> bool:
         """Check if a backend exists in Terraform configuration."""
-        tfvars = self._load_backend_tfvars()
-        return self._get_backend_entry(tfvars, backend_type, backend_name) is not None
+        return self._get_backend_entry(backend_type, backend_name) is not None
 
     def get_backend_config(
         self, backend_name: str, backend_type: str
     ) -> Dict[str, Any]:
         """Get the current configuration of a storage backend."""
         try:
-            tfvars = self._load_backend_tfvars()
-            entry = self._get_backend_entry(tfvars, backend_type, backend_name)
+            entry = self._get_backend_entry(backend_type, backend_name)
             if not entry:
                 raise BackendNotFoundException(f"Backend '{backend_name}' not found")
 

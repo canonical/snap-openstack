@@ -19,10 +19,22 @@ class MockStorageBackend(StorageBackendBase):
     """Mock storage backend for testing."""
 
     name = "mock"
-    display_name = "Mock Storage Backend"
+    display_name = "Mock Storage"
+    description = "Mock storage backend for testing"
+    terraform_plan_location = "/path/to/mock/terraform"
     charm_name = "mock-charm"
-    tfplan = "mock-backend-plan"
-    config_class = StorageBackendConfig
+
+    def __init__(self, deployment=None):
+        super().__init__()
+        self.deployment = deployment
+
+    def _get_default_config(self) -> dict:
+        """Get default configuration for mock backend."""
+        return {"mock_key": "default_value"}
+
+    def prompt_for_config(self) -> dict:
+        """Mock prompt for config."""
+        return {"mock_key": "mock_value"}
 
     @property
     def tfvar_config_key(self):
@@ -94,7 +106,7 @@ class MockStorageBackend(StorageBackendBase):
             deployment, self, backend_name, config_updates
         )
 
-    def prompt_for_config(self, backend_name: str) -> StorageBackendConfig:
+    def prompt_for_config(self, backend_name: str) -> StorageBackendConfig:  # noqa: F811
         """Mock prompt for configuration."""
         return StorageBackendConfig(name=backend_name)
 
@@ -156,7 +168,7 @@ class TestBaseStorageBackendDeployStep:
         assert step.backend_config == backend_config
         assert step.backend_instance == backend_instance
         assert step.model == model
-        assert "Deploy Mock Storage Backend" in step.name
+        assert "Deploy Mock Storage backend" in step.name
         assert "test-backend" in step.description
 
     @patch("sunbeam.storage.steps.read_config")
@@ -263,7 +275,7 @@ class TestBaseStorageBackendDestroyStep:
         assert step.backend_name == backend_name
         assert step.backend_instance == backend_instance
         assert step.model == model
-        assert "Destroy Mock Storage Backend" in step.name
+        assert "Destroy Mock Storage backend" in step.name
         assert "test-backend" in step.description
 
     @patch("sunbeam.storage.steps.read_config")
@@ -476,7 +488,7 @@ class TestBaseStorageBackendConfigUpdateStep:
         assert step.config_updates == config_updates
         assert step.client == mock_client
         assert step.tfhelper == mock_tfhelper
-        assert "Update Mock Storage Backend" in step.name
+        assert "Update Mock Storage backend" in step.name
         assert "test-backend" in step.description
 
     @patch("sunbeam.storage.steps.read_config")

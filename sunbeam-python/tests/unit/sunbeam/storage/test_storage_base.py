@@ -124,6 +124,10 @@ class MockStorageBackend(StorageBackendBase):
         """Mock CLI registration."""
         pass
 
+    def _get_default_config(self) -> StorageBackendConfig:
+        """Get a default configuration instance for comparison."""
+        return StorageBackendConfig(name="default")
+
 
 class TestStorageBackendBase:
     """Test cases for StorageBackendBase class."""

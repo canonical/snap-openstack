@@ -268,4 +268,8 @@ def mock_storage_backend():
             """Mock prompt for configuration."""
             return StorageBackendConfig(name=backend_name)
 
+        def _get_default_config(self) -> StorageBackendConfig:
+            """Get a default configuration instance for comparison."""
+            return StorageBackendConfig(name="default")
+
     return MockStorageBackend()

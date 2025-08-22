@@ -16,13 +16,21 @@ class MockStorageBackend(StorageBackendBase):
     """Mock storage backend for testing."""
 
     name = "mock"
-    display_name = "Mock Storage Backend"
-    charm_name = "mock-charm"
+    display_name = "Mock Storage"
+    description = "Mock storage backend for testing"
+    terraform_plan_location = "/path/to/mock/terraform"
 
-    def __init__(self):
+    def __init__(self, deployment=None):
         super().__init__()
-        self.tfplan = "mock-backend-plan"
-        self.tfplan_dir = "deploy-mock-backend"
+        self.deployment = deployment
+
+    def _get_default_config(self) -> dict:
+        """Get default configuration for mock backend."""
+        return {"mock_key": "default_value"}
+
+    def prompt_for_config(self) -> dict:
+        """Mock prompt for config."""
+        return {"mock_key": "mock_value"}
 
     @property
     def tfvar_config_key(self):
@@ -115,7 +123,7 @@ class MockStorageBackend(StorageBackendBase):
             deployment, self, backend_name, config_updates
         )
 
-    def prompt_for_config(self, backend_name: str) -> StorageBackendConfig:
+    def prompt_for_config(self, backend_name: str) -> StorageBackendConfig:  # noqa: F811
         """Mock prompt for configuration."""
         return StorageBackendConfig(name=backend_name)
 

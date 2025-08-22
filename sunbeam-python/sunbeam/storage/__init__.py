@@ -6,5 +6,4 @@
 This module provides a pluggable storage backend system for Sunbeam.
 """
 
-# Import backends to register them
-import sunbeam.storage.backends.hitachi.backend  # noqa: F401
+# Backends are loaded dynamically by the registry - no hardcoded imports needed

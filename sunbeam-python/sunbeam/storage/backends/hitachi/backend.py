@@ -3,10 +3,8 @@
 
 """Hitachi VSP storage backend implementation using base step classes."""
 
-import ipaddress
 import logging
-import re
-from typing import Any, Dict, Literal
+from typing import Any, Dict, Literal, Set
 
 import click
 
@@ -36,12 +34,6 @@ from sunbeam.storage.steps import (
 
 LOG = logging.getLogger(__name__)
 console = Console()
-
-# Regex pattern for validating FQDN (Fully Qualified Domain Name)
-FQDN_PATTERN = (
-    r"^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?"
-    r"(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$"
-)
 
 
 class HitachiConfig(StorageBackendConfig):
@@ -319,20 +311,12 @@ class HitachiBackend(StorageBackendBase):
         """Return the configuration class for Hitachi backend."""
         return HitachiConfig
 
-    def get_field_mapping(self) -> Dict[str, str]:
-        """Get mapping from config fields to charm config options.
+    def _get_credential_fields(self) -> Set[str]:
+        """Get set of credential field names that should be excluded from charm config.
 
-        Default mapping is underscore->hyphen for all Pydantic fields. For the
-        Hitachi backend we need to exclude fields that should NOT be sent to
-        the charm (credentials, secrets, and meta fields like name). This keeps
-        mapping maintenance minimal and future-proof while ensuring we do not
-        leak sensitive values via charm config.
+        For Hitachi backend, we exclude all credential fields and secret URIs.
         """
-        # Start from the base automatic mapping
-        mapping = super().get_field_mapping()
-
-        # Exclude fields that are not charm config options
-        exclude = {
+        return {
             # meta
             "name",
             # primary array credentials
@@ -354,35 +338,19 @@ class HitachiBackend(StorageBackendBase):
             "hitachi_mirror_rest_credentials_secret",
         }
 
+    def get_field_mapping(self) -> Dict[str, str]:
+        """Get mapping from config fields to charm config options.
+
+        Uses base class automatic mapping and excludes credential fields.
+        """
+        # Start from the base automatic mapping
+        mapping = super().get_field_mapping()
+
+        # Exclude credential fields
+        exclude = self._get_credential_fields()
         return {k: v for k, v in mapping.items() if k not in exclude}
 
-    # -------- Provider-style CLI registration --------
-    def register_add_cli(self, add: click.Group) -> None:
-        """Register 'sunbeam storage add hitachi'.
-
-        Delegates to HitachiCLI class.
-        """
-        from sunbeam.storage.backends.hitachi.cli import HitachiCLI
-
-        cli = HitachiCLI(self)
-        cli.register_add_cli(add)
-
-    def register_cli(
-        self,
-        remove: click.Group,
-        config_show: click.Group,
-        config_set: click.Group,
-        config_options: click.Group,
-        deployment: Deployment,
-    ) -> None:
-        """Register management commands for Hitachi backend.
-
-        Delegates to HitachiCLI class.
-        """
-        from sunbeam.storage.backends.hitachi.cli import HitachiCLI
-
-        cli = HitachiCLI(self)
-        cli.register_cli(remove, config_show, config_set, config_options, deployment)
+    # CLI registration uses base class implementation
 
     def get_terraform_variables(
         self, backend_name: str, config: StorageBackendConfig, model: str
@@ -392,21 +360,9 @@ class HitachiBackend(StorageBackendBase):
         config_dict = config.model_dump()
         field_mapping = self.get_field_mapping()
 
-        # Separate credential fields from regular config fields
-        credential_fields = {
-            "san_username",
-            "san_password",
-            "chap_username",
-            "chap_password",
-            "hitachi_mirror_chap_username",
-            "hitachi_mirror_chap_password",
-            "hitachi_mirror_rest_username",
-            "hitachi_mirror_rest_password",
-        }
-
-        # Filter config using the internal function, excluding credential fields
+        # Filter config using base class method, excluding credential fields
         charm_config = self._filter_config_for_charm(
-            config_dict, field_mapping, exclude_fields=credential_fields
+            config_dict, field_mapping, exclude_fields=self._get_credential_fields()
         )
 
         # Build Terraform variables to match the plan's expected format
@@ -447,29 +403,9 @@ class HitachiBackend(StorageBackendBase):
 
         return tfvars
 
-    def _filter_config_for_charm(
-        self,
-        config_dict: Dict[str, Any],
-        field_mapping: Dict[str, str],
-        exclude_fields: set | None = None,
-    ) -> Dict[str, Any]:
-        """Filter configuration dictionary for charm deployment.
-
-        Only includes explicitly set values (non-default, non-empty) to avoid
-        sending unnecessary configuration to the charm.
-
-        Args:
-            config_dict: Configuration dictionary to filter
-            field_mapping: Mapping from config keys to charm config keys
-            exclude_fields: Set of fields to exclude from filtering
-
-        Returns:
-            Filtered charm configuration dictionary
-        """
-        exclude_fields = exclude_fields or set()
-
-        # Get default values for comparison
-        default_config = HitachiConfig(
+    def _get_default_config(self) -> HitachiConfig:
+        """Get a default configuration instance for comparison."""
+        return HitachiConfig(
             name="dummy",
             hitachi_storage_id="dummy",
             hitachi_pools="dummy",
@@ -478,76 +414,12 @@ class HitachiBackend(StorageBackendBase):
             san_password="dummy",  # noqa: S106
             protocol="FC",
         )
-        default_dict = default_config.model_dump()
-
-        charm_config = {}
-        for key, value in config_dict.items():
-            # Skip excluded fields
-            if key in exclude_fields:
-                continue
-
-            if key in field_mapping:
-                # Only include explicitly set values (non-default, non-empty)
-                if self._should_include_config_value(key, value, default_dict.get(key)):
-                    charm_config[field_mapping[key]] = value
-
-        return charm_config
-
-    def _should_include_config_value(
-        self, key: str, value: Any, default_value: Any
-    ) -> bool:
-        """Determine if a configuration value should be included in charm config.
-
-        Args:
-            key: Configuration field name
-            value: Current value
-            default_value: Default value for this field
-
-        Returns:
-            True if the value should be sent to the charm, False otherwise
-        """
-        # Always include the 'name' field as it's required
-        if key == "name":
-            return True
-
-        # Skip None values
-        if value is None:
-            return False
-
-        # Skip empty strings
-        if isinstance(value, str) and value.strip() == "":
-            return False
-
-        # Skip empty lists
-        if isinstance(value, list) and len(value) == 0:
-            return False
-
-        # Skip empty dictionaries
-        if isinstance(value, dict) and len(value) == 0:
-            return False
-
-        # Skip values that match the default
-        if value == default_value:
-            return False
-
-        # Include all other values
-        return True
 
     def prompt_for_config(self, backend_name: str) -> HitachiConfig:
         """Prompt user for Hitachi-specific configuration."""
         return self._prompt_for_config(backend_name)
 
-    @staticmethod
-    def _validate_ip_or_fqdn(value: str) -> str:
-        """Validate IP address or FQDN."""
-        try:
-            ipaddress.ip_address(value)
-            return value
-        except ValueError:
-            # If not a valid IP, check if it's a valid FQDN
-            if re.match(FQDN_PATTERN, value):
-                return value
-            raise click.BadParameter("Must be a valid IP address or FQDN")
+    # IP/FQDN validation uses base class implementation
 
     def _prompt_for_config(self, backend_name: str) -> HitachiConfig:
         """Prompt user for Hitachi backend configuration."""

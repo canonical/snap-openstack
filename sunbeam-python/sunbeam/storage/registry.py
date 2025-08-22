@@ -92,6 +92,10 @@ class StorageBackendRegistry:
         self._load_backends()
         return self._backends.copy()
 
+    def get_backends(self) -> Dict[str, StorageBackendBase]:
+        """Get all available storage backends (alias for list_backends)."""
+        return self.list_backends()
+
     def register_cli_commands(
         self, storage_group: click.Group, deployment: Deployment
     ) -> None:

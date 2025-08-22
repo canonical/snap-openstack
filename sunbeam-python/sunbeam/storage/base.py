@@ -3,11 +3,12 @@
 
 """Storage backend base class with integrated Terraform functionality."""
 
+import ipaddress
 import logging
 import re
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 import click
 from packaging.version import Version
@@ -36,6 +37,12 @@ console = Console()
 # letters, numbers, hyphens. Cannot end with hyphen, cannot have
 # consecutive hyphens, cannot have numbers after final hyphen
 JUJU_APP_NAME_PATTERN = re.compile(r"^[a-z]([a-z0-9]*(-[a-z0-9]*)*)?$")
+
+# Regex pattern for validating FQDN (Fully Qualified Domain Name)
+FQDN_PATTERN = (
+    r"^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?"
+    r"(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$"
+)
 
 
 def validate_juju_application_name(name: str) -> bool:
@@ -93,19 +100,18 @@ class StorageBackendBase(ABC):
             self.service = StorageBackendService(deployment)
         return self.service
 
-    # CLI registration hooks (provider-style)
-    @abstractmethod
-    def register_add_cli(self, add: click.Group) -> None:
-        """Register this backend's add command under the provided 'add' group.
+    # Common CLI registration pattern (Abstraction 3: CLI registration)
+    def register_add_cli(self, add: click.Group) -> None:  # noqa: F811
+        """Register 'sunbeam storage add <backend>' command.
 
-        Implementations should add a subcommand named after the backend
-        (e.g., 'hitachi') so the final UX remains:
-          sunbeam storage add <backend> [args]
+        Default implementation delegates to CLI class following the pattern.
+        Subclasses can override if they need custom behavior.
         """
-        raise NotImplementedError
+        cli_class = self._get_cli_class()
+        cli = cli_class(self)
+        cli.register_add_cli(add)
 
-    @abstractmethod
-    def register_cli(
+    def register_cli(  # noqa: F811
         self,
         remove: click.Group,
         config_show: click.Group,
@@ -115,14 +121,12 @@ class StorageBackendBase(ABC):
     ) -> None:
         """Register management commands for this backend.
 
-        Implementations should register subcommands named after the backend
-        (e.g., 'hitachi') under the provided groups so the final UX remains:
-          sunbeam storage remove <backend> <name>
-          sunbeam storage config show <backend> <name>
-          sunbeam storage config set <backend> <name> key=value ...
-          sunbeam storage config options <backend> [name]
+        Default implementation delegates to CLI class following the pattern.
+        Subclasses can override if they need custom behavior.
         """
-        raise NotImplementedError
+        cli_class = self._get_cli_class()
+        cli = cli_class(self)
+        cli.register_cli(remove, config_show, config_set, config_options, deployment)
 
     # Terraform-related properties and methods
     @property
@@ -140,7 +144,7 @@ class StorageBackendBase(ABC):
     @property
     def tfvar_config_key(self) -> str:
         """Config key for storing Terraform variables in clusterd."""
-        return "TerraformVarsStorageBackends"  # Use shared config key for all backends
+        return f"TerraformVarsStorageBackends{self.name.title()}"
 
     # Abstract methods that each backend must implement
     @abstractmethod
@@ -523,3 +527,144 @@ class StorageBackendBase(ABC):
     def prompt_for_config(self, backend_name: str) -> StorageBackendConfig:
         """Prompt user for backend-specific configuration. Override in subclasses."""
         raise NotImplementedError("Subclasses must implement prompt_for_config")
+
+    # Common utility methods
+    def _filter_config_for_charm(
+        self,
+        config_dict: Dict[str, Any],
+        field_mapping: Dict[str, str],
+        exclude_fields: Set[str] | None = None,
+    ) -> Dict[str, Any]:
+        """Filter configuration dictionary for charm deployment.
+
+        Only includes explicitly set values (non-default, non-empty) to avoid
+        sending unnecessary configuration to the charm.
+
+        Args:
+            config_dict: Configuration dictionary to filter
+            field_mapping: Mapping from config keys to charm config keys
+            exclude_fields: Set of fields to exclude from filtering
+
+        Returns:
+            Filtered charm configuration dictionary
+        """
+        exclude_fields = exclude_fields or set()
+
+        # Get default values for comparison
+        default_config = self._get_default_config()
+        default_dict = default_config.model_dump()
+
+        charm_config = {}
+        for key, value in config_dict.items():
+            # Skip excluded fields
+            if key in exclude_fields:
+                continue
+
+            if key in field_mapping:
+                # Only include explicitly set values (non-default, non-empty)
+                if self._should_include_config_value(key, value, default_dict.get(key)):
+                    charm_config[field_mapping[key]] = value
+
+        return charm_config
+
+    def _should_include_config_value(
+        self, key: str, value: Any, default_value: Any
+    ) -> bool:
+        """Determine if a configuration value should be included in charm config.
+
+        Args:
+            key: Configuration field name
+            value: Current value
+            default_value: Default value for this field
+
+        Returns:
+            True if the value should be sent to the charm, False otherwise
+        """
+        # Always include the 'name' field as it's required
+        if key == "name":
+            return True
+
+        # Skip None values
+        if value is None:
+            return False
+
+        # Skip empty strings
+        if isinstance(value, str) and value.strip() == "":
+            return False
+
+        # Skip empty lists
+        if isinstance(value, list) and len(value) == 0:
+            return False
+
+        # Skip empty dictionaries
+        if isinstance(value, dict) and len(value) == 0:
+            return False
+
+        # Skip values that match the default
+        if value == default_value:
+            return False
+
+        # Include all other values
+        return True
+
+    @abstractmethod
+    def _get_default_config(self) -> StorageBackendConfig:
+        """Get a default configuration instance for comparison.
+
+        Subclasses must implement this to provide a default config instance
+        with dummy values for required fields.
+        """
+        raise NotImplementedError("Subclasses must implement _get_default_config")
+
+    def _get_credential_fields(self) -> Set[str]:
+        """Get set of credential field names that should be excluded from charm config.
+
+        Subclasses can override this to specify which fields contain credentials
+        that should not be sent to the charm configuration.
+
+        Returns:
+            Set of field names containing credentials
+        """
+        return {"name"}  # Default: only exclude the name field
+
+    # Common utility methods (Abstraction 2: IP/FQDN validation)
+    @staticmethod
+    def _validate_ip_or_fqdn(value: str) -> str:
+        """Validate IP address or FQDN.
+
+        Args:
+            value: IP address or FQDN to validate
+
+        Returns:
+            The validated value
+
+        Raises:
+            click.BadParameter: If value is not a valid IP or FQDN
+        """
+        try:
+            ipaddress.ip_address(value)
+            return value
+        except ValueError:
+            # If not a valid IP, check if it's a valid FQDN
+            if re.match(FQDN_PATTERN, value):
+                return value
+            raise click.BadParameter("Must be a valid IP address or FQDN")
+
+    def _get_cli_class(self):
+        """Get the CLI class for this backend.
+
+        Subclasses should override this to return their CLI class.
+        Default implementation attempts to import based on naming convention.
+        """
+        try:
+            # Try to import CLI class based on naming convention
+            module_path = f"sunbeam.storage.backends.{self.name}.cli"
+            cli_module = __import__(module_path, fromlist=[f"{self.name.title()}CLI"])
+            cli_class_name = f"{self.name.title()}CLI"
+            return getattr(cli_module, cli_class_name)
+        except (ImportError, AttributeError):
+            raise NotImplementedError(
+                f"Subclasses must implement _get_cli_class or "
+                f"follow naming convention: "
+                f"sunbeam.storage.backends.{self.name}.cli.{self.name.title()}CLI"
+            )
