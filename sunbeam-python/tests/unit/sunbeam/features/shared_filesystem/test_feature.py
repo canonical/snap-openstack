@@ -2,11 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-from unittest.mock import Mock, patch
+from unittest.mock import ANY, Mock, patch
 
 import pytest
 
 from sunbeam.features.shared_filesystem import feature as manila_feature
+from sunbeam.features.shared_filesystem import manila_data
 from sunbeam.steps import microceph, openstack
 
 
@@ -15,7 +16,14 @@ def deployment():
     deploy = Mock()
     deploy.openstack_machines_model = "foo"
     client = deploy.get_client.return_value
-    client.cluster.list_nodes_by_role.return_value = ["node1"]
+    nodes = [
+        {
+            "name": "node1",
+            "machineid": 1,
+        },
+    ]
+    client.cluster.list_nodes_by_role.return_value = nodes
+    client.cluster.list_nodes.return_value = nodes
 
     def get_config(key):
         if key == openstack.DATABASE_MEMORY_KEY:
@@ -44,6 +52,7 @@ class TestSharedFilesystemFeature:
             "manila-mysql-router",
             "manila-cephfs",
             "manila-cephfs-mysql-router",
+            "manila-data-mysql-router",
             "manila-mysql",
         ]
         assert expected_apps == apps
@@ -60,8 +69,21 @@ class TestSharedFilesystemFeature:
         # Run enable plans, ceph-nfs offer is already created.
         manila.run_enable_plans(deployment, feature_config, False)
 
+        # CreateCephNFSOfferStep calls.
         jhelper.offer_exists.assert_called_once_with("foo", microceph.NFS_OFFER_NAME)
         jhelper.create_offer.assert_not_called()
+
+        # AddManilaDataUnitsStep calls.
+        jhelper.add_unit.assert_called_with("foo", "manila-data", ["1"])
+        jhelper.wait_until_desired_status.assert_any_call(
+            "foo",
+            ["manila-data"],
+            units=jhelper.add_unit.return_value,
+            status=["active", "blocked"],
+            agent_status=["idle"],
+            timeout=manila_data.MANILA_DATA_UNIT_TIMEOUT,
+            queue=ANY,
+        )
 
         # Run enable plans, microceph-ceph-nfs doesn't exist.
         jhelper.offer_exists.return_value = False
@@ -79,6 +101,8 @@ class TestSharedFilesystemFeature:
     @patch.object(manila_feature, "click", Mock())
     def test_run_disable_plans(self, mock_JujuHelper, deployment):
         jhelper = mock_JujuHelper.return_value
+        tfhelper = deployment.get_tfhelper.return_value
+        tfhelper.state_list.return_value = []
         manila = manila_feature.SharedFilesystemFeature()
         manila._manifest = Mock()
         manila._manifest.core.software.charms = {}
@@ -86,6 +110,32 @@ class TestSharedFilesystemFeature:
         # Run disable plans, ceph-nfs offer is already created.
         manila.run_disable_plans(deployment, False)
 
+        # DeployManilaDataApplicationStep calls.
+        tfhelper.update_tfvars_and_apply_tf.assert_any_call(
+            deployment.get_client.return_value,
+            manila._manifest,
+            tfvar_config=manila_data.CONFIG_KEY,
+            override_tfvars={"machine_model": "foo"},
+            tf_apply_extra_args=["-input=false", "-destroy"],
+        )
+        jhelper.wait_application_gone.assert_any_call(
+            ["manila-data"], "foo", timeout=ANY
+        )
+
+        # DisableOpenStackApplicationStep calls.
+        extra_tfvars = manila.set_tfvars_on_disable(deployment)
+        extra_tfvars.update(manila.get_database_tfvars(deployment, enable=False))
+        tfhelper.update_tfvars_and_apply_tf.assert_any_call(
+            deployment.get_client.return_value,
+            manila._manifest,
+            tfvar_config="TerraformVarsOpenstack",
+            override_tfvars=extra_tfvars,
+        )
+        jhelper.wait_application_gone.assert_any_call(
+            manila.set_application_names(deployment), "openstack", timeout=ANY
+        )
+
+        # RemoveCephNFSOfferStep calls.
         jhelper.offer_exists.assert_called_once_with("foo", microceph.NFS_OFFER_NAME)
         jhelper.remove_offer.assert_called_once_with("foo", microceph.NFS_OFFER_NAME)
 

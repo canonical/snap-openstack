@@ -93,6 +93,8 @@ features:
           channel: 2024.1/edge
         manila-cephfs-k8s:
           channel: 2024.1/edge
+        manila-data:
+          channel: 2024.1/edge
   secrets:
     software:
       charms:
