@@ -280,6 +280,25 @@ class TestLocalConfigSRIOVStep:
     def test_has_prompts(self):
         assert self._get_step().has_prompts()
 
+    def test_is_skip_should_skip_false(self):
+        """Test is_skip returns COMPLETED when should_skip is False."""
+        step = self._get_step()
+        step.should_skip = False
+        result = step.is_skip()
+        assert result.result_type == ResultType.COMPLETED
+
+    def test_is_skip_should_skip_true(self):
+        """Test is_skip returns SKIPPED when should_skip is True."""
+        step = self._get_step()
+        step.should_skip = True
+        result = step.is_skip()
+        assert result.result_type == ResultType.SKIPPED
+
+    def test_should_skip_initialization(self):
+        """Test that should_skip is initialized to False in constructor."""
+        step = self._get_step()
+        assert step.should_skip is False
+
     @pytest.mark.parametrize(
         "prev_answers, accept_defaults, manifest_dev_specs, manifest_excl_devs, "
         "confirm_answers, prompt_answers, exp_dev_specs, exp_excl_devs",
@@ -527,3 +546,77 @@ class TestLocalConfigSRIOVStep:
         assert exp_excl_devs == step.variables["excluded_devices"]
 
         write_answers.assert_called_once_with(step.client, "PCI", step.variables)
+
+    def test_prompt_no_sriov_devices_sets_should_skip(
+        self,
+        load_answers,
+        write_answers,
+        question_bank,
+        fetch_nics,
+    ):
+        """Test that should_skip is set to True when no SR-IOV devices are detected."""
+        # Mock no SR-IOV devices available
+        nic_list = [
+            {
+                "pci_address": "0000:0:0.1",
+                "vendor_id": "0x0001",
+                "product_id": "0x0001",
+                "pf_pci_address": "",
+                "sriov_available": False,  # No SR-IOV available
+                "name": "eno1",
+            },
+        ]
+
+        load_answers.return_value = {}
+        fetch_nics.return_value = {
+            "nics": nic_list,
+            "candidates": [],
+        }
+        sriov_question = question_bank.return_value.configure_sriov
+        sriov_question.ask.return_value = True
+
+        step = self._get_step()
+        step.prompt(mock.sentinel.console)
+
+        # should_skip should be set to True when no SR-IOV devices are found
+        assert step.should_skip is True
+
+    def test_prompt_with_sriov_devices_does_not_set_should_skip(
+        self,
+        load_answers,
+        write_answers,
+        question_bank,
+        fetch_nics,
+        confirm_question,
+        prompt_question,
+    ):
+        """Test that should_skip remains False when SR-IOV devices are detected."""
+        # Mock SR-IOV devices available
+        nic_list = [
+            {
+                "pci_address": "0000:0:0.1",
+                "vendor_id": "0x0001",
+                "product_id": "0x0001",
+                "pf_pci_address": "",
+                "sriov_available": True,  # SR-IOV available
+                "name": "eno1",
+            },
+        ]
+
+        load_answers.return_value = {}
+        fetch_nics.return_value = {
+            "nics": nic_list,
+            "candidates": [],
+        }
+        sriov_question = question_bank.return_value.configure_sriov
+        sriov_question.ask.return_value = True
+        confirm_question.return_value.ask.return_value = (
+            False  # Don't whitelist any devices
+        )
+        prompt_question.return_value.ask.return_value = "physnet1"
+
+        step = self._get_step()
+        step.prompt(mock.sentinel.console)
+
+        # should_skip should remain False when SR-IOV devices are found
+        assert step.should_skip is False

@@ -96,10 +96,10 @@ K8S_CONFIG_KEY = "TerraformVarsK8S"
 K8S_ADDONS_CONFIG_KEY = "TerraformVarsK8SAddons"
 TRAEFIK_CONFIG_KEY = "TerraformVarsTraefikEndpoints"
 APPLICATION = "k8s"
-K8S_APP_TIMEOUT = 180  # 3 minutes, managing the application should be fast
+K8S_APP_TIMEOUT = 300  # 5 minutes, managing the application should be fast
 K8S_DESTROY_TIMEOUT = 900
 K8S_UNIT_TIMEOUT = 1800  # 30 minutes, adding / removing units can take a long time
-K8S_ENABLE_ADDONS_TIMEOUT = 180  # 3 minutes
+K8S_ENABLE_ADDONS_TIMEOUT = 300  # 5 minutes
 K8SD_SNAP_SOCKET = "/var/snap/k8s/common/var/lib/k8sd/state/control.socket"
 
 COREDNS_HPA = {

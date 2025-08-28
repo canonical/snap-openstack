@@ -303,7 +303,7 @@ class UpdateExternalProviderStep(BaseStep, JujuStepHelper):
 
         charm_name = "keystone-idp-{}".format(self._provider_name)
         apps = ["keystone", "horizon", charm_name]
-        app_queue: queue.Queue[str] = queue.Queue(maxsize=len(apps))
+        app_queue: queue.Queue[str] = queue.Queue()
         task = update_status_background(self, apps, app_queue, status)
         try:
             self.jhelper.wait_until_active(
@@ -509,7 +509,7 @@ class _BaseExternalProviderStep(_BaseProviderStep, _OIDCValidationMixin):
 
         charm_name = f"keystone-idp-{self._provider_name}"
         apps = ["keystone", "horizon", charm_name]
-        app_queue: queue.Queue[str] = queue.Queue(maxsize=len(apps))
+        app_queue: queue.Queue[str] = queue.Queue()
         task = update_status_background(self, apps, app_queue, status)
         try:
             self.jhelper.wait_until_active(
@@ -962,7 +962,7 @@ class DeployIdentityProvidersStep(BaseStep, JujuStepHelper):
         except TerraformException as e:
             return Result(ResultType.FAILED, str(e))
 
-        app_queue: queue.Queue[str] = queue.Queue(maxsize=len(apps))
+        app_queue: queue.Queue[str] = queue.Queue()
         task = update_status_background(self, apps, app_queue, status)
         try:
             self.jhelper.wait_until_active(

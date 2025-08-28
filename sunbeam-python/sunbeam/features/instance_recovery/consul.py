@@ -186,7 +186,7 @@ class DeployConsulClientStep(BaseStep):
 
         apps = ConsulFeature.set_consul_client_application_names(self.deployment)
         LOG.debug(f"Application monitored for readiness: {apps}")
-        status_queue: queue.Queue[str] = queue.Queue(maxsize=len(apps))
+        status_queue: queue.Queue[str] = queue.Queue()
         task = update_status_background(self, apps, status_queue, status)
         try:
             self.jhelper.wait_until_desired_status(

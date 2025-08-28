@@ -40,7 +40,7 @@ LOG = logging.getLogger(__name__)
 console = Console()
 
 APPLICATION = "ubuntu-pro"
-APP_TIMEOUT = 180  # 3 minutes, managing the application should be fast
+APP_TIMEOUT = 300  # 5 minutes, managing the application should be fast
 UNIT_TIMEOUT = 1200  # 15 minutes, adding / removing units can take a long time
 
 

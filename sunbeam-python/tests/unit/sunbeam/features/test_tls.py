@@ -713,3 +713,12 @@ class TestVaultTlsFeatureIsActive:
         with pytest.raises(click.ClickException) as exc:
             feature.is_vault_application_active(jhelper)
         assert "sealed" in str(exc.value)
+
+    def test_preseed_questions_content(self):
+        """Test that preseed_questions_content returns a flat list of strings."""
+        feature = vault.VaultTlsFeature()
+        content = feature.preseed_questions_content()
+
+        content = "\n".join(content)
+        assert "certificates:" in content
+        assert "TLS Certificates" in content

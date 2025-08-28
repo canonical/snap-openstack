@@ -458,11 +458,9 @@ class ClusterAddJujuUserStep(BaseStep):
 class ClusterUpdateJujuControllerStep(BaseStep, JujuStepHelper):
     """Save Juju controller in cluster database.
 
-    The controller IP is filtered based on the management_cidr
-    saved in the cluster database by default.
-    If filter_endpoints is False, the controller IP is not
-    filtered and all the controller IPs are saved in cluster
-    database.
+    The controller IPs are filtered based on the management_cidr
+    and if the filter did not return any IPs, all controller IPs
+    will be saved in cluster database.
     """
 
     def __init__(
@@ -470,7 +468,6 @@ class ClusterUpdateJujuControllerStep(BaseStep, JujuStepHelper):
         client: Client,
         controller: str,
         is_external: bool = False,
-        filter_endpoints: bool = True,
     ):
         super().__init__(
             "Add Juju controller to cluster DB",
@@ -480,7 +477,6 @@ class ClusterUpdateJujuControllerStep(BaseStep, JujuStepHelper):
         self.client = client
         self.controller = controller
         self.is_external = is_external
-        self.filter_endpoints = filter_endpoints
 
     def _extract_ip(self, ip) -> ipaddress.IPv4Address | ipaddress.IPv6Address:
         """Extract ip from ipv4 or ipv6 ip:port."""
@@ -495,13 +491,16 @@ class ClusterUpdateJujuControllerStep(BaseStep, JujuStepHelper):
     def filter_ips(self, ips: list[str], network_str: str | None) -> list[str]:
         """Filter ips missing from specified networks.
 
+        If there are no IPs from specified neworks, return all IPs.
+
         :param ips: list of ips to filter
         :param network_str: network to filter ips from, separated by comma
         """
         if network_str is None:
             return ips
+
         networks = [ipaddress.ip_network(network) for network in network_str.split(",")]
-        return list(
+        filtered_ips = list(
             filter(
                 lambda ip: any(
                     True for network in networks if self._extract_ip(ip) in network
@@ -509,6 +508,7 @@ class ClusterUpdateJujuControllerStep(BaseStep, JujuStepHelper):
                 ips,
             )
         )
+        return filtered_ips or ips
 
     def is_skip(self, status: Status | None = None) -> Result:
         """Determines if the step should be skipped or not.
@@ -521,10 +521,6 @@ class ClusterUpdateJujuControllerStep(BaseStep, JujuStepHelper):
         try:
             variables = questions.load_answers(self.client, BOOTSTRAP_CONFIG_KEY)
             self.networks = variables.get("bootstrap", {}).get("management_cidr")
-
-            # Do not filter api endpoints based on management cidr
-            if not self.filter_endpoints:
-                self.networks = None
 
             juju_controller = JujuController.load(self.client)
             LOG.debug(f"Controller(s) present at: {juju_controller.api_endpoints}")

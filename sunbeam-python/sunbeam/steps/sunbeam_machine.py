@@ -18,7 +18,7 @@ from sunbeam.core.terraform import TerraformHelper
 LOG = logging.getLogger(__name__)
 CONFIG_KEY = "TerraformVarsSunbeamMachine"
 APPLICATION = "sunbeam-machine"
-SUNBEAM_MACHINE_APP_TIMEOUT = 180  # 3 minutes, managing the application should be fast
+SUNBEAM_MACHINE_APP_TIMEOUT = 300  # 5 minutes, managing the application should be fast
 SUNBEAM_MACHINE_UNIT_TIMEOUT = (
     1200  # 20 minutes, adding / removing units can take a long time
 )

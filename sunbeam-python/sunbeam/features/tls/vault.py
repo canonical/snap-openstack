@@ -253,7 +253,7 @@ class VaultTlsFeature(TlsFeature):
             section_description="TLS Certificates",
             comment_out=True,
         )
-        return [content]
+        return content
 
     def _build_tls_config_maps(
         self,

@@ -56,7 +56,7 @@ else:
 LOG = logging.getLogger(__name__)
 CONFIG_KEY = "TerraformVarsHypervisor"
 APPLICATION = "openstack-hypervisor"
-HYPERVISOR_APP_TIMEOUT = 180  # 3 minutes, managing the application should be fast
+HYPERVISOR_APP_TIMEOUT = 300  # 5 minutes, managing the application should be fast
 HYPERVISOR_DESTROY_TIMEOUT = 600
 HYPERVISOR_UNIT_TIMEOUT = (
     1800  # 30 minutes, adding / removing units can take a long time

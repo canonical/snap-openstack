@@ -1,0 +1,39 @@
+name: Sync Git Tags
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+
+jobs:
+  sync-tags:
+    name: Sync Git Tags from Snap Builds
+    runs-on: ubuntu-latest
+    # Only run on main branch (for scheduled runs, this is automatic, but this ensures manual runs respect it too)
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: write # Required to push git tags
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure git
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Install uv
+        run: |
+          sudo snap install astral-uv --channel latest/stable --classic
+
+      - name: Run tag syncer
+        run: |
+          uv run .github/scripts/tag-syncer.py \
+            '~openstack-snappers/snap-openstack/+snap/openstack-caracal-candidate' \
+            '~openstack-snappers/+snap/openstack-caracal-edge'
+
+      - name: Push tags
+        run: |
+          git push --tags

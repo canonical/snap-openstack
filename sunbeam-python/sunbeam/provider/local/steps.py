@@ -293,6 +293,7 @@ class LocalConfigSRIOVStep(BaseStep):
         # Avoid the "Configure SR-IOV?" question if the user
         # specifically asked for this.
         self.show_initial_prompt = show_initial_prompt
+        self.should_skip = False
 
     def prompt(
         self,
@@ -458,7 +459,8 @@ class LocalConfigSRIOVStep(BaseStep):
                     )
 
         else:
-            LOG.info("No SR-IOV devics detected, skipping SR-IOV configuration.")
+            LOG.info("No SR-IOV devices detected, skipping SR-IOV configuration.")
+            self.should_skip = True
 
     def _get_nic_str_repr(self, nic: dict):
         """Get the nic string representation."""
@@ -496,6 +498,16 @@ class LocalConfigSRIOVStep(BaseStep):
                  False otherwise
         """
         return True
+
+    def is_skip(self, status: Status | None = None) -> Result:
+        """Determines if the step should be skipped or not.
+
+        :return: ResultType.SKIPPED if the Step should be skipped,
+                 ResultType.COMPLETED or ResultType.FAILED otherwise
+        """
+        if self.should_skip:
+            return Result(ResultType.SKIPPED)
+        return Result(ResultType.COMPLETED)
 
     def run(self, status: Status | None = None) -> Result:
         """Apply individual hypervisor settings."""

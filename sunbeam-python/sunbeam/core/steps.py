@@ -280,7 +280,7 @@ class AddMachineUnitsStep(BaseStep):
             return Result(ResultType.FAILED, str(e))
 
         apps = [self.application, *self.subordinate_applications]
-        status_queue: queue.Queue[str] = queue.Queue(maxsize=len(apps))
+        status_queue: queue.Queue[str] = queue.Queue()
         task = update_status_background(self, apps, status_queue, status)
         accepted_status = self.get_accepted_unit_status()
         try:

@@ -121,7 +121,7 @@ class BaseUpgrade(BaseStep, JujuStepHelper):
         except TerraformException as e:
             LOG.exception("Error upgrading cloud")
             return Result(ResultType.FAILED, str(e))
-        status_queue: queue.Queue[str] = queue.Queue(maxsize=len(apps))
+        status_queue: queue.Queue[str] = queue.Queue()
         task = update_status_background(self, apps, status_queue, status)
         try:
             self.jhelper.wait_until_desired_status(
