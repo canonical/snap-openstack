@@ -1,16 +1,15 @@
 # SPDX-FileCopyrightText: 2025 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
-"""CLI functionality for Pure Storage storage backend.
+"""CLI functionality for Dell Storage Center storage backend.
 
-This module contains all CLI-related code following the Hitachi pattern,
+This module contains all CLI-related code moved from backend.py,
 including command registration and helper functions.
 """
 
 from __future__ import annotations
 
 import json
-import logging
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -26,17 +25,16 @@ except Exception:  # yaml optional; handle gracefully at runtime
     yaml = None
 
 from sunbeam.core.deployment import Deployment
-from sunbeam.storage.backends.purestorage.backend import PureStorageBackend
+from sunbeam.storage.backends.dellsc.backend import DellSCBackend
 from sunbeam.storage.service import StorageBackendService
 
-LOG = logging.getLogger(__name__)
 console = Console()
 
 
-class PurestorageCLI:
-    """CLI functionality for Pure Storage storage backend."""
+class DellscCLI:
+    """CLI functionality for Dell Storage Center storage backend."""
 
-    def __init__(self, backend: PureStorageBackend):
+    def __init__(self, backend: DellSCBackend):
         self.backend = backend
 
     def _load_config_file(self, path: Optional[Path]) -> Dict[str, Any]:
@@ -53,7 +51,7 @@ class PurestorageCLI:
         return dict(json.loads(text))
 
     def register_add_cli(self, add: click.Group) -> None:  # noqa: C901
-        """Register 'sunbeam storage add purestorage'.
+        """Register 'sunbeam storage add dellsc'.
 
         Includes typed options and a --config-file flag.
         """
@@ -178,10 +176,10 @@ class PurestorageCLI:
             "- In non-interactive mode, --name is required (or supplied via "
             "--config-file).\n\n"
             "Examples:\n"
-            "  sunbeam storage add purestorage\n"
-            "  sunbeam storage add purestorage --config-file purestorage.yaml\n"
-            "  sunbeam storage add purestorage --name mypure --san-ip 10.0.0.10 "
-            "--pure-api-token mytoken\n"
+            "  sunbeam storage add dellsc\n"
+            "  sunbeam storage add dellsc --config-file dellsc.yaml\n"
+            "  sunbeam storage add dellsc --name mydellsc --san-ip 10.0.0.10 "
+            "--protocol fc\n"
         )
         cmd = click.Command(
             name=self.backend.name,
@@ -199,13 +197,13 @@ class PurestorageCLI:
         config_options: click.Group,
         deployment: Deployment,
     ) -> None:
-        """Register management commands for Pure Storage backend."""
+        """Register management commands for Dell Storage Center backend."""
 
         @click.command(name=self.backend.name)
         @click.argument("backend_name", type=str)
         @click.option("--yes", "-y", is_flag=True, help="Skip confirmation prompt")
         @click.pass_context
-        def remove_purestorage(ctx, backend_name: str, yes: bool):
+        def remove_dellsc(ctx, backend_name: str, yes: bool):
             service = self.backend._get_service(deployment)
             if not service.backend_exists(backend_name, self.backend.name):
                 console.print(f"[red]Error: Backend '{backend_name}' not found[/red]")
@@ -221,17 +219,17 @@ class PurestorageCLI:
                 console.print(f"[red]Error removing backend: {e}[/red]")
                 raise click.Abort()
 
-        remove.add_command(remove_purestorage)
+        remove.add_command(remove_dellsc)
 
         @click.command(name=self.backend.name)
         @click.argument("backend_name", type=str)
         @click.pass_context
-        def config_show_purestorage(ctx, backend_name: str):
+        def config_show_dellsc(ctx, backend_name: str):
             service = self.backend._get_service(deployment)
             config = service.get_backend_config(backend_name, self.backend.name)
             self.backend.display_config_table(backend_name, config)
 
-        config_show.add_command(config_show_purestorage)
+        config_show.add_command(config_show_dellsc)
 
         # Build typed options for config set (only provided options are updated)
         def _build_set_params() -> list:
@@ -338,9 +336,9 @@ class PurestorageCLI:
         config_set.add_command(set_cmd)
 
         @click.command(name=self.backend.name)
+        @click.argument("backend_name", type=str, required=False)
         @click.pass_context
-        def config_options_purestorage(ctx):
-             self.backend.display_config_options()
-            
+        def config_options_dellsc(ctx, backend_name: str | None = None):
+            self.backend.display_config_options()
 
-        config_options.add_command(config_options_purestorage)
+        config_options.add_command(config_options_dellsc)
