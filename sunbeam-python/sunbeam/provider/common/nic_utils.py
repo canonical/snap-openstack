@@ -21,6 +21,14 @@ def fetch_nics(client: Client, node_name: str, jhelper: JujuHelper, model: str):
     return json.loads(action_result.get("result", "{}"))
 
 
+def get_nic_str_repr(nic: dict):
+    """Get the string representation for a nic retrieved through list-nics."""
+    vendor = nic.get("vendor_name") or nic.get("vendor_id") or "Unknown vendor"
+    product = nic.get("product_name") or nic.get("product_id") or "Unknown product"
+    name = nic.get("name") or "Unknown ifname"
+    return f"{vendor} {product} ({name})"
+
+
 def is_sriov_nic_whitelisted(
     node_name: str,
     nic: dict,

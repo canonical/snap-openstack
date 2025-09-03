@@ -18,6 +18,7 @@ from sunbeam.clusterd.service import ClusterServiceUnavailableException
 from sunbeam.commands.configure import (
     CLOUD_CONFIG_SECTION,
     PCI_CONFIG_SECTION,
+    BaseConfigDPDKStep,
     SetHypervisorUnitsOptionsStep,
 )
 from sunbeam.core.common import (
@@ -434,7 +435,7 @@ class LocalConfigSRIOVStep(BaseStep):
                 )
 
                 for nic in sriov_nics:
-                    nic_str_repr = self._get_nic_str_repr(nic)
+                    nic_str_repr = nic_utils.get_nic_str_repr(nic)
                     whitelisted, physnet = nic_utils.is_sriov_nic_whitelisted(
                         self.node_name, nic, pci_whitelist, excluded_devices
                     )
@@ -466,13 +467,6 @@ class LocalConfigSRIOVStep(BaseStep):
             LOG.info("No SR-IOV devices detected, skipping SR-IOV configuration.")
             self.should_skip = True
 
-    def _get_nic_str_repr(self, nic: dict):
-        """Get the nic string representation."""
-        vendor = nic.get("vendor_name") or nic.get("vendor_id") or "Unknown vendor"
-        product = nic.get("product_name") or nic.get("product_id") or "Unknown product"
-        name = nic.get("name") or "Unknown ifname"
-        return f"{vendor} {product} ({name})"
-
     def _show_sriov_nics(
         self,
         console: Console,
@@ -490,7 +484,7 @@ class LocalConfigSRIOVStep(BaseStep):
                 self.node_name, nic, pci_whitelist, excluded_devices
             )
             checkbox = "X" if whitelisted else " "
-            nic_str_repr = self._get_nic_str_repr(nic)
+            nic_str_repr = nic_utils.get_nic_str_repr(nic)
 
             nic_info = f"  \\[{checkbox}] {nic_str_repr} \\[physnet: {physnet}]"
             console.print(nic_info)
@@ -630,3 +624,126 @@ class LocalEndpointsConfigurationStep(EndpointsConfigurationStep):
                 type(loadbalancer_range).__name__,
             )
             return False
+
+
+class LocalConfigDPDKStep(BaseConfigDPDKStep):
+    """Prompt the user for DPDK configuration.
+
+    Local deployment steps.
+    """
+
+    def __init__(
+        self,
+        client: Client,
+        node_name: str,
+        jhelper: JujuHelper,
+        model: str,
+        manifest: Manifest | None = None,
+        accept_defaults: bool = False,
+    ):
+        super().__init__(client, jhelper, model, manifest, accept_defaults)
+        self.node_name = node_name
+
+    def _prompt_nics(
+        self,
+        console: Console | None = None,
+        show_hint: bool = False,
+    ) -> None:
+        if not console:
+            return
+
+        if not self.variables.get("nics"):
+            self.variables["nics"] = {}
+        previous_nics = self.variables["nics"].get(self.node_name) or []
+
+        dpdk_manifest_ports = self._get_dpdk_manifest_ports() or {}
+        if dpdk_manifest_ports.get(self.node_name):
+            self.nics = dpdk_manifest_ports[self.node_name]
+            logging.debug("DPDK ports specified through the manifest: %s", self.nics)
+            return
+
+        with console:
+            nics = nic_utils.fetch_nics(
+                self.client, self.node_name, self.jhelper, self.model
+            )
+
+        all_nics: list[dict] = nics.get("nics") or []
+        candidate_nics: list[dict] = []
+        enabled_nic_names: list[str] = []
+
+        LOG.debug("Determining DPDK candidate interfaces.")
+        for nic in all_nics:
+            if not nic.get("name"):
+                # Note that the interface name will no longer be visible once
+                # assigned to the "vfio-pci" driver.
+                LOG.debug("No interface name: %s, skipping.", nic.get("pci_address"))
+                continue
+            if nic.get("pf_pci_address"):
+                LOG.debug("Ignoring SR-IOV VF: %s.", nic.get("name"))
+                continue
+            if not nic.get("pci_address"):
+                LOG.debug("Not a PCI device: %s.", nic.get("name"))
+                continue
+            if nic.get("configured"):
+                LOG.debug("The interface has an IP assigned, skipping.")
+                continue
+
+            candidate_nics.append(nic)
+
+        if not candidate_nics:
+            LOG.info("No candidate DPDK interfaces.")
+            return
+
+        console.print("Configuring DPDK physical interfaces.")
+        console.print(
+            "\nWARNING: the specified interfaces will be reconfigured to use a "
+            "DPDK-compatible driver (vfio-pci by default) and will no longer "
+            "be visible to the host."
+        )
+        console.print(
+            "Any bonds and bridges defined in MAAS/Netplan will be "
+            "updated to use the new DPDK OVS ports."
+        )
+        console.print("\nDPDK candidate interfaces:")
+        for nic in candidate_nics:
+            nic_str_repr = nic_utils.get_nic_str_repr(nic)
+            console.print(f"* {nic_str_repr}")
+
+        for nic in candidate_nics:
+            nic_str_repr = nic_utils.get_nic_str_repr(nic)
+            question = f"Enable interface DPDK mode? {nic_str_repr}"
+            enable_dpdk = sunbeam.core.questions.ConfirmQuestion(
+                question, default_value=(nic["name"] in previous_nics)
+            ).ask()
+            if enable_dpdk:
+                enabled_nic_names.append(nic["name"])
+
+        self.nics = enabled_nic_names
+        self.variables["nics"][self.node_name] = enabled_nic_names
+
+    def run(self, status: Status | None = None) -> Result:
+        """Apply individual hypervisor settings."""
+        app = "openstack-hypervisor"
+        action_cmd = "set-hypervisor-local-settings"
+        name = self.node_name
+
+        self.update_status(status, f"setting DPDK ports for {name}: {self.nics}")
+
+        node = self.client.cluster.get_node_info(name)
+        self.machine_id = str(node.get("machineid"))
+        unit = self.jhelper.get_unit_from_machine(app, self.machine_id, self.model)
+        try:
+            self.jhelper.run_action(
+                unit,
+                self.model,
+                action_cmd,
+                action_params={
+                    "ovs-dpdk-ports": ",".join(self.nics or ""),
+                },
+            )
+        except (ActionFailedException, TimeoutError):
+            msg = f"Unable to set hypervisor {name} configuration"
+            LOG.error(msg, exc_info=True)
+            return Result(ResultType.FAILED, msg)
+
+        return Result(ResultType.COMPLETED)

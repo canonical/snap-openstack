@@ -246,6 +246,15 @@ class CoreConfig(pydantic.BaseModel):
         ingress_public: _Endpoint | None = pydantic.Field(None, alias="ingress-public")
         ingress_rgw: _Endpoint | None = pydantic.Field(None, alias="ingress-rgw")
 
+    class _DPDK(pydantic.BaseModel):
+        enabled: bool = False
+        datapath_cores: int = 0
+        control_plane_cores: int = 0
+        # MB
+        memory: int = 0
+        driver: str = "vfio-pci"
+        ports: dict[str, list[str]]
+
     proxy: _ProxyConfig | None = None
     bootstrap: _BootstrapConfig | None = None
     database: str | None = None
@@ -258,6 +267,7 @@ class CoreConfig(pydantic.BaseModel):
     external_network: _ExternalNetwork | None = None
     microceph_config: pydantic.RootModel[dict[str, _HostMicroCephConfig]] | None = None
     pci: _PCI | None = None
+    dpdk: _DPDK | None = None
 
 
 class CoreManifest(pydantic.BaseModel):

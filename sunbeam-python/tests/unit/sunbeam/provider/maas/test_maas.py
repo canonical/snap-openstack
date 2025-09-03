@@ -5,7 +5,7 @@ import copy
 import json
 from builtins import ConnectionRefusedError
 from ssl import SSLError
-from unittest.mock import MagicMock, Mock
+from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 from lightkube import ApiError
@@ -29,6 +29,7 @@ from sunbeam.provider.maas.steps import (
     IpRangesCheck,
     MaasAddMachinesToClusterdStep,
     MaasBootstrapJujuStep,
+    MaasConfigDPDKStep,
     MaasConfigureMicrocephOSDStep,
     MaasCreateLoadBalancerIPPoolsStep,
     MaasDeployInfraMachinesStep,
@@ -1582,3 +1583,67 @@ class TestMaasCreateLoadBalancerIPPoolsStep:
         assert step.kube.replace.mock_calls[0][1][0].spec.get("addresses") == [
             "10.149.100.200-10.149.100.210"
         ]
+
+
+class TestMaasConfigDPDKStep:
+    @patch("sunbeam.provider.maas.client.MaasClient")
+    def _get_step(self, mock_maas_client, manifest=None):
+        return MaasConfigDPDKStep(
+            deployment=Mock(),
+            client=Mock(),
+            jhelper=Mock(),
+            model="test-model",
+            manifest=manifest,
+            accept_defaults=True,
+        )
+
+    @patch("sunbeam.provider.maas.client.list_machines")
+    def test_get_nics(self, mock_list_machines):
+        mock_list_machines.return_value = [
+            {
+                "hostname": "node1",
+                "nics": [
+                    {"name": "eth1", "tags": ["some-tag", "neutron:dpdk"]},
+                    {"name": "eth2", "tags": []},
+                ],
+            },
+            {
+                "hostname": "node2",
+                "nics": [
+                    {"name": "eth1", "tags": ["some-tag"]},
+                    {"name": "eth2", "tags": ["neutron:dpdk"]},
+                ],
+            },
+            {
+                "hostname": "node3",
+                "nics": [
+                    {"name": "eth1", "tags": []},
+                    {"name": "eth2", "tags": []},
+                ],
+            },
+            {
+                "hostname": "node4",
+                "nics": [
+                    {"name": "eth1", "tags": []},
+                    {"name": "eth2", "tags": []},
+                ],
+            },
+        ]
+
+        manifest = Mock()
+        manifest.core.config.dpdk.ports = {
+            "node2": ["eth1"],
+            "node3": ["eth1"],
+        }
+
+        expected_nics = {
+            "node1": ["eth1"],
+            "node2": ["eth2", "eth1"],
+            "node3": ["eth1"],
+            "node4": [],
+        }
+
+        step = self._get_step(manifest=manifest)
+        step._prompt_nics()
+
+        assert expected_nics == step.nics

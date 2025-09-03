@@ -3,6 +3,7 @@
 
 import ast
 import builtins
+import collections
 import copy
 import ipaddress
 import json
@@ -31,6 +32,7 @@ from sunbeam.commands.configure import (
     CLOUD_CONFIG_SECTION,
     PCI_CONFIG_SECTION,
     VARIABLE_DEFAULTS,
+    BaseConfigDPDKStep,
     SetHypervisorUnitsOptionsStep,
     ext_net_questions,
 )
@@ -2380,3 +2382,94 @@ class MaasEndpointsConfigurationStep(EndpointsConfigurationStep):
             if is_in_range:
                 return True
         return False
+
+
+class MaasConfigDPDKStep(BaseConfigDPDKStep):
+    """Prompt user for SR-IOV configuration."""
+
+    def __init__(
+        self,
+        deployment: maas_deployment.MaasDeployment,
+        client: Client,
+        jhelper: JujuHelper,
+        model: str,
+        manifest: Manifest | None = None,
+        accept_defaults: bool = False,
+    ):
+        super().__init__(client, jhelper, model, manifest, accept_defaults)
+        self.maas_client = maas_client.MaasClient.from_deployment(deployment)
+
+    def _get_compute_machines(self) -> list:
+        return maas_client.list_machines(
+            self.maas_client, tags=maas_deployment.RoleTags.COMPUTE.value
+        )
+
+    def _get_dpdk_nics_from_maas_tags(self, machine: dict) -> list[str]:
+        # Retrieve nics that contain the "neutron:dpdk" tag.
+
+        dpdk_nics = []
+        for nic in machine["nics"]:
+            if "neutron:dpdk" in nic["tags"]:
+                dpdk_nics.append(nic["name"])
+        return dpdk_nics
+
+    def _get_dpdk_port_map(self, compute_machines: list[dict]) -> dict[str, list[str]]:
+        # The list of DPDK interfaces for each compute node.
+        dpdk_port_map = collections.defaultdict(list)
+
+        # Get DPDK nics defined using MAAS tags.
+        for machine in compute_machines:
+            node_name = machine["hostname"]
+            dpdk_port_map[node_name] = self._get_dpdk_nics_from_maas_tags(machine)
+
+        # Get DPDK nics defined in the manifest.
+        dpdk_manifest_ports = self._get_dpdk_manifest_ports() or {}
+        # Merge the port lists.
+        for node_name, ports in dpdk_manifest_ports.items():
+            for port in ports:
+                if port not in dpdk_port_map[node_name]:
+                    dpdk_port_map[node_name].append(port)
+
+        return dict(dpdk_port_map)
+
+    def _prompt_nics(
+        self,
+        console: Console | None = None,
+        show_hint: bool = False,
+    ) -> None:
+        # In MAAS mode, we'll fetch the nics from the manifest and
+        # MASS tags, without actually showing user prompts.
+        compute_machines = self._get_compute_machines()
+        self.nics = self._get_dpdk_port_map(compute_machines)
+
+    def run(self, status: Status | None = None) -> Result:
+        """Apply individual hypervisor settings."""
+        self.update_status(status, "setting DPDK ports")
+
+        compute_machines = self._get_compute_machines()
+        for machine in compute_machines:
+            node_name = machine["hostname"]
+            dpdk_ports = self.nics.get(node_name) or []
+            LOG.debug("DPDK ports [%s]: %s", node_name, dpdk_ports)
+
+            app = "openstack-hypervisor"
+            action_cmd = "set-hypervisor-local-settings"
+
+            node = self.client.cluster.get_node_info(node_name)
+            machine_id = str(node.get("machineid"))
+            unit = self.jhelper.get_unit_from_machine(app, machine_id, self.model)
+            try:
+                self.jhelper.run_action(
+                    unit,
+                    self.model,
+                    action_cmd,
+                    action_params={
+                        "ovs-dpdk-ports": ",".join(dpdk_ports or ""),
+                    },
+                )
+            except (ActionFailedException, TimeoutError):
+                msg = f"Unable to set hypervisor {node_name} configuration"
+                LOG.error(msg, exc_info=True)
+                return Result(ResultType.FAILED, msg)
+
+        return Result(ResultType.COMPLETED)

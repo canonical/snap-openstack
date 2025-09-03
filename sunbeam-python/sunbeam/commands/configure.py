@@ -5,6 +5,7 @@ import ipaddress
 import json
 import logging
 import os
+import typing
 from pathlib import Path
 
 import click
@@ -28,6 +29,8 @@ from sunbeam.core.terraform import (
 
 CLOUD_CONFIG_SECTION = "CloudConfig"
 PCI_CONFIG_SECTION = "PCI"
+DPDK_CONFIG_SECTION = "DPDK"
+
 LOG = logging.getLogger(__name__)
 console = Console()
 
@@ -169,6 +172,55 @@ def ext_net_questions_local_only():
     }
 
 
+def dpdk_questions():
+    return {
+        "enabled": sunbeam.core.questions.ConfirmQuestion(
+            "Enable and configure DPDK",
+            default_value=False,
+            description=(
+                "Enable OVS DPDK data path, handling packets in userspace. It provides "
+                "improved performance compared to the standard OVS kernel data path. "
+                "DPDK capable network interfaces are required."
+            ),
+        ),
+        "datapath_cores": sunbeam.core.questions.PromptQuestion(
+            "The number of cores allocated to OVS datapath processing",
+            default_value=0,
+            description=(
+                "The specified number of cores will be allocated to OVS datapath "
+                "processing, taking into account the NUMA location of physical "
+                "DPDK ports. Isolated cpu cores must be preconfigured using kernel "
+                "parameters."
+            ),
+        ),
+        "control_plane_cores": sunbeam.core.questions.PromptQuestion(
+            "The number of cores allocated to OVS control plane processing",
+            default_value=0,
+            description=(
+                "The specified number of cores will be allocated to OVS control "
+                "plane processing, taking into account the NUMA location of physical "
+                "DPDK ports. Isolated cpu cores must be preconfigured using kernel "
+                "parameters."
+            ),
+        ),
+        "memory": sunbeam.core.questions.PromptQuestion(
+            "The amount of memory in MB allocated to OVS from huge pages",
+            default_value=0,
+            description=(
+                "The total amount of memory in MB to allocate from huge pages for OVS "
+                "DPDK. The memory will be distributed across NUMA nodes based on the "
+                "location of the physical DPDK ports. Currently uses 1GB pages, make "
+                "sure to specify a multiple of 1024 and preallocate enough 1GB pages."
+            ),
+        ),
+        "driver": sunbeam.core.questions.PromptQuestion(
+            "The number of cores allocated to OVS control plane processing",
+            default_value="vfio-pci",
+            description=("The DPDK-compatible driver used for DPDK physical ports."),
+        ),
+    }
+
+
 VARIABLE_DEFAULTS: dict[str, dict[str, str | int | bool | None]] = {
     "user": {
         "username": "demo",
@@ -283,6 +335,20 @@ def get_pci_whitelist_config(client: Client) -> dict:
     charm_config = {}
     variables = sunbeam.core.questions.load_answers(client, PCI_CONFIG_SECTION)
     charm_config["pci-device-specs"] = json.dumps(variables.get("pci_whitelist", "[]"))
+    return charm_config
+
+
+def get_dpdk_config(client: Client) -> dict:
+    charm_config = {}
+    variables = sunbeam.core.questions.load_answers(client, DPDK_CONFIG_SECTION)
+    charm_config["dpdk-enabled"] = variables.get("enabled", False)
+    charm_config["dpdk-datapath-cores"] = int(variables.get("datapath_cores") or 0)
+    charm_config["dpdk-control-plane-cores"] = int(
+        variables.get("control_plane_cores") or 0
+    )
+    charm_config["dpdk-memory"] = int(variables.get("memory") or 0)
+    charm_config["dpdk-driver"] = variables.get("driver") or "vfio-pci"
+    charm_config["dpdk-memory"] = int(variables.get("memory") or 0)
     return charm_config
 
 
@@ -617,6 +683,111 @@ class SetHypervisorUnitsOptionsStep(BaseStep):
                 LOG.debug(_message, exc_info=True)
                 return Result(ResultType.FAILED, _message)
         return Result(ResultType.COMPLETED)
+
+
+class BaseConfigDPDKStep(BaseStep):
+    """Prompt the user for DPDK configuration.
+
+    Subclasses are expected to provide the dpdk port list based on the
+    deployment type (local or maas).
+    """
+
+    def __init__(
+        self,
+        client: Client,
+        jhelper: JujuHelper,
+        model: str,
+        manifest: Manifest | None = None,
+        accept_defaults: bool = False,
+    ):
+        super().__init__("DPDK Settings", "Configure DPDK")
+        self.client = client
+        self.jhelper = jhelper
+        self.model = model
+        self.manifest = manifest
+        self.accept_defaults = accept_defaults
+        self.variables: dict = {}
+
+        self.nics: typing.Any = None
+
+    def has_prompts(self) -> bool:
+        """Returns true if the step has prompts that it can ask the user."""
+        return True
+
+    def _prompt_nics(
+        self,
+        console: Console | None = None,
+        show_hint: bool = False,
+    ) -> None:
+        pass
+
+    def _get_dpdk_manifest_config(self) -> typing.Any:
+        if not self.manifest:
+            return None
+        return self.manifest.core.config.dpdk
+
+    def _get_dpdk_manifest_ports(self) -> dict:
+        dpdk_manifest_config = self._get_dpdk_manifest_config()
+        if dpdk_manifest_config and dpdk_manifest_config.ports:
+            return dpdk_manifest_config.ports
+        return {}
+
+    def prompt(
+        self,
+        console: Console | None = None,
+        show_hint: bool = False,
+    ) -> None:
+        """Prompt the user for DPDK configuration."""
+        self.variables = sunbeam.core.questions.load_answers(
+            self.client, DPDK_CONFIG_SECTION
+        )
+        preseed = {}
+        if self.manifest and (dpdk := self.manifest.core.config.dpdk):
+            preseed = dpdk.model_dump(by_alias=True)
+
+        dpdk_bank = sunbeam.core.questions.QuestionBank(
+            questions=dpdk_questions(),
+            console=console,
+            preseed=preseed,
+            previous_answers=self.variables,
+            accept_defaults=self.accept_defaults,
+            show_hint=show_hint,
+        )
+
+        self.variables["enabled"] = dpdk_bank.enabled.ask()
+        if not self.variables["enabled"]:
+            LOG.debug("DPDK disabled.")
+        else:
+            self._prompt_nics(console, show_hint)
+
+            self.variables["datapath_cores"] = dpdk_bank.datapath_cores.ask()
+            self.variables["control_plane_cores"] = dpdk_bank.control_plane_cores.ask()
+            self.variables["memory"] = dpdk_bank.memory.ask()
+            if int(self.variables["memory"] or 0) % 1024:
+                raise click.ClickException(
+                    "DPDK uses 1GB huge pages, please specify a multple of 1024. "
+                    "Received: %s (MB)." % self.variables["memory"]
+                )
+            self.variables["driver"] = dpdk_bank.driver.ask()
+
+        sunbeam.core.questions.write_answers(
+            self.client, DPDK_CONFIG_SECTION, self.variables
+        )
+
+    def run(self, status: Status | None = None) -> Result:
+        """Run the step to completion."""
+        return Result(ResultType.COMPLETED)
+
+    def is_skip(self, status: Status | None = None) -> Result:
+        """Determines if the step should be skipped or not.
+
+        :return: ResultType.SKIPPED if the Step should be skipped,
+                 ResultType.COMPLETED or ResultType.FAILED otherwise
+        """
+        if not self.nics:
+            return Result(ResultType.SKIPPED)
+        else:
+            return Result(ResultType.COMPLETED)
 
 
 def _sorter(cmd: tuple[str, click.Command]) -> int:
