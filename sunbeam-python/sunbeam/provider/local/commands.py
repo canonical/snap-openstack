@@ -77,6 +77,7 @@ from sunbeam.provider.base import ProviderBase
 from sunbeam.provider.local.deployment import LOCAL_TYPE, LocalDeployment
 from sunbeam.provider.local.steps import (
     LocalClusterStatusStep,
+    LocalConfigDPDKStep,
     LocalConfigSRIOVStep,
     LocalEndpointsConfigurationStep,
     LocalSetHypervisorUnitsOptionsStep,
@@ -213,6 +214,7 @@ class LocalProvider(ProviderBase):
         init.add_command(cluster)
         configure.add_command(configure_cmd)
         configure.add_command(configure_sriov)
+        configure.add_command(configure_dpdk)
         cluster.add_command(bootstrap)
         cluster.add_command(add)
         cluster.add_command(join)
@@ -916,6 +918,14 @@ def bootstrap(
                     manifest,
                     accept_defaults,
                 ),
+                LocalConfigDPDKStep(
+                    client,
+                    fqdn,
+                    jhelper,
+                    deployment.openstack_machines_model,
+                    manifest,
+                    accept_defaults,
+                ),
                 ReapplyHypervisorTerraformPlanStep(
                     client,
                     hypervisor_tfhelper,
@@ -977,6 +987,62 @@ def configure_sriov(
             manifest,
             accept_defaults,
             show_initial_prompt=False,
+        ),
+        ReapplyHypervisorTerraformPlanStep(
+            client,
+            tfhelper_hypervisor,
+            jhelper,
+            manifest,
+            model=deployment.openstack_machines_model,
+        ),
+    ]
+    run_plan(plan, console, show_hints)
+
+
+@click.command("dpdk")
+@click.option("-a", "--accept-defaults", help="Accept all defaults.", is_flag=True)
+@click.option(
+    "-m",
+    "--manifest",
+    "manifest_path",
+    help="Manifest file.",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+)
+@click_option_show_hints
+@click.pass_context
+def configure_dpdk(
+    ctx: click.Context,
+    manifest_path: Path | None = None,
+    accept_defaults: bool = False,
+    show_hints: bool = False,
+) -> None:
+    """Configure DPDK."""
+    deployment: LocalDeployment = ctx.obj
+    client = deployment.get_client()
+    fqdn = utils.get_fqdn()
+
+    node = client.cluster.get_node_info(fqdn)
+
+    if "compute" not in node["role"]:
+        LOG.info("DPDK can only be configured on compute nodes.")
+        return
+
+    manifest = deployment.get_manifest(manifest_path)
+    jhelper = JujuHelper(deployment.juju_controller)
+
+    admin_credentials = retrieve_admin_credentials(jhelper, OPENSTACK_MODEL)
+    admin_credentials["OS_INSECURE"] = "true"
+
+    tfhelper_hypervisor = deployment.get_tfhelper("hypervisor-plan")
+
+    plan: list[BaseStep] = [
+        LocalConfigDPDKStep(
+            client,
+            fqdn,
+            jhelper,
+            deployment.openstack_machines_model,
+            manifest,
+            accept_defaults,
         ),
         ReapplyHypervisorTerraformPlanStep(
             client,
@@ -1340,6 +1406,14 @@ def join(
                     manifest=manifest,
                 ),
                 LocalConfigSRIOVStep(
+                    client,
+                    name,
+                    jhelper,
+                    deployment.openstack_machines_model,
+                    manifest,
+                    accept_defaults,
+                ),
+                LocalConfigDPDKStep(
                     client,
                     name,
                     jhelper,

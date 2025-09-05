@@ -15,6 +15,7 @@ from sunbeam.clusterd.service import (
     NodeNotExistInClusterException,
 )
 from sunbeam.commands.configure import (
+    get_dpdk_config,
     get_external_network_configs,
     get_pci_whitelist_config,
 )
@@ -419,6 +420,10 @@ class ReapplyHypervisorTerraformPlanStep(BaseStep):
         pci_whitelist_config = get_pci_whitelist_config(self.client)
         LOG.debug("Adding PCI whitelist configuration: %s", pci_whitelist_config)
         self.extra_tfvars["charm_config"].update(pci_whitelist_config)
+
+        dpdk_config = get_dpdk_config(self.client)
+        LOG.debug("Adding DPDK configuration: %s", dpdk_config)
+        self.extra_tfvars["charm_config"].update(dpdk_config)
 
         statuses = ["active", "unknown"]
         if len(self.client.cluster.list_nodes_by_role("storage")) < 1:
