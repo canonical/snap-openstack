@@ -1,6 +1,7 @@
 variable "libvirt_uri" {
-  type = string
-  default = "qemu:///system"
+  description = "Libvirt connection URI"
+  type        = string
+  default     = "qemu:///system"
 }
 
 variable "nodes_count" {
