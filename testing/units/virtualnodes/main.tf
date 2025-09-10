@@ -28,6 +28,7 @@ locals {
 resource "libvirt_network" "generic_net" {
   name = "generic_net"
   mode = "nat"
+  autostart = true
 
   domain = var.generic_net_domain
   addresses = local.generic_net_addresses
@@ -40,6 +41,7 @@ resource "libvirt_network" "generic_net" {
 resource "libvirt_network" "external_net" {
   name = "external_net"
   mode = "nat"
+  autostart = true
 
   domain = var.external_net_domain
   addresses = local.external_net_addresses
