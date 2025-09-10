@@ -2,3 +2,4 @@
 *.tfstate.backup
 *.lock.hcl
 .terraform/
+.terragrunt-cache/
