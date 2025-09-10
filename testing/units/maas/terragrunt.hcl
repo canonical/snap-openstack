@@ -11,7 +11,7 @@ dependency "virtualnodes" {
   config_path = "../virtualnodes"
 
   mock_outputs = {
-    maas_api_key               = "abc123-apikey"
+    maas_api_key               = "ConsumerSecret:TokenKey:TokenSecret"
     maas_controller_ip_address = "1.2.3.4"
     nodes = []
   }
