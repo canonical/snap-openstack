@@ -86,6 +86,7 @@ resource "libvirt_cloudinit_disk" "maas_controller_cloudinit" {
     {
       address        = local.maas_controller_ip_addr
       dns_server     = var.upstream_dns_server
+      maas_hostname  = var.maas_hostname
       networks       = "generic:172.16.1.0/24"
       ssh_public_key = file(var.ssh_public_key_path)
     })
@@ -112,7 +113,7 @@ resource "libvirt_domain" "maas_controller" {
   }
   network_interface {
     network_id     = libvirt_network.generic_net.id
-    hostname       = "maas_controller"
+    hostname       = var.maas_hostname
     addresses      = [local.maas_controller_ip_addr]
     mac            = var.maas_controller_mac_address
   }

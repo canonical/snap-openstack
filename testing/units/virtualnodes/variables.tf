@@ -28,6 +28,12 @@ variable "maas_controller_vcpu" {
   default = 2
 }
 
+variable "maas_hostname" {
+  description = "MAAS Controller hostname"
+  type        = string
+  default     = "maas-controller"
+}
+
 variable "node_rootfs_size" {
   description = "Node rootfs disk size (in bytes)"
   type        = number
