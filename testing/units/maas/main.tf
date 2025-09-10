@@ -101,10 +101,6 @@ data "maas_rack_controller" "rack_controller" {
   hostname = var.maas_hostname
 }
 
-data "maas_subnet" "generic_subnet" {
-  cidr = local.generic_net_addresses[0]
-}
-
 resource "maas_space" "space_external" {
   name = "space-external"
 }
@@ -124,10 +120,10 @@ import {
 }
 
 resource "maas_fabric" "generic_fabric" {
-  name = "generic-fabric"
+  name = "fabric-0"
 }
 
-# VLAN
+# VLAN - Generic
 data "maas_vlan" "generic_vlan" {
   fabric = resource.maas_fabric.generic_fabric.id
   vlan   = 0
@@ -135,29 +131,41 @@ data "maas_vlan" "generic_vlan" {
 
 import {
   to = maas_vlan.generic_vlan
-  id = "${data.maas_vlan.generic_vlan.fabric}:${data.maas_vlan.generic_vlan.id}"
+  id = "${data.maas_fabric.generic_fabric.name}:0"
 }
 
 resource "maas_vlan" "generic_vlan" {
   fabric = maas_fabric.generic_fabric.id
   vid    = 0
-  name   = "Default VLAN"
-  space  = maas_space.space_generic
+  name   = "untagged"
+  space  = maas_space.space_generic.name
+}
+
+# Subent - generic
+
+data "maas_subnet" "generic_subnet" {
+  cidr   = local.generic_net_addresses[0]
+}
+
+import {
+  to = maas_subnet.generic_subnet
+  id = "${data.maas_subnet.generic_subnet.cidr}"
 }
 
 resource "maas_subnet" "generic_subnet" {
+  name   = local.generic_net_addresses[0]
   cidr   = local.generic_net_addresses[0]
   fabric = maas_fabric.generic_fabric.id
-  vlan   = maas_vlan.generic_vlan.id
+  vlan   = maas_vlan.generic_vlan.vid
 }
 
-resource "maas_machine" "node" {
-  count = length(var.nodes)
-  hostname = var.nodes[count.index].name
-  power_type = "virsh"
-  power_parameters = jsonencode({
-    power_address = var.libvirt_uri
-    power_id      = var.nodes[count.index].name
-  })
-  pxe_mac_address = var.nodes[count.index].mac_address
-}
+# resource "maas_machine" "node" {
+#   count = length(var.nodes)
+#   hostname = var.nodes[count.index].name
+#   power_type = "virsh"
+#   power_parameters = jsonencode({
+#     power_address = var.libvirt_uri
+#     power_id      = var.nodes[count.index].name
+#   })
+#   pxe_mac_address = var.nodes[count.index].mac_address
+# }
