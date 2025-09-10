@@ -201,23 +201,3 @@ data "external" "remote_command" {
   EOF
   ]
 }
-
-output "maas_controller_ip_address" {
-  value       = local.maas_controller_ip_addr
-  description = "MAAS Controller IP Address."
-}
-
-output "nodes" {
-  description = "List of (virtual) nodes"
-  value = [
-    for node in libvirt_domain.node : {
-      name             = node.name
-      mac_address      = node.network_interface[0].mac
-    }
-  ]
-}
-
-output "maas_api_key" {
-  description = "MAAS Admin API Key"
-  value = data.external.remote_command.result.apikey
-}
