@@ -82,3 +82,71 @@ jobs:
       - name: Setup tmate session
         if: ${{ failure() && runner.debug }}
         uses: canonical/action-tmate@main
+  functional-test-maas:
+    needs: build
+    name: Functional test on MAAS
+    runs-on: [self-hosted, testflinger]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          path: repository
+      - name: Download snap artifact
+        id: download
+        uses: actions/download-artifact@v5
+        with:
+          name: local-${{ needs.build.outputs.snap }}
+          path: repository
+      - name: Pack the repository
+        run: |
+          tar acf repository.tar.gz repository/
+      - name: Submit job
+        uses: canonical/testflinger/.github/actions/submit@main
+        with:
+          poll: true
+          job: |
+            job_queue: openstack
+            provision_data:
+              distro: noble
+            global_timeout: 14400  # 4 hours
+            output_timeout: 5400  # 90 min
+            test_data:
+              attachments:
+                - local: repository.tar.gz
+              test_cmds: |
+                set -ex
+                scp ./attachments/test/repository.tar.gz "ubuntu@${DEVICE_IP}:"
+                if ssh "ubuntu@${DEVICE_IP}" '
+                    set -ex
+                    # LP: #2093303
+                    sudo mv -v /etc/apt/sources.list{,.bak}
+                    sudo apt-get update
+                    # include ~/.local/bin in PATH
+                    source  ~/.profile
+                    set -o pipefail
+                    # LP: #2097451
+                    # LP: #2102175
+                    tar xf repository.tar.gz
+                    cd repository/testing/
+                    ./install_deps.sh
+                    ./deploy.sh
+                    cd ../
+                    ./testing/test.sh
+                '; then
+                    scp -r "ubuntu@${DEVICE_IP}:repository/artifacts/" artifacts/ || true
+                    find artifacts/
+                else
+                    scp -r "ubuntu@${DEVICE_IP}:repository/artifacts/" artifacts/ || true
+                    find artifacts/
+                    exit 1
+                fi
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sunbeam_logs
+          path: logs
+          retention-days: 30
+      - name: Setup tmate session
+        if: ${{ failure() && runner.debug }}
+        uses: canonical/action-tmate@main
