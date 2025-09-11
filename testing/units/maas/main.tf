@@ -1,6 +1,8 @@
 locals {
   generic_net_addresses   = ["172.16.1.0/24"]
   external_net_addresses  = ["172.16.2.0/24"]
+  generic_dhcp_start = cidrhost(local.generic_net_addresses[0], 200)
+  generic_dhcp_end = cidrhost(local.generic_net_addresses[0], 254)
 }
 
 resource "maas_configuration" "kernel_opts" {
@@ -97,7 +99,7 @@ resource "null_resource" "maas_controller_null" {
 }
 
 
-data "maas_rack_controller" "rack_controller" {
+data "maas_rack_controller" "primary" {
   hostname = var.maas_hostname
 }
 
@@ -157,6 +159,20 @@ resource "maas_subnet" "generic_subnet" {
   cidr   = local.generic_net_addresses[0]
   fabric = maas_fabric.generic_fabric.id
   vlan   = maas_vlan.generic_vlan.vid
+}
+
+resource "maas_subnet_ip_range" "generic_subnet_dhcp_range" {
+  subnet   = maas_subnet.generic_subnet.id
+  start_ip = local.generic_dhcp_start
+  end_ip   = local.generic_dhcp_end
+  type     = "dynamic"
+}
+
+resource "maas_vlan_dhcp" "generic_vlan_dhcp" {
+  fabric                  = maas_fabric.generic_fabric.id
+  vlan                    = maas_vlan.generic_vlan.vid
+  primary_rack_controller = data.maas_rack_controller.primary.id
+  ip_ranges               = [maas_subnet_ip_range.generic_subnet_dhcp_range.id]
 }
 
 # resource "maas_machine" "node" {
