@@ -96,6 +96,8 @@ features:
           channel: 2024.1/beta
         manila-cephfs-k8s:
           channel: 2024.1/beta
+        manila-data:
+          channel: 2024.1/beta
   telemetry:
     software:
       charms:

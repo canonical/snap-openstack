@@ -98,6 +98,8 @@ features:
           channel: 2024.1/stable
         manila-cephfs-k8s:
           channel: 2024.1/stable
+        manila-data:
+          channel: 2024.1/stable
   telemetry:
     software:
       charms:

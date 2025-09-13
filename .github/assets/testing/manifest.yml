@@ -32,6 +32,12 @@ core:
         channel: OS_CHARM
       magnum-k8s:
         channel: OS_CHARM
+      manila-k8s:
+        channel: OS_CHARM
+      manila-cephfs-k8s:
+        channel: OS_CHARM
+      manila-data:
+        channel: OS_CHARM
       neutron-k8s:
         channel: OS_CHARM
       nova-k8s:
