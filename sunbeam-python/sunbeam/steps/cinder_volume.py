@@ -74,6 +74,7 @@ class DeployCinderVolumeApplicationStep(DeployMachineApplicationStep):
             CONFIG_KEY,
             APPLICATION,
             model,
+            [Role.STORAGE],
             "Deploy Cinder Volume",
             "Deploying Cinder Volume",
             refresh,
