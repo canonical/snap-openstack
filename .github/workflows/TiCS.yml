@@ -23,15 +23,15 @@ jobs:
         - name: Install dependencies
           run: |
             sudo add-apt-repository -y ppa:dqlite/dev
-            sudo apt install build-essential dqlite-tools libdqlite-dev libraft-canonical-dev -y
+            sudo apt install build-essential libdqlite-dev tox -y
 
-            python -m pip install tox
+            sudo snap install astral-uv --channel latest/stable --classic
 
             go install honnef.co/go/tools/cmd/staticcheck@v0.6.1
 
         - name: Run sunbeam-python coverage tests
           working-directory: ./sunbeam-python
-          run: tox -e cover
+          run: tox -e cover -- tests/unit
 
         - name: Build and run microcluster tests
           working-directory: ./sunbeam-microcluster
@@ -39,12 +39,10 @@ jobs:
             make build
 
         - name: Install snap dependencies
+          working-directory: ./sunbeam-python
           run: |
-            pip3 install --upgrade pip
-            for f in $(find -name '*requirements.txt'); do
-              echo "${f}"
-              pip3 install --requirement "${f}"
-            done
+            uv sync --all-extras
+            source .venv/bin/activate
 
         - name: TICS
           uses: tiobe/tics-github-action@v3
