@@ -13,7 +13,7 @@ jobs:
       - name: Setup GO
         uses: actions/setup-go@v4
         with:
-          go-version: '1.22'
+          go-version: '1.24'
       - name: Install dependencies
         run: |
           sudo add-apt-repository -y ppa:dqlite/dev
