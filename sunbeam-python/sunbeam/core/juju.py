@@ -1504,6 +1504,8 @@ class JujuHelper:
         """
         _model = self.get_model(model)["name"]  # ensure model is long name
         try:
+            # Juju offer does not accept --model option, so switch the model explicitly
+            self._juju.cli("switch", _model, include_model=False)
             self._juju.offer(
                 f"{_model}.{application_name}",
                 endpoint=endpoint,
@@ -1520,7 +1522,8 @@ class JujuHelper:
         _model = self.get_model(model)["name"]  # ensure model is long name
         offer_url = f"{_model}.{offer_name}"
         try:
-            self._juju.cli("remove-offer", offer_url)
+            self._juju.cli("switch", _model, include_model=False)
+            self._juju.cli("remove-offer", offer_url, include_model=False)
         except jubilant.CLIError as e:
             raise JujuException(f"Failed to remove offer {offer_url}: {str(e)}") from e
 
@@ -1528,6 +1531,9 @@ class JujuHelper:
         """Checks whether a juju offer exists."""
         _model = self.get_model(model)["name"]  # ensure model is long name
         offer_url = f"{_model}.{offer_name}"
+        # Command to run juju show-offer --model <> <offer-url>
+        # so set the model
+        self._juju.model = _model
         try:
             self._juju.cli("show-offer", offer_url)
             return True
