@@ -1,5 +1,5 @@
-// Package types provides shared types and structs.
-package types
+// Package apitypes provides shared types and structs.
+package apitypes
 
 // Manifests holds list of manifest type
 type Manifests []Manifest

@@ -12,7 +12,7 @@ import (
 	"github.com/gorilla/mux"
 
 	"github.com/canonical/snap-openstack/sunbeam-microcluster/access"
-	"github.com/canonical/snap-openstack/sunbeam-microcluster/api/types"
+	"github.com/canonical/snap-openstack/sunbeam-microcluster/api/apitypes"
 	"github.com/canonical/snap-openstack/sunbeam-microcluster/sunbeam"
 )
 
@@ -63,7 +63,7 @@ func cmdManifestGet(s state.State, r *http.Request) response.Response {
 }
 
 func cmdManifestsPost(s state.State, r *http.Request) response.Response {
-	var req types.Manifest
+	var req apitypes.Manifest
 
 	err := json.NewDecoder(r.Body).Decode(&req)
 	if err != nil {

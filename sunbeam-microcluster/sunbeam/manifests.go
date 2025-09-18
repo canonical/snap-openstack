@@ -7,13 +7,13 @@ import (
 
 	"github.com/canonical/microcluster/v2/state"
 
-	"github.com/canonical/snap-openstack/sunbeam-microcluster/api/types"
+	"github.com/canonical/snap-openstack/sunbeam-microcluster/api/apitypes"
 	"github.com/canonical/snap-openstack/sunbeam-microcluster/database"
 )
 
 // ListManifests return all the manifests
-func ListManifests(ctx context.Context, s state.State) (types.Manifests, error) {
-	manifests := types.Manifests{}
+func ListManifests(ctx context.Context, s state.State) (apitypes.Manifests, error) {
+	manifests := apitypes.Manifests{}
 
 	// Get the manifests from the database.
 	err := s.Database().Transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
@@ -23,7 +23,7 @@ func ListManifests(ctx context.Context, s state.State) (types.Manifests, error) 
 		}
 
 		for _, manifest := range records {
-			manifests = append(manifests, types.Manifest{
+			manifests = append(manifests, apitypes.Manifest{
 				ManifestID:  manifest.ManifestID,
 				AppliedDate: manifest.AppliedDate,
 				Data:        manifest.Data,
@@ -40,8 +40,8 @@ func ListManifests(ctx context.Context, s state.State) (types.Manifests, error) 
 }
 
 // GetManifest returns a Manifest with the given id
-func GetManifest(ctx context.Context, s state.State, manifestid string) (types.Manifest, error) {
-	manifest := types.Manifest{}
+func GetManifest(ctx context.Context, s state.State, manifestid string) (apitypes.Manifest, error) {
+	manifest := apitypes.Manifest{}
 
 	err := s.Database().Transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		var record *database.ManifestItem

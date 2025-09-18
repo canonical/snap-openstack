@@ -1,5 +1,5 @@
-// Package types provides shared types and structs.
-package types
+// Package apitypes provides shared types and structs.
+package apitypes
 
 // CertPair is a struct to hold a certificate and private key pair.
 type CertPair struct {

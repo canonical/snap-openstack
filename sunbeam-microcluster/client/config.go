@@ -8,7 +8,7 @@ import (
 	"github.com/canonical/lxd/shared/api"
 	microCli "github.com/canonical/microcluster/v2/client"
 
-	"github.com/canonical/snap-openstack/sunbeam-microcluster/api/types"
+	"github.com/canonical/snap-openstack/sunbeam-microcluster/api/apitypes"
 )
 
 const (
@@ -22,7 +22,7 @@ func ConfigClusterCASet(ctx context.Context, c *microCli.Client, data string) er
 	queryCtx, cancel := context.WithTimeout(ctx, time.Second*60)
 	defer cancel()
 
-	err := c.Query(queryCtx, "PUT", types.ExtendedPathPrefix, api.NewURL().Path("config", ClusterCA), data, nil)
+	err := c.Query(queryCtx, "PUT", apitypes.ExtendedPathPrefix, api.NewURL().Path("config", ClusterCA), data, nil)
 	if err != nil {
 		return err
 	}
@@ -36,7 +36,7 @@ func ConfigClusterCAGet(ctx context.Context, c *microCli.Client) (string, error)
 	defer cancel()
 
 	var data string
-	err := c.Query(queryCtx, "GET", types.ExtendedPathPrefix, api.NewURL().Path("config", ClusterCA), nil, &data)
+	err := c.Query(queryCtx, "GET", apitypes.ExtendedPathPrefix, api.NewURL().Path("config", ClusterCA), nil, &data)
 	if err != nil {
 		return "", err
 	}

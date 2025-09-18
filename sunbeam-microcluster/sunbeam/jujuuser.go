@@ -7,13 +7,13 @@ import (
 
 	"github.com/canonical/microcluster/v2/state"
 
-	"github.com/canonical/snap-openstack/sunbeam-microcluster/api/types"
+	"github.com/canonical/snap-openstack/sunbeam-microcluster/api/apitypes"
 	"github.com/canonical/snap-openstack/sunbeam-microcluster/database"
 )
 
 // ListJujuUsers returns the jujuusers from the database
-func ListJujuUsers(ctx context.Context, s state.State) (types.JujuUsers, error) {
-	users := types.JujuUsers{}
+func ListJujuUsers(ctx context.Context, s state.State) (apitypes.JujuUsers, error) {
+	users := apitypes.JujuUsers{}
 
 	// Get the juju users from the database.
 	err := s.Database().Transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
@@ -23,7 +23,7 @@ func ListJujuUsers(ctx context.Context, s state.State) (types.JujuUsers, error) 
 		}
 
 		for _, user := range records {
-			users = append(users, types.JujuUser{
+			users = append(users, apitypes.JujuUser{
 				Username: user.Username,
 				Token:    user.Token,
 			})
@@ -39,8 +39,8 @@ func ListJujuUsers(ctx context.Context, s state.State) (types.JujuUsers, error) 
 }
 
 // GetJujuUser returns a JujuUser with the given name
-func GetJujuUser(ctx context.Context, s state.State, name string) (types.JujuUser, error) {
-	jujuUser := types.JujuUser{}
+func GetJujuUser(ctx context.Context, s state.State, name string) (apitypes.JujuUser, error) {
+	jujuUser := apitypes.JujuUser{}
 	err := s.Database().Transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		record, err := database.GetJujuUser(ctx, tx, name)
 		if err != nil {

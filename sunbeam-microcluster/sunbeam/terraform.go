@@ -9,7 +9,7 @@ import (
 	"github.com/canonical/lxd/shared/api"
 	"github.com/canonical/microcluster/v2/state"
 
-	"github.com/canonical/snap-openstack/sunbeam-microcluster/api/types"
+	"github.com/canonical/snap-openstack/sunbeam-microcluster/api/apitypes"
 )
 
 const tfstatePrefix = "tfstate-"
@@ -39,8 +39,8 @@ func GetTerraformState(ctx context.Context, s state.State, name string) (string,
 }
 
 // UpdateTerraformState updates the terraform state record in the database
-func UpdateTerraformState(ctx context.Context, s state.State, name string, lockID string, state string) (types.Lock, error) {
-	var dbLock types.Lock
+func UpdateTerraformState(ctx context.Context, s state.State, name string, lockID string, state string) (apitypes.Lock, error) {
+	var dbLock apitypes.Lock
 
 	tflockKey := tflockPrefix + name
 	lockInDb, err := GetConfig(ctx, s, tflockKey)
@@ -97,9 +97,9 @@ func GetTerraformLock(ctx context.Context, s state.State, name string) (string, 
 }
 
 // UpdateTerraformLock updates the terraform lock record in the database
-func UpdateTerraformLock(ctx context.Context, s state.State, name string, lock string) (types.Lock, error) {
-	var reqLock types.Lock
-	var dbLock types.Lock
+func UpdateTerraformLock(ctx context.Context, s state.State, name string, lock string) (apitypes.Lock, error) {
+	var reqLock apitypes.Lock
+	var dbLock apitypes.Lock
 
 	err := json.Unmarshal([]byte(lock), &reqLock)
 	if err != nil {
@@ -139,9 +139,9 @@ func UpdateTerraformLock(ctx context.Context, s state.State, name string, lock s
 }
 
 // DeleteTerraformLock deletes the terraform lock from the database
-func DeleteTerraformLock(ctx context.Context, s state.State, name string, lock string) (types.Lock, error) {
-	var reqLock types.Lock
-	var dbLock types.Lock
+func DeleteTerraformLock(ctx context.Context, s state.State, name string, lock string) (apitypes.Lock, error) {
+	var reqLock apitypes.Lock
+	var dbLock apitypes.Lock
 
 	err := json.Unmarshal([]byte(lock), &reqLock)
 	if err != nil {

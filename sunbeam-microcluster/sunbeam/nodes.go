@@ -9,13 +9,13 @@ import (
 
 	"github.com/canonical/microcluster/v2/state"
 
-	"github.com/canonical/snap-openstack/sunbeam-microcluster/api/types"
+	"github.com/canonical/snap-openstack/sunbeam-microcluster/api/apitypes"
 	"github.com/canonical/snap-openstack/sunbeam-microcluster/database"
 )
 
 // ListNodes return all the nodes, filterable by role (Optional)
-func ListNodes(ctx context.Context, s state.State, roles []string) (types.Nodes, error) {
-	nodes := types.Nodes{}
+func ListNodes(ctx context.Context, s state.State, roles []string) (apitypes.Nodes, error) {
+	nodes := apitypes.Nodes{}
 
 	// Get the nodes from the database.
 	err := s.Database().Transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
@@ -29,7 +29,7 @@ func ListNodes(ctx context.Context, s state.State, roles []string) (types.Nodes,
 			if err != nil {
 				return err
 			}
-			nodes = append(nodes, types.Node{
+			nodes = append(nodes, apitypes.Node{
 				Name:      node.Name,
 				Role:      nodeRole,
 				MachineID: node.MachineID,
@@ -47,8 +47,8 @@ func ListNodes(ctx context.Context, s state.State, roles []string) (types.Nodes,
 }
 
 // GetNode returns a Node with the given name
-func GetNode(ctx context.Context, s state.State, name string) (types.Node, error) {
-	node := types.Node{MachineID: -1}
+func GetNode(ctx context.Context, s state.State, name string) (apitypes.Node, error) {
+	node := apitypes.Node{MachineID: -1}
 	err := s.Database().Transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		record, err := database.GetNode(ctx, tx, name)
 		if err != nil {

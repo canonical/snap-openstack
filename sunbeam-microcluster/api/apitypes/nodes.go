@@ -1,5 +1,5 @@
-// Package types provides shared types and structs.
-package types
+// Package apitypes provides shared types and structs.
+package apitypes
 
 // Nodes holds list of Node type
 type Nodes []Node

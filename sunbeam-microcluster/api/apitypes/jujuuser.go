@@ -1,5 +1,5 @@
-// Package types provides shared types and structs.
-package types
+// Package apitypes provides shared types and structs.
+package apitypes
 
 // JujuUsers is list of JujuUser struct
 type JujuUsers []JujuUser

@@ -3,7 +3,7 @@ package api
 
 import (
 	"github.com/canonical/microcluster/v2/rest"
-	"github.com/canonical/snap-openstack/sunbeam-microcluster/api/types"
+	"github.com/canonical/snap-openstack/sunbeam-microcluster/api/apitypes"
 )
 
 // Servers is a global list of all API servers on the /1.0 endpoint of
@@ -14,7 +14,7 @@ var Servers = map[string]rest.Server{
 		ServeUnix: true,
 		Resources: []rest.Resources{
 			{
-				PathPrefix: types.ExtendedPathPrefix,
+				PathPrefix: apitypes.ExtendedPathPrefix,
 				Endpoints: []rest.Endpoint{
 					nodesCmd,
 					nodeCmd,
@@ -32,7 +32,7 @@ var Servers = map[string]rest.Server{
 				},
 			},
 			{
-				PathPrefix: types.LocalPathPrefix,
+				PathPrefix: apitypes.LocalPathPrefix,
 				Endpoints: []rest.Endpoint{
 					certPair,
 				},

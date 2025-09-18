@@ -8,7 +8,7 @@ import (
 	"github.com/canonical/microcluster/v2/rest"
 	"github.com/canonical/microcluster/v2/state"
 	"github.com/canonical/snap-openstack/sunbeam-microcluster/access"
-	"github.com/canonical/snap-openstack/sunbeam-microcluster/api/types"
+	"github.com/canonical/snap-openstack/sunbeam-microcluster/api/apitypes"
 )
 
 // url path: /local/certpair/server
@@ -30,7 +30,7 @@ func cmdGetMemberServerCertPair(s state.State, _ *http.Request) response.Respons
 		return response.InternalError(nil)
 	}
 
-	return response.SyncResponse(true, types.CertPair{
+	return response.SyncResponse(true, apitypes.CertPair{
 		Certificate: string(certs.PublicKey()),
 		PrivateKey:  string(certs.PrivateKey()),
 	})

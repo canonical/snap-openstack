@@ -1,4 +1,4 @@
-package types
+package apitypes
 
 import (
 	"github.com/canonical/microcluster/v2/rest/types"

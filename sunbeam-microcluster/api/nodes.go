@@ -12,7 +12,7 @@ import (
 	"github.com/gorilla/mux"
 
 	"github.com/canonical/snap-openstack/sunbeam-microcluster/access"
-	"github.com/canonical/snap-openstack/sunbeam-microcluster/api/types"
+	"github.com/canonical/snap-openstack/sunbeam-microcluster/api/apitypes"
 	"github.com/canonical/snap-openstack/sunbeam-microcluster/sunbeam"
 )
 
@@ -64,7 +64,7 @@ func cmdNodesGet(s state.State, r *http.Request) response.Response {
 }
 
 func cmdNodesPost(s state.State, r *http.Request) response.Response {
-	req := types.Node{MachineID: -1}
+	req := apitypes.Node{MachineID: -1}
 
 	err := json.NewDecoder(r.Body).Decode(&req)
 	if err != nil {
@@ -80,7 +80,7 @@ func cmdNodesPost(s state.State, r *http.Request) response.Response {
 }
 
 func cmdNodesPut(s state.State, r *http.Request) response.Response {
-	req := types.Node{MachineID: -1}
+	req := apitypes.Node{MachineID: -1}
 
 	name, err := url.PathUnescape(mux.Vars(r)["name"])
 	if err != nil {

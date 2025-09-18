@@ -12,7 +12,7 @@ import (
 	"github.com/gorilla/mux"
 
 	"github.com/canonical/snap-openstack/sunbeam-microcluster/access"
-	"github.com/canonical/snap-openstack/sunbeam-microcluster/api/types"
+	"github.com/canonical/snap-openstack/sunbeam-microcluster/api/apitypes"
 	"github.com/canonical/snap-openstack/sunbeam-microcluster/sunbeam"
 )
 
@@ -61,7 +61,7 @@ func cmdJujuUsersGet(s state.State, r *http.Request) response.Response {
 }
 
 func cmdJujuUsersPost(s state.State, r *http.Request) response.Response {
-	var req types.JujuUser
+	var req apitypes.JujuUser
 
 	err := json.NewDecoder(r.Body).Decode(&req)
 	if err != nil {
