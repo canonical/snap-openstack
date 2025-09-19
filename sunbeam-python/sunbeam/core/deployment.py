@@ -23,6 +23,7 @@ from sunbeam.core.common import (
     RiskLevel,
     _get_default_no_proxy_settings,
     infer_risk,
+    infer_version,
     read_config,
 )
 from sunbeam.core.juju import JujuAccount, JujuController
@@ -316,8 +317,8 @@ class Deployment(pydantic.BaseModel):
                 snap = Snap()
                 risk = infer_risk(snap)
                 if risk != RiskLevel.STABLE:
-                    manifest_file = embedded_manifest_path(snap, risk)
-                    LOG.debug(f"Risk {risk.value} detected, loading {manifest_file}...")
+                    version = infer_version(snap)
+                    manifest_file = embedded_manifest_path(snap, version, risk)
                     override_manifest = self.parse_manifest(
                         yaml.safe_load(manifest_file.read_text())
                     )

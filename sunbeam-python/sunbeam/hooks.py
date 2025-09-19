@@ -15,6 +15,7 @@ DEFAULT_CONFIG = {
     "daemon.debug": False,
     "k8s.provider": "k8s",
     "deployment.risk": "stable",
+    "deployment.version": "2024.1",
 }
 
 OPTION_KEYS = {k.split(".")[0] for k in DEFAULT_CONFIG.keys()}

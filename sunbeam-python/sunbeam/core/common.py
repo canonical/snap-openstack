@@ -570,6 +570,15 @@ def infer_risk(snap: Snap) -> RiskLevel:
             return RiskLevel.STABLE
 
 
+def infer_version(snap: Snap) -> str:
+    """Compute version from environment."""
+    try:
+        version = str(snap.config.get("deployment.version"))
+    except UnknownConfigKey:
+        return "2024.1"
+    return version
+
+
 def parse_ip_range(
     ip_range: str, separator: str = "-"
 ) -> (

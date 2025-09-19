@@ -323,12 +323,17 @@ def test_create_offer(jhelper, juju):
 
 
 def test_remove_offer(jhelper, juju):
-    juju.cli.side_effect = jubilant.CLIError(1, "remove-offer", stderr="expected")
+    juju.cli.side_effect = (
+        None,
+        jubilant.CLIError(1, "remove-offer", stderr="expected"),
+    )
 
     with pytest.raises(jujulib.JujuException):
         jhelper.remove_offer("test-model", "foo")
 
-    juju.cli.assert_called_once_with("remove-offer", "admin/test-model.foo")
+    juju.cli.assert_called_with(
+        "remove-offer", "admin/test-model.foo", include_model=False
+    )
 
 
 def test_offer_exists_true(jhelper, juju):

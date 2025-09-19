@@ -1,0 +1,118 @@
+core:
+  software:
+    charms:
+      cinder-volume:
+        channel: 2025.1/edge
+      cinder-volume-ceph:
+        channel: 2025.1/edge
+      cinder-k8s:
+        channel: 2025.1/edge
+      glance-k8s:
+        channel: 2025.1/edge
+      horizon-k8s:
+        channel: 2025.1/edge
+      keystone-k8s:
+        channel: 2025.1/edge
+      neutron-k8s:
+        channel: 2025.1/edge
+      nova-k8s:
+        channel: 2025.1/edge
+      openstack-hypervisor:
+        channel: 2025.1/edge
+        config:
+          snap-channel: 2025.1/edge
+      ovn-central-k8s:
+        channel: 25.03/edge
+      ovn-relay-k8s:
+        channel: 25.03/edge
+      placement-k8s:
+        channel: 2025.1/edge
+      sunbeam-clusterd:
+        channel: 2025.1/edge
+        config:
+          snap-channel: 2025.1/edge
+      sunbeam-machine:
+        channel: 2025.1/edge
+      epa-orchestrator:
+        channel: 2025.1/edge
+      microceph:
+        channel: squid/stable
+        config:
+          snap-channel: squid/stable
+features:
+  caas:
+    software:
+      charms:
+        magnum-k8s:
+          channel: 2025.1/edge
+  dns:
+    software:
+      charms:
+        designate-bind-k8s:
+          channel: 9/edge
+        designate-k8s:
+          channel: 2025.1/edge
+  images-sync:
+    software:
+      charms:
+        openstack-images-sync-k8s:
+          channel: 2025.1/edge
+  instance-recovery:
+    software:
+      charms:
+        consul-k8s:
+          channel: 1.19/edge
+        consul-client:
+          channel: 1.19/edge
+        masakari-k8s:
+          channel: 2025.1/edge
+  ldap:
+    software:
+      charms:
+        keystone-ldap-k8s:
+          channel: 2025.1/edge
+  loadbalancer:
+    software:
+      charms:
+        octavia-k8s:
+          channel: 2025.1/edge
+  orchestration:
+    software:
+      charms:
+        heat-k8s:
+          channel: 2025.1/edge
+  resource-optimization:
+    software:
+      charms:
+        watcher-k8s:
+          channel: 2025.1/edge
+  shared-filesystem:
+    software:
+      charms:
+        manila-k8s:
+          channel: 2025.1/edge
+        manila-cephfs-k8s:
+          channel: 2025.1/edge
+        manila-data:
+          channel: 2025.1/edge
+  secrets:
+    software:
+      charms:
+        barbican-k8s:
+          channel: 2025.1/edge
+  telemetry:
+    software:
+      charms:
+        aodh-k8s:
+          channel: 2025.1/edge
+        ceilometer-k8s:
+          channel: 2025.1/edge
+        gnocchi-k8s:
+          channel: 2025.1/edge
+        openstack-exporter-k8s:
+          channel: 2025.1/edge
+  validation:
+    software:
+      charms:
+        tempest-k8s:
+          channel: 2025.1/edge

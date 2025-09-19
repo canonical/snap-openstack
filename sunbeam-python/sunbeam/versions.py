@@ -2,25 +2,36 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+from functools import cache
 from typing import TypedDict
+
+
+@cache
+def determine_version() -> str:
+    # This function could be expanded to determine version dynamically
+    from snaphelpers import Snap
+
+    try:
+        snap = Snap()
+        risk = str(snap.config.get("deployment.version"))
+    except Exception:
+        risk = "2024.1"
+    return risk
+
 
 SUPPORTED_RELEASE = "noble"
 JUJU_CHANNEL = "3.6/stable"
 JUJU_BASE = "ubuntu@24.04"
-OPENSTACK_CHANNEL = "2024.1/stable"
+OPENSTACK_CHANNEL = f"{determine_version()}/stable"
 OVN_CHANNEL = "24.03/stable"
 RABBITMQ_CHANNEL = "3.12/stable"
 TRAEFIK_CHANNEL = "latest/stable"
 MICROCEPH_CHANNEL = "squid/stable"
-SUNBEAM_MACHINE_CHANNEL = "2024.1/stable"
-SUNBEAM_CLUSTERD_CHANNEL = "2024.1/stable"
-SNAP_SUNBEAM_CLUSTERD_CHANNEL = "2024.1/stable"
 MYSQL_CHANNEL = "8.0/stable"
 CERT_AUTH_CHANNEL = "1/stable"
 BIND_CHANNEL = "9/stable"
 VAULT_CHANNEL = "1.16/stable"
 CONSUL_CHANNEL = "1.19/edge"
-TEMPEST_CHANNEL = "2024.1/stable"
 K8S_CHANNEL = "1.32/stable"
 LXD_CHANNEL = "5.21/stable"
 SUNBEAM_EPA_ORCHESTRATOR_CHANNEL = "2024.1/edge"
@@ -61,8 +72,8 @@ MACHINE_CHARMS = {
     "microceph": MICROCEPH_CHANNEL,
     "k8s": K8S_CHANNEL,
     "openstack-hypervisor": OPENSTACK_CHANNEL,
-    "sunbeam-machine": SUNBEAM_MACHINE_CHANNEL,
-    "sunbeam-clusterd": SUNBEAM_CLUSTERD_CHANNEL,
+    "sunbeam-machine": OPENSTACK_CHANNEL,
+    "sunbeam-clusterd": OPENSTACK_CHANNEL,
     "self-signed-certificates": CERT_AUTH_CHANNEL,
     "cinder-volume": OPENSTACK_CHANNEL,
     "cinder-volume-ceph": OPENSTACK_CHANNEL,

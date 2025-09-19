@@ -24,6 +24,7 @@ from sunbeam.core.common import (
     ResultType,
     Status,
     infer_risk,
+    infer_version,
 )
 
 # from sunbeam.feature_manager import FeatureManager
@@ -33,8 +34,8 @@ LOG = logging.getLogger(__name__)
 EMPTY_MANIFEST: dict[str, dict] = {"core": {"charms": {}, "terraform": {}}}
 
 
-def embedded_manifest_path(snap: Snap, risk: str) -> Path:
-    return snap.paths.snap / "etc" / "manifests" / f"{risk}.yml"
+def embedded_manifest_path(snap: Snap, version: str, risk: str) -> Path:
+    return snap.paths.snap / "etc" / "manifests" / version / f"{risk}.yml"
 
 
 class JujuManifest(pydantic.BaseModel):
@@ -430,9 +431,10 @@ class AddManifestStep(BaseStep):
     def is_skip(self, status: Status | None = None) -> Result:
         """Skip if the user provided manifest and the latest from db are same."""
         risk = infer_risk(self.snap)
+        version = infer_version(self.snap)
         try:
             embedded_manifest = yaml.safe_load(
-                embedded_manifest_path(self.snap, risk).read_bytes()
+                embedded_manifest_path(self.snap, version, risk).read_bytes()
             )
             if self.manifest_file:
                 with self.manifest_file.open("r") as file:

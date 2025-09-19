@@ -611,7 +611,7 @@ class DeploySunbeamClusterdApplicationStep(BaseStep):
         charm_manifest: CharmManifest = self.manifest.core.software.charms[
             "sunbeam-clusterd"
         ]
-        charm_config = {"snap-channel": versions.SNAP_SUNBEAM_CLUSTERD_CHANNEL}
+        charm_config = {"snap-channel": versions.OPENSTACK_CHANNEL}
         if charm_manifest.config:
             charm_config.update(charm_manifest.config)
         self.jhelper.deploy(

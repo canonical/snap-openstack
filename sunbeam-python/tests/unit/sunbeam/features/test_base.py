@@ -65,7 +65,24 @@ def base_feature_abc():
 
 
 def feature_classes() -> list[type[EnableDisableFeature]]:
-    with patch("snaphelpers.Snap"):
+    with (
+        patch("snaphelpers.Snap"),
+        patch(
+            "os.environ",
+            {
+                "SNAP": "/dev/null",
+                "SNAP_COMMON": "/dev/null",
+                "SNAP_DATA": "/dev/null",
+                "SNAP_USER_COMMON": "/dev/null",
+                "SNAP_USER_DATA": "/dev/null",
+                "SNAP_REAL_HOME": "/dev/null",
+                "SNAP_INSTANCE_NAME": "",
+                "SNAP_NAME": "sunbeam",
+                "SNAP_REVISION": "2",
+                "SNAP_VERSION": "1.2.3",
+            },
+        ),
+    ):
         manager = FeatureManager()
         classes = []
         for klass in manager.get_all_feature_classes():

@@ -8,7 +8,7 @@ import pytest
 from snaphelpers import Snap, SnapConfig, SnapServices
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def snap_env(tmp_path: Path, mocker):
     """Environment variables defined in the snap.
 

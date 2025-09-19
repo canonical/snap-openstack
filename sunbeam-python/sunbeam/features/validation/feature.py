@@ -42,7 +42,7 @@ from sunbeam.features.interface.v1.openstack import (
 )
 from sunbeam.steps.juju import JujuLoginStep
 from sunbeam.utils import click_option_show_hints, pass_method_obj
-from sunbeam.versions import TEMPEST_CHANNEL
+from sunbeam.versions import OPENSTACK_CHANNEL
 
 LOG = logging.getLogger(__name__)
 console = Console()
@@ -256,7 +256,7 @@ class ValidationFeature(OpenStackControlPlaneFeature):
     def default_software_overrides(self) -> SoftwareConfig:
         """Feature software configuration."""
         return SoftwareConfig(
-            charms={"tempest-k8s": CharmManifest(channel=TEMPEST_CHANNEL)}
+            charms={"tempest-k8s": CharmManifest(channel=OPENSTACK_CHANNEL)}
         )
 
     def manifest_attributes_tfvar_map(self) -> dict:

@@ -1,0 +1,116 @@
+core:
+  software:
+    charms:
+      cinder-volume:
+        channel: 2025.1/beta
+      cinder-volume-ceph:
+        channel: 2025.1/beta
+      cinder-k8s:
+        channel: 2025.1/beta
+      glance-k8s:
+        channel: 2025.1/beta
+      horizon-k8s:
+        channel: 2025.1/beta
+      keystone-k8s:
+        channel: 2025.1/beta
+      neutron-k8s:
+        channel: 2025.1/beta
+      nova-k8s:
+        channel: 2025.1/beta
+      openstack-hypervisor:
+        channel: 2025.1/beta
+        config:
+          snap-channel: 2025.1/beta
+      ovn-central-k8s:
+        channel: 25.03/beta
+      ovn-relay-k8s:
+        channel: 25.03/beta
+      placement-k8s:
+        channel: 2025.1/beta
+      sunbeam-clusterd:
+        channel: 2025.1/beta
+        config:
+          snap-channel: 2025.1/beta
+      sunbeam-machine:
+        channel: 2025.1/beta
+      microceph:
+        channel: squid/stable
+        config:
+          snap-channel: squid/stable
+features:
+  caas:
+    software:
+      charms:
+        magnum-k8s:
+          channel: 2025.1/beta
+  dns:
+    software:
+      charms:
+        designate-bind-k8s:
+          channel: 9/beta
+        designate-k8s:
+          channel: 2025.1/beta
+  images-sync:
+    software:
+      charms:
+        openstack-images-sync-k8s:
+          channel: 2025.1/beta
+  instance-recovery:
+    software:
+      charms:
+        consul-k8s:
+          channel: 1.19/beta
+        consul-client:
+          channel: 1.19/beta
+        masakari-k8s:
+          channel: 2025.1/beta
+  ldap:
+    software:
+      charms:
+        keystone-ldap-k8s:
+          channel: 2025.1/beta
+  loadbalancer:
+    software:
+      charms:
+        octavia-k8s:
+          channel: 2025.1/beta
+  orchestration:
+    software:
+      charms:
+        heat-k8s:
+          channel: 2025.1/beta
+  resource-optimization:
+    software:
+      charms:
+        watcher-k8s:
+          channel: 2025.1/beta
+  secrets:
+    software:
+      charms:
+        barbican-k8s:
+          channel: 2025.1/beta
+  shared-filesystem:
+    software:
+      charms:
+        manila-k8s:
+          channel: 2025.1/beta
+        manila-cephfs-k8s:
+          channel: 2025.1/beta
+        manila-data:
+          channel: 2025.1/beta
+  telemetry:
+    software:
+      charms:
+        aodh-k8s:
+          channel: 2025.1/beta
+        ceilometer-k8s:
+          channel: 2025.1/beta
+        gnocchi-k8s:
+          channel: 2025.1/beta
+        openstack-exporter-k8s:
+          channel: 2025.1/beta
+  validation:
+    software:
+      charms:
+        tempest-k8s:
+          channel: 2025.1/beta

@@ -189,6 +189,15 @@ parts:
     source: manifests/
     organize:
       '*': etc/manifests/
+    override-prime: |
+      craftctl default
+      # For backward compatibility, we symlink 2024.1 manifests to the root manifests dir
+      for manifest in $CRAFT_PRIME/etc/manifests/2024.1/*yml;
+      do
+        link=$CRAFT_PRIME/etc/manifests/$(basename $manifest)
+        [ -e $link ] && rm $link || true
+        ln -sr $manifest $link
+      done
 
   sunbeam-and-openstackclients:
     plugin: python

@@ -4,7 +4,13 @@
 import click
 from rich.console import Console
 
-from sunbeam.versions import JUJU_BASE, JUJU_CHANNEL, LXD_CHANNEL, SUPPORTED_RELEASE
+from sunbeam.versions import (
+    JUJU_BASE,
+    JUJU_CHANNEL,
+    LXD_CHANNEL,
+    OPENSTACK_CHANNEL,
+    SUPPORTED_RELEASE,
+)
 
 console = Console()
 
@@ -101,16 +107,21 @@ mkdir -p $HOME/.config/openstack
 snap_output=$(snap list openstack --unicode=never --color=never | grep openstack)
 track=$(awk -v col=4 '{{print $col}}' <<<"$snap_output")
 
-# if never installed from the store, the channel is "-"
-if [[ $track =~ "edge" ]] || [[ $track == "-" ]]; then
-    risk="edge"
-elif [[ $track =~ "beta" ]]; then
-    risk="beta"
-elif [[ $track =~ "candidate" ]]; then
-    risk="candidate"
-else
-    risk="stable"
+# value for track will be either "<version>/<risk>" or "-"
+version=$(cut -d'/' -f1 <<<"$track")
+risk=$(cut -d'/' -f2 <<<"$track")
+
+# if never installed from the store, the version is "-"
+if [[ $version == "-" ]]; then
+    version={OPENSTACK_CHANNEL.split("/")[0]}
 fi
+
+# if never installed from the store, the channel is "-"
+if [[ $track == "-" ]]; then
+    risk="edge"
+fi
+
+sudo snap set openstack deployment.version=$version
 
 if [[ $risk != "stable" ]]; then
     sudo snap set openstack deployment.risk=$risk
