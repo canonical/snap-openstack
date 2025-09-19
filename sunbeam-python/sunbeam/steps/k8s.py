@@ -96,7 +96,7 @@ LOG = logging.getLogger(__name__)
 K8S_CONFIG_KEY = "TerraformVarsK8S"
 K8S_ADDONS_CONFIG_KEY = "TerraformVarsK8SAddons"
 APPLICATION = "k8s"
-K8S_APP_TIMEOUT = 300  # 5 minutes, managing the application should be fast
+K8S_APP_TIMEOUT = 1800  # 30 minutes, step includes adding / removing units
 K8S_DESTROY_TIMEOUT = 900
 K8S_UNIT_TIMEOUT = 1800  # 30 minutes, adding / removing units can take a long time
 K8S_ENABLE_ADDONS_TIMEOUT = 300  # 5 minutes
@@ -205,6 +205,7 @@ class DeployK8SApplicationStep(DeployMachineApplicationStep):
             K8S_CONFIG_KEY,
             APPLICATION,
             model,
+            [Role.CONTROL],
             "Deploy K8S",
             "Deploying K8S",
             refresh,
