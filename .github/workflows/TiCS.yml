@@ -23,7 +23,7 @@ jobs:
         - name: Install dependencies
           run: |
             sudo add-apt-repository -y ppa:dqlite/dev
-            sudo apt install build-essential libdqlite-dev tox -y
+            sudo apt install build-essential libdqlite1.17-dev tox -y
 
             sudo snap install astral-uv --channel latest/stable --classic
 
