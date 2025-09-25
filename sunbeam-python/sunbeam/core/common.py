@@ -62,6 +62,7 @@ class Role(enum.Enum):
     CONTROL = 1
     COMPUTE = 2
     STORAGE = 3
+    NETWORK = 4
 
     def is_control_node(self) -> bool:
         """Returns True if the node requires control services.
@@ -98,6 +99,18 @@ class Role(enum.Enum):
                  False otherwise
         """
         return self == Role.STORAGE
+
+    def is_network_node(self) -> bool:
+        """Returns True if the node requires network services.
+
+        Network services are installed on nodes which are designated
+        for network nodes only. This helps determine the role that the local
+        node will play.
+
+        :return: True if the node should have network services,
+                 False otherwise
+        """
+        return self == Role.NETWORK
 
 
 def roles_to_str_list(roles: list[Role]) -> list[str]:

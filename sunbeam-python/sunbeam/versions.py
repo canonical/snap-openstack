@@ -27,6 +27,7 @@ OVN_CHANNEL = "24.03/stable"
 RABBITMQ_CHANNEL = "3.12/stable"
 TRAEFIK_CHANNEL = "latest/stable"
 MICROCEPH_CHANNEL = "squid/stable"
+MICROOVN_CHANNEL = "latest/edge"
 MYSQL_CHANNEL = "8.0/stable"
 CERT_AUTH_CHANNEL = "1/stable"
 BIND_CHANNEL = "9/stable"
@@ -70,6 +71,7 @@ MISC_CHARMS_K8S = {
 }
 MACHINE_CHARMS = {
     "microceph": MICROCEPH_CHANNEL,
+    "microovn": MICROOVN_CHANNEL,
     "k8s": K8S_CHANNEL,
     "openstack-hypervisor": OPENSTACK_CHANNEL,
     "sunbeam-machine": OPENSTACK_CHANNEL,
@@ -97,6 +99,7 @@ TERRAFORM_DIR_NAMES = {
     "sunbeam-machine-plan": "deploy-sunbeam-machine",
     "k8s-plan": "deploy-k8s",
     "microceph-plan": "deploy-microceph",
+    "microovn-plan": "deploy-microovn",
     "cinder-volume-plan": "deploy-cinder-volume",
     "openstack-plan": "deploy-openstack",
     "hypervisor-plan": "deploy-openstack-hypervisor",
@@ -218,6 +221,15 @@ DEPLOY_MICROCEPH_TFVAR_MAP: VarMap = {
         }
     }
 }
+DEPLOY_MICROOVN_TFVAR_MAP: VarMap = {
+    "charms": {
+        "microovn": {
+            "channel": "charm_microovn_channel",
+            "revision": "charm_microovn_revision",
+            "config": "charm_microovn_config",
+        }
+    }
+}
 DEPLOY_OPENSTACK_HYPERVISOR_TFVAR_MAP: VarMap = {
     "charms": {
         "openstack-hypervisor": {
@@ -261,6 +273,7 @@ MANIFEST_ATTRIBUTES_TFVAR_MAP: dict[str, VarMap] = {
     "sunbeam-machine-plan": DEPLOY_SUNBEAM_MACHINE_TFVAR_MAP,
     "k8s-plan": DEPLOY_K8S_TFVAR_MAP,
     "microceph-plan": DEPLOY_MICROCEPH_TFVAR_MAP,
+    "microovn-plan": DEPLOY_MICROOVN_TFVAR_MAP,
     "openstack-plan": DEPLOY_OPENSTACK_TFVAR_MAP,
     "hypervisor-plan": DEPLOY_OPENSTACK_HYPERVISOR_TFVAR_MAP,
     "cinder-volume-plan": DEPLOY_CINDER_VOLUME_TFVAR_MAP,
