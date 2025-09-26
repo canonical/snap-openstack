@@ -4,11 +4,9 @@
 import unittest
 from unittest.mock import MagicMock, Mock, patch
 
-from sunbeam.clusterd.service import ConfigItemNotFoundException
 from sunbeam.steps.cinder_volume import (
     CINDER_VOLUME_APP_TIMEOUT,
     CINDER_VOLUME_UNIT_TIMEOUT,
-    AddCinderVolumeUnitsStep,
     DeployCinderVolumeApplicationStep,
     RemoveCinderVolumeUnitsStep,
 )
@@ -116,108 +114,6 @@ class TestDeployCinderVolumeApplicationStep(unittest.TestCase):
         get_mandatory_control_plane_offers.assert_not_called()
         self.assertNotIn("ceph-application-name", tfvars)
         self.assertNotIn("keystone-offer-url", tfvars)
-
-
-class TestAddCinderVolumeUnitsStep(unittest.TestCase):
-    def setUp(self):
-        self.client = MagicMock()
-        self.names = ["node1"]
-        self.jhelper = MagicMock()
-        self.model = "test-model"
-        self.os_tfhelper = MagicMock()
-        self.add_cinder_volume_units_step = AddCinderVolumeUnitsStep(
-            self.client,
-            self.names,
-            self.jhelper,
-            self.model,
-            self.os_tfhelper,
-        )
-
-    def test_get_unit_timeout(self):
-        self.assertEqual(
-            self.add_cinder_volume_units_step.get_unit_timeout(),
-            CINDER_VOLUME_UNIT_TIMEOUT,
-        )
-
-    @patch(
-        "sunbeam.steps.cinder_volume.get_mandatory_control_plane_offers",
-        return_value={
-            "keystone-offer-url": "keystone-offer",
-            "database-offer-url": "database-offer",
-            "amqp-offer-url": "amqp-offer",
-        },
-    )
-    @patch(
-        "sunbeam.steps.cinder_volume.read_config",
-        return_value={
-            "keystone-offer-url": "keystone-offer",
-            "database-offer-url": "database-offer",
-            "amqp-offer-url": "amqp-offer",
-        },
-    )
-    def test_get_accepted_unit_status(
-        self, get_mandatory_control_plane_offers, read_config
-    ):
-        self.client.cluster.list_nodes_by_role.return_value = ["node1"]
-        accepted_status = self.add_cinder_volume_units_step.get_accepted_unit_status()
-        self.assertNotIn("blocked", accepted_status["workload"])
-        get_mandatory_control_plane_offers.assert_called_once()
-        read_config.assert_called_once()
-
-    @patch(
-        "sunbeam.steps.cinder_volume.get_mandatory_control_plane_offers",
-        return_value={"keystone-offer-url": None},
-    )
-    def test_get_accepted_unit_status_with_missing_offers(
-        self, get_mandatory_control_plane_offers
-    ):
-        accepted_status = self.add_cinder_volume_units_step.get_accepted_unit_status()
-        self.assertIn("blocked", accepted_status["workload"])
-        get_mandatory_control_plane_offers.assert_called_once()
-
-    @patch(
-        "sunbeam.steps.cinder_volume.get_mandatory_control_plane_offers",
-        return_value={
-            "keystone-offer-url": "keystone-offer",
-            "database-offer-url": "database-offer",
-            "amqp-offer-url": "amqp-offer",
-        },
-    )
-    @patch(
-        "sunbeam.steps.cinder_volume.read_config",
-        return_value={
-            "keystone-offer-url": "keystone-differ",
-            "database-offer-url": "database-offer",
-            "amqp-offer-url": "amqp-offer",
-        },
-    )
-    def test_get_accepted_unit_status_with_different_config(
-        self, get_mandatory_control_plane_offers, read_config
-    ):
-        accepted_status = self.add_cinder_volume_units_step.get_accepted_unit_status()
-        self.assertIn("blocked", accepted_status["workload"])
-        get_mandatory_control_plane_offers.assert_called_once()
-        read_config.assert_called_once()
-
-    @patch(
-        "sunbeam.steps.cinder_volume.get_mandatory_control_plane_offers",
-        return_value={
-            "keystone-offer-url": "keystone-offer",
-            "database-offer-url": "database-offer",
-            "amqp-offer-url": "amqp-offer",
-        },
-    )
-    @patch(
-        "sunbeam.steps.cinder_volume.read_config",
-        side_effect=ConfigItemNotFoundException("config not found"),
-    )
-    def test_get_accepted_unit_status_with_config_exception(
-        self, get_mandatory_control_plane_offers, read_config
-    ):
-        accepted_status = self.add_cinder_volume_units_step.get_accepted_unit_status()
-        self.assertIn("blocked", accepted_status["workload"])
-        get_mandatory_control_plane_offers.assert_called_once()
-        read_config.assert_called_once()
 
 
 class TestRemoveCinderVolumeUnitsStep(unittest.TestCase):

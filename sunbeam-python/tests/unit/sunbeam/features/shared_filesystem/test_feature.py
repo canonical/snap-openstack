@@ -74,15 +74,11 @@ class TestSharedFilesystemFeature:
         jhelper.create_offer.assert_not_called()
 
         # AddManilaDataUnitsStep calls.
-        jhelper.add_unit.assert_called_with("foo", "manila-data", ["1"])
-        jhelper.wait_until_desired_status.assert_any_call(
+        jhelper.wait_application_ready.assert_any_call(
+            "manila-data",
             "foo",
-            ["manila-data"],
-            units=jhelper.add_unit.return_value,
-            status=["active", "blocked"],
-            agent_status=["idle"],
+            accepted_status=["active", "unknown", "blocked"],
             timeout=manila_data.MANILA_DATA_UNIT_TIMEOUT,
-            queue=ANY,
         )
 
         # Run enable plans, microceph-ceph-nfs doesn't exist.

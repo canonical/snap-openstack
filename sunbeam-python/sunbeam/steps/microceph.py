@@ -31,7 +31,6 @@ from sunbeam.core.juju import (
 from sunbeam.core.manifest import Manifest
 from sunbeam.core.openstack import DEFAULT_REGION, REGION_CONFIG_KEY
 from sunbeam.core.steps import (
-    AddMachineUnitsStep,
     DeployMachineApplicationStep,
     DestroyMachineApplicationStep,
     RemoveMachineUnitsStep,
@@ -44,9 +43,9 @@ CONFIG_DISKS_KEY = "TerraformVarsMicroceph"
 APPLICATION = "microceph"
 CEPH_NFS_RELATION = "ceph-nfs"
 NFS_OFFER_NAME = "microceph-ceph-nfs"
-# Timeout set to 20 minutes instead of 9 minutes due to bug
-# https://github.com/canonical/charm-microceph/issues/113
-MICROCEPH_APP_TIMEOUT = 1200  # updating rgw configs can take some time
+MICROCEPH_APP_TIMEOUT = (
+    1800  # 30 minutes, can trigger to deploy mutliple units in parallel
+)
 MICROCEPH_UNIT_TIMEOUT = (
     1200  # 20 minutes, adding / removing units can take a long time
 )
@@ -103,7 +102,6 @@ class DeployMicrocephApplicationStep(DeployMachineApplicationStep):
         jhelper: JujuHelper,
         manifest: Manifest,
         model: str,
-        refresh: bool = False,
     ):
         super().__init__(
             deployment,
@@ -114,9 +112,9 @@ class DeployMicrocephApplicationStep(DeployMachineApplicationStep):
             CONFIG_KEY,
             APPLICATION,
             model,
+            [Role.STORAGE],
             "Deploy MicroCeph",
             "Deploying MicroCeph",
-            refresh,
         )
 
     def get_application_timeout(self) -> int:
@@ -206,32 +204,6 @@ class DeployMicrocephApplicationStep(DeployMachineApplicationStep):
                 tfvars["ingress-rgw-offer-url"] = traefik_rgw_offer_url
 
         return tfvars
-
-
-class AddMicrocephUnitsStep(AddMachineUnitsStep):
-    """Add Microceph Unit."""
-
-    def __init__(
-        self,
-        client: Client,
-        names: list[str] | str,
-        jhelper: JujuHelper,
-        model: str,
-    ):
-        super().__init__(
-            client,
-            names,
-            jhelper,
-            CONFIG_KEY,
-            APPLICATION,
-            model,
-            "Add MicroCeph unit",
-            "Adding MicroCeph unit to machine",
-        )
-
-    def get_unit_timeout(self) -> int:
-        """Return unit timeout in seconds."""
-        return MICROCEPH_UNIT_TIMEOUT
 
 
 class RemoveMicrocephUnitsStep(RemoveMachineUnitsStep):

@@ -4,16 +4,11 @@
 import unittest
 from unittest.mock import MagicMock, Mock, patch
 
-from sunbeam.clusterd.service import (
-    ConfigItemNotFoundException,
-)
 from sunbeam.core.common import ResultType
 from sunbeam.core.deployment import Networks
 from sunbeam.core.terraform import TerraformException
 from sunbeam.features.shared_filesystem.manila_data import (
     MANILA_DATA_APP_TIMEOUT,
-    MANILA_DATA_UNIT_TIMEOUT,
-    AddManilaDataUnitsStep,
     DeployManilaDataApplicationStep,
     DestroyManilaDataApplicationStep,
 )
@@ -46,7 +41,11 @@ class TestDeployManilaDataApplicationStep(unittest.TestCase):
             MANILA_DATA_APP_TIMEOUT,
         )
 
-    def test_get_accepted_application_status(self):
+    @patch(
+        "sunbeam.features.shared_filesystem.manila_data.read_config",
+        return_value={},
+    )
+    def test_get_accepted_application_status(self, read_config):
         self.deploy_manila_data_step._get_offers = Mock(
             return_value={"keystone-offer-url": None}
         )
@@ -54,7 +53,11 @@ class TestDeployManilaDataApplicationStep(unittest.TestCase):
         accepted_status = self.deploy_manila_data_step.get_accepted_application_status()
         self.assertIn("blocked", accepted_status)
 
-    def test_get_accepted_application_status_with_offers(self):
+    @patch(
+        "sunbeam.features.shared_filesystem.manila_data.read_config",
+        return_value={"keystone-offer-url": "url"},
+    )
+    def test_get_accepted_application_status_with_offers(self, read_config):
         self.deploy_manila_data_step._get_offers = Mock(
             return_value={"keystone-offer-url": "url"}
         )
@@ -114,113 +117,14 @@ class TestDeployManilaDataApplicationStep(unittest.TestCase):
                 },
             ],
             "charm-manila-data-config": {},
+            "machine_ids": [],
             "keystone-offer-url": "keystone-offer",
             "database-offer-url": "database-offer",
             "amqp-offer-url": "amqp-offer",
         }
+        print(tfvars)
+        print(expected_tfvars)
         self.assertEqual(tfvars, expected_tfvars)
-
-
-class TestAddManilaDataUnitsStep(unittest.TestCase):
-    def setUp(self):
-        self.client = MagicMock()
-        self.names = ["node1"]
-        self.jhelper = MagicMock()
-        self.model = "test-model"
-        self.os_tfhelper = MagicMock()
-        self.add_manila_data_units_step = AddManilaDataUnitsStep(
-            self.client,
-            self.names,
-            self.jhelper,
-            self.model,
-            self.os_tfhelper,
-        )
-
-    def test_get_unit_timeout(self):
-        self.assertEqual(
-            self.add_manila_data_units_step.get_unit_timeout(),
-            MANILA_DATA_UNIT_TIMEOUT,
-        )
-
-    @patch(
-        "sunbeam.features.shared_filesystem.manila_data.get_mandatory_control_plane_offers",
-        return_value={
-            "keystone-offer-url": "keystone-offer",
-            "database-offer-url": "database-offer",
-            "amqp-offer-url": "amqp-offer",
-        },
-    )
-    @patch(
-        "sunbeam.features.shared_filesystem.manila_data.read_config",
-        return_value={
-            "keystone-offer-url": "keystone-offer",
-            "database-offer-url": "database-offer",
-            "amqp-offer-url": "amqp-offer",
-        },
-    )
-    def test_get_accepted_unit_status(
-        self, get_mandatory_control_plane_offers, read_config
-    ):
-        self.client.cluster.list_nodes_by_role.return_value = ["node1"]
-        accepted_status = self.add_manila_data_units_step.get_accepted_unit_status()
-        self.assertNotIn("blocked", accepted_status["workload"])
-        get_mandatory_control_plane_offers.assert_called_once()
-        read_config.assert_called_once()
-
-    @patch(
-        "sunbeam.features.shared_filesystem.manila_data.get_mandatory_control_plane_offers",
-        return_value={"keystone-offer-url": None},
-    )
-    def test_get_accepted_unit_status_with_missing_offers(
-        self, get_mandatory_control_plane_offers
-    ):
-        accepted_status = self.add_manila_data_units_step.get_accepted_unit_status()
-        self.assertIn("blocked", accepted_status["workload"])
-        get_mandatory_control_plane_offers.assert_called_once()
-
-    @patch(
-        "sunbeam.features.shared_filesystem.manila_data.get_mandatory_control_plane_offers",
-        return_value={
-            "keystone-offer-url": "keystone-offer",
-            "database-offer-url": "database-offer",
-            "amqp-offer-url": "amqp-offer",
-        },
-    )
-    @patch(
-        "sunbeam.features.shared_filesystem.manila_data.read_config",
-        return_value={
-            "keystone-offer-url": "keystone-differ",
-            "database-offer-url": "database-offer",
-            "amqp-offer-url": "amqp-offer",
-        },
-    )
-    def test_get_accepted_unit_status_with_different_config(
-        self, get_mandatory_control_plane_offers, read_config
-    ):
-        accepted_status = self.add_manila_data_units_step.get_accepted_unit_status()
-        self.assertIn("blocked", accepted_status["workload"])
-        get_mandatory_control_plane_offers.assert_called_once()
-        read_config.assert_called_once()
-
-    @patch(
-        "sunbeam.features.shared_filesystem.manila_data.get_mandatory_control_plane_offers",
-        return_value={
-            "keystone-offer-url": "keystone-offer",
-            "database-offer-url": "database-offer",
-            "amqp-offer-url": "amqp-offer",
-        },
-    )
-    @patch(
-        "sunbeam.features.shared_filesystem.manila_data.read_config",
-        side_effect=ConfigItemNotFoundException("config not found"),
-    )
-    def test_get_accepted_unit_status_with_config_exception(
-        self, get_mandatory_control_plane_offers, read_config
-    ):
-        accepted_status = self.add_manila_data_units_step.get_accepted_unit_status()
-        self.assertIn("blocked", accepted_status["workload"])
-        get_mandatory_control_plane_offers.assert_called_once()
-        read_config.assert_called_once()
 
 
 class TestDestroyManilaDataApplicationStep(unittest.TestCase):

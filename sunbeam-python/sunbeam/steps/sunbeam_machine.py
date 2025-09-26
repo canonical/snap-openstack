@@ -4,11 +4,11 @@
 import logging
 
 from sunbeam.clusterd.client import Client
+from sunbeam.core.common import Role
 from sunbeam.core.deployment import Deployment, Networks
 from sunbeam.core.juju import JujuHelper
 from sunbeam.core.manifest import Manifest
 from sunbeam.core.steps import (
-    AddMachineUnitsStep,
     DeployMachineApplicationStep,
     DestroyMachineApplicationStep,
     RemoveMachineUnitsStep,
@@ -18,9 +18,9 @@ from sunbeam.core.terraform import TerraformHelper
 LOG = logging.getLogger(__name__)
 CONFIG_KEY = "TerraformVarsSunbeamMachine"
 APPLICATION = "sunbeam-machine"
-SUNBEAM_MACHINE_APP_TIMEOUT = 300  # 5 minutes, managing the application should be fast
+SUNBEAM_MACHINE_APP_TIMEOUT = 1800  # 30 minutes, deploys multiple units in parallel
 SUNBEAM_MACHINE_UNIT_TIMEOUT = (
-    1200  # 20 minutes, adding / removing units can take a long time
+    1800  # 30 minutes, adding / removing units, can be multiple units in parallel
 )
 SUBORDINATE_APPLICATIONS = ["epa-orchestrator"]
 
@@ -36,7 +36,6 @@ class DeploySunbeamMachineApplicationStep(DeployMachineApplicationStep):
         jhelper: JujuHelper,
         manifest: Manifest,
         model: str,
-        refresh: bool = False,
         proxy_settings: dict = {},
     ):
         super().__init__(
@@ -48,9 +47,9 @@ class DeploySunbeamMachineApplicationStep(DeployMachineApplicationStep):
             CONFIG_KEY,
             APPLICATION,
             model,
+            [Role.CONTROL, Role.COMPUTE, Role.STORAGE],
             "Deploy sunbeam-machine",
             "Deploying Sunbeam Machine",
-            refresh,
         )
         self.proxy_settings = proxy_settings
 
@@ -74,33 +73,6 @@ class DeploySunbeamMachineApplicationStep(DeployMachineApplicationStep):
                 "no_proxy": self.proxy_settings.get("NO_PROXY", ""),
             },
         }
-
-
-class AddSunbeamMachineUnitsStep(AddMachineUnitsStep):
-    """Add Sunbeam machine Units."""
-
-    def __init__(
-        self,
-        client: Client,
-        names: list[str] | str,
-        jhelper: JujuHelper,
-        model: str,
-    ):
-        super().__init__(
-            client,
-            names,
-            jhelper,
-            CONFIG_KEY,
-            APPLICATION,
-            model,
-            "Add Sunbeam-machine unit(s)",
-            "Adding Sunbeam Machine unit to machine(s)",
-            subordinate_applications=["epa-orchestrator"],
-        )
-
-    def get_unit_timeout(self) -> int:
-        """Return unit timeout in seconds."""
-        return SUNBEAM_MACHINE_UNIT_TIMEOUT
 
 
 class RemoveSunbeamMachineUnitsStep(RemoveMachineUnitsStep):

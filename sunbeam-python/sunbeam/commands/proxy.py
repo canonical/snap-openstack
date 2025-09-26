@@ -84,7 +84,6 @@ def _update_proxy(proxy: dict, deployment: Deployment, show_hints: bool):
             jhelper,
             manifest,
             deployment.openstack_machines_model,
-            refresh=True,
             proxy_settings=proxy_settings,
         )
     )

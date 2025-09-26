@@ -146,7 +146,6 @@ class LatestInChannelCoordinator(UpgradeCoordinator):
                 self.jhelper,
                 self.manifest,
                 self.deployment.openstack_machines_model,
-                refresh=True,
             ),
         ]
 
@@ -187,7 +186,6 @@ class LatestInChannelCoordinator(UpgradeCoordinator):
                     self.jhelper,
                     self.manifest,
                     self.deployment.openstack_machines_model,
-                    refresh=True,
                 ),
                 TerraformInitStep(self.deployment.get_tfhelper("cinder-volume-plan")),
                 DeployCinderVolumeApplicationStep(
@@ -197,7 +195,6 @@ class LatestInChannelCoordinator(UpgradeCoordinator):
                     self.jhelper,
                     self.manifest,
                     self.deployment.openstack_machines_model,
-                    refresh=True,
                 ),
                 TerraformInitStep(self.deployment.get_tfhelper("hypervisor-plan")),
                 ReapplyHypervisorTerraformPlanStep(

@@ -70,7 +70,6 @@ def resize(
                     jhelper,
                     manifest,
                     deployment.openstack_machines_model,
-                    refresh=True,
                 ),
                 SetCephMgrPoolSizeStep(
                     client,
@@ -108,7 +107,6 @@ def resize(
                     jhelper,
                     manifest,
                     deployment.openstack_machines_model,
-                    refresh=True,
                 ),
             ]
         )

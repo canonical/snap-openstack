@@ -17,7 +17,6 @@ from sunbeam.core.juju import (
 )
 from sunbeam.core.manifest import Manifest
 from sunbeam.core.steps import (
-    AddMachineUnitsStep,
     DeployMachineApplicationStep,
     DestroyMachineApplicationStep,
 )
@@ -26,8 +25,8 @@ from sunbeam.core.terraform import TerraformException, TerraformHelper
 LOG = logging.getLogger(__name__)
 CONFIG_KEY = "TerraformVarsManilaDataPlan"
 APPLICATION = "manila-data"
-MANILA_DATA_APP_TIMEOUT = 600
-MANILA_DATA_UNIT_TIMEOUT = 600
+MANILA_DATA_APP_TIMEOUT = 1800  # Can trigger multiple units deploy in parallel
+MANILA_DATA_UNIT_TIMEOUT = 1800
 
 
 def get_mandatory_control_plane_offers(
@@ -55,7 +54,6 @@ class DeployManilaDataApplicationStep(DeployMachineApplicationStep):
         jhelper: JujuHelper,
         manifest: Manifest,
         model: str,
-        refresh: bool = False,
     ):
         super().__init__(
             deployment,
@@ -66,9 +64,9 @@ class DeployManilaDataApplicationStep(DeployMachineApplicationStep):
             CONFIG_KEY,
             APPLICATION,
             model,
+            [],
             "Deploy Manila Data",
             "Deploying Manila Data",
-            refresh,
         )
         self._offers: dict[str, str | None] = {}
 
@@ -81,7 +79,20 @@ class DeployManilaDataApplicationStep(DeployMachineApplicationStep):
         accepted_status = super().get_accepted_application_status()
         offers = self._get_offers()
         if not offers or not all(offers.values()):
-            accepted_status.append("blocked")
+            if "blocked" not in accepted_status:
+                accepted_status.append("blocked")
+
+        try:
+            config = read_config(self.client, CONFIG_KEY)
+        except ConfigItemNotFoundException:
+            config = {}
+
+        # check if values in offers are the same in config
+        for key, value in offers.items():
+            if key not in config or config[key] != value:
+                if "blocked" not in accepted_status:
+                    accepted_status.append("blocked")
+
         return accepted_status
 
     def _get_offers(self):
@@ -93,7 +104,13 @@ class DeployManilaDataApplicationStep(DeployMachineApplicationStep):
 
     def extra_tfvars(self) -> dict:
         """Extra terraform vars to pass to terraform apply."""
-        # storage_nodes = self.client.cluster.list_nodes_by_role("storage")
+        nodes = self.client.cluster.list_nodes_by_role("storage")
+        machine_ids = {
+            node.get("machineid") for node in nodes if node.get("machineid") != -1
+        }
+        if machine_ids:
+            machine_ids = {sorted(machine_ids)[0]}
+
         tfvars: dict[str, Any] = {
             "endpoint_bindings": [
                 {
@@ -113,59 +130,12 @@ class DeployManilaDataApplicationStep(DeployMachineApplicationStep):
                 },
             ],
             "charm-manila-data-config": {},
+            "machine_ids": list(machine_ids),
         }
 
         tfvars.update(self._get_offers())
 
         return tfvars
-
-
-class AddManilaDataUnitsStep(AddMachineUnitsStep):
-    """Add Manila Data Unit."""
-
-    def __init__(
-        self,
-        client: Client,
-        names: list[str] | str,
-        jhelper: JujuHelper,
-        model: str,
-        openstack_tfhelper: TerraformHelper,
-    ):
-        super().__init__(
-            client,
-            names,
-            jhelper,
-            CONFIG_KEY,
-            APPLICATION,
-            model,
-            "Add Manila Data unit",
-            "Adding Manila Data unit to machine",
-        )
-        self.os_tfhelper = openstack_tfhelper
-
-    def get_unit_timeout(self) -> int:
-        """Return unit timeout in seconds."""
-        return MANILA_DATA_UNIT_TIMEOUT
-
-    def get_accepted_unit_status(self) -> dict[str, list[str]]:
-        """Accepted status to pass wait_units_ready function."""
-        offers = get_mandatory_control_plane_offers(self.os_tfhelper)
-
-        allow_blocked = {"agent": ["idle"], "workload": ["active", "blocked"]}
-        if not offers or not all(offers.values()):
-            return allow_blocked
-
-        try:
-            config = read_config(self.client, CONFIG_KEY)
-        except ConfigItemNotFoundException:
-            config = {}
-
-        # check if values in offers are the same in config
-        for key, value in offers.items():
-            if key not in config or config[key] != value:
-                return allow_blocked
-
-        return super().get_accepted_unit_status()
 
 
 class DestroyManilaDataApplicationStep(DestroyMachineApplicationStep):

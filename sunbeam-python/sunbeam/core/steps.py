@@ -3,7 +3,6 @@
 
 import abc
 import logging
-import queue
 import typing
 
 import tenacity
@@ -17,17 +16,16 @@ from sunbeam.core.common import (
     BaseStep,
     Result,
     ResultType,
+    Role,
     convert_retry_failure_as_result,
     read_config,
-    update_config,
-    update_status_background,
+    roles_to_str_list,
 )
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import (
     ApplicationNotFoundException,
     JujuException,
     JujuHelper,
-    JujuWaitException,
     ModelNotFoundException,
 )
 from sunbeam.core.k8s import K8SHelper
@@ -69,9 +67,9 @@ class DeployMachineApplicationStep(BaseStep):
         config: str,
         application: str,
         model: str,
+        roles: list[Role] | list[list[Role]] | None = None,
         banner: str = "",
         description: str = "",
-        refresh: bool = False,
     ):
         super().__init__(banner, description)
         self.deployment = deployment
@@ -82,8 +80,7 @@ class DeployMachineApplicationStep(BaseStep):
         self.config = config
         self.application = application
         self.model = model
-        # Set refresh flag to True to redeploy the application
-        self.refresh = refresh
+        self.roles = roles or []
 
     def extra_tfvars(self) -> dict:
         """Extra terraform vars to pass to terraform apply."""
@@ -97,22 +94,6 @@ class DeployMachineApplicationStep(BaseStep):
         """Application timeout in seconds."""
         return 600
 
-    def is_skip(self, status: Status | None = None) -> Result:
-        """Determines if the step should be skipped or not.
-
-        :return: ResultType.SKIPPED if the Step should be skipped,
-                ResultType.COMPLETED or ResultType.FAILED otherwise
-        """
-        if self.refresh:
-            return Result(ResultType.COMPLETED)
-
-        try:
-            self.jhelper.get_application(self.application, self.model)
-        except ApplicationNotFoundException:
-            return Result(ResultType.COMPLETED)
-
-        return Result(ResultType.SKIPPED)
-
     def get_accepted_application_status(self) -> list[str]:
         """Accepted status to pass wait_application_ready function."""
         return ["active", "unknown"]
@@ -125,22 +106,29 @@ class DeployMachineApplicationStep(BaseStep):
     )
     def run(self, status: Status | None = None) -> Result:
         """Apply terraform configuration to deploy sunbeam machine."""
-        machine_ids: list[str] = []
-
-        try:
-            app = self.jhelper.get_application(self.application, self.model)
-            machine_ids.extend(unit.machine for unit in app.units.values())
-        except ApplicationNotFoundException as e:
-            LOG.debug(str(e))
-
         try:
             extra_tfvars = self.extra_tfvars()
-            extra_tfvars.update(
-                {
-                    "machine_ids": machine_ids,
-                    "machine_model": self.model,
-                }
-            )
+            extra_tfvars["machine_model"] = self.model
+            if "machine_ids" not in extra_tfvars:
+                machine_ids: set[str] = set()
+                nodes: list[dict] = []
+
+                for role in self.roles:
+                    if isinstance(role, Role):
+                        role = [role]
+                    nodes = self.client.cluster.list_nodes_by_role(
+                        roles_to_str_list(role)
+                    )
+                    machine_ids.update(
+                        {
+                            node["machineid"]
+                            for node in nodes
+                            if node.get("machineid", -1) != -1
+                        }
+                    )
+
+                extra_tfvars["machine_ids"] = sorted(machine_ids)
+
             self.tfhelper.update_tfvars_and_apply_tf(
                 self.client,
                 self.manifest,
@@ -164,140 +152,6 @@ class DeployMachineApplicationStep(BaseStep):
             LOG.warning(str(e))
             return Result(ResultType.FAILED, str(e))
 
-        return Result(ResultType.COMPLETED)
-
-
-class AddMachineUnitsStep(BaseStep):
-    """Base class to add units of machine application."""
-
-    def __init__(
-        self,
-        client: Client,
-        names: list[str] | str,
-        jhelper: JujuHelper,
-        config: str,
-        application: str,
-        model: str,
-        banner: str = "",
-        description: str = "",
-        subordinate_applications: list[str] | None = None,
-    ):
-        super().__init__(banner, description)
-        self.client = client
-        if isinstance(names, str):
-            names = [names]
-        self.names = names
-        self.jhelper = jhelper
-        self.config = config
-        self.application = application
-        self.model = model
-        self.to_deploy: set[str] = set()
-        self.subordinate_applications = subordinate_applications or []
-
-    def get_unit_timeout(self) -> int:
-        """Return unit timeout in seconds."""
-        return 600  # 10 minutes
-
-    def is_skip(self, status: Status | None = None) -> Result:
-        """Determines if the step should be skipped or not.
-
-        :return: ResultType.SKIPPED if the Step should be skipped,
-                ResultType.COMPLETED or ResultType.FAILED otherwise
-        """
-        if len(self.names) == 0:
-            return Result(ResultType.SKIPPED)
-        nodes: list[dict] = self.client.cluster.list_nodes()
-
-        filtered_nodes = list(filter(lambda node: node["name"] in self.names, nodes))
-        if len(filtered_nodes) != len(self.names):
-            filtered_node_names = [node["name"] for node in filtered_nodes]
-            missing_nodes = set(self.names) - set(filtered_node_names)
-            return Result(
-                ResultType.FAILED,
-                f"Nodes '{','.join(missing_nodes)}' do not exist in cluster database",
-            )
-
-        nodes_without_machine_id = []
-
-        for node in filtered_nodes:
-            node_machine_id = node.get("machineid", -1)
-            if node_machine_id == -1:
-                nodes_without_machine_id.append(node["name"])
-                continue
-            self.to_deploy.add(str(node_machine_id))
-
-        if len(nodes_without_machine_id) > 0:
-            return Result(
-                ResultType.FAILED,
-                f"Nodes '{','.join(nodes_without_machine_id)}' do not have machine id,"
-                " are they deployed?",
-            )
-        try:
-            app = self.jhelper.get_application(self.application, self.model)
-            deployed_units_machine_ids = {unit.machine for unit in app.units.values()}
-        except ApplicationNotFoundException:
-            return Result(
-                ResultType.FAILED,
-                f"Application {self.application} has not been deployed",
-            )
-
-        self.to_deploy -= deployed_units_machine_ids
-        if len(self.to_deploy) == 0:
-            return Result(ResultType.SKIPPED, "No new units to deploy")
-
-        return Result(ResultType.COMPLETED)
-
-    def add_machine_id_to_tfvar(self) -> None:
-        """Add machine id to terraform vars saved in cluster db."""
-        try:
-            tfvars = read_config(self.client, self.config)
-        except ConfigItemNotFoundException:
-            tfvars = {}
-
-        machine_ids = set(tfvars.get("machine_ids", []))
-
-        if len(self.to_deploy) > 0 and self.to_deploy.issubset(machine_ids):
-            LOG.debug("All machine ids are already in tfvars, skipping update")
-            return
-
-        machine_ids.update(self.to_deploy)
-        tfvars.update({"machine_ids": sorted(machine_ids)})
-        update_config(self.client, self.config, tfvars)
-
-    def get_accepted_unit_status(self) -> dict[str, list[str]]:
-        """Accepted status to pass wait_units_ready function."""
-        return {"agent": ["idle"], "workload": ["active"]}
-
-    def run(self, status: Status | None = None) -> Result:
-        """Add unit to machine application on Juju model."""
-        try:
-            unit_names = self.jhelper.add_unit(
-                self.model, self.application, list(self.to_deploy)
-            )
-            self.add_machine_id_to_tfvar()
-        except ApplicationNotFoundException as e:
-            LOG.warning(str(e))
-            return Result(ResultType.FAILED, str(e))
-
-        apps = [self.application, *self.subordinate_applications]
-        status_queue: queue.Queue[str] = queue.Queue()
-        task = update_status_background(self, apps, status_queue, status)
-        accepted_status = self.get_accepted_unit_status()
-        try:
-            self.jhelper.wait_until_desired_status(
-                self.model,
-                apps,
-                units=unit_names,
-                status=accepted_status["workload"],
-                agent_status=accepted_status["agent"],
-                timeout=self.get_unit_timeout(),
-                queue=status_queue,
-            )
-        except (JujuWaitException, TimeoutError) as e:
-            LOG.warning(str(e))
-            return Result(ResultType.FAILED, str(e))
-        finally:
-            task.stop()
         return Result(ResultType.COMPLETED)
 
 

@@ -9,10 +9,9 @@ from rich.status import Status
 import sunbeam.steps.microceph as microceph
 from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import (
-    ConfigItemNotFoundException,
     NodeNotExistInClusterException,
 )
-from sunbeam.core.common import BaseStep, Result, ResultType, Role, read_config
+from sunbeam.core.common import BaseStep, Result, ResultType, Role
 from sunbeam.core.deployment import Deployment, Networks
 from sunbeam.core.juju import (
     ApplicationNotFoundException,
@@ -20,7 +19,6 @@ from sunbeam.core.juju import (
 )
 from sunbeam.core.manifest import Manifest
 from sunbeam.core.steps import (
-    AddMachineUnitsStep,
     DeployMachineApplicationStep,
     DestroyMachineApplicationStep,
     RemoveMachineUnitsStep,
@@ -32,7 +30,7 @@ CONFIG_KEY = "TerraformVarsCinderVolumePlan"
 APPLICATION = "cinder-volume"
 CINDER_VOLUME_APP_TIMEOUT = 1200
 CINDER_VOLUME_UNIT_TIMEOUT = (
-    1200  # 20 minutes, adding / removing units can take a long time
+    1800  # 30 minutes, adding / removing units can take a long time
 )
 
 
@@ -63,7 +61,6 @@ class DeployCinderVolumeApplicationStep(DeployMachineApplicationStep):
         jhelper: JujuHelper,
         manifest: Manifest,
         model: str,
-        refresh: bool = False,
     ):
         super().__init__(
             deployment,
@@ -74,9 +71,9 @@ class DeployCinderVolumeApplicationStep(DeployMachineApplicationStep):
             CONFIG_KEY,
             APPLICATION,
             model,
+            [Role.STORAGE],
             "Deploy Cinder Volume",
             "Deploying Cinder Volume",
-            refresh,
         )
         self._offers: dict[str, str | None] = {}
 
@@ -163,54 +160,6 @@ class DeployCinderVolumeApplicationStep(DeployMachineApplicationStep):
             tfvars.update(self._get_offers())
 
         return tfvars
-
-
-class AddCinderVolumeUnitsStep(AddMachineUnitsStep):
-    """Add Cinder Volume Unit."""
-
-    def __init__(
-        self,
-        client: Client,
-        names: list[str] | str,
-        jhelper: JujuHelper,
-        model: str,
-        openstack_tfhelper: TerraformHelper,
-    ):
-        super().__init__(
-            client,
-            names,
-            jhelper,
-            CONFIG_KEY,
-            APPLICATION,
-            model,
-            "Add Cinder Volume unit",
-            "Adding Cinder Volume unit to machine",
-        )
-        self.os_tfhelper = openstack_tfhelper
-
-    def get_unit_timeout(self) -> int:
-        """Return unit timeout in seconds."""
-        return CINDER_VOLUME_UNIT_TIMEOUT
-
-    def get_accepted_unit_status(self) -> dict[str, list[str]]:
-        """Accepted status to pass wait_units_ready function."""
-        offers = get_mandatory_control_plane_offers(self.os_tfhelper)
-
-        allow_blocked = {"agent": ["idle"], "workload": ["active", "blocked"]}
-        if not offers or not all(offers.values()):
-            return allow_blocked
-
-        try:
-            config = read_config(self.client, CONFIG_KEY)
-        except ConfigItemNotFoundException:
-            config = {}
-
-        # check if values in offers are the same in config
-        for key, value in offers.items():
-            if key not in config or config[key] != value:
-                return allow_blocked
-
-        return super().get_accepted_unit_status()
 
 
 class RemoveCinderVolumeUnitsStep(RemoveMachineUnitsStep):

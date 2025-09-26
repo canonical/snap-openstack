@@ -23,6 +23,7 @@ from sunbeam.core.common import (
     BaseStep,
     Result,
     ResultType,
+    Role,
     convert_retry_failure_as_result,
     read_config,
     update_config,
@@ -38,7 +39,6 @@ from sunbeam.core.manifest import Manifest
 from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.core.openstack_api import remove_hypervisor
 from sunbeam.core.steps import (
-    AddMachineUnitsStep,
     DeployMachineApplicationStep,
     DestroyMachineApplicationStep,
 )
@@ -57,7 +57,7 @@ else:
 LOG = logging.getLogger(__name__)
 CONFIG_KEY = "TerraformVarsHypervisor"
 APPLICATION = "openstack-hypervisor"
-HYPERVISOR_APP_TIMEOUT = 300  # 5 minutes, managing the application should be fast
+HYPERVISOR_APP_TIMEOUT = 1800  # 30 minutes, includes adding / removing units
 HYPERVISOR_DESTROY_TIMEOUT = 600
 HYPERVISOR_UNIT_TIMEOUT = (
     1800  # 30 minutes, adding / removing units can take a long time
@@ -79,7 +79,6 @@ class DeployHypervisorApplicationStep(DeployMachineApplicationStep):
         jhelper: JujuHelper,
         manifest: Manifest,
         model: str,
-        refresh: bool = False,
     ):
         super().__init__(
             deployment,
@@ -90,9 +89,9 @@ class DeployHypervisorApplicationStep(DeployMachineApplicationStep):
             CONFIG_KEY,
             APPLICATION,
             model,
+            [Role.COMPUTE],
             "Deploy OpenStack Hypervisor",
             "Deploying OpenStack Hypervisor",
-            refresh=refresh,
         )
         self.openstack_tfhelper = openstack_tfhelper
         self.openstack_model = OPENSTACK_MODEL
@@ -207,38 +206,6 @@ class ReapplyHypervisorOptionalIntegrationsStep(DeployHypervisorApplicationStep)
             "-target=juju_integration.hypervisor-cinder-ceph",
             "-target=juju_integration.hypervisor-masakari",
         ]
-
-
-class AddHypervisorUnitsStep(AddMachineUnitsStep):
-    def __init__(
-        self,
-        client: Client,
-        names: list[str] | str,
-        jhelper: JujuHelper,
-        model: str,
-    ):
-        super().__init__(
-            client,
-            names,
-            jhelper,
-            CONFIG_KEY,
-            APPLICATION,
-            model,
-            "Add Openstack-Hypervisor unit(s)",
-            "Adding Openstack Hypervisor unit to machine(s)",
-        )
-
-    def get_accepted_unit_status(self) -> dict[str, list[str]]:
-        """Accepted status to pass wait_units_ready function."""
-        workload_statuses = ["active"]
-        if len(self.client.cluster.list_nodes_by_role("storage")) < 1:
-            LOG.debug("No storage nodes found, allowing hypervisor waiting status")
-            workload_statuses.append("waiting")
-        return {"agent": ["idle"], "workload": workload_statuses}
-
-    def get_unit_timeout(self) -> int:
-        """Return unit timeout in seconds."""
-        return HYPERVISOR_UNIT_TIMEOUT
 
 
 class RemoveHypervisorUnitStep(BaseStep, JujuStepHelper):

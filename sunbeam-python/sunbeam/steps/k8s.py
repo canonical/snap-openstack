@@ -68,7 +68,6 @@ from sunbeam.core.questions import (
     write_answers,
 )
 from sunbeam.core.steps import (
-    AddMachineUnitsStep,
     DeployMachineApplicationStep,
     DestroyMachineApplicationStep,
     RemoveMachineUnitsStep,
@@ -96,7 +95,7 @@ LOG = logging.getLogger(__name__)
 K8S_CONFIG_KEY = "TerraformVarsK8S"
 K8S_ADDONS_CONFIG_KEY = "TerraformVarsK8SAddons"
 APPLICATION = "k8s"
-K8S_APP_TIMEOUT = 300  # 5 minutes, managing the application should be fast
+K8S_APP_TIMEOUT = 1800  # 30 minutes, step includes adding / removing units
 K8S_DESTROY_TIMEOUT = 900
 K8S_UNIT_TIMEOUT = 1800  # 30 minutes, adding / removing units can take a long time
 K8S_ENABLE_ADDONS_TIMEOUT = 300  # 5 minutes
@@ -205,12 +204,13 @@ class DeployK8SApplicationStep(DeployMachineApplicationStep):
             K8S_CONFIG_KEY,
             APPLICATION,
             model,
+            [Role.CONTROL],
             "Deploy K8S",
             "Deploying K8S",
-            refresh,
         )
 
         self.accept_defaults = accept_defaults
+        self.refresh = refresh
         self.variables: dict = {}
         self.ranges: str | None = None
         self.traefik_variables: dict = {}
@@ -298,32 +298,6 @@ class DeployK8SApplicationStep(DeployMachineApplicationStep):
             "k8s_config": self._get_k8s_config_tfvars(),
         }
         return tfvars
-
-
-class AddK8SUnitsStep(AddMachineUnitsStep):
-    """Add K8S Unit."""
-
-    def __init__(
-        self,
-        client: Client,
-        names: list[str] | str,
-        jhelper: JujuHelper,
-        model: str,
-    ):
-        super().__init__(
-            client,
-            names,
-            jhelper,
-            K8S_CONFIG_KEY,
-            APPLICATION,
-            model,
-            "Add K8S unit",
-            "Adding K8S unit to machine",
-        )
-
-    def get_unit_timeout(self) -> int:
-        """Return unit timeout in seconds."""
-        return K8S_UNIT_TIMEOUT
 
 
 def _get_machines_space_ips(
