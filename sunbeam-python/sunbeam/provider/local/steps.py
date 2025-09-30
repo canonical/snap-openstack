@@ -28,7 +28,7 @@ from sunbeam.core.common import (
     SunbeamException,
     parse_ip_range_or_cidr,
 )
-from sunbeam.core.juju import ActionFailedException, JujuHelper
+from sunbeam.core.juju import ActionFailedException, JujuHelper, JujuStepHelper
 from sunbeam.core.manifest import Manifest
 from sunbeam.provider.common import nic_utils
 from sunbeam.steps import hypervisor
@@ -757,3 +757,214 @@ class LocalConfigDPDKStep(BaseConfigDPDKStep):
             return Result(ResultType.FAILED, msg)
 
         return Result(ResultType.COMPLETED)
+
+
+class ConfigureOpenStackNetworkAgentsLocalSettingsStep(BaseStep, JujuStepHelper):
+    """Configure openstack-network-agents local settings via charm config.
+
+    This is intended to run after microovn optional integrations are applied,
+    so juju-info relation to openstack-network-agents exists.
+    """
+
+    def __init__(
+        self,
+        jhelper: JujuHelper,
+        external_interface: str,
+        bridge_name: str,
+        physnet_name: str,
+        model: str,
+        enable_chassis_as_gw: bool = True,
+    ):
+        super().__init__(
+            "Configure OpenStack network agents",
+            "Setting openstack-network-agents local settings",
+        )
+        self.jhelper = jhelper
+        self.model = model
+        self.external_interface = external_interface
+        self.bridge_name = bridge_name
+        self.physnet_name = physnet_name
+        self.enable_chassis_as_gw = enable_chassis_as_gw
+
+    def is_skip(self, status: Status | None = None) -> Result:
+        """Check if openstack-network-agents is deployed."""
+        try:
+            self.jhelper.get_application("openstack-network-agents", self.model)
+        except Exception:
+            return Result(ResultType.SKIPPED, "openstack-network-agents not deployed")
+        return Result(ResultType.COMPLETED)
+
+    def run(self, status: Status | None = None) -> Result:
+        """Run action to configure openstack-network-agents local settings."""
+        try:
+            self.jhelper.wait_application_ready(
+                "openstack-network-agents",
+                self.model,
+                accepted_status=["active", "blocked", "waiting"],
+                timeout=600,
+            )
+
+            unit_name = None
+
+            try:
+                principal = self.jhelper.get_leader_unit("microovn", self.model)
+            except Exception:
+                app = self.jhelper.get_application("microovn", self.model)
+                principal = None
+                units_attr = getattr(app, "units", None)
+                if units_attr:
+                    try:
+                        principal = next(iter(units_attr)).name
+                    except Exception:
+                        principal = next(iter(units_attr.keys()))
+
+            if not principal or "/" not in principal:
+                return Result(
+                    ResultType.FAILED, "Could not determine principal microovn unit"
+                )
+
+            ordinal = principal.split("/", 1)[1]
+            unit_name = f"openstack-network-agents/{ordinal}"
+
+            LOG.debug(
+                "Running set-network-agents-local-settings on %s"
+                " (bridge=%s, physnet=%s, iface=%s, gw=%s)",
+                unit_name,
+                self.bridge_name,
+                self.physnet_name,
+                self.external_interface,
+                self.enable_chassis_as_gw,
+            )
+
+            self.jhelper.run_action(
+                unit_name,
+                self.model,
+                "set-network-agents-local-settings",
+                action_params={
+                    "external-interface": self.external_interface,
+                    "bridge-name": self.bridge_name,
+                    "physnet-name": self.physnet_name,
+                    "enable-chassis-as-gw": self.enable_chassis_as_gw,
+                },
+            )
+
+            return Result(ResultType.COMPLETED)
+
+        except Exception as e:
+            LOG.debug(
+                "Failed to configure openstack-network-agents via action: %s",
+                e,
+                exc_info=True,
+            )
+            return Result(
+                ResultType.FAILED, "Failed to configure openstack-network-agents"
+            )
+
+
+def network_node_questions():
+    return {
+        "external_interface": sunbeam.core.questions.PromptQuestion(
+            "External network's interface",
+            description=(
+                "Interface used by networking layer to allow remote access to cloud"
+                " instances. This interface must be unconfigured"
+                " (no IP address assigned) and connected to the external network."
+            ),
+        ),
+    }
+
+
+class LocalConfigureOpenStackNetworkAgentsStep(BaseStep):
+    """Prompt for external interface (or use manifest) and configure agents."""
+
+    def __init__(
+        self,
+        client: Client,
+        node_name: str,
+        jhelper: JujuHelper,
+        model: str,
+        manifest: Manifest | None = None,
+        accept_defaults: bool = False,
+        bridge_name: str = "br-ex",
+        physnet_name: str = "physnet1",
+        enable_chassis_as_gw: bool = True,
+    ):
+        super().__init__(
+            "Configure OpenStack network agents (local)",
+            "Configuring openstack-network-agents local settings",
+        )
+        self.client = client
+        self.node_name = node_name
+        self.jhelper = jhelper
+        self.model = model
+        self.manifest = manifest
+        self.accept_defaults = accept_defaults
+        self.external_interface: str | None = None
+        self.bridge_name = bridge_name
+        self.physnet_name = physnet_name
+        self.enable_chassis_as_gw = enable_chassis_as_gw
+
+    def has_prompts(self) -> bool:
+        """Returns true if the step has prompts that it can ask the user."""
+        return True
+
+    def _prompt_for_external_nic(self, console: Console | None) -> str:
+        candidates: list[str] = []
+        all_nics: list[dict] = []
+
+        qbank = sunbeam.core.questions.QuestionBank(
+            questions=network_node_questions(),
+            console=console,
+            accept_defaults=self.accept_defaults,
+        )
+
+        if not candidates:
+            return qbank.external_interface.ask()
+
+        while True:
+            nic = qbank.external_interface.ask(
+                new_default=candidates[0], new_choices=candidates
+            )
+            if not nic:
+                continue
+            state = next((i for i in all_nics if i.get("name") == nic), None) or {}
+            if state.get("configured"):
+                if not sunbeam.core.questions.ConfirmQuestion(
+                    f"WARNING: Interface {nic} is configured. "
+                    "Any configuration will be lost. Continue?"
+                ).ask():
+                    continue
+            if state.get("up") and not state.get("connected"):
+                if not sunbeam.core.questions.ConfirmQuestion(
+                    f"WARNING: Interface {nic} is not detected as connected. Continue?",
+                    description="It may not work as expected.",
+                ).ask():
+                    continue
+            return nic
+
+    def prompt(self, console: Console | None = None, show_hint: bool = False) -> None:
+        """Prompt for external interface if not provided in manifest."""
+        if self.manifest and (ext := self.manifest.core.config.external_network):
+            hostmap = (ext.nics or {}) if hasattr(ext, "nics") else {}
+            nic = hostmap.get(self.node_name)
+            if not nic and hasattr(ext, "nic"):
+                nic = getattr(ext, "nic")
+            if nic:
+                self.external_interface = nic
+                return
+        self.external_interface = self._prompt_for_external_nic(console)
+
+    def run(self, status: Status | None = None) -> Result:
+        """Configure openstack-network-agents local settings via action."""
+        if not self.external_interface:
+            return Result(ResultType.FAILED, "No external interface selected")
+
+        step = ConfigureOpenStackNetworkAgentsLocalSettingsStep(
+            jhelper=self.jhelper,
+            external_interface=self.external_interface,
+            bridge_name=self.bridge_name,
+            physnet_name=self.physnet_name,
+            model=self.model,
+            enable_chassis_as_gw=self.enable_chassis_as_gw,
+        )
+        return step.run(status)

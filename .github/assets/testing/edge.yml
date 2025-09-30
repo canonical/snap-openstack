@@ -43,6 +43,8 @@ core:
         channel: squid/edge
         config:
           snap-channel: squid/edge
+      microovn:
+        channel: latest/edge
       mysql-k8s:
         channel: 8.0/stable
         storage:

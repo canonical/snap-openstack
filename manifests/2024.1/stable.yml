@@ -39,6 +39,8 @@ core:
         channel: squid/stable
         config:
           snap-channel: squid/stable
+      microovn:
+        channel: latest/edge
 features:
   caas:
     software:

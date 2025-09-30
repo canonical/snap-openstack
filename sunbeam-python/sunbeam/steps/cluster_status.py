@@ -22,7 +22,7 @@ from sunbeam.core.common import (
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import JujuHelper, ModelNotFoundException
 from sunbeam.core.steps import BaseStep
-from sunbeam.steps import clusterd, hypervisor, k8s, microceph
+from sunbeam.steps import clusterd, hypervisor, k8s, microceph, microovn
 from sunbeam.utils import merge_dict
 
 LOG = logging.getLogger(__name__)
@@ -64,7 +64,9 @@ def format_status(
     deployment: Deployment,
     status: dict,
     format: str,
-    mandatory_columns: frozenset[str] = frozenset(("compute", "storage", "control")),
+    mandatory_columns: frozenset[str] = frozenset(
+        ("compute", "storage", "control", "network")
+    ),
 ) -> Sequence[rich.console.RenderableType]:
     """Return a list renderables for the status.
 
@@ -128,6 +130,7 @@ class ClusterStatusStep(abc.ABC, BaseStep):
             k8s.APPLICATION: "control",
             hypervisor.APPLICATION: "compute",
             microceph.APPLICATION: "storage",
+            microovn.APPLICATION: "network",
         }
 
     @abc.abstractmethod
