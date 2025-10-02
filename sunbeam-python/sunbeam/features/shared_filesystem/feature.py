@@ -7,19 +7,14 @@ from pathlib import Path
 import click
 from packaging.version import Version
 from rich.console import Console
-from rich.status import Status
 
 from sunbeam.core.common import (
     BaseStep,
-    Result,
-    ResultType,
     run_plan,
 )
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import (
-    JujuException,
     JujuHelper,
-    JujuStepHelper,
 )
 from sunbeam.core.manifest import (
     AddManifestStep,
@@ -38,7 +33,6 @@ from sunbeam.features.interface.v1.openstack import (
     TerraformPlanLocation,
 )
 from sunbeam.features.shared_filesystem import manila_data
-from sunbeam.steps import microceph
 from sunbeam.utils import click_option_show_hints, pass_method_obj
 from sunbeam.versions import OPENSTACK_CHANNEL
 
@@ -50,85 +44,6 @@ MANILA_DATA_APP = "manila-data"
 
 LOG = logging.getLogger(__name__)
 console = Console()
-
-
-class CreateCephNFSOfferStep(BaseStep, JujuStepHelper):
-    """Create microceph-ceph-nfs offer using Terraform."""
-
-    def __init__(
-        self,
-        deployment: Deployment,
-        jhelper: JujuHelper,
-    ):
-        super().__init__(
-            f"Create {microceph.NFS_OFFER_NAME} offer",
-            f"Creating {microceph.NFS_OFFER_NAME} offer",
-        )
-        self.model = deployment.openstack_machines_model
-        self.jhelper = jhelper
-
-    def is_skip(self, status: Status | None = None) -> Result:
-        """Determines if the step should be skipped or not.
-
-        :return: ResultType.SKIPPED if the Step should be skipped,
-                ResultType.COMPLETED or ResultType.FAILED otherwise
-        """
-        if self.jhelper.offer_exists(self.model, microceph.NFS_OFFER_NAME):
-            return Result(ResultType.SKIPPED)
-
-        return Result(ResultType.COMPLETED)
-
-    def run(self, status: Status | None = None) -> Result:
-        """Apply terraform configuration to deploy microceph-ceph-nfs offer."""
-        try:
-            self.jhelper.create_offer(
-                self.model,
-                microceph.APPLICATION,
-                microceph.CEPH_NFS_RELATION,
-                microceph.NFS_OFFER_NAME,
-            )
-        except JujuException as e:
-            LOG.exception(f"Error creating {microceph.NFS_OFFER_NAME} offer")
-            return Result(ResultType.FAILED, str(e))
-
-        return Result(ResultType.COMPLETED)
-
-
-class RemoveCephNFSOfferStep(BaseStep, JujuStepHelper):
-    """Remove microceph-ceph-nfs offer using Terraform."""
-
-    def __init__(
-        self,
-        deployment: Deployment,
-        jhelper: JujuHelper,
-    ):
-        super().__init__(
-            f"Remove {microceph.NFS_OFFER_NAME} offer",
-            f"Removing {microceph.NFS_OFFER_NAME} offer",
-        )
-        self.model = deployment.openstack_machines_model
-        self.jhelper = jhelper
-
-    def is_skip(self, status: Status | None = None) -> Result:
-        """Determines if the step should be skipped or not.
-
-        :return: ResultType.SKIPPED if the Step should be skipped,
-                ResultType.COMPLETED or ResultType.FAILED otherwise
-        """
-        if not self.jhelper.offer_exists(self.model, microceph.NFS_OFFER_NAME):
-            return Result(ResultType.SKIPPED)
-
-        return Result(ResultType.COMPLETED)
-
-    def run(self, status: Status | None = None) -> Result:
-        """Execute configuration using terraform."""
-        try:
-            self.jhelper.remove_offer(self.model, microceph.NFS_OFFER_NAME)
-        except JujuException as e:
-            LOG.exception(f"Error removing {microceph.NFS_OFFER_NAME} offer")
-            return Result(ResultType.FAILED, str(e))
-
-        return Result(ResultType.COMPLETED)
 
 
 class SharedFilesystemFeature(OpenStackControlPlaneFeature):
@@ -226,7 +141,6 @@ class SharedFilesystemFeature(OpenStackControlPlaneFeature):
             ]
         )
 
-        ceph_nfs_plan = [CreateCephNFSOfferStep(deployment, jhelper)]
         manila_data_plan = [
             TerraformInitStep(tfhelper_manila_data),
             manila_data.DeployManilaDataApplicationStep(
@@ -239,7 +153,7 @@ class SharedFilesystemFeature(OpenStackControlPlaneFeature):
             ),
         ]
 
-        run_plan(ceph_nfs_plan, console, show_hints)
+        run_plan(plan, console, show_hints)
         run_plan(manila_data_plan, console, show_hints)
 
         click.echo("Shared Filesystems enabled.")
@@ -255,7 +169,6 @@ class SharedFilesystemFeature(OpenStackControlPlaneFeature):
             DisableOpenStackApplicationStep(deployment, tfhelper, jhelper, self),
         ]
 
-        ceph_nfs_plan = [RemoveCephNFSOfferStep(deployment, jhelper)]
         manila_data_plan = [
             TerraformInitStep(tfhelper_manila_data),
             manila_data.DestroyManilaDataApplicationStep(
@@ -269,7 +182,6 @@ class SharedFilesystemFeature(OpenStackControlPlaneFeature):
 
         run_plan(manila_data_plan, console, show_hints)
         run_plan(plan, console, show_hints)
-        run_plan(ceph_nfs_plan, console, show_hints)
 
         click.echo("Shared Filesystems disabled.")
 

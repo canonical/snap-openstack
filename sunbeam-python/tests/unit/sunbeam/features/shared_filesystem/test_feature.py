@@ -8,7 +8,7 @@ import pytest
 
 from sunbeam.features.shared_filesystem import feature as manila_feature
 from sunbeam.features.shared_filesystem import manila_data
-from sunbeam.steps import microceph, openstack
+from sunbeam.steps import openstack
 
 
 @pytest.fixture()
@@ -66,12 +66,8 @@ class TestSharedFilesystemFeature:
         manila._manifest.core.software.charms = {}
         feature_config = Mock()
 
-        # Run enable plans, ceph-nfs offer is already created.
+        # Run enable plans.
         manila.run_enable_plans(deployment, feature_config, False)
-
-        # CreateCephNFSOfferStep calls.
-        jhelper.offer_exists.assert_called_once_with("foo", microceph.NFS_OFFER_NAME)
-        jhelper.create_offer.assert_not_called()
 
         # AddManilaDataUnitsStep calls.
         jhelper.wait_application_ready.assert_any_call(
@@ -79,18 +75,6 @@ class TestSharedFilesystemFeature:
             "foo",
             accepted_status=["active", "unknown", "blocked"],
             timeout=manila_data.MANILA_DATA_UNIT_TIMEOUT,
-        )
-
-        # Run enable plans, microceph-ceph-nfs doesn't exist.
-        jhelper.offer_exists.return_value = False
-
-        manila.run_enable_plans(deployment, feature_config, False)
-
-        jhelper.create_offer.assert_called_once_with(
-            "foo",
-            microceph.APPLICATION,
-            microceph.CEPH_NFS_RELATION,
-            microceph.NFS_OFFER_NAME,
         )
 
     @patch.object(manila_feature, "JujuHelper")
@@ -103,7 +87,7 @@ class TestSharedFilesystemFeature:
         manila._manifest = Mock()
         manila._manifest.core.software.charms = {}
 
-        # Run disable plans, ceph-nfs offer is already created.
+        # Run disable plans.
         manila.run_disable_plans(deployment, False)
 
         # DeployManilaDataApplicationStep calls.
@@ -130,18 +114,6 @@ class TestSharedFilesystemFeature:
         jhelper.wait_application_gone.assert_any_call(
             manila.set_application_names(deployment), "openstack", timeout=ANY
         )
-
-        # RemoveCephNFSOfferStep calls.
-        jhelper.offer_exists.assert_called_once_with("foo", microceph.NFS_OFFER_NAME)
-        jhelper.remove_offer.assert_called_once_with("foo", microceph.NFS_OFFER_NAME)
-
-        # Run disable plans, microceph-ceph-nfs doesn't exist.
-        jhelper.remove_offer.reset_mock()
-        jhelper.offer_exists.return_value = False
-
-        manila.run_disable_plans(deployment, False)
-
-        jhelper.remove_offer.assert_not_called()
 
     def test_set_tfvars_on_enable(self, deployment):
         manila = manila_feature.SharedFilesystemFeature()

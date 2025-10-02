@@ -311,54 +311,6 @@ def test_get_space_networks_invalid_cidr(jhelper, juju):
         jhelper.get_space_networks("test-model", "space")
 
 
-def test_create_offer(jhelper, juju):
-    juju.offer.side_effect = jubilant.CLIError(1, "offer", stderr="expected")
-
-    with pytest.raises(jujulib.JujuException):
-        jhelper.create_offer("test-model", "foo", "lish")
-
-    juju.offer.assert_called_once_with(
-        "admin/test-model.foo", endpoint="lish", name=None
-    )
-
-
-def test_remove_offer(jhelper, juju):
-    juju.cli.side_effect = (
-        None,
-        jubilant.CLIError(1, "remove-offer", stderr="expected"),
-    )
-
-    with pytest.raises(jujulib.JujuException):
-        jhelper.remove_offer("test-model", "foo")
-
-    juju.cli.assert_called_with(
-        "remove-offer", "admin/test-model.foo", include_model=False
-    )
-
-
-def test_offer_exists_true(jhelper, juju):
-    result = jhelper.offer_exists("test-model", "foo")
-
-    assert result
-    juju.cli.assert_called_once_with("show-offer", "admin/test-model.foo")
-
-
-def test_offer_exists_false(jhelper, juju):
-    juju.cli.side_effect = jubilant.CLIError(1, "show-offer", stderr="not found")
-
-    result = jhelper.offer_exists("test-model", "foo")
-
-    assert not result
-    juju.cli.assert_called_once_with("show-offer", "admin/test-model.foo")
-
-
-def test_offer_exists_fail(jhelper, juju):
-    juju.cli.side_effect = jubilant.CLIError(1, "show-offer", stderr="unexpected")
-
-    with pytest.raises(jujulib.JujuException):
-        jhelper.offer_exists("test-model", "foo")
-
-
 def test_remove_saas_success(jhelper, juju):
     jhelper.remove_saas("test-model", "saas1")
     juju.cli.assert_called()

@@ -1491,60 +1491,6 @@ class JujuHelper:
 
         return cidrs
 
-    def create_offer(
-        self,
-        model: str,
-        application_name: str,
-        endpoint: str,
-        offer_name: None | str = None,
-    ):
-        """Create an offer.
-
-        This function creates a juju offer for the given application and endpoint.
-        """
-        _model = self.get_model(model)["name"]  # ensure model is long name
-        try:
-            # Juju offer does not accept --model option, so switch the model explicitly
-            self._juju.cli("switch", _model, include_model=False)
-            self._juju.offer(
-                f"{_model}.{application_name}",
-                endpoint=endpoint,
-                name=offer_name,
-            )
-        except jubilant.CLIError as e:
-            raise JujuException(
-                f"Failed to create offer for "
-                f"{_model}.{application_name}:{endpoint}: {str(e)}"
-            ) from e
-
-    def remove_offer(self, model: str, offer_name: str):
-        """Remove a juju offer."""
-        _model = self.get_model(model)["name"]  # ensure model is long name
-        offer_url = f"{_model}.{offer_name}"
-        try:
-            self._juju.cli("switch", _model, include_model=False)
-            self._juju.cli("remove-offer", offer_url, include_model=False)
-        except jubilant.CLIError as e:
-            raise JujuException(f"Failed to remove offer {offer_url}: {str(e)}") from e
-
-    def offer_exists(self, model: str, offer_name: str) -> bool:
-        """Checks whether a juju offer exists."""
-        _model = self.get_model(model)["name"]  # ensure model is long name
-        offer_url = f"{_model}.{offer_name}"
-        # Command to run juju show-offer --model <> <offer-url>
-        # so set the model
-        self._juju.model = _model
-        try:
-            self._juju.cli("show-offer", offer_url)
-            return True
-        except jubilant.CLIError as e:
-            if "not found" in e.stderr:
-                return False
-
-            raise JujuException(
-                f"Failed to check if offer {offer_url} exists: {str(e)}"
-            ) from e
-
     def consume_offer(self, model: str, offer_url: str, alias: str = ""):
         """Consume an offer.
 
