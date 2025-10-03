@@ -20,7 +20,7 @@ test_data:
         set -o pipefail
         # LP: #2097451
         # LP: #2102175
-        tar xf repository.tar.gz
+        tar xzvf repository.tar.gz
         cd repository/testing/
         ./install_deps.sh
         ./deploy.sh
