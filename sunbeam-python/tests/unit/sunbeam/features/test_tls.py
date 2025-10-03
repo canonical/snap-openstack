@@ -8,7 +8,6 @@ import click
 import pytest
 
 import sunbeam.core.questions
-import sunbeam.features.interface.utils
 import sunbeam.features.tls.ca as ca
 import sunbeam.features.tls.common as tls
 import sunbeam.features.tls.vault as vault

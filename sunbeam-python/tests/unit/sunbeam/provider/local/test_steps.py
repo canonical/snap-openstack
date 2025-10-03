@@ -8,7 +8,6 @@ import pytest
 
 import sunbeam.core.questions
 import sunbeam.provider.local.steps as local_steps
-import sunbeam.utils
 from sunbeam.core.common import ResultType
 from sunbeam.provider.common import nic_utils
 

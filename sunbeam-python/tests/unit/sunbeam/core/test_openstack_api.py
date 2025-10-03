@@ -5,7 +5,6 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-import sunbeam.commands.configure
 import sunbeam.core.openstack_api
 
 FAKE_CREDS = {
