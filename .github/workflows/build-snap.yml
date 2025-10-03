@@ -44,7 +44,7 @@ jobs:
           name: local-${{ needs.build.outputs.snap }}
       - name: test
         run: |
-          ./testing/test-standalone.sh
+          ./testing/test-standalone.sh local-${{ needs.build.outputs.snap }}
       - name: Collect logs
         if: always()
         run: |
@@ -85,7 +85,7 @@ jobs:
   functional-test-maas:
     needs: build
     name: Functional test on MAAS
-    runs-on: [self-hosted, testflinger]
+    runs-on: [self-hosted, self-hosted-linux-amd64-noble-private-endpoint-medium]
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -131,7 +131,7 @@ jobs:
                     ./install_deps.sh
                     ./deploy.sh
                     cd ../
-                    ./testing/test.sh
+                    ./testing/test-multinode-maas.sh local-${{ needs.build.outputs.snap }}
                 '; then
                     scp -r "ubuntu@${DEVICE_IP}:repository/artifacts/" artifacts/ || true
                     find artifacts/
