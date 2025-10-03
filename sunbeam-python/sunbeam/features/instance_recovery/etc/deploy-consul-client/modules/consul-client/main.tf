@@ -57,3 +57,17 @@ resource "juju_integration" "consul-client-to-consul-server" {
     offer_url = var.consul-cluster-offer-url
   }
 }
+
+resource "juju_integration" "principal-application-to-consul-client-notify" {
+  model = var.principal-application-model
+
+  application {
+    name     = var.principal-application
+    endpoint = "consul-notify"
+  }
+
+  application {
+    name     = juju_application.consul-client.name
+    endpoint = "consul-notify"
+  }
+}

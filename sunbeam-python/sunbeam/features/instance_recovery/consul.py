@@ -119,6 +119,10 @@ class DeployConsulClientStep(BaseStep):
                     "endpoint": "consul",
                     "space": self.deployment.get_space(Networks.MANAGEMENT),
                 },
+                {
+                    "endpoint": "consul-notify",
+                    "space": self.deployment.get_space(Networks.MANAGEMENT),
+                },
             ]
         else:
             tfvars["enable-consul-management"] = False
@@ -140,6 +144,10 @@ class DeployConsulClientStep(BaseStep):
                     "endpoint": "consul",
                     "space": self.deployment.get_space(Networks.DATA),
                 },
+                {
+                    "endpoint": "consul-notify",
+                    "space": self.deployment.get_space(Networks.MANAGEMENT),
+                },
             ]
         else:
             tfvars["enable-consul-tenant"] = False
@@ -160,6 +168,10 @@ class DeployConsulClientStep(BaseStep):
                 {
                     "endpoint": "consul",
                     "space": self.deployment.get_space(Networks.STORAGE),
+                },
+                {
+                    "endpoint": "consul-notify",
+                    "space": self.deployment.get_space(Networks.MANAGEMENT),
                 },
             ]
         else:
