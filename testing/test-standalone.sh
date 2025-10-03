@@ -2,6 +2,19 @@
 set -x
 export COLUMNS=256
 
+if [$# -ne 1]; then
+    echo "Invalid number of arguments" >&2
+    echo "Usage:"
+    echo "  $0 <openstack_snap.snap>"
+fi
+
+TEST_SNAP_OPENSTACK=${1}
+
+if [[ ! -f "${TEST_SNAP_OPENSTACK}" ]]; then
+    echo "${TEST_SNAP_OPENSTACK}: No such file or directory" >&2
+    exit 1
+fi
+
 # Check docker, containerd and remove them if exists
 sudo apt remove --purge docker.io containerd runc -y
 sudo rm -rf /run/containerd
@@ -17,7 +30,7 @@ sudo nft chain ip filter FORWARD '{policy accept;}'
 sudo snap remove --purge lxd
 sudo snap install --channel 3.6 juju
 
-sudo snap install  ${{ needs.build.outputs.snap }} --dangerous
+sudo snap install --dangerous ${TEST_SNAP_OPENSTACK}
 sudo snap connect openstack:juju-bin juju:juju-bin
 openstack.sunbeam prepare-node-script --bootstrap | bash -x
 sudo snap connect openstack:dot-local-share-juju
