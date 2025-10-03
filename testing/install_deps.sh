@@ -2,7 +2,7 @@
 
 if [ "x$(which terragrunt)" != "x0" ]; then
     sudo wget -O /usr/local/bin/terragrunt https://github.com/gruntwork-io/terragrunt/releases/download/v0.87.1/terragrunt_linux_amd64
-    chmod +x /usr/local/bin/terragrunt
+    sudo chmod +x /usr/local/bin/terragrunt
 fi
 
 if [ "x$(which tofu)" != "x0" ]; then
@@ -28,7 +28,7 @@ if [ "x$(which virsh)" != "x0" ]; then
         libvirt-daemon-driver-qemu \
         libvirt-daemon-system \
         libvirt-clients
-    sudo sed '/^security_driver/d' /etc/libvirt/qemu.conf
-    echo 'security_driver = "none"' | sudo tee -a /etc/libvirt/qemu.conf
+    sudo sed -i '/^security_driver/d' /etc/libvirt/qemu.conf
+    echo 'security_driver = "none"' | sudo tee -a /etc/libvirt/qemu.conf >/dev/null
     sudo systemctl restart libvirtd
 fi
