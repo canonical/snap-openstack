@@ -2261,6 +2261,21 @@ class MaasConfigSRIOVStep(BaseStep):
                     # Add to the per-node exclusion list.
                     nic_utils.exclude_sriov_nic(node_name, snap_nic, excluded_devices)
 
+            # Handle PCI passthrough devices
+            # All GPU devices returned by openstack-hypervisor will be added
+            # as PCI passthrough devices to pci_whitelist.
+            # openstack-hypervisor currently returns all devices that are intended
+            # for PCI passthrough as vGPU is not yet supported. So no filtering is
+            # reuired on devices returned from openstack-hypervisor.
+            snap_gpus = nic_utils.fetch_gpus(
+                self.client, node_name, self.jhelper, self.model
+            )
+
+            for snap_gpu in snap_gpus["gpus"]:
+                nic_utils.whitelist_pci_passthrough_device(
+                    node_name, snap_gpu, pci_whitelist, excluded_devices
+                )
+
         return pci_whitelist, excluded_devices
 
     def run(self, status: Status | None = None) -> Result:
