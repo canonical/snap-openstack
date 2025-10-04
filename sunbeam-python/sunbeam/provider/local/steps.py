@@ -367,6 +367,24 @@ class LocalConfigSRIOVStep(BaseStep):
         LOG.info("Updated PCI device whitelist: %s", pci_whitelist)
         LOG.info("Updated PCI device exclusion list: %s", excluded_devices)
 
+        # Handle PCI passthrough devices
+        # All GPU devices returned by openstack-hypervisor will be added
+        # as PCI passthrough devices to pci_whitelist.
+        snap_gpus = nic_utils.fetch_gpus(
+            self.client, self.node_name, self.jhelper, self.model
+        )
+
+        for snap_gpu in snap_gpus["gpus"]:
+            nic_utils.whitelist_pci_passthrough_device(
+                self.node_name, snap_gpu, pci_whitelist, excluded_devices
+            )
+
+        LOG.info(
+            "PCI device whitelist information after handling PCI passthrough devices:"
+        )
+        LOG.info("Updated PCI device whitelist: %s", pci_whitelist)
+        LOG.info("Updated PCI device exclusion list: %s", excluded_devices)
+
         self.variables["pci_whitelist"] = pci_whitelist
         self.variables["excluded_devices"] = excluded_devices
 
