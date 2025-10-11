@@ -23,6 +23,7 @@ from sunbeam.commands.configure import (
     TerraformDemoInitStep,
     UserOpenRCStep,
     UserQuestions,
+    get_external_network_configs,
     retrieve_admin_credentials,
 )
 from sunbeam.commands.dashboard_url import retrieve_dashboard_url
@@ -79,6 +80,7 @@ from sunbeam.provider.local.steps import (
     LocalClusterStatusStep,
     LocalConfigDPDKStep,
     LocalConfigSRIOVStep,
+    LocalConfigureOpenStackNetworkAgentsStep,
     LocalEndpointsConfigurationStep,
     LocalSetHypervisorUnitsOptionsStep,
 )
@@ -153,6 +155,11 @@ from sunbeam.steps.microceph import (
     ConfigureMicrocephOSDStep,
     DeployMicrocephApplicationStep,
     RemoveMicrocephUnitsStep,
+)
+from sunbeam.steps.microovn import (
+    DeployMicroOVNApplicationStep,
+    ReapplyMicroOVNOptionalIntegrationsStep,
+    RemoveMicroOVNUnitsStep,
 )
 from sunbeam.steps.openstack import (
     DeployControlPlaneStep,
@@ -570,7 +577,7 @@ def deploy_and_migrate_juju_controller(
     multiple=True,
     default=["control", "compute"],
     callback=validate_roles,
-    help="Specify additional roles, compute or storage, for the "
+    help="Specify additional roles, compute, storage or network, for the "
     "bootstrap node. Defaults to the compute role."
     " Can be repeated and comma separated.",
 )
@@ -625,6 +632,12 @@ def bootstrap(
     is_control_node = any(role.is_control_node() for role in roles)
     is_compute_node = any(role.is_compute_node() for role in roles)
     is_storage_node = any(role.is_storage_node() for role in roles)
+    is_network_node = any(role.is_network_node() for role in roles)
+
+    if is_network_node and is_compute_node:
+        raise click.ClickException(
+            "A node cannot be both a compute and network node at the same time."
+        )
 
     fqdn = utils.get_fqdn()
 
@@ -874,6 +887,29 @@ def bootstrap(
             deployment.openstack_machines_model,
         )
     )
+    if is_network_node:
+        microovn_tfhelper = deployment.get_tfhelper("microovn-plan")
+        plan2.append(TerraformInitStep(microovn_tfhelper))
+        plan2.append(
+            DeployMicroOVNApplicationStep(
+                deployment,
+                client,
+                microovn_tfhelper,
+                jhelper,
+                manifest,
+                deployment.openstack_machines_model,
+            )
+        )
+        plan2.append(
+            ReapplyMicroOVNOptionalIntegrationsStep(
+                deployment,
+                client,
+                microovn_tfhelper,
+                jhelper,
+                manifest,
+                deployment.openstack_machines_model,
+            )
+        )
 
     plan2.append(SetBootstrapped(client))
     run_plan(plan2, console, show_hints)
@@ -1140,6 +1176,12 @@ def join(
     is_control_node = any(role.is_control_node() for role in roles)
     is_compute_node = any(role.is_compute_node() for role in roles)
     is_storage_node = any(role.is_storage_node() for role in roles)
+    is_network_node = any(role.is_network_node() for role in roles)
+
+    if is_network_node and is_compute_node:
+        raise click.ClickException(
+            "A node cannot be both a compute and network node at the same time."
+        )
 
     # Register juju user with same name as Node fqdn
     name = utils.get_fqdn()
@@ -1289,6 +1331,31 @@ def join(
     plan4.append(TerraformInitStep(openstack_tfhelper))
     plan4.append(TerraformInitStep(hypervisor_tfhelper))
     plan4.append(TerraformInitStep(cinder_volume_tfhelper))
+    microovn_tfhelper = deployment.get_tfhelper("microovn-plan")
+    if is_network_node:
+        microovn_tfhelper = deployment.get_tfhelper("microovn-plan")
+        plan4.append(TerraformInitStep(microovn_tfhelper))
+        plan4.append(
+            DeployMicroOVNApplicationStep(
+                deployment,
+                client,
+                microovn_tfhelper,
+                jhelper,
+                manifest,
+                deployment.openstack_machines_model,
+            )
+        )
+        plan4.append(
+            ReapplyMicroOVNOptionalIntegrationsStep(
+                deployment,
+                client,
+                microovn_tfhelper,
+                jhelper,
+                manifest,
+                deployment.openstack_machines_model,
+            )
+        )
+
     if is_storage_node:
         plan4.append(TerraformInitStep(microceph_tfhelper))
         plan4.append(
@@ -1550,6 +1617,9 @@ def remove(ctx: click.Context, name: str, force: bool, show_hints: bool) -> None
         RemoveMicrocephUnitsStep(
             client, name, jhelper, deployment.openstack_machines_model
         ),
+        RemoveMicroOVNUnitsStep(
+            client, name, jhelper, deployment.openstack_machines_model
+        ),
         CordonK8SUnitStep(client, name, jhelper, deployment.openstack_machines_model),
         DrainK8SUnitStep(
             client, name, jhelper, deployment.openstack_machines_model, remove_pvc=True
@@ -1630,50 +1700,28 @@ def configure_cmd(
     if not jhelper.model_exists(OPENSTACK_MODEL):
         LOG.error(f"Expected model {OPENSTACK_MODEL} missing")
         raise click.ClickException("Please run `sunbeam cluster bootstrap` first")
-    admin_credentials = retrieve_admin_credentials(jhelper, OPENSTACK_MODEL)
-    # Add OS_INSECURE as https not working with terraform openstack provider.
-    admin_credentials["OS_INSECURE"] = "true"
+    # Check if the node is a network node
+    node = client.cluster.get_node_info(name)
 
-    tfplan = "demo-setup"
-    tfhelper = deployment.get_tfhelper(tfplan)
-    tfhelper.env = (tfhelper.env or {}) | admin_credentials
-    answer_file = tfhelper.path / "config.auto.tfvars.json"
-    tfhelper_hypervisor = deployment.get_tfhelper("hypervisor-plan")
     plan = [
         AddManifestStep(client, manifest_path),
         JujuLoginStep(deployment.juju_account),
-        UserQuestions(
-            client,
-            answer_file=answer_file,
-            manifest=manifest,
-            accept_defaults=accept_defaults,
-        ),
-        TerraformDemoInitStep(client, tfhelper),
-        DemoSetup(
-            client=client,
-            tfhelper=tfhelper,
-            answer_file=answer_file,
-        ),
-        UserOpenRCStep(
-            client=client,
-            tfhelper=tfhelper,
-            auth_url=admin_credentials["OS_AUTH_URL"],
-            auth_version=admin_credentials["OS_AUTH_VERSION"],
-            cacert=admin_credentials.get("OS_CACERT"),
-            openrc=openrc,
-        ),
-        TerraformInitStep(tfhelper_hypervisor),
-        ReapplyHypervisorTerraformPlanStep(
-            client,
-            tfhelper_hypervisor,
-            jhelper,
-            manifest,
-            model=deployment.openstack_machines_model,
-        ),
     ]
     node = client.cluster.get_node_info(name)
 
     if "compute" in node["role"]:
+        admin_credentials = retrieve_admin_credentials(jhelper, OPENSTACK_MODEL)
+        # Add OS_INSECURE as https not working with terraform openstack provider.
+        admin_credentials["OS_INSECURE"] = "true"
+        tfplan = "demo-setup"
+        tfhelper = deployment.get_tfhelper(tfplan)
+        tfhelper.env = (tfhelper.env or {}) | admin_credentials
+        answer_file = tfhelper.path / "config.auto.tfvars.json"
+        tfhelper_hypervisor = deployment.get_tfhelper("hypervisor-plan")
+        machine_id = str(node.get("machineid"))
+        jhelper.get_unit_from_machine(
+            "openstack-hypervisor", machine_id, deployment.openstack_machines_model
+        )
         plan.append(
             LocalSetHypervisorUnitsOptionsStep(
                 client,
@@ -1684,6 +1732,57 @@ def configure_cmd(
                 # selection may vary from machine to machine and is potentially
                 # destructive if it takes over an unintended nic.
                 manifest=manifest,
+            )
+        )
+        plan.append(TerraformInitStep(tfhelper_hypervisor))
+        plan.append(
+            ReapplyHypervisorTerraformPlanStep(
+                client,
+                tfhelper_hypervisor,
+                jhelper,
+                manifest,
+                model=deployment.openstack_machines_model,
+            )
+        )
+
+        plan.extend(
+            [
+                UserQuestions(
+                    client,
+                    answer_file=answer_file,
+                    manifest=manifest,
+                    accept_defaults=accept_defaults,
+                ),
+                TerraformDemoInitStep(client, tfhelper),
+                DemoSetup(client=client, tfhelper=tfhelper, answer_file=answer_file),
+                UserOpenRCStep(
+                    client=client,
+                    tfhelper=tfhelper,
+                    auth_url=admin_credentials["OS_AUTH_URL"],
+                    auth_version=admin_credentials["OS_AUTH_VERSION"],
+                    cacert=admin_credentials.get("OS_CACERT"),
+                    openrc=openrc,
+                ),
+            ]
+        )
+
+    if "network" in node["role"]:
+        # Get external network configuration from user answers
+        ext_net_config = get_external_network_configs(client)
+        bridge_name = ext_net_config.get("external-bridge", "br-ex")
+        physnet_name = ext_net_config.get("physnet-name", "physnet1")
+
+        plan.append(
+            LocalConfigureOpenStackNetworkAgentsStep(
+                client,
+                name,
+                jhelper,
+                deployment.openstack_machines_model,
+                manifest,
+                accept_defaults,
+                bridge_name=bridge_name,
+                physnet_name=physnet_name,
+                enable_chassis_as_gw=True,
             )
         )
     run_plan(plan, console, show_hints)

@@ -32,6 +32,7 @@ from sunbeam.steps.maintenance import (
     RunWatcherAuditStep,
     UncordonControlRoleNodeStep,
 )
+from sunbeam.steps.microovn import EnableMicroOVNStep
 from sunbeam.utils import click_option_show_hints, pass_method_obj
 
 console = Console()
@@ -541,6 +542,8 @@ class DisableMaintenance(MaintenanceCommand):
             self.ops_viewer.add_uncordon_control_role_step(
                 result=uncordon_k8s_node_dry_run_result
             )
+        if "network" in node_status:
+            self.ops_viewer.add_step(step_name=EnableMicroOVNStep.__name__)
 
         console.print(self.ops_viewer.dry_run_message)
 
