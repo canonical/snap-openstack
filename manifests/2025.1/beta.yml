@@ -40,6 +40,15 @@ core:
         config:
           snap-channel: squid/stable
 features:
+  baremetal:
+    software:
+      charms:
+        ironic-conductor-k8s:
+          channel: 2025.1/beta
+        ironic-k8s:
+          channel: 2025.1/beta
+        nova-ironic-k8s:
+          channel: 2025.1/beta
   caas:
     software:
       charms:
