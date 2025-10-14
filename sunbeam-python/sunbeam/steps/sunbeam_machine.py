@@ -47,7 +47,7 @@ class DeploySunbeamMachineApplicationStep(DeployMachineApplicationStep):
             CONFIG_KEY,
             APPLICATION,
             model,
-            [Role.CONTROL, Role.COMPUTE, Role.STORAGE],
+            [Role.CONTROL, Role.COMPUTE, Role.STORAGE, Role.REGION_CONTROLLER],
             "Deploy sunbeam-machine",
             "Deploying Sunbeam Machine",
         )

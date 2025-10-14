@@ -157,7 +157,10 @@ def determine_target_topology(client: Client) -> str:
     """
     control_nodes = client.cluster.list_nodes_by_role("control")
     compute_nodes = client.cluster.list_nodes_by_role("compute")
-    combined = {node["name"] for node in control_nodes + compute_nodes}
+    region_controllers = client.cluster.list_nodes_by_role("region_controller")
+    combined = {
+        node["name"] for node in control_nodes + compute_nodes + region_controllers
+    }
     host_total_ram = get_host_total_ram()
     host_cores = get_host_total_cores()
     if len(combined) == 1 and (
@@ -418,6 +421,7 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
         topology: str,
         machine_model: str,
         proxy_settings: dict | None = None,
+        external_keystone_model: str | None = None,
     ):
         super().__init__(
             "Deploying OpenStack Control Plane",
@@ -433,6 +437,7 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
         self.model = OPENSTACK_MODEL
         self.cloud = K8SHelper.get_cloud(deployment.name)
         self.database = DEFAULT_DATABASE_TOPOLOGY
+        self.external_keystone_model = external_keystone_model
 
     def get_storage_tfvars(self, storage_nodes: list[dict]) -> dict:
         """Create terraform variables related to storage."""
@@ -598,16 +603,22 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
         self.update_status(status, "fetching cluster nodes")
         control_nodes = self.client.cluster.list_nodes_by_role("control")
         storage_nodes = self.client.cluster.list_nodes_by_role("storage")
+        region_controllers = self.client.cluster.list_nodes_by_role("region_controller")
 
         self.update_status(status, "computing deployment sizing")
         model_config = convert_proxy_to_model_configs(self.proxy_settings)
         model_config.update({"workload-storage": K8SHelper.get_default_storageclass()})
-        os_api_scale = compute_os_api_scale(self.topology, len(control_nodes))
+        os_api_scale = compute_os_api_scale(
+            self.topology, len(control_nodes) or len(region_controllers)
+        )
         extra_tfvars = self.get_storage_tfvars(storage_nodes)
         extra_tfvars.update(self.get_region_tfvars())
+
+        # This is used to calculate the "experimental-max-connections" mysql setting.
+        database_service_scale = len(control_nodes) or len(region_controllers) or 1
         extra_tfvars.update(
             self.get_database_tfvars(
-                service_scale_function(os_api_scale, len(storage_nodes))
+                service_scale_function(os_api_scale, database_service_scale)
             )
         )
         extra_tfvars.update(self.get_endpoints_tfvars())
@@ -617,13 +628,48 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
                 "cloud": self.cloud,
                 "credential": f"{self.cloud}{CREDENTIAL_SUFFIX}",
                 "config": model_config,
-                "ha-scale": compute_ha_scale(self.topology, len(control_nodes)),
+                "ha-scale": compute_ha_scale(
+                    self.topology, len(control_nodes) or len(region_controllers)
+                ),
                 "os-api-scale": os_api_scale,
                 "ingress-scale": compute_ingress_scale(
-                    self.topology, len(control_nodes)
+                    self.topology, len(control_nodes) or len(region_controllers)
                 ),
+                "is-region-controller": bool(region_controllers),
             }
         )
+        if self.external_keystone_model:
+            # The model name is expected to contain the controller and owner, e.g.:
+            #   controller:owner/model
+            m = self.external_keystone_model
+            LOG.info(
+                "The Terraform Juju provider does not currently support "
+                "cross-controller relations: "
+                "https://github.com/juju/terraform-provider-juju/issues/805."
+            )
+            LOG.info(
+                "The following offers must be consumed manually: "
+                f"{m}.keystone-credentials, {m}.keystone-endpoints "
+                f"{m}.keystone-ops, {m}.cert-distributor"
+            )
+            extra_tfvars.update(
+                {
+                    "is-secondary-region": True,
+                    # TODO: Uncomment the following lines when cross-controller
+                    # relation support gets added to the Terraform Juju provider:
+                    #   https://github.com/juju/terraform-provider-juju/issues/805
+                    # The relations must be defined manually in the meantime.
+                    #
+                    # "external-keystone-offer-url":
+                    #   f"{m}.keystone-credentials",
+                    # "external-keystone-endpoints-offer-url":
+                    #   f"{m}.keystone-endpoints",
+                    # "external-keystone-ops-offer-url":
+                    #   f"{m}.keystone-ops",
+                    # "external-cert-distributor-offer-url":
+                    #   f"{m}.cert-distributor",
+                }
+            )
         self.update_status(status, "deploying services")
         try:
             self.tfhelper.update_tfvars_and_apply_tf(
@@ -637,7 +683,7 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
             return Result(ResultType.FAILED, str(e))
 
         apps = self.jhelper.get_application_names(self.model)
-        if not extra_tfvars.get("enable-cinder-volume"):
+        if not extra_tfvars.get("enable-cinder-volume") and "cinder" in apps:
             # Cinder will be blocked in this case
             apps.remove("cinder")
         apps = list(set(apps) - set(self.remove_blocked_apps_from_features()))
@@ -670,7 +716,10 @@ class OpenStackPatchLoadBalancerServicesIPStep(PatchLoadBalancerServicesIPStep):
 
     def services(self):
         """List of services to patch."""
-        services = ["traefik", "traefik-public", "rabbitmq", "ovn-relay"]
+        services = ["traefik", "traefik-public", "rabbitmq"]
+        if not self.client.cluster.list_nodes_by_role("region_controller"):
+            # The region controller cluster is not expected to have ovn-relay.
+            services.append("ovn-relay")
         if self.client.cluster.list_nodes_by_role("storage"):
             services.append("traefik-rgw")
         return services
@@ -752,7 +801,7 @@ class ReapplyOpenStackTerraformPlanStep(BaseStep, JujuStepHelper):
         storage_nodes = self.client.cluster.list_nodes_by_role("storage")
         # Remove cinder from apps to wait on if no storage nodes
         apps = self.jhelper.get_application_names(self.model)
-        if not storage_nodes:
+        if not storage_nodes and "cinder" in apps:
             apps.remove("cinder")
         LOG.debug(f"Application monitored for readiness: {apps}")
         status_queue: queue.Queue[str] = queue.Queue()
