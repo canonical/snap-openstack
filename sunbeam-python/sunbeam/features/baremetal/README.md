@@ -10,6 +10,39 @@ To enable the Baremetal service, you need an already bootstraped Sunbeam instanc
 sunbeam enable baremetal
 ```
 
+The feature will be configured based on the cluster's manifest file. Alternatively, a different manifest file can be specified during the feature enablement:
+
+```bash
+sunbeam enable --manifest baremetal-manifest.yaml baremetal
+```
+
+Sample `baremetal-manifest.yaml` file:
+
+```yaml
+features:
+  baremetal:
+    software:
+      charms:
+        ironic-conductor-k8s:
+          channel: 2025.1/edge
+        ironic-k8s:
+          channel: 2025.1/edge
+        nova-ironic-k8s:
+          channel: 2025.1/edge
+    config:
+      shards: ["foo", "lish"]
+```
+
+**Note**: Rerunning the `sunbeam enable baremetal` command with a different manifest file will replace the previously deployed feature configuration (e.g.: deployed `nova-ironic` shards).
+
+## Additional commands
+
+Additional commands will be available after the feature has been enabled:
+
+- `sunbeam baremetal shard add SHARD`: Add a new Ironic nova-compute shard.
+- `sunbeam baremetal shard list`: List Ironic nova-compute shards.
+- `sunbeam baremetal shard delete SHARD`: Delete Ironic nova-compute shard.
+
 ## Contents
 
 This feature will install the following services:
