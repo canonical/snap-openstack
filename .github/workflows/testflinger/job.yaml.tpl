@@ -56,6 +56,11 @@ test_data:
         # make the libvirt group effective in this shell, so terraform can talk to the libvirt unix socket
         sudo su - ubuntu -c $(realpath ./deploy.sh)
         cd ../
+
+        # Start the testing using the previously prepare test bed.
+        export TEST_SNAP_OPENSTACK=${OPENSTACK_SNAP_PATH}
+        export TEST_MAAS_API_KEY="$(cat /tmp/maas-api.key)"
+        export TEST_MAAS_URL="http://172.16.1.2:5240/MAAS"
         ./testing/test-multinode-maas.sh ${OPENSTACK_SNAP_PATH}
     '; then
         scp -r "ubuntu@${DEVICE_IP}:repository/artifacts/" artifacts/ || true
