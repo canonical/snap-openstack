@@ -69,5 +69,8 @@ test_data:
         ssh ubuntu@${DEVICE_IP} /home/ubuntu/repository/testing/collect-logs.sh
         scp -r "ubuntu@${DEVICE_IP}:repository/artifacts/" artifacts/ || true
         find artifacts/
+        echo "blocking until file /tmp/.continue shows up in ${DEVICE_IP}"
+        echo ssh ubuntu@${DEVICE_IP}
+        ssh ubuntu@${DEVICE_IP} "until test -f /tmp/.continue; do sleep 10;done"
         exit 1
     fi
