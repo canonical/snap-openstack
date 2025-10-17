@@ -213,7 +213,10 @@ data "external" "remote_command" {
     libvirt_domain.maas_controller
   ]
   program = ["bash", "-c", <<-EOF
-    ssh -i ${var.ssh_private_key_path} ubuntu@${local.maas_controller_ip_addr} 'cat api.key' | jq -R '{apikey: .}'
+    # Block until the api.key file shows up
+    API_KEY_FILE=/tmp/maas-api.key
+    ssh -i ${var.ssh_private_key_path} ubuntu@${local.maas_controller_ip_addr} 'touch /home/ubuntu/api.key; until [ -s /home/ubuntu/api.key ]; do sleep 5;done; cat /home/ubuntu/api.key' > $API_KEY_FILE
+    cat $API_KEY_FILE  2>&1 | jq -R '{apikey: .}'  2>&1
   EOF
   ]
 }
