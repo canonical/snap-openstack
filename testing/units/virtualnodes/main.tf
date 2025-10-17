@@ -51,17 +51,27 @@ resource "libvirt_network" "external_net" {
   }
 }
 
+resource "libvirt_pool" "sunbeam" {
+  name = "sunbeam"
+  type = "dir"
+  target {
+    path = var.storage_pool_path
+  }
+}
+
 #### Volumes
 
 resource "libvirt_volume" "node_vol" {
   name  = "node_${count.index}.qcow2"
   count = var.nodes_count
+  pool = libvirt_pool.sunbeam.name
   size  = var.node_rootfs_size
 }
 
 resource "libvirt_volume" "node_vol_secondary" {
   name  = "node_${count.index}_secondary.qcow2"
   count = var.nodes_count
+  pool = libvirt_pool.sunbeam.name
   size  = var.node_secondary_disk_size
 }
 
@@ -69,11 +79,13 @@ resource "libvirt_volume" "node_vol_secondary" {
 resource "libvirt_volume" "ubuntu_noble" {
   name   = "ubuntu-noble.qcow2"
   source = "https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img"
+  pool = libvirt_pool.sunbeam.name
 }
 
 resource "libvirt_volume" "maas_controller_vol" {
   name           = "maas-controller-vol"
   base_volume_id = libvirt_volume.ubuntu_noble.id
+  pool = libvirt_pool.sunbeam.name
   size           = var.maas_controller_rootfs_size
 }
 
@@ -81,6 +93,7 @@ resource "libvirt_volume" "maas_controller_vol" {
 
 resource "libvirt_cloudinit_disk" "maas_controller_cloudinit" {
   name      = "maas_controller_cloudinit.iso"
+  pool = libvirt_pool.sunbeam.name
   user_data = templatefile(
     "${path.module}/templates/maas_controller.cloudinit.cfg",
     {

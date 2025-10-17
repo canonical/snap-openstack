@@ -8,6 +8,23 @@ include "stack" {
 
 terraform {
   source = "./"
+  before_hook "create_directories" {
+    commands = ["apply", "plan"]
+    execute  = ["bash", "-c", <<-EOT
+      chmod 755 $HOME
+      mkdir -p $HOME/sunbeam_storage
+      chmod 775 $HOME/sunbeam_storage
+      chgrp libvirt $HOME/sunbeam_storage
+      echo "Directory $HOME/sunbeam_storage created"
+      ls -ld $HOME/sunbeam_storage
+    EOT
+    ]
+  }
 }
 
-inputs = include.stack.locals.stack_config
+inputs = merge(
+  include.stack.locals.stack_config,
+  {
+    storage_pool_path = format("%s/sunbeam_storage", get_env("HOME"))
+  }
+)

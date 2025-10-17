@@ -71,6 +71,11 @@ variable "ssh_private_key_path" {
   default     = "~/.ssh/id_ecdsa"
 }
 
+variable "storage_pool_path" {
+  description = "Path to the storage pool used by the virtual nodes"
+  type        = string
+}
+
 variable "upstream_dns_server" {
   description = "upstream dns server to use in MAAS"
   type        = string
