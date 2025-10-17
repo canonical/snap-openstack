@@ -1859,6 +1859,35 @@ class JujuStepHelper:
         except JujuSecretNotFound:
             return False
 
+    def find_subordinate_unit_for(
+        self, principal_unit: str, subordinate_app: str, model: str
+    ) -> str:
+        """Find subordinate unit for the given principal unit."""
+        status = self.jhelper.get_model_status(model)
+
+        principal_app = principal_unit.split("/")[0]
+        principal_app_status = status.apps.get(principal_app)
+        if not principal_app_status:
+            raise ApplicationNotFoundException(
+                f"Principal application {principal_app!r} not found in model {model!r}"
+            )
+
+        principal_unit_status = principal_app_status.units.get(principal_unit)
+        if not principal_unit_status:
+            raise UnitNotFoundException(
+                f"Principal unit {principal_unit!r} not found in model {model!r}"
+            )
+
+        subs = getattr(principal_unit_status, "subordinates", {}) or {}
+        for sub_name in subs.keys():
+            if sub_name.startswith(f"{subordinate_app}/"):
+                return sub_name
+
+        raise UnitNotFoundException(
+            f"Subordinate unit for {subordinate_app!r} not found for"
+            f"principal unit {principal_unit!r}"
+        )
+
 
 class JujuActionHelper:
     @staticmethod

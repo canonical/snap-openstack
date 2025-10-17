@@ -611,6 +611,28 @@ class TestJujuStepHelper:
         assert not jsh.channel_update_needed("latest/stable", "latest/stable")
         assert not jsh.channel_update_needed("foo/stable", "ba/stable")
 
+    def test_find_subordinate_unit_for(self):
+        jhelper = jujulib.JujuStepHelper()
+        jhelper.jhelper = Mock()
+
+        status = Mock()
+        principal_unit = Mock()
+        principal_unit.machine = "1"
+        principal_unit.subordinates = {"sub/0": Mock()}
+
+        principal_app = Mock()
+        principal_app.units = {"app1/0": principal_unit}
+
+        sub_app = Mock()
+        sub_app.units = {"sub/0": Mock(machine="1")}
+
+        status.apps = {"app1": principal_app, "sub": sub_app}
+        jhelper.jhelper.get_model_status.return_value = status
+
+        assert (
+            jhelper.find_subordinate_unit_for("app1/0", "sub", "test-model") == "sub/0"
+        )
+
 
 class TestJujuActionHelper:
     def test_get_unit(self):

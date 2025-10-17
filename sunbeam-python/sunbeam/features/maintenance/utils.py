@@ -29,6 +29,7 @@ from sunbeam.steps.maintenance import (
     RunWatcherAuditStep,
     UncordonControlRoleNodeStep,
 )
+from sunbeam.steps.microovn import EnableMicroOVNStep
 
 if TYPE_CHECKING:
     from watcherclient import v1 as watcher
@@ -223,6 +224,8 @@ class OperationViewer:
             elif name == CordonControlRoleNodeStep.__name__:
                 self.update_step_result(result.message["id"], result)
             elif name == UncordonControlRoleNodeStep.__name__:
+                self.update_step_result(result.message["id"], result)
+            elif name == EnableMicroOVNStep.__name__:
                 self.update_step_result(result.message["id"], result)
         console.print(self._operation_result)
         if failed_result is not None and failed_result_name is not None:

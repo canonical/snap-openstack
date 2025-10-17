@@ -28,6 +28,16 @@ on:
         required: true
         default: squid/beta
         type: string
+      microovn-charm-channel:
+        description: Specify microovn charms channel
+        required: true
+        default: latest/edge
+        type: string
+      microovn-snap-channel:
+        description: Specify microovn snap channel
+        required: true
+        default: latest/edge
+        type: string
       rabbitmq-charm-channel:
         description: Specify rabbitmq charms channel
         required: true
