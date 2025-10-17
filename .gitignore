@@ -160,3 +160,5 @@ cython_debug/
 .idea/
 
 .stestr/
+
+.github/workflows/testflinger/*.yaml
