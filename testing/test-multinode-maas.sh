@@ -1,8 +1,8 @@
-#!/bin/bash
-set -x
+#!/bin/bash -eux
+
 export COLUMNS=256
 
-if [$# -ne 1]; then
+if [ $# -ne 1 ]; then
     echo "Invalid number of arguments" >&2
     echo "Usage:"
     echo "  $0 <openstack_snap.snap>"
@@ -31,30 +31,27 @@ if [[ ! -f "$HOME/.ssh/passwordless" ]]; then
 fi
 
 function run_snap_daemon {
-    sg snap_daemon "$@"
+    sg snap_daemon -c "$*"
 }
 
 sudo snap install --channel ${TEST_JUJU_CHANNEL} juju
 sudo snap install  --dangerous  ${TEST_SNAP_OPENSTACK}
 sudo snap connect openstack:juju-bin juju:juju-bin
 openstack.sunbeam prepare-node-script --bootstrap | bash -x
+
+# connect plugs manually since the snap is installed from a locally built one.
 sudo snap connect openstack:dot-local-share-juju
 sudo snap connect openstack:dot-config-openstack
 sudo snap connect openstack:dot-local-share-openstack
 sudo snap alias openstack.sunbeam sunbeam
 
-run_snap_daemon sunbeam deployment add maas \
-  --name my_maas \
-  --url ${TEST_MAAS_URL} \
-  --token ${TEST_MAAS_API_TOKEN} \
-
-
-run_snap_daemon sunbeam deployment space map myspace data
-run_snap_daemon sunbeam deployment space map myspace internal
-run_snap_daemon sunbeam deployment space map myspace management
-run_snap_daemon sunbeam deployment space map myspace public
-run_snap_daemon sunbeam deployment space map myspace storage
-run_snap_daemon sunbeam deployment space map myspace storage-cluster
+run_snap_daemon sunbeam deployment add maas mymaas ${TEST_MAAS_API_KEY} ${TEST_MAAS_URL}
+run_snap_daemon sunbeam deployment space map space-generic:data
+run_snap_daemon sunbeam deployment space map space-generic:internal
+run_snap_daemon sunbeam deployment space map space-generic:management
+run_snap_daemon sunbeam deployment space map space-generic:storage
+run_snap_daemon sunbeam deployment space map space-generic:storage-cluster
+run_snap_daemon sunbeam deployment space map space-external:public
 
 run_snap_daemon sunbeam deployment validate
 
