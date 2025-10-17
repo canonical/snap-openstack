@@ -38,6 +38,7 @@ fi
 
 if [ "x$(which virsh)" != "x0" ]; then
     sudo apt-get install -y -qq \
+        sosreport \
         libvirt-daemon \
         libvirt-daemon-driver-qemu \
         libvirt-daemon-system \
