@@ -66,6 +66,7 @@ test_data:
         scp -r "ubuntu@${DEVICE_IP}:repository/artifacts/" artifacts/ || true
         find artifacts/
     else
+        ssh ubuntu@${DEVICE_IP} /home/ubuntu/repository/testing/collect-logs.sh
         scp -r "ubuntu@${DEVICE_IP}:repository/artifacts/" artifacts/ || true
         find artifacts/
         exit 1
