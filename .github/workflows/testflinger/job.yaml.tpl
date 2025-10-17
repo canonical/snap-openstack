@@ -51,7 +51,10 @@ test_data:
 
         # Install depependencies in the hypervisor.
         ./install_deps.sh
-        ./deploy.sh
+
+        # Prepare the testing bed running terragrunt
+        # make the libvirt group effective in this shell, so terraform can talk to the libvirt unix socket
+        sudo su - ubuntu -c $(realpath ./deploy.sh)
         cd ../
         ./testing/test-multinode-maas.sh ${OPENSTACK_SNAP_PATH}
     '; then
