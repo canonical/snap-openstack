@@ -42,7 +42,10 @@ if [ "x$(which virsh)" != "x0" ]; then
         libvirt-daemon \
         libvirt-daemon-driver-qemu \
         libvirt-daemon-system \
-        libvirt-clients
+        libvirt-clients \
+        genisoimage
+
+    # allow a non-root user to use libvirt/virsh easily with no permission issues
     sudo sed -i '/^security_driver/d' /etc/libvirt/qemu.conf
     echo 'security_driver = "none"' | sudo tee -a /etc/libvirt/qemu.conf >/dev/null
     sudo systemctl restart libvirtd
