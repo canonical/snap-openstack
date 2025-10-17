@@ -40,6 +40,16 @@ test_data:
         # LP: #2102175
         tar xzvf repository.tar.gz
         cd repository/testing/
+
+        # generate passwordless key if needed
+        test -f ~/.ssh/passwordless || ssh-keygen -b 2048 -t rsa -f ~/.ssh/passwordless -q -N ""
+
+        # Allow ssh connections to the virtual nodes without having host fingerprint issues.
+        echo "Host 172.16.1.* 172.16.2.*" >> ~/.ssh/config
+        echo "    UserKnownHostsFile /dev/null" >> ~/.ssh/config
+        echo "    StrictHostKeyChecking no" >> ~/.ssh/config
+
+        # Install depependencies in the hypervisor.
         ./install_deps.sh
         ./deploy.sh
         cd ../
