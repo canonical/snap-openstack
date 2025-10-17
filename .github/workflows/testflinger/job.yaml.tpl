@@ -12,9 +12,27 @@ test_data:
     scp ./attachments/test/repository.tar.gz "ubuntu@${DEVICE_IP}:"
     if ssh "ubuntu@${DEVICE_IP}" '
         set -ex
-        # LP: #2093303
+        ssh-import-id lp:freyes
+        timeout_loop () {
+            local TIMEOUT=90
+            while [ "$TIMEOUT" -gt 0 ]; do
+              if "$@" > /dev/null 2>&1; then
+                  echo "OK"
+                  return 0
+              fi
+              TIMEOUT=$((TIMEOUT - 1))
+              sleep 1
+            done
+            echo "ERROR: $* FAILED"
+            ret=1
+            return 1
+        }
+        # http://pad.lv/2093303
         sudo mv -v /etc/apt/sources.list{,.bak}
-        sudo apt-get update
+        # Workaround for:
+        #   E: Failed to fetch http://...  Hash Sum mismatch
+        timeout_loop sudo apt-get update -q
+
         # include ~/.local/bin in PATH
         source  ~/.profile
         set -o pipefail
