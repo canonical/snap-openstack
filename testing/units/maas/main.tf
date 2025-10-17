@@ -175,13 +175,13 @@ resource "maas_vlan_dhcp" "generic_vlan_dhcp" {
   ip_ranges               = [maas_subnet_ip_range.generic_subnet_dhcp_range.id]
 }
 
-# resource "maas_machine" "node" {
-#   count = length(var.nodes)
-#   hostname = var.nodes[count.index].name
-#   power_type = "virsh"
-#   power_parameters = jsonencode({
-#     power_address = var.libvirt_uri
-#     power_id      = var.nodes[count.index].name
-#   })
-#   pxe_mac_address = var.nodes[count.index].mac_address
-# }
+resource "maas_machine" "node" {
+  count = length(var.nodes)
+  hostname = var.nodes[count.index].name
+  power_type = "virsh"
+  power_parameters = jsonencode({
+    power_address = var.libvirt_uri
+    power_id      = var.nodes[count.index].name
+  })
+  pxe_mac_address = var.nodes[count.index].mac_address
+}
