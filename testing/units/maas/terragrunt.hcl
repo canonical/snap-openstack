@@ -5,6 +5,10 @@ include "stack" {
 
 terraform {
   source = "."
+  extra_arguments "parallelism" {
+    commands = ["apply", "plan", "destroy"]
+    arguments = ["-parallelism=1"]
+  }
 }
 
 dependency "virtualnodes" {
