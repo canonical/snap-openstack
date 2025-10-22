@@ -5,7 +5,7 @@
 
 from typing import Any, Dict
 
-from pydantic import BaseModel, Field
+import pydantic
 
 from sunbeam.core.common import SunbeamException
 
@@ -43,13 +43,7 @@ class BackendValidationException(StorageBackendException):
 # =============================================================================
 
 
-class StorageBackendConfig(BaseModel):
-    """Base configuration model for storage backends."""
-
-    name: str = Field(..., description="Backend name")
-
-
-class StorageBackendInfo(BaseModel):
+class StorageBackendInfo(pydantic.BaseModel):
     """Information about a deployed storage backend."""
 
     name: str
@@ -57,3 +51,20 @@ class StorageBackendInfo(BaseModel):
     status: str
     charm: str
     config: Dict[str, Any] = {}
+
+
+class SecretDictField:
+    """Marker class to indicate a field needs to be managed as a juju secret.
+
+    This class is used as a field annotation in Pydantic models to indicate that
+    the field contains sensitive information (e.g., passwords, API tokens).
+
+    The field name is the name of the key in the Juju secret dictionary.
+    """
+
+    def __init__(self, field: str):
+        self.field = field
+
+    def __repr__(self) -> str:
+        """Return a string representation of the SecretDictField."""
+        return f"SecretDictField(field={self.field})"

@@ -1,275 +1,145 @@
 # SPDX-FileCopyrightText: 2025 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
-"""Test fixtures for storage backend tests."""
+"""Common fixtures for storage backend tests."""
 
-from unittest.mock import Mock, PropertyMock
+from pathlib import Path
+from typing import Annotated
+from unittest.mock import MagicMock
 
 import pytest
+from pydantic import Field
 
-from sunbeam.clusterd.client import Client
-from sunbeam.core.manifest import Manifest
-from sunbeam.core.terraform import TerraformHelper
+from sunbeam.core.manifest import StorageBackendConfig
 from sunbeam.storage.base import StorageBackendBase
-from sunbeam.storage.models import StorageBackendConfig
+from sunbeam.storage.models import SecretDictField
+
+
+class MockStorageConfig(StorageBackendConfig):
+    """Mock configuration for testing."""
+
+    required_field: Annotated[str, Field(description="A required field")]
+    optional_field: Annotated[str | None, Field(description="An optional field")] = None
+    secret_field: Annotated[
+        str,
+        Field(description="A secret field"),
+        SecretDictField(field="secret-key"),
+    ]
+    int_field: Annotated[int | None, Field(description="An integer field")] = None
+
+
+class MockStorageBackend(StorageBackendBase[MockStorageConfig]):
+    """Mock storage backend for testing."""
+
+    backend_type = "mock"
+    display_name = "Mock Storage Backend"
+
+    @property
+    def charm_name(self) -> str:
+        return "mock-charm"
+
+    @property
+    def charm_channel(self) -> str:
+        return "latest/stable"
+
+    @property
+    def backend_endpoint(self) -> str:
+        return "cinder-volume"
+
+    def config_type(self) -> type[MockStorageConfig]:
+        return MockStorageConfig
 
 
 @pytest.fixture
-def mock_deployment():
-    """Mock deployment object."""
-    deployment = Mock()
-    deployment.openstack_machines_model = "openstack"  # Match actual service behavior
+def mock_backend():
+    """Create a mock backend instance for testing."""
+    return MockStorageBackend()
 
-    # Mock the client with cluster attribute
-    mock_client = Mock()
-    mock_cluster = Mock()
-    mock_client.cluster = mock_cluster
+
+@pytest.fixture
+def mock_deployment(tmp_path: Path):
+    """Create a mock deployment object."""
+    deployment = MagicMock()
+    deployment.name = "test_deployment"
+    deployment.plans_directory = tmp_path / "plans"
+    deployment.plans_directory.mkdir(parents=True)
+    deployment.openstack_machines_model = "openstack"
+    deployment.juju_controller = "test-controller"
+
+    # Mock get_space method
+    deployment.get_space.return_value = "test-space"
+
+    # Mock get_client
+    mock_client = MagicMock()
     deployment.get_client.return_value = mock_client
 
-    # Mock juju_controller
-    mock_controller = Mock()
-    mock_controller.name = "test-controller"
-    type(deployment).juju_controller = PropertyMock(return_value=mock_controller)
-
     # Mock get_tfhelper
-    deployment.get_tfhelper.return_value = Mock(spec=TerraformHelper)
+    mock_tfhelper = MagicMock()
+    deployment.get_tfhelper.return_value = mock_tfhelper
+
+    # Mock proxy settings
+    deployment.get_proxy_settings.return_value = {}
+
+    # Mock _get_juju_clusterd_env
+    deployment._get_juju_clusterd_env.return_value = {}
+
+    # Mock get_clusterd_http_address
+    deployment.get_clusterd_http_address.return_value = "http://localhost:7000"
+
+    # Mock _tfhelpers
+    deployment._tfhelpers = {}
 
     return deployment
 
 
 @pytest.fixture
-def mock_client():
-    """Mock clusterd client."""
-    client = Mock(spec=Client)
-    client.cluster = Mock()
-    return client
-
-
-@pytest.fixture
-def mock_tfhelper():
-    """Mock Terraform helper."""
-    return Mock(spec=TerraformHelper)
-
-
-@pytest.fixture
 def mock_jhelper():
-    """Mock Juju helper."""
-    return Mock()
+    """Create a mock JujuHelper."""
+    jhelper = MagicMock()
+    jhelper.get_model_name_with_owner.return_value = "admin/openstack"
+
+    # Mock model status
+    mock_status = MagicMock()
+    mock_status.apps = {}
+    jhelper.get_model_status.return_value = mock_status
+
+    # Mock get_model
+    jhelper.get_model.return_value = {"model-uuid": "test-uuid"}
+
+    return jhelper
 
 
 @pytest.fixture
 def mock_manifest():
-    """Mock manifest object."""
-    return Mock(spec=Manifest)
+    """Create a mock manifest."""
+    manifest = MagicMock()
+    manifest.storage.root = {}
+    return manifest
 
 
 @pytest.fixture
-def sample_backend_config():
-    """Sample backend configuration for testing."""
-    return {
-        "model": "openstack",
-        "hitachi_backends": {
-            "test-backend": {
-                "backend_type": "hitachi",
-                "charm_name": "cinder-volume-hitachi",
-                "charm_channel": "latest/edge",
-                "backend_config": {
-                    "hitachi-storage-id": "123456",
-                    "hitachi-pools": ["pool1", "pool2"],
-                    "san-ip": "192.168.1.100",
-                },
-                "backend_endpoint": "cinder-volume",
-                "units": 1,
-                "additional_integrations": {},
-            }
-        },
-    }
+def mock_console():
+    """Create a mock console."""
+    return MagicMock()
 
 
 @pytest.fixture
-def sample_clusterd_config():
-    """Sample clusterd configuration for testing."""
-    return {
-        "TerraformVarsStorageBackends": {
-            "hitachi_backends": {
-                "test-backend": {
-                    "backend_type": "hitachi",
-                    "charm_name": "cinder-volume-hitachi",
-                    "charm_channel": "latest/edge",
-                    "charm_config": {
-                        "hitachi-storage-id": "123456",
-                        "hitachi-pools": ["pool1", "pool2"],
-                        "san-ip": "192.168.1.100",
-                    },
-                    "backend_endpoint": "cinder-volume",
-                    "units": 1,
-                    "additional_integrations": {},
-                }
-            }
-        }
-    }
+def terraform_plan_dir(tmp_path: Path):
+    """Create a temporary terraform plan directory."""
+    plan_dir = tmp_path / "etc" / "deploy-storage"
+    plan_dir.mkdir(parents=True)
+
+    # Create some dummy terraform files
+    (plan_dir / "main.tf").write_text("# Terraform config")
+    (plan_dir / "variables.tf").write_text("# Variables")
+
+    return plan_dir
 
 
 @pytest.fixture
-def mock_storage_backend():
-    """Mock storage backend for testing."""
-
-    class MockStorageBackend(StorageBackendBase):
-        """Mock storage backend for testing."""
-
-        name = "mock"
-        display_name = "Mock Storage Backend"
-        charm_name = "mock-charm"
-
-        def __init__(self):
-            super().__init__()
-            self.tfplan = "mock-backend-plan"
-            self.tfplan_dir = "deploy-mock-backend"
-
-        @property
-        def config_class(self):
-            return StorageBackendConfig
-
-        def get_terraform_variables(
-            self, backend_name: str, config: StorageBackendConfig, model: str
-        ):
-            return {
-                "model": model,
-                "mock_backends": {
-                    backend_name: {
-                        "backend_type": self.name,
-                        "charm_name": self.charm_name,
-                        "charm_channel": "latest/stable",
-                        "backend_config": config.model_dump(),
-                        "backend_endpoint": "storage-backend",
-                        "units": 1,
-                        "additional_integrations": {},
-                    }
-                },
-            }
-
-        def create_deploy_step(
-            self,
-            deployment,
-            client,
-            tfhelper,
-            jhelper,
-            manifest,
-            backend_name,
-            backend_config,
-            model,
-        ):
-            """Create a mock deploy step."""
-            from sunbeam.storage.steps import BaseStorageBackendDeployStep
-
-            class MockDeployStep(BaseStorageBackendDeployStep):
-                def get_terraform_variables(self):
-                    return self.backend_instance.get_terraform_variables(
-                        self.backend_name, self.backend_config, self.model
-                    )
-
-            return MockDeployStep(
-                deployment,
-                client,
-                tfhelper,
-                jhelper,
-                manifest,
-                backend_name,
-                backend_config,
-                self,
-                model,
-            )
-
-        def create_destroy_step(
-            self, deployment, client, tfhelper, jhelper, manifest, backend_name, model
-        ):
-            """Create a mock destroy step."""
-            from sunbeam.storage.steps import BaseStorageBackendDestroyStep
-
-            return BaseStorageBackendDestroyStep(
-                deployment,
-                client,
-                tfhelper,
-                jhelper,
-                manifest,
-                backend_name,
-                self,
-                model,
-            )
-
-        def create_config_update_step(
-            self,
-            deployment,
-            client,
-            tfhelper,
-            jhelper,
-            manifest,
-            backend_name,
-            backend_config,
-            model,
-            updates,
-        ):
-            """Create a mock config update step."""
-            from sunbeam.storage.steps import BaseStorageBackendConfigUpdateStep
-
-            return BaseStorageBackendConfigUpdateStep(
-                deployment,
-                client,
-                tfhelper,
-                jhelper,
-                manifest,
-                backend_name,
-                backend_config,
-                self,
-                model,
-                updates,
-            )
-
-        def create_update_config_step(self, deployment, backend_name, config_updates):
-            """Create a configuration update step for this backend."""
-            # Mock implementation - return a simple mock step
-
-            from sunbeam.core.common import BaseStep
-
-            class MockUpdateConfigStep(BaseStep):
-                def run(self):
-                    from sunbeam.core.common import ResultType
-
-                    return ResultType.COMPLETED
-
-            return MockUpdateConfigStep()
-
-        def commands(self):
-            """Return mock commands for testing."""
-            return {
-                "add": [{"name": "mock", "command": Mock()}],
-                "remove": [{"name": "mock", "command": Mock()}],
-                "list": [{"name": "mock", "command": Mock()}],
-                "config": [{"name": "mock", "command": Mock()}],
-            }
-
-        def register_add_cli(self, add):
-            """Mock CLI registration."""
-            pass
-
-        def register_cli(
-            self,
-            remove,
-            config_show,
-            config_set,
-            config_reset,
-            config_options,
-            deployment,
-        ):
-            """Mock CLI registration."""
-            pass
-
-        def prompt_for_config(self, backend_name: str) -> StorageBackendConfig:
-            """Mock prompt for configuration."""
-            return StorageBackendConfig(name=backend_name)
-
-        def _get_default_config(self) -> StorageBackendConfig:
-            """Get a default configuration instance for comparison."""
-            return StorageBackendConfig(name="default")
-
-    return MockStorageBackend()
+def mock_click_context(mock_deployment, mock_manifest):
+    """Create a mock Click context."""
+    ctx = MagicMock()
+    ctx.obj = mock_deployment
+    mock_deployment.get_manifest.return_value = mock_manifest
+    return ctx

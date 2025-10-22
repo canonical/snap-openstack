@@ -18,8 +18,9 @@ from pathlib import Path
 
 import click
 import netifaces  # type: ignore [import-untyped]
+import pydantic.alias_generators
 
-from sunbeam.core.common import SunbeamException
+from sunbeam.errors import SunbeamException
 from sunbeam.lazy import LazyImport
 
 if typing.TYPE_CHECKING:
@@ -408,3 +409,8 @@ def clean_env():
     for key in os.environ:
         if key.startswith("OS_"):
             os.environ.pop(key)
+
+
+def to_kebab(value: str) -> str:
+    """Convert a string to kebab-case."""
+    return pydantic.alias_generators.to_snake(value).replace("_", "-")

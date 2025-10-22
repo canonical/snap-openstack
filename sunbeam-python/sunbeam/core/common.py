@@ -21,6 +21,7 @@ from snaphelpers import Snap, UnknownConfigKey
 from tenacity import RetryCallState
 
 from sunbeam.clusterd.client import Client
+from sunbeam.errors import SunbeamException  # noqa F401
 
 LOG = logging.getLogger(__name__)
 RAM_16_GB_IN_KB = 16 * 1000 * 1000
@@ -514,12 +515,6 @@ def convert_proxy_to_model_configs(proxy_settings: dict) -> dict:
         "snap-http-proxy": proxy_settings.get("HTTP_PROXY", ""),
         "snap-https-proxy": proxy_settings.get("HTTPS_PROXY", ""),
     }
-
-
-class SunbeamException(Exception):
-    """Base exception for sunbeam."""
-
-    pass
 
 
 class RiskLevel(str, enum.Enum):

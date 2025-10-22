@@ -92,6 +92,14 @@ class URLNotFoundException(RemoteException):
     pass
 
 
+class StorageBackendException(RemoteException):
+    """Base exception for storage backend operations."""
+
+
+class StorageBackendNotFoundException(StorageBackendException):
+    """Raised when storage backend is not found."""
+
+
 class BaseService(ABC):
     """BaseService is the base service class for sunbeam clusterd services."""
 
@@ -203,6 +211,8 @@ class BaseService(ABC):
                 raise ConfigItemNotFoundException("ConfigItem not found")
             elif "ManifestItem not found" in error:
                 raise ManifestItemNotFoundException("ManifestItem not found")
+            elif "StorageBackend not found" in error:
+                raise StorageBackendNotFoundException("Storage backend not found")
             raise e
 
         return response.json()

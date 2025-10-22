@@ -9,15 +9,18 @@ to get common functionality while customizing specific behavior.
 """
 
 import logging
-from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Dict
+from typing import TYPE_CHECKING
 
+import pydantic
 import tenacity
 from rich.console import Console
 from rich.status import Status
 
 from sunbeam.clusterd.client import Client
-from sunbeam.clusterd.service import ConfigItemNotFoundException
+from sunbeam.clusterd.service import (
+    ConfigItemNotFoundException,
+    StorageBackendNotFoundException,
+)
 from sunbeam.core.common import (
     BaseStep,
     Result,
@@ -34,12 +37,24 @@ from sunbeam.core.juju import (
     JujuHelper,
 )
 from sunbeam.core.manifest import Manifest
-from sunbeam.core.terraform import TerraformHelper, TerraformStateLockedException
-
-from .models import BackendNotFoundException, StorageBackendConfig
+from sunbeam.core.questions import (
+    ConfirmQuestion,
+    PasswordPromptQuestion,
+    PromptQuestion,
+    Question,
+    QuestionBank,
+    load_answers,
+    write_answers,
+)
+from sunbeam.core.terraform import (
+    TerraformException,
+    TerraformHelper,
+    TerraformStateLockedException,
+)
+from sunbeam.storage.models import SecretDictField
 
 if TYPE_CHECKING:
-    from .base import StorageBackendBase
+    from sunbeam.storage.base import StorageBackendBase
 
 LOG = logging.getLogger(__name__)
 console = Console()
@@ -161,7 +176,6 @@ class ValidateStoragePrerequisitesStep(BaseStep):
                     "Please ensure OpenStack storage services are deployed.",
                 )
 
-            console.print("✓ All storage prerequisites validated successfully")
             return Result(ResultType.COMPLETED)
 
         except Exception as e:
@@ -169,12 +183,45 @@ class ValidateStoragePrerequisitesStep(BaseStep):
             return Result(ResultType.FAILED, str(e))
 
 
-class BaseStorageBackendDeployStep(BaseStep, ABC):
+def generate_required_questions_from_config(
+    config_type: type[pydantic.BaseModel],
+) -> dict[str, Question]:
+    questions = {}  # type: ignore
+    for field, finfo in config_type.model_fields.items():
+        if not finfo.is_required():
+            continue
+        question_type: type[Question] = PromptQuestion
+        for constraint in finfo.metadata:
+            if isinstance(constraint, SecretDictField):
+                question_type = PasswordPromptQuestion
+        questions[field] = question_type(
+            f"Enter value for {field!r}", description=finfo.description
+        )
+    return questions
+
+
+def generate_optional_questions_from_config(
+    config_type: type[pydantic.BaseModel],
+) -> dict[str, Question]:
+    questions = {}  # type: ignore
+    for field, finfo in config_type.model_fields.items():
+        if finfo.is_required():
+            continue
+        question_type: type[Question] = PromptQuestion
+        for constraint in finfo.metadata:
+            if isinstance(constraint, SecretDictField):
+                question_type = PasswordPromptQuestion
+        questions[field] = question_type(
+            f"Enter value for {field!r} (optional)", description=finfo.description
+        )
+    return questions
+
+
+class BaseStorageBackendDeployStep(BaseStep):
     """Base class for storage backend deployment steps.
 
     Provides common deployment functionality that backends can inherit from
-    and customize as needed. Backends should override get_terraform_variables()
-    and can override other methods for custom behavior.
+    and customize as needed.
     """
 
     def __init__(
@@ -184,10 +231,11 @@ class BaseStorageBackendDeployStep(BaseStep, ABC):
         tfhelper: TerraformHelper,
         jhelper: JujuHelper,
         manifest: Manifest,
+        preseed: dict,
         backend_name: str,
-        backend_config: StorageBackendConfig,
         backend_instance: "StorageBackendBase",
         model: str,
+        accept_defaults: bool = False,
     ):
         super().__init__(
             f"Deploy {backend_instance.display_name} backend {backend_name}",
@@ -199,18 +247,108 @@ class BaseStorageBackendDeployStep(BaseStep, ABC):
         self.jhelper = jhelper
         self.manifest = manifest
         self.backend_name = backend_name
-        self.backend_config = backend_config
         self.backend_instance = backend_instance
         self.model = model
+        self.preseed = preseed
+        self.accept_defaults = accept_defaults
+        self.variables: dict = {}
+        self.config_key = self.backend_instance.config_key(self.backend_name)
 
-    @abstractmethod
-    def get_terraform_variables(self) -> Dict[str, Any]:
-        """Get Terraform variables for this backend deployment.
+    def prompt(
+        self,
+        console: Console | None = None,
+        show_hint: bool = False,
+    ) -> None:
+        """Determines if the step can take input from the user.
 
-        Backends must implement this method to provide their specific
-        Terraform variables for deployment.
+        Prompts are used by Steps to gather the necessary input prior to
+        running the step. Steps should not expect that the prompt will be
+        available and should provide a reasonable default where possible.
         """
-        pass
+        self.variables = load_answers(self.client, self.config_key)
+
+        preseed = {}
+        if self.manifest and self.manifest.storage:
+            if backends := self.manifest.storage.root.get(
+                self.backend_instance.backend_type
+            ):
+                if crt := backends.root.get(self.backend_name):
+                    # Since question generation depends on field name,
+                    # do not dump by alias
+                    preseed = crt.model_dump(by_alias=False)["config"]
+
+        # Preseed from user is higher priority than manifest
+        preseed.update(self.preseed)
+
+        manifest_configured = False
+
+        if preseed:
+            manifest_configured = True
+
+        required_questions_bank = QuestionBank(
+            questions=generate_required_questions_from_config(
+                self.backend_instance.config_type()
+            ),
+            console=console,
+            preseed=preseed,
+            previous_answers=self.variables,
+            accept_defaults=self.accept_defaults,
+            show_hint=show_hint,
+        )
+        for name, question in required_questions_bank.questions.items():
+            self.variables[name] = question.ask()
+
+        res = ConfirmQuestion(
+            "Set optional configurations?",
+            accept_defaults=self.accept_defaults,
+            default_value=manifest_configured,
+        ).ask()
+
+        if not res:
+            write_answers(self.client, self.config_key, self.variables)
+            return
+
+        optional_questions_bank = QuestionBank(
+            questions=generate_optional_questions_from_config(
+                self.backend_instance.config_type()
+            ),
+            console=console,
+            preseed=preseed,
+            previous_answers=self.variables,
+            accept_defaults=self.accept_defaults,
+            show_hint=show_hint,
+        )
+
+        for name, question in optional_questions_bank.questions.items():
+            if ConfirmQuestion(
+                f"Configure option {name!r}?",
+                accept_defaults=self.accept_defaults,
+                default_value=name in preseed,
+            ).ask():
+                self.variables[name] = question.ask()
+            else:
+                # Remove variable if previously set for
+                # subsequent runs
+                self.variables.pop(name, None)
+
+        try:
+            # Validate configuration
+            self.backend_instance.config_type().model_validate(
+                self.variables, by_name=True
+            )
+        except pydantic.ValidationError as e:
+            LOG.error(f"Invalid configuration: {e}")
+            raise e
+
+        write_answers(self.client, self.config_key, self.variables)
+
+    def has_prompts(self) -> bool:
+        """Returns true if the step has prompts that it can ask the user.
+
+        :return: True if the step can ask the user for prompts,
+                 False otherwise
+        """
+        return True
 
     @tenacity.retry(
         wait=tenacity.wait_fixed(60),
@@ -224,47 +362,45 @@ class BaseStorageBackendDeployStep(BaseStep, ABC):
     )
     def run(self, status: Status | None = None) -> Result:
         """Deploy the storage backend using Terraform."""
+        # Ensure fresh Juju credentials and Terraform env before applying
         try:
-            # Ensure fresh Juju credentials and Terraform env before applying
-            try:
-                self.deployment.reload_tfhelpers()
-            except Exception as cred_err:
-                LOG.debug(f"Failed to reload credentials/env: {cred_err}")
+            self.deployment.reload_tfhelpers()
+        except Exception as cred_err:
+            LOG.debug(f"Failed to reload credentials/env: {cred_err}")
 
-            # Get Terraform variables for this backend (contains a single backend entry)
-            tf_vars = self.get_terraform_variables()
+        # Merge with existing backends so we don't overwrite them
+        backend_key = self.backend_name
+        try:
+            tfvars = read_config(self.client, self.backend_instance.tfvar_config_key)
+        except Exception:
+            tfvars = {}
 
-            # Merge with existing backends so we don't overwrite them
-            backend_key = f"{self.backend_instance.name}_backends"
-            try:
-                current_tfvars = read_config(
-                    self.client, self.backend_instance.tfvar_config_key
-                )
-                current_backends = (
-                    current_tfvars.get(backend_key, {}) if current_tfvars else {}
-                )
-            except Exception:
-                current_backends = {}
+        model = self.jhelper.get_model(self.model)
 
-            # The new backend map is at tf_vars[backend_key]
-            new_backends = tf_vars.get(backend_key, {})
-            merged_backends = {**current_backends, **new_backends}
-            tf_vars[backend_key] = merged_backends
+        backends = tfvars.setdefault("backends", {})
 
+        tfvars["model"] = model["model-uuid"]
+
+        # Remove backend if in current config, to ensure we remove the keys
+        # no longer used
+        backends.pop(backend_key, None)
+        validated_config = self.backend_instance.config_type().model_validate(
+            self.variables, by_name=True
+        )
+        backends[backend_key] = self.backend_instance.build_terraform_vars(
+            self.deployment,
+            self.manifest,
+            self.backend_name,
+            validated_config,
+        )
+        try:
             # Update Terraform variables and apply with merged map
             self.tfhelper.update_tfvars_and_apply_tf(
                 self.client,
                 self.manifest,
                 tfvar_config=self.backend_instance.tfvar_config_key,
-                override_tfvars=tf_vars,
+                override_tfvars=tfvars,
             )
-
-            console.print(
-                f"Successfully deployed {self.backend_instance.display_name} "
-                f"backend '{self.backend_name}'"
-            )
-            return Result(ResultType.COMPLETED)
-
         except TerraformStateLockedException as e:
             # Bubble up to trigger retry
             raise e
@@ -274,6 +410,31 @@ class BaseStorageBackendDeployStep(BaseStep, ABC):
                 f"backend {self.backend_name}: {e}"
             )
             return Result(ResultType.FAILED, str(e))
+        # Let's save backend if not present
+        self.client.cluster.add_storage_backend(
+            self.backend_name,
+            self.backend_instance.backend_type,
+            validated_config.model_dump(exclude_none=True, by_alias=True),
+            self.backend_instance.principal_application,
+            model["model-uuid"],
+        )
+
+        try:
+            self.jhelper.wait_application_ready(
+                self.backend_name,
+                model["model-uuid"],
+                accepted_status=self.get_accepted_application_status(),
+                timeout=self.get_application_timeout(),
+            )
+        except TimeoutError as e:
+            LOG.warning(str(e))
+            return Result(ResultType.FAILED, str(e))
+
+        console.print(
+            f"Successfully deployed {self.backend_instance.display_name} "
+            f"backend {self.backend_name!r}"
+        )
+        return Result(ResultType.COMPLETED)
 
     def get_application_timeout(self) -> int:
         """Return application timeout in seconds. Override for custom timeout."""
@@ -281,10 +442,10 @@ class BaseStorageBackendDeployStep(BaseStep, ABC):
 
     def get_accepted_application_status(self) -> list[str]:
         """Return accepted application status."""
-        return ["active", "waiting"]
+        return ["active"]
 
 
-class BaseStorageBackendDestroyStep(BaseStep, ABC):
+class BaseStorageBackendDestroyStep(BaseStep):
     """Base class for storage backend destruction steps.
 
     Provides common destruction functionality that backends can inherit from
@@ -317,36 +478,6 @@ class BaseStorageBackendDestroyStep(BaseStep, ABC):
         self.backend_instance = backend_instance
         self.model = model
 
-    def should_destroy_all_resources(self) -> bool:
-        """Check if all resources should be destroyed (no backends left).
-
-        Override this method if backend has custom logic for determining
-        when to destroy all resources vs just removing configuration.
-        """
-        try:
-            current_config = read_config(
-                self.client, self.backend_instance.tfvar_config_key
-            )
-
-            backend_key = (
-                f"{self.backend_instance.name}_backends"  # e.g., "hitachi_backends"
-            )
-
-            if backend_key in current_config:
-                backends = current_config[backend_key]
-            else:
-                raise BackendNotFoundException(
-                    f"Backend '{self.backend_name}' not found"
-                )
-
-            # Remove this backend from the count
-            backends_without_current = {
-                k: v for k, v in backends.items() if k != self.backend_name
-            }
-            return len(backends_without_current) == 0
-        except ConfigItemNotFoundException:
-            return True
-
     @tenacity.retry(
         wait=tenacity.wait_fixed(60),
         stop=tenacity.stop_after_delay(300),
@@ -365,278 +496,76 @@ class BaseStorageBackendDestroyStep(BaseStep, ABC):
         The operation is atomic: either it succeeds completely or fails
         without modifying the configuration.
         """
+        # Ensure fresh Juju credentials and Terraform env before destroying/applying
         try:
-            # Ensure fresh Juju credentials and Terraform env before destroying/applying
-            try:
-                self.deployment.reload_tfhelpers()
-            except Exception as cred_err:
-                LOG.debug(f"Failed to reload credentials/env: {cred_err}")
+            self.deployment.reload_tfhelpers()
+        except Exception as cred_err:
+            LOG.debug(f"Failed to reload credentials/env: {cred_err}")
 
-            # First, read and validate the current configuration
-            try:
-                current_config = read_config(
-                    self.client, self.backend_instance.tfvar_config_key
-                )
-            except ConfigItemNotFoundException:
-                LOG.warning(f"No configuration found for backend {self.backend_name}")
-                raise BackendNotFoundException(
-                    f"No Terraform configuration found for backend "
-                    f"'{self.backend_name}'"
-                )
+        # First, read and validate the current configuration
+        try:
+            tfvars = read_config(self.client, self.backend_instance.tfvar_config_key)
+        except ConfigItemNotFoundException:
+            LOG.warning(f"No configuration found for backend {self.backend_name}")
+            tfvars = {}
 
-            # Check if backend exists in configuration
-            backend_key = (
-                f"{self.backend_instance.name}_backends"  # e.g., "hitachi_backends"
+        backends = tfvars.get("backends", {})
+
+        # Drop backend from current configuration
+        backends.pop(self.backend_name, None)
+
+        # For removal: update config and apply atomically
+        LOG.info(f"Performing removal for backend {self.backend_name}")
+        LOG.info(f"Remaining backends after removal: {list(tfvars['backends'].keys())}")
+
+        # First update the configuration
+        update_config(
+            self.client,
+            self.backend_instance.tfvar_config_key,
+            tfvars,
+        )
+        LOG.info("Configuration updated, now running terraform apply...")
+
+        try:
+            LOG.info(
+                f"Writing Terraform variables with backends: "
+                f"{list(tfvars.get('backends', {}).keys())}"
             )
-
-            if (
-                backend_key not in current_config
-                or self.backend_name not in current_config[backend_key]
-            ):
-                LOG.warning(f"Backend {self.backend_name} not found in configuration")
-                raise BackendNotFoundException(
-                    f"Backend '{self.backend_name}' not found in Terraform"
-                    f"configuration. This may indicate a state inconsistency."
-                )
-
-            # Create a backup of the backend configuration before removal
-            backend_backup = current_config[backend_key][self.backend_name].copy()
-
-            # Remove backend from configuration (in memory only)
-            del current_config[backend_key][self.backend_name]
-
-            # Determine if we need to destroy all resources or just apply changes
-            destroy_all = self.should_destroy_all_resources()
-
-            try:
-                if destroy_all:
-                    # For complete destruction: first update config, then destroy
-                    # If destroy fails, we can restore the config
-                    update_config(
-                        self.client,
-                        self.backend_instance.tfvar_config_key,
-                        current_config,
-                    )
-
-                    try:
-                        self.tfhelper.destroy()
-                    except Exception as destroy_error:
-                        # Restore the backend configuration if destroy fails
-                        LOG.error(
-                            f"""Terraform destroy failed,
-                            restoring configuration: {destroy_error}"""
-                        )
-                        current_config[backend_key][self.backend_name] = backend_backup
-                        update_config(
-                            self.client,
-                            self.backend_instance.tfvar_config_key,
-                            current_config,
-                        )
-                        raise destroy_error
-                else:
-                    # For partial removal: update config and apply atomically
-                    LOG.info(
-                        f"Performing partial removal for backend {self.backend_name}"
-                    )
-                    LOG.info(
-                        f"Remaining backends after removal: "
-                        f"{list(current_config[backend_key].keys())}"
-                    )
-
-                    # First update the configuration
-                    update_config(
-                        self.client,
-                        self.backend_instance.tfvar_config_key,
-                        current_config,
-                    )
-                    LOG.info("Configuration updated, now running terraform apply...")
-
-                    try:
-                        LOG.info("Starting terraform apply for partial removal")
-                        # CRITICAL: Write the updated Terraform variables
-                        # before applying
-                        # This was missing and causing partial removal to fail!
-                        LOG.info("Writing updated Terraform variables...")
-
-                        # Get the updated Terraform variables from the current config
-                        tf_vars = current_config.copy()
-                        LOG.info(
-                            f"Writing Terraform variables with backends: "
-                            f"{list(tf_vars.get(backend_key, {}).keys())}"
-                        )
-
-                        self.tfhelper.write_tfvars(tf_vars)
-                        LOG.info("Terraform variables written, now applying...")
-                        self.tfhelper.apply()
-                        LOG.info(
-                            "Terraform apply completed successfully for partial removal"
-                        )
-                    except Exception as apply_error:
-                        # Restore the backend configuration if apply fails
-                        LOG.error(
-                            f"Terraform apply failed, restoring configuration: "
-                            f"{apply_error}"
-                        )
-                        current_config[backend_key][self.backend_name] = backend_backup
-                        update_config(
-                            self.client,
-                            self.backend_instance.tfvar_config_key,
-                            current_config,
-                        )
-                        raise apply_error
-
-            except Exception as tf_error:
-                # Any Terraform operation failure should be propagated
-                raise tf_error
-
-            console.print(
-                f"Successfully removed {self.backend_instance.display_name} "
-                f"backend '{self.backend_name}'"
+            self.tfhelper.update_tfvars_and_apply_tf(
+                self.client,
+                self.manifest,
+                tfvar_config=self.backend_instance.tfvar_config_key,
+                override_tfvars=tfvars,
             )
-            return Result(ResultType.COMPLETED)
-
         except TerraformStateLockedException as e:
             # Bubble up to trigger retry
+            LOG.debug("Error: Terraform state locked")
             raise e
-        except Exception as e:
-            LOG.error(
-                f"Failed to destroy {self.backend_instance.display_name} "
-                f"backend {self.backend_name}: {e}"
+        except TerraformException:
+            # Restore the backend configuration if apply fails
+            LOG.debug("Terraform apply failed", exc_info=True)
+            return Result(
+                ResultType.FAILED,
+                f"Failed to destroy backend {self.backend_name!r}",
             )
-            return Result(ResultType.FAILED, str(e))
+
+        try:
+            self.client.cluster.delete_storage_backend(self.backend_name)
+        except StorageBackendNotFoundException:
+            LOG.debug(f"Backend {self.backend_name} not found in clusterd")
+
+        try:
+            # Wipe previously saved answers
+            self.client.cluster.delete_config(
+                self.backend_instance.config_key(self.backend_name)
+            )
+        except ConfigItemNotFoundException:
+            LOG.debug(
+                f"Configuration for backend {self.backend_name} not found in clusterd"
+            )
+
+        return Result(ResultType.COMPLETED)
 
     def get_application_timeout(self) -> int:
         """Return application timeout in seconds."""
         return 1200  # 20 minutes, same as cinder-volume
-
-
-class BaseStorageBackendConfigUpdateStep(BaseStep, ABC):
-    """Base class for storage backend configuration update steps.
-
-    Provides common configuration update functionality that backends can inherit from
-    and customize as needed. Handles configuration updates and reset operations.
-    """
-
-    def __init__(
-        self,
-        deployment: Deployment,
-        backend_instance: "StorageBackendBase",
-        backend_name: str,
-        config_updates: Dict[str, Any],
-    ):
-        super().__init__(
-            f"Update {backend_instance.display_name} backend config {backend_name}",
-            f"Updating {backend_instance.display_name} storage backend "
-            f"configuration for {backend_name}",
-        )
-        self.deployment = deployment
-        self.backend_instance = backend_instance
-        self.backend_name = backend_name
-        self.config_updates = config_updates
-        self.client = deployment.get_client()
-        self.tfhelper = deployment.get_tfhelper(backend_instance.tfplan)
-
-    def handle_update_operation(self, current_config: Dict[str, Any]) -> Dict[str, Any]:
-        """Handle configuration update operation. Override for custom update logic.
-
-        Args:
-            current_config: Current backend configuration
-
-        Returns:
-            Updated configuration with new values applied
-        """
-        # Get backend config from new format only
-        backend_key = (
-            f"{self.backend_instance.name}_backends"  # e.g., "hitachi_backends"
-        )
-        backend_config = current_config[backend_key][self.backend_name]
-        if "charm_config" not in backend_config:
-            backend_config["charm_config"] = {}
-
-        # Apply configuration updates (excluding reset keys) with field mapping
-        updates = {k: v for k, v in self.config_updates.items() if k != "_reset_keys"}
-
-        # Apply field mapping to convert internal field names to charm field names
-        field_mapping = self.backend_instance.get_field_mapping()
-        mapped_updates = {}
-        for key, value in updates.items():
-            # Use field mapping if available, otherwise use the key as-is
-            charm_key = field_mapping.get(key, key)
-            mapped_updates[charm_key] = value
-
-        backend_config["charm_config"].update(mapped_updates)
-
-        return current_config
-
-    @tenacity.retry(
-        wait=tenacity.wait_fixed(60),
-        stop=tenacity.stop_after_delay(300),
-        retry=tenacity.retry_if_exception_type(TerraformStateLockedException),
-        retry_error_callback=friendly_terraform_lock_retry_callback,
-        before_sleep=lambda retry_state: console.print(
-            f"Terraform state locked, retrying in 60 seconds... "
-            f"(attempt {retry_state.attempt_number}/5)"
-        ),
-    )
-    def run(self, status: Status | None = None) -> Result:
-        """Update the storage backend configuration using Terraform."""
-        # Read current configuration
-        try:
-            current_config = read_config(
-                self.client, self.backend_instance.tfvar_config_key
-            )
-
-            # Check new format (backend-specific keys only)
-            backend_key = (
-                f"{self.backend_instance.name}_backends"  # e.g., "hitachi_backends"
-            )
-
-            if (
-                backend_key not in current_config
-                or self.backend_name not in current_config[backend_key]
-            ):
-                return Result(
-                    ResultType.FAILED, f"Backend {self.backend_name} not found"
-                )
-
-            # Handle update operation
-            current_config = self.handle_update_operation(current_config)
-            operation_type = "update"
-
-            # Save updated configuration and apply with updated tfvars
-            update_config(
-                self.client, self.backend_instance.tfvar_config_key, current_config
-            )
-
-            # Ensure fresh Juju credentials and Terraform env before applying
-            try:
-                self.deployment.reload_tfhelpers()
-            except Exception as cred_err:
-                LOG.debug(f"Failed to reload credentials/env: {cred_err}")
-
-            # Write the updated tfvars and apply
-            self.tfhelper.write_tfvars(current_config)
-            self.tfhelper.apply()
-
-            console.print(
-                f"Successfully {operation_type}d "
-                f"{self.backend_instance.display_name} backend "
-                f"'{self.backend_name}' configuration"
-            )
-            return Result(ResultType.COMPLETED)
-
-        except ConfigItemNotFoundException:
-            return Result(
-                ResultType.FAILED,
-                f"Configuration not found for backend {self.backend_name}",
-            )
-
-        except TerraformStateLockedException as e:
-            # Bubble up to trigger retry
-            raise e
-        except Exception as e:
-            LOG.error(
-                f"Failed to update {self.backend_instance.display_name} "
-                f"backend {self.backend_name} configuration: {e}"
-            )
-            return Result(ResultType.FAILED, str(e))

@@ -29,6 +29,8 @@ var Servers = map[string]rest.Server{
 					manifestsCmd,
 					manifestCmd,
 					statusCmd,
+					storageBackendsCmd,
+					storageBackendCmd,
 				},
 			},
 			{

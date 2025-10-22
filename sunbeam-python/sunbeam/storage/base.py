@@ -3,31 +3,39 @@
 
 """Storage backend base class with integrated Terraform functionality."""
 
+import enum
 import ipaddress
 import logging
 import re
-from abc import ABC, abstractmethod
+import types
+import typing
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any
 
 import click
+import pydantic
 from packaging.version import Version
 from rich.console import Console
 from rich.table import Table
 
-from sunbeam.core.common import BaseStep, run_plan
-from sunbeam.core.deployment import Deployment
+from sunbeam import utils
+from sunbeam.clusterd.client import Client
+from sunbeam.core.common import BaseStep, RiskLevel, run_plan
+from sunbeam.core.deployment import Deployment, Networks
 from sunbeam.core.juju import JujuHelper
-from sunbeam.core.manifest import Manifest
+from sunbeam.core.manifest import Manifest, StorageBackendConfig
 from sunbeam.core.terraform import TerraformHelper, TerraformInitStep
-
-from .models import (
+from sunbeam.storage.cli_base import StorageBackendCLIBase
+from sunbeam.storage.models import (
     BackendAlreadyExistsException,
-    BackendNotFoundException,
-    StorageBackendConfig,
+    SecretDictField,
 )
-from .service import StorageBackendService
-from .steps import ValidateStoragePrerequisitesStep
+from sunbeam.storage.service import StorageBackendService
+from sunbeam.storage.steps import (
+    BaseStorageBackendDeployStep,
+    BaseStorageBackendDestroyStep,
+    ValidateStoragePrerequisitesStep,
+)
 
 LOG = logging.getLogger(__name__)
 console = Console()
@@ -78,27 +86,26 @@ def validate_juju_application_name(name: str) -> bool:
     return True
 
 
-class StorageBackendBase(ABC):
+BackendConfig = typing.TypeVar("BackendConfig", bound=StorageBackendConfig)
+
+
+class StorageBackendBase(typing.Generic[BackendConfig]):
     """Base class for storage backends with integrated Terraform functionality."""
 
-    name: str = "base"
+    backend_type: str = "base"
     display_name: str = "Base Storage Backend"
     version = Version("0.0.1")
-    tf_plan_location = "FEATURE_REPO"  # Plans stored in feature directory
     user_manifest = None  # Path to user manifest file
+    # By default, any storage backend is considered beta risk.
+    # It will be needed to override in subclasses if the backend is
+    # considered stable.
+    risk_availability: RiskLevel = RiskLevel.BETA
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize storage backend."""
         self.tfplan = "storage-backend-plan"
         self.tfplan_dir = "deploy-storage-backend"
-        self._manifest: Optional[Manifest] = None
-        self.service: Optional[StorageBackendService] = None
-
-    def _get_service(self, deployment: Deployment) -> StorageBackendService:
-        """Get or create the storage backend service."""
-        if self.service is None:
-            self.service = StorageBackendService(deployment)
-        return self.service
+        self._manifest: Manifest | None = None
 
     # Common CLI registration pattern (Abstraction 3: CLI registration)
     def register_add_cli(self, add: click.Group) -> None:  # noqa: F811
@@ -111,22 +118,15 @@ class StorageBackendBase(ABC):
         cli = cli_class(self)
         cli.register_add_cli(add)
 
-    def register_cli(  # noqa: F811
-        self,
-        remove: click.Group,
-        config_show: click.Group,
-        config_set: click.Group,
-        config_options: click.Group,
-        deployment: Deployment,
-    ) -> None:
-        """Register management commands for this backend.
+    def register_options_cli(self, options: click.Group) -> None:
+        """Register 'sunbeam storage options <backend>' command.
 
         Default implementation delegates to CLI class following the pattern.
         Subclasses can override if they need custom behavior.
         """
         cli_class = self._get_cli_class()
         cli = cli_class(self)
-        cli.register_cli(remove, config_show, config_set, config_options, deployment)
+        cli.register_options_cli(options)
 
     # Terraform-related properties and methods
     @property
@@ -144,25 +144,38 @@ class StorageBackendBase(ABC):
     @property
     def tfvar_config_key(self) -> str:
         """Config key for storing Terraform variables in clusterd."""
-        return f"TerraformVarsStorageBackends{self.name.title()}"
+        return "TerraformVarsStorageBackends"
 
-    # Abstract methods that each backend must implement
-    @abstractmethod
+    def config_key(self, name: str) -> str:
+        """Config key for a specific backend instance."""
+        return f"Storage-{name}"
+
     def create_deploy_step(
         self,
         deployment: Deployment,
-        client,
+        client: Client,
         tfhelper: TerraformHelper,
         jhelper: JujuHelper,
         manifest: Manifest,
+        preseed: dict,
         backend_name: str,
-        backend_config: StorageBackendConfig,
         model: str,
+        accept_defaults: bool = False,
     ) -> BaseStep:
         """Create a deployment step for this backend."""
-        pass
+        return BaseStorageBackendDeployStep(
+            deployment,
+            client,
+            tfhelper,
+            jhelper,
+            manifest,
+            preseed,
+            backend_name,
+            self,
+            model,
+            accept_defaults,
+        )
 
-    @abstractmethod
     def create_destroy_step(
         self,
         deployment: Deployment,
@@ -174,17 +187,16 @@ class StorageBackendBase(ABC):
         model: str,
     ) -> BaseStep:
         """Create a destruction step for this backend."""
-        pass
-
-    @abstractmethod
-    def create_update_config_step(
-        self,
-        deployment: Deployment,
-        backend_name: str,
-        config_updates: Dict[str, Any],
-    ) -> BaseStep:
-        """Create a configuration update step for this backend."""
-        pass
+        return BaseStorageBackendDestroyStep(
+            deployment,
+            client,
+            tfhelper,
+            jhelper,
+            manifest,
+            backend_name,
+            self,
+            model,
+        )
 
     def register_terraform_plan(self, deployment: Deployment) -> None:
         """Register storage backend Terraform plan with deployment system."""
@@ -194,7 +206,8 @@ class StorageBackendBase(ABC):
 
         # Get the plan source path
         backend_self_contained = (
-            Path(__file__).parent / "backends" / self.name / self.tfplan_dir
+            Path(__file__).parent.parent.parent.parent.parent.parent
+            / "etc/deploy-storage"  # / "backends" / self.name / self.tfplan_dir
         )
 
         if backend_self_contained.exists():
@@ -225,30 +238,31 @@ class StorageBackendBase(ABC):
         # Register the helper with the deployment's tfhelpers
         deployment._tfhelpers[self.tfplan] = tfhelper
 
-    def add_backend(
+    def add_backend_instance(
         self,
         deployment: Deployment,
-        backend_name: str,
-        config: StorageBackendConfig,
+        name: str,
+        config: dict,
         console: Console,
+        accept_defaults: bool = False,
     ) -> None:
         """Add a storage backend using Terraform deployment."""
         # Validate backend name follows Juju application naming rules
-        if not validate_juju_application_name(backend_name):
+        if not validate_juju_application_name(name):
             raise click.ClickException(
-                f"Invalid backend name '{backend_name}'. "
-                f"Backend names must be valid Juju application names: "
-                f"start with a letter, contain only lowercase letters, numbers,"
-                f"and hyphens, cannot end with hyphen, cannot"
-                f"have consecutive hyphens, and cannot have numbers"
-                f"after the final hyphen."
+                f"Invalid backend name '{name}'. "
+                "Backend names must be valid Juju application names: "
+                "start with a letter, contain only lowercase letters, numbers,"
+                "and hyphens, cannot end with hyphen, cannot"
+                "have consecutive hyphens, and cannot have numbers"
+                "after the final hyphen."
             )
 
-        service = self._get_service(deployment)
-        if service.backend_exists(backend_name, self.name):
-            raise BackendAlreadyExistsException(
-                f"Backend '{backend_name}' already exists"
-            )
+        service = StorageBackendService(
+            deployment, JujuHelper(deployment.juju_controller)
+        )
+        if service.backend_exists(name, self.backend_type):
+            raise BackendAlreadyExistsException(f"Backend {name!r} already exists")
 
         # Register our Terraform plan with the deployment system
         self.register_terraform_plan(deployment)
@@ -267,71 +281,99 @@ class StorageBackendBase(ABC):
                 tfhelper,
                 jhelper,
                 self.manifest,
-                backend_name,
                 config,
+                name,
                 deployment.openstack_machines_model,
+                accept_defaults,
             ),
         ]
 
         run_plan(plan, console)
 
-    def _get_field_descriptions(self, config_class) -> dict:
+    def _get_field_descriptions(self, config_class: type[BackendConfig]) -> dict:
         """Extract field descriptions from a Pydantic v2 model class."""
-        desc: Dict[str, str] = {}
-        if hasattr(config_class, "model_fields"):
-            for field_name, field_info in config_class.model_fields.items():
-                desc[field_name] = getattr(
-                    getattr(field_info, "field_info", field_info),
-                    "description",
-                    "No description available",
-                )
+        desc: dict[str, str] = {}
+        for field_name, field_info in config_class.model_fields.items():
+            desc[field_name] = field_info.description or "No description available"
         return desc
 
-    def _format_config_value(self, key: str, value) -> str:
+    def _field_is_secret(self, finfo) -> bool:
+        """Check if a field is marked as a secret."""
+        for constraint in finfo.metadata:
+            if isinstance(constraint, SecretDictField):
+                return True
+        return False
+
+    def _format_config_value(self, value, is_secret: bool) -> str:
         """Format configuration value for display, masking sensitive data."""
         display_value = str(value)
-        if any(s in key.lower() for s in ["password", "secret", "token", "key"]):
+        if is_secret:
             display_value = "*" * min(8, len(display_value)) if display_value else ""
         if len(display_value) > 23:
             display_value = display_value[:20] + "..."
         return display_value
 
-    def _extract_field_info(self, field_info) -> tuple:
+    def _format_type(self, annotation: type) -> str:
+        """Return a consistent, human-readable representation of a type annotation."""
+        origin = typing.get_origin(annotation)
+        args = typing.get_args(annotation)
+
+        # Handle Optional / Union[..., None]
+        if origin is typing.Union and type(None) in args:
+            non_none_args = [a for a in args if a is not type(None)]
+            inner = " | ".join(self._format_type(a) for a in non_none_args)
+            return inner
+
+        # Handle other Unions
+        if origin in (typing.Union, types.UnionType):
+            if args and args[-1] is type(None):
+                args = args[:-1]
+            return " | ".join(self._format_type(a) for a in args)
+
+        # Handle Literal types
+        if origin is typing.Literal:
+            values = ", ".join(repr(a) for a in args)
+            return f"{values}"
+
+        # Handle Enum subclasses
+        if isinstance(annotation, type) and issubclass(annotation, enum.Enum):
+            # Display allowed values (stringified)
+            options = ", ".join(repr(e.value) for e in annotation)
+            return f"{options}"
+
+        # Handle parametrised generics, e.g., list[str], dict[str, int]
+        if origin is not None:
+            origin_name = getattr(origin, "__name__", str(origin))
+            inner = ", ".join(self._format_type(a) for a in args)
+            return f"{origin_name}[{inner}]" if args else origin_name
+
+        # Handle bare types like int, bool, str, MyClass
+        if hasattr(annotation, "__name__"):
+            return annotation.__name__
+
+        # Handle special typing constructs (e.g. Any)
+        return str(annotation)
+
+    def _extract_field_info(self, field_info: pydantic.fields.FieldInfo) -> tuple:
         """Extract field type, default value, and description from field info."""
-        if hasattr(field_info, "type_"):
-            field_type = str(field_info.type_).replace("<class '", "").replace("'>", "")
-        elif hasattr(field_info, "annotation"):
-            field_type = (
-                str(field_info.annotation).replace("<class '", "").replace("'>", "")
-            )
+        if field_info.annotation:
+            field_type = self._format_type(field_info.annotation)
         else:
             field_type = "str"
 
-        if hasattr(field_info, "default"):
-            default_value = (
-                str(field_info.default) if field_info.default is not ... else "Required"
-            )
-        else:
-            default_value = "Unknown"
+        if field_info.is_required():
+            field_type += " [red]Required[/red]"
 
-        if hasattr(field_info, "field_info") and hasattr(
-            field_info.field_info, "description"
-        ):
-            description = field_info.field_info.description or "No description"
-        elif hasattr(field_info, "description"):
-            description = field_info.description or "No description"
-        else:
-            description = "No description"
+        description = field_info.description or "No description"
 
-        return field_type, default_value, description
+        return field_type, description
 
     def display_config_options(self) -> None:
         """Display available configuration options for this backend."""
         console.print(
             f"[blue]Available configuration options for {self.display_name}:[/blue]"
         )
-        config_class = self.config_class
-        fields = getattr(config_class, "model_fields", {})
+        fields = self.config_type().model_fields
         if not fields:
             console.print(
                 "  Configuration options are managed dynamically via Terraform."
@@ -344,21 +386,20 @@ class StorageBackendBase(ABC):
         table = Table(show_header=True, header_style="bold blue")
         table.add_column("Option", style="cyan")
         table.add_column("Type", style="green")
-        table.add_column("Default", style="yellow")
         table.add_column("Description", style="white")
 
         for field_name, finfo in fields.items():
             if field_name == "name":
                 continue
             try:
-                ftype, default, descr = self._extract_field_info(finfo)
-                table.add_row(field_name, ftype, default, descr)
+                ftype, descr = self._extract_field_info(finfo)
+                table.add_row(field_name, ftype, descr)
             except Exception:
-                table.add_row(field_name, "str", "Unknown", "Configuration option")
+                table.add_row(field_name, "str", "Configuration option")
 
         console.print(table)
 
-    def display_config_table(self, backend_name: str, config: dict) -> None:
+    def display_config_table(self, backend_name: str, config: BackendConfig) -> None:
         """Display current configuration in a formatted table for this backend."""
         table = Table(
             title=f"Configuration for {self.display_name} backend '{backend_name}'",
@@ -372,8 +413,11 @@ class StorageBackendBase(ABC):
         table.add_column("Value", style="green", width=25)
         table.add_column("Description", style="dim", width=50)
 
-        field_descriptions = self._get_field_descriptions(self.config_class)
-        for key, value in sorted(config.items()):
+        field_descriptions = self._get_field_descriptions(self.config_type())
+        for field, finfo in self.config_type().model_fields.items():
+            value = getattr(config, field, None)
+            if not value:
+                continue
             # Skip empty values (None, empty string, empty dict, empty list)
             # But keep 0 and False as valid values
             if (
@@ -383,16 +427,18 @@ class StorageBackendBase(ABC):
             ):
                 continue
 
-            display_value = self._format_config_value(key, value)
-            description = field_descriptions.get(key, "Configuration option")
+            display_value = self._format_config_value(
+                value, is_secret=self._field_is_secret(finfo)
+            )
+            description = field_descriptions.get(field, "Configuration option")
             if len(description) > 47:
                 description = description[:44] + "..."
-            table.add_row(key, display_value, description)
+            table.add_row(utils.to_kebab(field), display_value, description)
 
         if not config:
             console.print(
                 (
-                    f"[yellow]No configuration found for {self.name} "
+                    f"[yellow]No configuration found for {self.backend_type} "
                     f"backend '{backend_name}'[/yellow]"
                 )
             )
@@ -409,10 +455,6 @@ class StorageBackendBase(ABC):
         self, deployment: Deployment, backend_name: str, console: Console
     ) -> None:
         """Remove a storage backend using Terraform."""
-        service = self._get_service(deployment)
-        if not service.backend_exists(backend_name, self.name):
-            raise BackendNotFoundException(f"Backend '{backend_name}' not found")
-
         # Register our Terraform plan with the deployment system
         self.register_terraform_plan(deployment)
 
@@ -438,194 +480,119 @@ class StorageBackendBase(ABC):
 
         run_plan(plan, console)
 
-    def update_backend_config(
-        self, deployment: Deployment, backend_name: str, config_updates: Dict[str, Any]
-    ) -> None:
-        """Update backend configuration using Terraform."""
-        service = self._get_service(deployment)
-        if not service.backend_exists(backend_name, self.name):
-            raise BackendNotFoundException(f"Backend '{backend_name}' not found")
-
-        # Ensure the Terraform plan is registered so we can obtain its tfhelper
-        self.register_terraform_plan(deployment)
-
-        plan = [
-            TerraformInitStep(deployment.get_tfhelper(self.tfplan)),
-            self.create_update_config_step(deployment, backend_name, config_updates),
-        ]
-
-        run_plan(plan, console)
-
-    @property
-    def config_class(self) -> type[StorageBackendConfig]:
+    def config_type(self) -> type[BackendConfig]:
         """Return the configuration class for this backend."""
-        return StorageBackendConfig
+        raise NotImplementedError("Subclasses must implement config_type")
 
     # Backend-specific properties that subclasses should override
     @property
-    def backend_type(self) -> str:
-        """Backend type identifier. Override in subclasses."""
-        return self.name
-
-    @property
     def charm_name(self) -> str:
-        """Charm name for this backend. Override in subclasses."""
+        """Charm name for this backend."""
         raise NotImplementedError("Subclasses must define charm_name")
 
     @property
     def charm_channel(self) -> str:
-        """Charm channel for this backend. Override in subclasses."""
-        return "stable"
+        """Charm channel for this backend."""
+        return "latest/stable"
 
     @property
-    def charm_revision(self) -> Optional[int]:
-        """Charm revision for this backend. Override in subclasses."""
+    def charm_revision(self) -> str | None:
+        """Charm revision for this backend."""
         return None
 
     @property
     def charm_base(self) -> str:
-        """Charm base for this backend. Override in subclasses."""
+        """Charm base for this backend."""
         return "ubuntu@22.04"
 
     @property
     def backend_endpoint(self) -> str:
-        """Backend endpoint name for integration. Override in subclasses."""
+        """Backend endpoint name for integration."""
         return "cinder-volume"
 
     @property
     def units(self) -> int:
-        """Number of units to deploy. Override in subclasses."""
+        """Number of units to deploy."""
         return 1
 
     @property
-    def additional_integrations(self) -> List[str]:
-        """Additional integrations for this backend. Override in subclasses."""
+    def additional_integrations(self) -> list[str]:
+        """Additional integrations for this backend."""
         return []
 
-    @abstractmethod
-    def get_terraform_variables(
-        self, backend_name: str, config: StorageBackendConfig, model: str
-    ) -> Dict[str, Any]:
-        """Generate Terraform variables for this backend. Override in subclasses."""
-        raise NotImplementedError("Subclasses must implement get_terraform_variables")
+    @property
+    def principal_application(self) -> str:
+        """Principal application for this backend.
 
-    def get_field_mapping(self) -> Dict[str, str]:
-        """Get mapping from config fields to charm config options.
-
-        Maps Pydantic field names (with underscores) to charm config option
-        names (with hyphens). Uses the config_class to automatically generate
-        the mapping from Pydantic model fields.
+        To override when supporting non-ha backends.
         """
-        config_class = self.config_class
-        # Use model_fields for Pydantic v2
-        model_fields = getattr(config_class, "model_fields", {})
-        field_names = model_fields.keys() if model_fields else []
+        return "cinder-volume"
 
-        return {key: key.replace("_", "-") for key in field_names}
+    def get_endpoint_bindings(self, deployment: Deployment) -> list[dict[str, str]]:
+        """Endpoint bindings for this backend."""
+        return [
+            {"space": deployment.get_space(Networks.MANAGEMENT)},
+            {
+                "endpoint": "cinder-volume",
+                "space": deployment.get_space(Networks.STORAGE),
+            },
+        ]
 
-    @abstractmethod
-    def prompt_for_config(self, backend_name: str) -> StorageBackendConfig:
-        """Prompt user for backend-specific configuration. Override in subclasses."""
-        raise NotImplementedError("Subclasses must implement prompt_for_config")
-
-    # Common utility methods
-    def _filter_config_for_charm(
+    def build_terraform_vars(
         self,
-        config_dict: Dict[str, Any],
-        field_mapping: Dict[str, str],
-        exclude_fields: Set[str] | None = None,
-    ) -> Dict[str, Any]:
-        """Filter configuration dictionary for charm deployment.
+        deployment: Deployment,
+        manifest: Manifest,
+        backend_name: str,
+        config: BackendConfig,
+    ) -> dict[str, Any]:
+        """Generate Terraform variables for Pure Storage backend deployment."""
+        # Map our configuration fields to the correct charm configuration option names
+        config_dict = config.model_dump(exclude_none=True, by_alias=True)
 
-        Only includes explicitly set values (non-default, non-empty) to avoid
-        sending unnecessary configuration to the charm.
+        # Secret fields that will be translated to juju secrets
+        # K: config field name, V: field key in juju secret
+        secret_fields = {}
+        alias_generator = self.config_type().model_config.get("alias_generator")
+        if alias_generator is None:
+            raise RuntimeError(
+                "Alias generator not defined in config model StorageBackendConfig"
+            )
+        # raise if alias generator is callable
+        if not hasattr(alias_generator, "generate_aliases"):
+            raise RuntimeError(
+                "Alias generator is not of type AliasGenerator in"
+                " config model StorageBackendConfig"
+            )
+        for fname, finfo in self.config_type().model_fields.items():
+            for constraint in finfo.metadata:
+                if isinstance(constraint, SecretDictField):
+                    secret_fields[alias_generator.generate_aliases(fname)[2]] = (  # type: ignore
+                        constraint.field
+                    )
 
-        Args:
-            config_dict: Configuration dictionary to filter
-            field_mapping: Mapping from config keys to charm config keys
-            exclude_fields: Set of fields to exclude from filtering
+        charm_channel = self.charm_channel
+        charm_revision = None
+        if backends_cfg := manifest.storage.root.get(self.backend_type):
+            if backend_cfg := backends_cfg.root.get(backend_name):
+                if charm_cfg := backend_cfg.software.charms.get(self.charm_name):
+                    if channel := charm_cfg.channel:
+                        charm_channel = channel
+                    if revision := charm_cfg.revision:
+                        charm_revision = revision
 
-        Returns:
-            Filtered charm configuration dictionary
-        """
-        exclude_fields = exclude_fields or set()
+        # Build Terraform variables to match the plan's expected format
+        tfvars = {
+            "principal_application": self.principal_application,
+            "charm_name": self.charm_name,
+            "charm_base": self.charm_base,
+            "charm_channel": charm_channel,
+            "charm_revision": charm_revision,
+            "endpoint_bindings": self.get_endpoint_bindings(deployment),
+            "charm_config": config_dict,
+            "secrets": secret_fields,
+        }
 
-        # Get default values for comparison
-        default_config = self._get_default_config()
-        default_dict = default_config.model_dump()
-
-        charm_config = {}
-        for key, value in config_dict.items():
-            # Skip excluded fields
-            if key in exclude_fields:
-                continue
-
-            if key in field_mapping:
-                # Only include explicitly set values (non-default, non-empty)
-                if self._should_include_config_value(key, value, default_dict.get(key)):
-                    charm_config[field_mapping[key]] = value
-
-        return charm_config
-
-    def _should_include_config_value(
-        self, key: str, value: Any, default_value: Any
-    ) -> bool:
-        """Determine if a configuration value should be included in charm config.
-
-        Args:
-            key: Configuration field name
-            value: Current value
-            default_value: Default value for this field
-
-        Returns:
-            True if the value should be sent to the charm, False otherwise
-        """
-        # Always include the 'name' field as it's required
-        if key == "name":
-            return True
-
-        # Skip None values
-        if value is None:
-            return False
-
-        # Skip empty strings
-        if isinstance(value, str) and value.strip() == "":
-            return False
-
-        # Skip empty lists
-        if isinstance(value, list) and len(value) == 0:
-            return False
-
-        # Skip empty dictionaries
-        if isinstance(value, dict) and len(value) == 0:
-            return False
-
-        # Skip values that match the default
-        if value == default_value:
-            return False
-
-        # Include all other values
-        return True
-
-    @abstractmethod
-    def _get_default_config(self) -> StorageBackendConfig:
-        """Get a default configuration instance for comparison.
-
-        Subclasses must implement this to provide a default config instance
-        with dummy values for required fields.
-        """
-        raise NotImplementedError("Subclasses must implement _get_default_config")
-
-    def _get_credential_fields(self) -> Set[str]:
-        """Get set of credential field names that should be excluded from charm config.
-
-        Subclasses can override this to specify which fields contain credentials
-        that should not be sent to the charm configuration.
-
-        Returns:
-            Set of field names containing credentials
-        """
-        return {"name"}  # Default: only exclude the name field
+        return tfvars
 
     # Common utility methods (Abstraction 2: IP/FQDN validation)
     @staticmethod
@@ -650,7 +617,7 @@ class StorageBackendBase(ABC):
                 return value
             raise click.BadParameter("Must be a valid IP address or FQDN")
 
-    def _get_cli_class(self):
+    def _get_cli_class(self) -> type[StorageBackendCLIBase]:
         """Get the CLI class for this backend.
 
         Subclasses should override this to return their CLI class.
@@ -658,13 +625,12 @@ class StorageBackendBase(ABC):
         """
         try:
             # Try to import CLI class based on naming convention
-            module_path = f"sunbeam.storage.backends.{self.name}.cli"
-            cli_module = __import__(module_path, fromlist=[f"{self.name.title()}CLI"])
-            cli_class_name = f"{self.name.title()}CLI"
+            module_path = f"sunbeam.storage.backends.{self.backend_type}.cli"
+            cli_module = __import__(
+                module_path, fromlist=[f"{self.backend_type.title()}CLI"]
+            )
+            cli_class_name = f"{self.backend_type.title()}CLI"
             return getattr(cli_module, cli_class_name)
         except (ImportError, AttributeError):
-            raise NotImplementedError(
-                f"Subclasses must implement _get_cli_class or "
-                f"follow naming convention: "
-                f"sunbeam.storage.backends.{self.name}.cli.{self.name.title()}CLI"
-            )
+            LOG.debug(f"{self.backend_type} does not implement custom cli class")
+            return StorageBackendCLIBase
