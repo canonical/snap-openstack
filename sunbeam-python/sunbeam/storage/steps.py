@@ -9,7 +9,7 @@ to get common functionality while customizing specific behavior.
 """
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Callable
 
 import pydantic
 import tenacity
@@ -183,36 +183,56 @@ class ValidateStoragePrerequisitesStep(BaseStep):
             return Result(ResultType.FAILED, str(e))
 
 
-def generate_required_questions_from_config(
-    config_type: type[pydantic.BaseModel],
+def basemodel_validator(
+    model: type[pydantic.BaseModel],
+) -> Callable[[str], Callable[[Any], None]]:
+    """Return a factory producing value validators for Pydantic model fields."""
+    validator = model.__pydantic_validator__
+    fields = dict(model.model_fields.items())
+    constructed = model.model_construct()
+
+    def field_validator(field: str) -> Callable[[Any], None]:
+        if field not in fields:
+            raise ValueError(f"{model.__name__} has no field named {field!r}")
+
+        def value_validator(value: Any) -> None:
+            try:
+                validator.validate_assignment(constructed, field, value)
+            except pydantic.ValidationError as exc:
+                messages: list[str] = []
+                for error in exc.errors():
+                    location = ".".join(str(part) for part in error.get("loc", ()))
+                    message = error.get("msg", str(error))
+                    if location:
+                        messages.append(f"{location}: {message}")
+                    else:
+                        messages.append(message)
+                raise ValueError("; ".join(messages))
+
+        return value_validator
+
+    return field_validator
+
+
+def generate_questions_from_config(
+    config_type: type[pydantic.BaseModel], *, optional: bool = False
 ) -> dict[str, Question]:
     questions = {}  # type: ignore
+    field_validator = basemodel_validator(config_type)
     for field, finfo in config_type.model_fields.items():
-        if not finfo.is_required():
+        if optional and finfo.is_required():
+            continue
+        if not optional and not finfo.is_required():
             continue
         question_type: type[Question] = PromptQuestion
         for constraint in finfo.metadata:
             if isinstance(constraint, SecretDictField):
                 question_type = PasswordPromptQuestion
+        prompt_suffix = " (optional)" if optional else ""
         questions[field] = question_type(
-            f"Enter value for {field!r}", description=finfo.description
-        )
-    return questions
-
-
-def generate_optional_questions_from_config(
-    config_type: type[pydantic.BaseModel],
-) -> dict[str, Question]:
-    questions = {}  # type: ignore
-    for field, finfo in config_type.model_fields.items():
-        if finfo.is_required():
-            continue
-        question_type: type[Question] = PromptQuestion
-        for constraint in finfo.metadata:
-            if isinstance(constraint, SecretDictField):
-                question_type = PasswordPromptQuestion
-        questions[field] = question_type(
-            f"Enter value for {field!r} (optional)", description=finfo.description
+            f"Enter value for {field!r}{prompt_suffix}",
+            description=finfo.description,
+            validation_function=field_validator(field),
         )
     return questions
 
@@ -286,7 +306,7 @@ class BaseStorageBackendDeployStep(BaseStep):
             manifest_configured = True
 
         required_questions_bank = QuestionBank(
-            questions=generate_required_questions_from_config(
+            questions=generate_questions_from_config(
                 self.backend_instance.config_type()
             ),
             console=console,
@@ -296,7 +316,10 @@ class BaseStorageBackendDeployStep(BaseStep):
             show_hint=show_hint,
         )
         for name, question in required_questions_bank.questions.items():
-            self.variables[name] = question.ask()
+            answer = question.ask()
+            while not answer:
+                answer = question.ask()
+            self.variables[name] = answer
 
         res = ConfirmQuestion(
             "Set optional configurations?",
@@ -309,8 +332,8 @@ class BaseStorageBackendDeployStep(BaseStep):
             return
 
         optional_questions_bank = QuestionBank(
-            questions=generate_optional_questions_from_config(
-                self.backend_instance.config_type()
+            questions=generate_questions_from_config(
+                self.backend_instance.config_type(), optional=True
             ),
             console=console,
             preseed=preseed,
