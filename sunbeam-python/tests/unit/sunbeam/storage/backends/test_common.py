@@ -76,22 +76,6 @@ class BaseBackendTests:
         assert backend.charm_base
         assert isinstance(backend.charm_base, str)
 
-    def test_backend_endpoint_is_set(self, backend):
-        """Test that backend_endpoint property is set."""
-        assert backend.backend_endpoint
-        assert isinstance(backend.backend_endpoint, str)
-
-    def test_units_is_positive(self, backend):
-        """Test that units property returns a positive integer."""
-        assert isinstance(backend.units, int)
-        assert backend.units > 0
-
-    def test_additional_integrations_is_list(self, backend):
-        """Test that additional_integrations returns a list."""
-        integrations = backend.additional_integrations
-        assert isinstance(integrations, list)
-        assert all(isinstance(i, str) for i in integrations)
-
     # Configuration tests
 
     def test_config_type_returns_class(self, backend):

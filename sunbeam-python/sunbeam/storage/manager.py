@@ -146,7 +146,7 @@ class StorageBackendManager:
     ) -> None:
         """Register all backend commands with the storage CLI group.
 
-        This now follows the provider pattern: create stable top-level groups
+        This follows the provider pattern: create stable top-level groups
         and let each backend self-register its subcommands under those groups.
         The CLI UX remains the same, e.g.:
           sunbeam storage add <backend> [...]

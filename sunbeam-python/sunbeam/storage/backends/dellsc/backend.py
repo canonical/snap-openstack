@@ -149,21 +149,6 @@ class DellSCBackend(StorageBackendBase):
         """Return the charm base for this backend."""
         return "ubuntu@24.04"
 
-    @property
-    def backend_endpoint(self) -> str:
-        """Return the backend endpoint for this backend."""
-        return "cinder-volume"
-
-    @property
-    def units(self) -> int:
-        """Return the number of units for this backend."""
-        return 1
-
-    @property
-    def additional_integrations(self) -> list[str]:
-        """Return a list of additional integrations for this backend."""
-        return []
-
     def config_type(self) -> type[StorageBackendConfig]:
         """Return the configuration class for Dell Storage Center backend."""
         return DellSCConfig

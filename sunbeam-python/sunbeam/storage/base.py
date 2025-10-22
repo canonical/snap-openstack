@@ -96,10 +96,10 @@ class StorageBackendBase(typing.Generic[BackendConfig]):
     display_name: str = "Base Storage Backend"
     version = Version("0.0.1")
     user_manifest = None  # Path to user manifest file
-    # By default, any storage backend is considered beta risk.
+    # By default, any storage backend is considered edge risk.
     # It will be needed to override in subclasses if the backend is
     # considered stable.
-    risk_availability: RiskLevel = RiskLevel.BETA
+    risk_availability: RiskLevel = RiskLevel.EDGE
 
     def __init__(self) -> None:
         """Initialize storage backend."""
@@ -504,21 +504,6 @@ class StorageBackendBase(typing.Generic[BackendConfig]):
     def charm_base(self) -> str:
         """Charm base for this backend."""
         return "ubuntu@22.04"
-
-    @property
-    def backend_endpoint(self) -> str:
-        """Backend endpoint name for integration."""
-        return "cinder-volume"
-
-    @property
-    def units(self) -> int:
-        """Number of units to deploy."""
-        return 1
-
-    @property
-    def additional_integrations(self) -> list[str]:
-        """Additional integrations for this backend."""
-        return []
 
     @property
     def principal_application(self) -> str:
