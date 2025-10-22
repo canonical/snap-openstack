@@ -88,8 +88,11 @@ def validate_ca_certificate(
 
 
 def validate_ca_chain(
-    ctx: click.core.Context, param: click.core.Option, value: str
-) -> str:
+    ctx: click.core.Context, param: click.core.Option, value: str | None
+) -> str | None:
+    if value is None:
+        return None
+
     try:
         chain_bytes = base64.b64decode(value)
         chain_list = re.findall(
@@ -99,28 +102,19 @@ def validate_ca_chain(
             string=chain_bytes.decode(),
             flags=re.DOTALL,
         )
-        if len(chain_list) == 0:
-            LOG.debug("Empty CA Chain provided by user")
-            return value
 
         if len(chain_list) < 2:
-            raise ValueError(
-                "Invalid CA chain: It must contain at least 2 certificates."
-            )
+            # Just validate individual certs
+            for cert in chain_list:
+                x509.load_pem_x509_certificate(cert.encode())
 
-        for cert in chain_list:
-            cert_bytes = cert.encode()
-            x509.load_pem_x509_certificate(cert_bytes)
+            return value
 
-        for ca_cert, cert in zip(chain_list, chain_list[1:]):
-            ca_cert_object = x509.load_pem_x509_certificate(ca_cert.encode("utf-8"))
-            cert_object = x509.load_pem_x509_certificate(cert.encode("utf-8"))
-            try:
-                # function available from cryptography 40.0.0
-                # Antelope upper constraints has cryptography < 40.0.0
-                cert_object.verify_directly_issued_by(ca_cert_object)
-            except AttributeError:
-                LOG.debug("CA Chain certs not verified")
+        # Check if the chain is in correct order
+        for i in range(len(chain_list) - 1):
+            cert = x509.load_pem_x509_certificate(chain_list[i].encode())
+            issuer = x509.load_pem_x509_certificate(chain_list[i + 1].encode())
+            cert.verify_directly_issued_by(issuer)
 
         return value
     except (
@@ -188,3 +182,28 @@ def cert_and_key_match(certificate: bytes, key: bytes) -> bool:
         return cert_bytes == private_bytes
 
     return False
+
+
+def generate_ca_chain(certificate: str, ca_certificate: str, ca_chain: str) -> str:
+    """Generate CA chain by combining certificate, ca_certificate and ca_chain.
+
+    :param certificate: Base64 encoded certificate
+    :param ca_certificate: Base64 encoded CA certificate
+    :param ca_chain: Base64 encoded CA chain
+    :return: Base64 encoded combined CA chain
+    """
+    certificate_decoded = decode_base64_as_string(certificate)
+    ca_certificate_decoded = decode_base64_as_string(ca_certificate)
+    ca_chain_decoded = decode_base64_as_string(ca_chain)
+
+    if not certificate_decoded or not ca_certificate_decoded or not ca_chain_decoded:
+        raise binascii.Error("Unable to decode one of the certificates")
+
+    chain_parts = [certificate_decoded, ca_certificate_decoded, ca_chain_decoded]
+
+    # Join all parts with newline separator and encode as base64
+    ca_chain_combined = encode_base64_as_string("\n".join(chain_parts))
+    if not ca_chain_combined:
+        raise binascii.Error("Unable to combine the CA chain parts")
+
+    return ca_chain_combined

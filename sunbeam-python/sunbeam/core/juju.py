@@ -1521,6 +1521,73 @@ class JujuHelper:
                     f"Failed to remove SaaS {saas_name!r}: {str(e)}"
                 ) from e
 
+    def get_relation_map(self, provider_app: str, interface: str, model: str) -> dict:
+        """Get mapping of relation ids and consumer unit name.
+
+        Given a provider application and interface, return a mapping of relation ids and
+        consumer unit names from the leader unit of provider application.
+
+        :provider_app: Provider application name
+        :interface: Interface name
+        :returns: Mapping of relation ids and consumer unit names
+        :raises: JujuException
+        """
+        try:
+            provider_leader_unit = self.get_leader_unit(provider_app, model)
+        except (ApplicationNotFoundException, LeaderNotFoundException) as e:
+            raise JujuException(
+                f"Failed to get leader unit for {provider_app!r} in model {model!r}"
+            ) from e
+
+        cmd = f"relation-ids {interface}"
+        try:
+            result = self.run_cmd_on_machine_unit_payload(
+                provider_leader_unit, model, cmd, timeout=60
+            )
+        except ExecFailedException as e:
+            raise JujuException(
+                f"Failed to get relation ids for interface {interface!r} "
+                f"on provider application {provider_app!r} in model {model!r}: {e}"
+            ) from e
+        if result.return_code != 0:
+            raise JujuException(
+                f"Failed to get relation ids for interface {interface!r} "
+                f"on provider application {provider_app!r} in model {model!r}: "
+                f"{result.stderr}"
+            )
+
+        relation_map = {}
+        relation_ids = result.stdout.strip().splitlines()
+        LOG.debug(
+            f"Relation IDs for interface {interface!r} on provider application "
+            f"{provider_app!r} in model {model!r}: {relation_ids}"
+        )
+        for relation_id in relation_ids:
+            cmd = f"relation-list -r {relation_id}"
+            try:
+                result = self.run_cmd_on_machine_unit_payload(
+                    provider_leader_unit, model, cmd, timeout=60
+                )
+            except ExecFailedException as e:
+                raise JujuException(
+                    f"Failed to get relation list for relation id {relation_id!r} "
+                    f"on provider application {provider_app!r} in model {model!r}: {e}"
+                ) from e
+            if result.return_code != 0:
+                raise JujuException(
+                    f"Failed to get relation list for relation id {relation_id!r} "
+                    f"on provider application {provider_app!r} in model {model!r}: "
+                    f"{result.stderr}"
+                )
+            unit_name = result.stdout.strip()
+            relation_map[relation_id] = unit_name
+
+        LOG.debug(
+            f"Relation map for interface {interface!r} on provider application "
+            f"{provider_app!r} in model {model!r}: {relation_map}"
+        )
+        return relation_map
+
 
 class JujuStepHelper:
     jhelper: JujuHelper
