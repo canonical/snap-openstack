@@ -506,21 +506,6 @@ class StorageBackendBase(typing.Generic[BackendConfig]):
         return "ubuntu@22.04"
 
     @property
-    def backend_endpoint(self) -> str:
-        """Backend endpoint name for integration."""
-        return "cinder-volume"
-
-    @property
-    def units(self) -> int:
-        """Number of units to deploy."""
-        return 1
-
-    @property
-    def additional_integrations(self) -> list[str]:
-        """Additional integrations for this backend."""
-        return []
-
-    @property
     def principal_application(self) -> str:
         """Principal application for this backend.
 

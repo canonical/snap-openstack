@@ -42,10 +42,6 @@ class MockStorageBackend(StorageBackendBase[MockStorageConfig]):
     def charm_channel(self) -> str:
         return "latest/stable"
 
-    @property
-    def backend_endpoint(self) -> str:
-        return "cinder-volume"
-
     def config_type(self) -> type[MockStorageConfig]:
         return MockStorageConfig
 
