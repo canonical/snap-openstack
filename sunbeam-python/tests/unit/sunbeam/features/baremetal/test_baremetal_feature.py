@@ -73,6 +73,7 @@ class TestBaremetalFeature:
         ironic._manifest.core.software.charms = {}
         config = feature_config.BaremetalFeatureConfig(
             shards=["foo", "lish"],
+            conductor_groups=["foo", "lish"],
         )
 
         # Run enable plans.
@@ -80,11 +81,11 @@ class TestBaremetalFeature:
 
         # RunSetTempUrlSecretStep calls.
         jhelper = mock_JujuHelper.return_value
-        jhelper.get_leader_unit.assert_called_once_with(
+        jhelper.get_leader_unit.assert_any_call(
             constants.IRONIC_CONDUCTOR_APP,
             OPENSTACK_MODEL,
         )
-        jhelper.wait_until_active.assert_called_once_with(
+        jhelper.wait_until_active.assert_any_call(
             OPENSTACK_MODEL,
             [constants.IRONIC_CONDUCTOR_APP],
             timeout=constants.IRONIC_APP_TIMEOUT,
@@ -99,9 +100,22 @@ class TestBaremetalFeature:
                 "lish": {"shard": "lish"},
             },
         }
-        mock_apply_tfvars.assert_called_once_with(
+        mock_apply_tfvars.assert_any_call(
             expected_items,
             ["nova-ironic-foo", "nova-ironic-lish"],
+        )
+
+        # DeployIronicConductorGroupsStep call.
+        expected_items = {
+            "database": "multi",
+            constants.IRONIC_CONDUCTOR_GROUPS_TFVAR: {
+                "foo": {"conductor-group": "foo"},
+                "lish": {"conductor-group": "lish"},
+            },
+        }
+        mock_apply_tfvars.assert_any_call(
+            expected_items,
+            ["ironic-conductor-foo", "ironic-conductor-lish"],
         )
 
     def test_set_tfvars_on_enable(self, deployment):
@@ -123,5 +137,6 @@ class TestBaremetalFeature:
         expected_tfvars = {
             "enable-ironic": False,
             constants.NOVA_IRONIC_SHARDS_TFVAR: {},
+            constants.IRONIC_CONDUCTOR_GROUPS_TFVAR: {},
         }
         assert extra_tfvars == expected_tfvars

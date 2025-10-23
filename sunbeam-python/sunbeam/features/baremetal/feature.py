@@ -140,6 +140,25 @@ class BaremetalFeature(OpenStackControlPlaneFeature):
                 )
             )
 
+        if config.conductor_groups:
+            conductor_apps = [
+                f"ironic-conductor-{name}" for name in config.conductor_groups
+            ]
+            plan.extend(
+                [
+                    steps.DeployIronicConductorGroupsStep(
+                        deployment,
+                        self,
+                        config.conductor_groups,
+                    ),
+                    steps.RunSetTempUrlSecretStep(
+                        deployment,
+                        jhelper,
+                        conductor_apps,
+                    ),
+                ]
+            )
+
         run_plan(plan, console, show_hints)
 
         click.echo("Baremetal enabled.")
@@ -157,6 +176,7 @@ class BaremetalFeature(OpenStackControlPlaneFeature):
         return {
             "enable-ironic": False,
             constants.NOVA_IRONIC_SHARDS_TFVAR: {},
+            constants.IRONIC_CONDUCTOR_GROUPS_TFVAR: {},
         }
 
     def set_tfvars_on_resize(
@@ -228,6 +248,45 @@ class BaremetalFeature(OpenStackControlPlaneFeature):
         step = steps.DeleteNovaIronicShardStep(deployment, self, shard)
         run_plan([step], console, show_hints)
 
+    @click.group()
+    def conductor_groups(self):
+        """Manage baremetal ironic-conductor groups."""
+
+    @click.command()
+    @click.argument("group_name")
+    @click_option_show_hints
+    @pass_method_obj
+    def conductor_group_add(
+        self, deployment: Deployment, group_name: str, show_hints: bool
+    ):
+        """Add ironic-conductor group."""
+        step = steps.DeployIronicConductorGroupsStep(deployment, self, [group_name])
+        jhelper = JujuHelper(deployment.juju_controller)
+        temp_url_secret_step = steps.RunSetTempUrlSecretStep(
+            deployment,
+            jhelper,
+            [f"ironic-conductor-{group_name}"],
+        )
+        run_plan([step, temp_url_secret_step], console, show_hints)
+
+    @click.command()
+    @pass_method_obj
+    def conductor_group_list(self, deployment: Deployment):
+        """List ironic-conductor groups."""
+        step = steps.ListIronicConductorGroupsStep(deployment, self)
+        run_plan([step], console)
+
+    @click.command()
+    @click.argument("group_name")
+    @click_option_show_hints
+    @pass_method_obj
+    def conductor_group_delete(
+        self, deployment: Deployment, group_name: str, show_hints: bool
+    ):
+        """Delete ironic-conductor group."""
+        step = steps.DeleteIronicConductorGroupStep(deployment, self, group_name)
+        run_plan([step], console, show_hints)
+
     def enabled_commands(self) -> dict[str, list[dict]]:
         """Dict of clickgroup along with commands.
 
@@ -241,6 +300,9 @@ class BaremetalFeature(OpenStackControlPlaneFeature):
                 # Add the baremetal shard group:
                 # sunbeam baremetal shard ...
                 {"name": "shard", "command": self.shard_group},
+                # Add the baremetal conductor-groups group:
+                # sunbeam baremetal conductor-groups ...
+                {"name": "conductor-groups", "command": self.conductor_groups},
             ],
             # Add the baremetal shard subcommands:
             "init.baremetal.shard": [
@@ -248,5 +310,12 @@ class BaremetalFeature(OpenStackControlPlaneFeature):
                 {"name": "add", "command": self.compute_shard_add},
                 {"name": "list", "command": self.compute_shard_list},
                 {"name": "delete", "command": self.compute_shard_delete},
+            ],
+            # Add the baremetal conductor-groups subcommands:
+            "init.baremetal.conductor-groups": [
+                # sunbeam baremetal conductor-groups action ...
+                {"name": "add", "command": self.conductor_group_add},
+                {"name": "list", "command": self.conductor_group_list},
+                {"name": "delete", "command": self.conductor_group_delete},
             ],
         }
