@@ -17,8 +17,10 @@ from sunbeam.core.common import (
 )
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import (
+    ActionFailedException,
     JujuHelper,
     JujuWaitException,
+    LeaderNotFoundException,
 )
 from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.core.terraform import (
@@ -92,6 +94,70 @@ def compute_shard_delete(
     )
 
 
+@click.command()
+@click.argument("group_name")
+@click_option_show_hints
+@pass_method_obj
+def conductor_group_add(
+    feature: OpenStackControlPlaneFeature,
+    deployment: Deployment,
+    group_name: str,
+    show_hints: bool,
+) -> None:
+    """Add ironic-conductor group."""
+    items = {
+        # item_name: charm_config
+        group_name: {"conductor-group": group_name},
+    }
+    _baremetal_resource_add(
+        feature,
+        deployment,
+        constants.IRONIC_CONDUCTOR_GROUPS_TFVAR,
+        items,
+        "ironic-conductor",
+        apps_desired_status=["active", "blocked"],
+    )
+    _run_set_temp_url_secret(
+        feature,
+        deployment,
+        [f"ironic-conductor-{group_name}"],
+    )
+
+
+@click.command()
+@pass_method_obj
+def conductor_group_list(
+    feature: OpenStackControlPlaneFeature,
+    deployment: Deployment,
+) -> None:
+    """List ironic-conductor groups."""
+    _baremetal_resource_list(
+        feature,
+        deployment,
+        constants.IRONIC_CONDUCTOR_GROUPS_TFVAR,
+    )
+
+
+@click.command()
+@click.argument("group_name")
+@click_option_show_hints
+@pass_method_obj
+def conductor_group_delete(
+    feature: OpenStackControlPlaneFeature,
+    deployment: Deployment,
+    group_name: str,
+    show_hints: bool,
+) -> None:
+    """Delete ironic-conductor group."""
+    _baremetal_resource_delete(
+        feature,
+        deployment,
+        constants.IRONIC_CONDUCTOR_GROUPS_TFVAR,
+        group_name,
+        f"ironic-conductor-{group_name}",
+    )
+
+
 def _baremetal_resource_add(
     feature: OpenStackControlPlaneFeature,
     deployment: Deployment,
@@ -99,6 +165,7 @@ def _baremetal_resource_add(
     items: dict[str, dict],
     charm_name_prefix: str,
     replace: bool = False,
+    apps_desired_status: list[str] = ["active"],
 ) -> None:
     tfvars = _get_tfvars(feature, deployment)
     current_items = tfvars.get(tfvars_key, {})
@@ -114,7 +181,7 @@ def _baremetal_resource_add(
     tfvars[tfvars_key] = current_items
 
     apps = [f"{charm_name_prefix}-{suffix}" for suffix in items.keys()]
-    _apply_tfvars(feature, deployment, tfvars, apps)
+    _apply_tfvars(feature, deployment, tfvars, apps, apps_desired_status)
 
 
 def _get_tfvars(
@@ -137,6 +204,7 @@ def _apply_tfvars(
     deployment: Deployment,
     tfvars: dict,
     apps: list[str],
+    apps_desired_status: list[str] = ["active"],
 ) -> None:
     client = deployment.get_client()
     config_key = feature.get_tfvar_config_key()
@@ -157,11 +225,12 @@ def _apply_tfvars(
     jhelper = JujuHelper(deployment.juju_controller)
 
     try:
-        jhelper.wait_until_active(
+        jhelper.wait_until_desired_status(
             OPENSTACK_MODEL,
             apps,
             timeout=constants.IRONIC_APP_TIMEOUT,
             queue=status_queue,
+            status=apps_desired_status,
         )
     except (JujuWaitException, TimeoutError):
         raise click.ClickException(f"Timed out waiting for {apps} to become active.")
@@ -222,3 +291,37 @@ def _baremetal_resource_delete(
         raise click.ClickException(f"Timed out waiting for {charm_name} to dissapear.")
 
     click.echo(f"Resource {item} deleted.")
+
+
+def _run_set_temp_url_secret(
+    feature: OpenStackControlPlaneFeature,
+    deployment: Deployment,
+    apps: list[str],
+):
+    jhelper = JujuHelper(deployment.juju_controller)
+
+    try:
+        for app in apps:
+            unit = jhelper.get_leader_unit(app, OPENSTACK_MODEL)
+            jhelper.run_action(unit, OPENSTACK_MODEL, "set-temp-url-secret")
+    except (ActionFailedException, LeaderNotFoundException) as e:
+        raise click.ClickException(
+            f"Error running the set-temp-url-secret action on {app}.",
+        ) from e
+
+    LOG.debug(f"Application monitored for readiness: {apps}")
+    status_queue: queue.Queue[str] = queue.Queue()
+    task = update_status_background(feature, apps, status_queue)
+    try:
+        jhelper.wait_until_active(
+            OPENSTACK_MODEL,
+            apps,
+            timeout=constants.IRONIC_APP_TIMEOUT,
+            queue=status_queue,
+        )
+    except (JujuWaitException, TimeoutError) as e:
+        raise click.ClickException(
+            "Error waiting for applications to become active."
+        ) from e
+    finally:
+        task.stop()

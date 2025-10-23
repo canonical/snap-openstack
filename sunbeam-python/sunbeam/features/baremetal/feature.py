@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
-import queue
 
 import click
 from packaging.version import Version
@@ -14,22 +13,17 @@ from sunbeam.core.common import (
     Result,
     ResultType,
     run_plan,
-    update_status_background,
 )
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import (
-    ActionFailedException,
     JujuHelper,
     JujuStepHelper,
-    JujuWaitException,
-    LeaderNotFoundException,
 )
 from sunbeam.core.manifest import (
     AddManifestStep,
     CharmManifest,
     SoftwareConfig,
 )
-from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.core.terraform import (
     TerraformInitStep,
 )
@@ -52,56 +46,33 @@ console = Console()
 
 
 class RunSetTempUrlSecretStep(BaseStep, JujuStepHelper):
-    """Run the set-temp-url-secret action on the ironic-conductor."""
+    """Run the set-temp-url-secret action on the ironic-conductor apps."""
 
     def __init__(
         self,
         deployment: Deployment,
-        jhelper: JujuHelper,
+        feature: "BaremetalFeature",
+        apps: None | list[str] = None,
     ):
         super().__init__(
-            "Run the set-temp-url-secret action on ironic-conductor",
-            "Running the set-temp-url-secret action on ironic-conductor",
+            "Run the set-temp-url-secret action on ironic-conductor apps",
+            "Running the set-temp-url-secret action on ironic-conductor apps",
         )
-        self.jhelper = jhelper
         self.deployment = deployment
-        self.model = OPENSTACK_MODEL
+        self.feature = feature
+        self.apps = apps or [constants.IRONIC_CONDUCTOR_APP]
 
     def run(self, status: Status | None = None) -> Result:
-        """Run the set-temp-url-secret action on ironic-conductor."""
+        """Run the set-temp-url-secret action on ironic-conductor apps."""
         try:
-            unit = self.jhelper.get_leader_unit(
-                constants.IRONIC_CONDUCTOR_APP,
-                self.model,
+            commands._run_set_temp_url_secret(
+                self.feature,
+                self.deployment,
+                self.apps,
             )
-            self.jhelper.run_action(
-                unit,
-                self.model,
-                "set-temp-url-secret",
-            )
-        except (ActionFailedException, LeaderNotFoundException) as e:
-            LOG.error(
-                "Error running the set-temp-url-secret action on ironic-conductor: %s",
-                e,
-            )
+        except Exception as e:
+            LOG.error(str(e))
             return Result(ResultType.FAILED, str(e))
-
-        apps = [constants.IRONIC_CONDUCTOR_APP]
-        LOG.debug(f"Application monitored for readiness: {apps}")
-        status_queue: queue.Queue[str] = queue.Queue()
-        task = update_status_background(self, apps, status_queue, status)
-        try:
-            self.jhelper.wait_until_active(
-                self.model,
-                apps,
-                timeout=constants.IRONIC_APP_TIMEOUT,
-                queue=status_queue,
-            )
-        except (JujuWaitException, TimeoutError) as e:
-            LOG.warning(str(e))
-            return Result(ResultType.FAILED, str(e))
-        finally:
-            task.stop()
 
         return Result(ResultType.COMPLETED)
 
@@ -137,7 +108,47 @@ class DeployNovaIronicShardsStep(BaseStep, JujuStepHelper):
                 replace=True,
             )
         except Exception as ex:
-            LOG.exception("Error deploying nova-ironic shards: %s", ex)
+            LOG.error(str(ex))
+            return Result(ResultType.FAILED, str(ex))
+
+        return Result(ResultType.COMPLETED)
+
+
+class DeployIronicConductorGroupsStep(BaseStep, JujuStepHelper):
+    """Deploy ironic-conductor groups using Terraform."""
+
+    def __init__(
+        self,
+        deployment: Deployment,
+        feature: "BaremetalFeature",
+        conductor_groups: list[str],
+    ):
+        super().__init__(
+            "Deploy ironic-conductor groups", "Deploying ironic-conductor groups"
+        )
+        self.deployment = deployment
+        self.feature = feature
+        self.conductor_groups = conductor_groups
+
+    def run(self, status: Status | None = None) -> Result:
+        """Execute configuration using terraform."""
+        # item_name: charm_config
+        items = {}
+        for conductor_group in self.conductor_groups:
+            items[conductor_group] = {"conductor-group": conductor_group}
+
+        try:
+            commands._baremetal_resource_add(
+                self.feature,
+                self.deployment,
+                constants.IRONIC_CONDUCTOR_GROUPS_TFVAR,
+                items,
+                "ironic-conductor",
+                replace=True,
+                apps_desired_status=["active", "blocked"],
+            )
+        except Exception as ex:
+            LOG.exception("Error deploying ironic-conductor groups: %s", ex)
             return Result(ResultType.FAILED, str(ex))
 
         return Result(ResultType.COMPLETED)
@@ -229,7 +240,7 @@ class BaremetalFeature(OpenStackControlPlaneFeature):
                 ),
                 RunSetTempUrlSecretStep(
                     deployment,
-                    jhelper,
+                    self,
                 ),
             ]
         )
@@ -241,6 +252,25 @@ class BaremetalFeature(OpenStackControlPlaneFeature):
                     self,
                     config.shards,
                 )
+            )
+
+        if config.conductor_groups:
+            conductor_apps = [
+                f"ironic-conductor-{name}" for name in config.conductor_groups
+            ]
+            plan.extend(
+                [
+                    DeployIronicConductorGroupsStep(
+                        deployment,
+                        self,
+                        config.conductor_groups,
+                    ),
+                    RunSetTempUrlSecretStep(
+                        deployment,
+                        self,
+                        conductor_apps,
+                    ),
+                ]
             )
 
         run_plan(plan, console, show_hints)
@@ -262,6 +292,7 @@ class BaremetalFeature(OpenStackControlPlaneFeature):
             "enable-ironic": False,
             "enable-ceph-rgw": False,
             constants.NOVA_IRONIC_SHARDS_TFVAR: {},
+            constants.IRONIC_CONDUCTOR_GROUPS_TFVAR: {},
         }
 
     def set_tfvars_on_resize(
@@ -306,6 +337,10 @@ class BaremetalFeature(OpenStackControlPlaneFeature):
     def shard_group(self):
         """Manage baremetal nova-compute shards."""
 
+    @click.group()
+    def conductor_groups(self):
+        """Manage baremetal ironic-conductor groups."""
+
     def enabled_commands(self) -> dict[str, list[dict]]:
         """Dict of clickgroup along with commands.
 
@@ -319,6 +354,9 @@ class BaremetalFeature(OpenStackControlPlaneFeature):
                 # Add the baremetal shard group:
                 # sunbeam baremetal shard ...
                 {"name": "shard", "command": self.shard_group},
+                # Add the baremetal conductor-groups group:
+                # sunbeam baremetal conductor-groups ...
+                {"name": "conductor-groups", "command": self.conductor_groups},
             ],
             # Add the baremetal shard subcommands:
             "init.baremetal.shard": [
@@ -326,5 +364,12 @@ class BaremetalFeature(OpenStackControlPlaneFeature):
                 {"name": "add", "command": commands.compute_shard_add},
                 {"name": "list", "command": commands.compute_shard_list},
                 {"name": "delete", "command": commands.compute_shard_delete},
+            ],
+            # Add the baremetal conductor-groups subcommands:
+            "init.baremetal.conductor-groups": [
+                # sunbeam baremetal conductor-groups action ...
+                {"name": "add", "command": commands.conductor_group_add},
+                {"name": "list", "command": commands.conductor_group_list},
+                {"name": "delete", "command": commands.conductor_group_delete},
             ],
         }

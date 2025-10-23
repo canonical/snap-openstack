@@ -42,6 +42,9 @@ Additional commands will be available after the feature has been enabled:
 - `sunbeam baremetal shard add SHARD`: Add a new Ironic nova-compute shard.
 - `sunbeam baremetal shard list`: List Ironic nova-compute shards.
 - `sunbeam baremetal shard delete SHARD`: Delete Ironic nova-compute shard.
+- `sunbeam baremetal conductor-groups add GROUP-NAME`: Add ironic-conductor group.
+- `sunbeam baremetal conductor-groups list`: List ironic-conductor groups.
+- `sunbeam baremetal conductor-groups delete GROUP-NAME`: Delete ironic-conductor group.
 
 ## Contents
 

@@ -65,28 +65,34 @@ class TestBaremetalFeature:
         assert expected_apps == apps
 
     @patch.object(ironic_feature.commands, "_baremetal_resource_add")
+    @patch("sunbeam.features.baremetal.commands.JujuHelper")
     @patch.object(ironic_feature, "JujuHelper")
     @patch.object(ironic_feature, "click", Mock())
     def test_run_enable_plans(
-        self, mock_JujuHelper, mock_baremetal_resource_add, deployment
+        self,
+        mock_JujuHelper,
+        commands_JujuHelper,
+        mock_baremetal_resource_add,
+        deployment,
     ):
         ironic = ironic_feature.BaremetalFeature()
         ironic._manifest = Mock()
         ironic._manifest.core.software.charms = {}
         config = feature_config.BaremetalFeatureConfig(
             shards=["foo", "lish"],
+            conductor_groups=["foo", "lish"],
         )
 
         # Run enable plans.
         ironic.run_enable_plans(deployment, config, False)
 
         # RunSetTempUrlSecretStep calls.
-        jhelper = mock_JujuHelper.return_value
-        jhelper.get_leader_unit.assert_called_once_with(
+        jhelper = commands_JujuHelper.return_value
+        jhelper.get_leader_unit.assert_any_call(
             constants.IRONIC_CONDUCTOR_APP,
             OPENSTACK_MODEL,
         )
-        jhelper.wait_until_active.assert_called_once_with(
+        jhelper.wait_until_active.assert_any_call(
             OPENSTACK_MODEL,
             [constants.IRONIC_CONDUCTOR_APP],
             timeout=constants.IRONIC_APP_TIMEOUT,
@@ -98,13 +104,39 @@ class TestBaremetalFeature:
             "foo": {"shard": "foo"},
             "lish": {"shard": "lish"},
         }
-        mock_baremetal_resource_add.assert_called_once_with(
+        mock_baremetal_resource_add.assert_any_call(
             ironic,
             deployment,
             constants.NOVA_IRONIC_SHARDS_TFVAR,
             expected_items,
             "nova-ironic",
             replace=True,
+        )
+
+        # DeployIronicConductorGroupsStep call.
+        expected_items = {
+            "foo": {"conductor-group": "foo"},
+            "lish": {"conductor-group": "lish"},
+        }
+        mock_baremetal_resource_add.assert_any_call(
+            ironic,
+            deployment,
+            constants.IRONIC_CONDUCTOR_GROUPS_TFVAR,
+            expected_items,
+            "ironic-conductor",
+            replace=True,
+            apps_desired_status=["active", "blocked"],
+        )
+
+        app_names = [f"ironic-conductor-{name}" for name in ["foo", "lish"]]
+        for app_name in app_names:
+            jhelper.get_leader_unit.assert_any_call(app_name, OPENSTACK_MODEL)
+
+        jhelper.wait_until_active.assert_any_call(
+            OPENSTACK_MODEL,
+            app_names,
+            timeout=constants.IRONIC_APP_TIMEOUT,
+            queue=ANY,
         )
 
     def test_set_tfvars_on_enable(self, deployment):
@@ -128,5 +160,6 @@ class TestBaremetalFeature:
             "enable-ironic": False,
             "enable-ceph-rgw": False,
             constants.NOVA_IRONIC_SHARDS_TFVAR: {},
+            constants.IRONIC_CONDUCTOR_GROUPS_TFVAR: {},
         }
         assert extra_tfvars == expected_tfvars
