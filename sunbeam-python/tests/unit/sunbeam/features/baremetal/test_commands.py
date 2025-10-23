@@ -8,6 +8,7 @@ import click
 import pytest
 
 from sunbeam.core.juju import (
+    ActionFailedException,
     JujuWaitException,
 )
 from sunbeam.core.openstack import OPENSTACK_MODEL
@@ -77,7 +78,7 @@ class TestBaremetalCommands:
     def test_baremetal_resource_add_timeout(self, mock_JujuHelper, deployment):
         ironic = ironic_feature.BaremetalFeature()
         jhelper = mock_JujuHelper.return_value
-        jhelper.wait_until_active.side_effect = JujuWaitException
+        jhelper.wait_until_desired_status.side_effect = JujuWaitException
 
         with pytest.raises(click.ClickException):
             commands._baremetal_resource_add(
@@ -88,11 +89,12 @@ class TestBaremetalCommands:
                 "nova-ironic",
             )
 
-        jhelper.wait_until_active.assert_called_once_with(
+        jhelper.wait_until_desired_status.assert_called_once_with(
             OPENSTACK_MODEL,
             ["nova-ironic-foo"],
             timeout=constants.IRONIC_APP_TIMEOUT,
             queue=ANY,
+            status=["active"],
         )
 
     @patch.object(commands, "JujuHelper")
@@ -115,11 +117,12 @@ class TestBaremetalCommands:
         tfhelper.apply.assert_called_once()
 
         jhelper = mock_JujuHelper.return_value
-        jhelper.wait_until_active.assert_called_once_with(
+        jhelper.wait_until_desired_status.assert_called_once_with(
             OPENSTACK_MODEL,
             ["nova-ironic-foo"],
             timeout=constants.IRONIC_APP_TIMEOUT,
             queue=ANY,
+            status=["active"],
         )
 
     @patch.object(commands, "JujuHelper")
@@ -147,11 +150,12 @@ class TestBaremetalCommands:
         tfhelper.apply.assert_called_once()
 
         jhelper = mock_JujuHelper.return_value
-        jhelper.wait_until_active.assert_called_once_with(
+        jhelper.wait_until_desired_status.assert_called_once_with(
             OPENSTACK_MODEL,
             ["nova-ironic-lish"],
             timeout=constants.IRONIC_APP_TIMEOUT,
             queue=ANY,
+            status=["active"],
         )
 
     @patch.object(commands.console, "print")
@@ -273,4 +277,34 @@ class TestBaremetalCommands:
             ["nova-ironic-foo"],
             OPENSTACK_MODEL,
             timeout=constants.IRONIC_APP_TIMEOUT,
+        )
+
+    @patch.object(commands, "JujuHelper")
+    def test_run_set_temp_url_secret_failed(self, mock_JujuHelper):
+        jhelper = mock_JujuHelper.return_value
+        jhelper.run_action.side_effect = ActionFailedException("expected")
+
+        with pytest.raises(click.ClickException):
+            commands._run_set_temp_url_secret(Mock(), Mock(), ["foo"])
+
+        jhelper.get_leader_unit.assert_called_once_with("foo", OPENSTACK_MODEL)
+        jhelper.run_action.assert_called_once_with(
+            jhelper.get_leader_unit.return_value,
+            OPENSTACK_MODEL,
+            "set-temp-url-secret",
+        )
+
+    @patch.object(commands, "JujuHelper")
+    def test_run_set_temp_url_secret_timeout(self, mock_JujuHelper):
+        jhelper = mock_JujuHelper.return_value
+        jhelper.wait_until_active.side_effect = JujuWaitException
+
+        with pytest.raises(click.ClickException):
+            commands._run_set_temp_url_secret(Mock(), Mock(), ["foo"])
+
+        jhelper.wait_until_active.assert_called_once_with(
+            OPENSTACK_MODEL,
+            ["foo"],
+            timeout=constants.IRONIC_APP_TIMEOUT,
+            queue=ANY,
         )
