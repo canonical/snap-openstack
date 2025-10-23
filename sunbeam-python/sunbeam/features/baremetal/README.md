@@ -31,11 +31,12 @@ features:
           channel: 2025.1/edge
     config:
       shards: ["foo", "lish"]
+      conductor-groups: ["foo", "lish"]
 ```
 
-**Note**: Rerunning the `sunbeam enable baremetal` command with a different manifest file will replace the previously deployed feature configuration (e.g.: deployed `nova-ironic` shards).
+**Note**: Rerunning the `sunbeam enable baremetal` command with a different manifest file will replace the previously deployed feature configuration (e.g.: deployed `nova-ironic` shards, Ironic Conductor groups).
 
-After the feature is enabled, you can use the `sunbeam baremetal` subcommand to manage the deployed `nova-ironic` shards.
+After the feature is enabled, you can use the `sunbeam baremetal` subcommand to manage the deployed `nova-ironic` shards, and Ironic Conductor groups.
 
 ## Managing `nova-ironic` shards
 
@@ -55,6 +56,29 @@ The following command can be used to list the currently deployed shards:
 
 ```bash
 sunbeam baremetal shard list
+```
+
+## Managing Ironic Conductor groups
+
+By default, sunbeam deploys an `ironic-conductor-k8s` charm with an empty `conductor-group` configuration option. Additional Ironic Conductor groups will be deployed while enabling the `baremetal` feature, based on the `conductor-groups` configuration mentioned above.
+
+Additional Ironic Conductor groups can be added through the following command:
+
+```bash
+sunbeam baremetal conductor-groups add GROUP-NAME
+```
+
+Ironic Conductor Groups can be removed by running the following command:
+
+```bash
+sunbeam baremetal conductor-groups delete GROUP-NAME
+```
+
+The following command can be used to list the currently Ironic Conductor
+Groups:
+
+```bash
+sunbeam baremetal conductor-groups list
 ```
 
 ## Contents

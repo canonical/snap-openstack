@@ -44,6 +44,7 @@ class RunSetTempUrlSecretStep(BaseStep, JujuStepHelper):
         self,
         deployment: Deployment,
         jhelper: JujuHelper,
+        apps: list[str] = [constants.IRONIC_CONDUCTOR_APP],
     ):
         super().__init__(
             "Run the set-temp-url-secret action on ironic-conductor",
@@ -52,34 +53,36 @@ class RunSetTempUrlSecretStep(BaseStep, JujuStepHelper):
         self.jhelper = jhelper
         self.deployment = deployment
         self.model = OPENSTACK_MODEL
+        self.apps = apps
 
     def run(self, status: Status | None = None) -> Result:
-        """Run the set-temp-url-secret action on ironic-conductor."""
+        """Run the set-temp-url-secret action on ironic-conductor apps."""
         try:
-            unit = self.jhelper.get_leader_unit(
-                constants.IRONIC_CONDUCTOR_APP,
-                self.model,
-            )
-            self.jhelper.run_action(
-                unit,
-                self.model,
-                "set-temp-url-secret",
-            )
+            for app in self.apps:
+                unit = self.jhelper.get_leader_unit(
+                    app,
+                    self.model,
+                )
+                self.jhelper.run_action(
+                    unit,
+                    self.model,
+                    "set-temp-url-secret",
+                )
         except (ActionFailedException, LeaderNotFoundException) as e:
             LOG.error(
-                "Error running the set-temp-url-secret action on ironic-conductor: %s",
+                "Error running the set-temp-url-secret action on %s: %s",
+                app,
                 e,
             )
             return Result(ResultType.FAILED, str(e))
 
-        apps = [constants.IRONIC_CONDUCTOR_APP]
-        LOG.debug(f"Application monitored for readiness: {apps}")
+        LOG.debug(f"Application monitored for readiness: {self.apps}")
         status_queue: queue.Queue[str] = queue.Queue()
-        task = update_status_background(self, apps, status_queue, status)
+        task = update_status_background(self, self.apps, status_queue, status)
         try:
             self.jhelper.wait_until_active(
                 self.model,
-                apps,
+                self.apps,
                 timeout=constants.IRONIC_APP_TIMEOUT,
                 queue=status_queue,
             )
@@ -100,6 +103,7 @@ class _BaseStep(abc.ABC, BaseStep, JujuStepHelper):
         deployment: Deployment,
         feature: OpenStackControlPlaneFeature,
         tfvars_key: str,
+        apps_desired_status: list[str] = ["active"],
     ):
         super().__init__(name, description)
         self.deployment = deployment
@@ -109,6 +113,7 @@ class _BaseStep(abc.ABC, BaseStep, JujuStepHelper):
         self.client = deployment.get_client()
         self.config_key = feature.get_tfvar_config_key()
         self.tfhelper = deployment.get_tfhelper(feature.tfplan)
+        self.apps_desired_status = apps_desired_status
 
     def run(self, status: Status | None = None) -> Result:
         """Execute step."""
@@ -147,11 +152,12 @@ class _BaseStep(abc.ABC, BaseStep, JujuStepHelper):
         jhelper = JujuHelper(self.deployment.juju_controller)
 
         try:
-            jhelper.wait_until_active(
+            jhelper.wait_until_desired_status(
                 OPENSTACK_MODEL,
                 apps,
                 timeout=constants.IRONIC_APP_TIMEOUT,
                 queue=status_queue,
+                status=self.apps_desired_status,
             )
         except (JujuWaitException, TimeoutError):
             raise click.ClickException(
@@ -176,8 +182,11 @@ class _DeployResourcesStep(_BaseStep):
         items: dict[str, dict],
         charm_name_prefix: str,
         replace: bool = False,
+        apps_desired_status: list[str] = ["active"],
     ):
-        super().__init__(name, description, deployment, feature, tfvars_key)
+        super().__init__(
+            name, description, deployment, feature, tfvars_key, apps_desired_status
+        )
         self.items = items
         self.charm_name_prefix = charm_name_prefix
         self.replace = replace
@@ -320,4 +329,69 @@ class ListNovaIronicShardsStep(_ListResourcesStep):
             deployment,
             feature,
             constants.NOVA_IRONIC_SHARDS_TFVAR,
+        )
+
+
+class DeployIronicConductorGroupsStep(_DeployResourcesStep):
+    """Deploy ironic-conductor groups using Terraform."""
+
+    def __init__(
+        self,
+        deployment: Deployment,
+        feature: OpenStackControlPlaneFeature,
+        conductor_groups: list[str],
+        replace: bool = False,
+    ):
+        # item_name: charm_config
+        items = {}
+        for conductor_group in conductor_groups:
+            items[conductor_group] = {"conductor-group": conductor_group}
+
+        super().__init__(
+            "Deploy ironic-conductor groups",
+            "Deploying ironic-conductor groups",
+            deployment,
+            feature,
+            constants.IRONIC_CONDUCTOR_GROUPS_TFVAR,
+            items,
+            "ironic-conductor",
+            replace,
+            apps_desired_status=["active", "blocked"],
+        )
+
+
+class DeleteIronicConductorGroupStep(_DeleteResourcesStep):
+    """Delete ironic-conductor group using Terraform."""
+
+    def __init__(
+        self,
+        deployment: Deployment,
+        feature: OpenStackControlPlaneFeature,
+        group_name: str,
+    ):
+        super().__init__(
+            "Delete ironic-conductor group",
+            "Deleting ironic-conductor group",
+            deployment,
+            feature,
+            constants.IRONIC_CONDUCTOR_GROUPS_TFVAR,
+            group_name,
+            f"ironic-conductor-{group_name}",
+        )
+
+
+class ListIronicConductorGroupsStep(_ListResourcesStep):
+    """List ironic-conductor groups."""
+
+    def __init__(
+        self,
+        deployment: Deployment,
+        feature: OpenStackControlPlaneFeature,
+    ):
+        super().__init__(
+            "List ironic-conductor groups",
+            "Listing ironic-conductor groups",
+            deployment,
+            feature,
+            constants.IRONIC_CONDUCTOR_GROUPS_TFVAR,
         )
