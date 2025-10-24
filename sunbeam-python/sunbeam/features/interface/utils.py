@@ -199,7 +199,13 @@ def generate_ca_chain(certificate: str, ca_certificate: str, ca_chain: str) -> s
     if not certificate_decoded or not ca_certificate_decoded or not ca_chain_decoded:
         raise binascii.Error("Unable to decode one of the certificates")
 
-    chain_parts = [certificate_decoded, ca_certificate_decoded, ca_chain_decoded]
+    # If ca_certificate is already part of ca_chain, do not add it to the final ca chain
+    # manual-tls-certificates checks if the final ca_chain is in proper order and each
+    # certificate is signed by the successor one.
+    if ca_certificate_decoded in ca_chain_decoded:
+        chain_parts = [certificate_decoded, ca_chain_decoded]
+    else:
+        chain_parts = [certificate_decoded, ca_certificate_decoded, ca_chain_decoded]
 
     # Join all parts with newline separator and encode as base64
     ca_chain_combined = encode_base64_as_string("\n".join(chain_parts))

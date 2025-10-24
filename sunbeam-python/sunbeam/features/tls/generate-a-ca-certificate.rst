@@ -102,7 +102,7 @@ Generate the CA chain file:
 
    ::
 
-        cat rootca.crt interca1.crt > ca-chain.pem
+        cat interca1.crt rootca.crt > ca-chain.pem
 
 
 Generate the CA required for Vault

@@ -367,12 +367,21 @@ class RemoveCACertsFromKeystoneStep(BaseStep):
         return Result(ResultType.COMPLETED)
 
 
-def certificate_questions(unit: str, subject: str):
-    return {
-        "certificate": questions.PromptQuestion(
-            f"Base64 encoded Certificate for {unit} CSR Unique ID: {subject}",
-        ),
-    }
+def certificate_questions(app: str, unit: str | None, subject: str):
+    # For backward compatibility, if unit is provided, ask question
+    # with unit name else with app name
+    if unit:
+        return {
+            "certificate": questions.PromptQuestion(
+                f"Base64 encoded Certificate for unit {unit} CSR Unique ID: {subject}",
+            ),
+        }
+    else:
+        return {
+            "certificate": questions.PromptQuestion(
+                f"Base64 encoded Certificate for app {app} CSR Unique ID: {subject}",
+            ),
+        }
 
 
 def get_outstanding_certificate_requests(
@@ -391,8 +400,22 @@ def get_outstanding_certificate_requests(
 
 def handle_list_outstanding_csrs(
     ca_provider_app: str, interface: str, model: str, deployment: Deployment
-) -> dict[str, str]:
-    """List outstanding CSRs."""
+) -> list[dict[str, str | None]]:
+    r"""List outstanding CSRs.
+
+    Output will be in format:
+    [
+        {"app_name": "traefik",
+        "unit_name": None,
+        "relation_id": 3,
+        "csr": "-----BEGIN CERTIFICATE REQUEST-----\nMIIC..."},
+        # Backward compatible example without relation_id
+        {"app_name": "traefik-public",
+        "unit_name": "traefik-public/0",
+        "relation_id": None,
+        "csr": "-----BEGIN CERTIFICATE REQUEST-----\nMIIC..."},
+    ]
+    """
     action_cmd = "get-outstanding-certificate-requests"
     jhelper = JujuHelper(deployment.juju_controller)
     try:
@@ -413,42 +436,45 @@ def handle_list_outstanding_csrs(
         )
 
     certs_to_process = json.loads(action_result.get("result", "[]"))
-    csrs: dict[str, str] = {}
+    if certs_to_process == []:
+        LOG.debug("No outstanding CSRs to list")
+        return []
 
-    # Output from manual-tls-certificates latest/stable
-    # handle this for backward compatibility
-    csrs_with_units = {
-        unit: csr
-        for record in certs_to_process
-        if (unit := record.get("unit")) and (csr := record.get("csr"))
-    }
-
-    # Output from manual-tls-certificates 1/stable
-    csrs_with_relation_ids = {
-        f"{interface}:{relation_id}": csr
-        for record in certs_to_process
-        if (relation_id := record.get("relation_id")) and (csr := record.get("csr"))
-    }
-
-    if csrs_with_relation_ids:
-        relation_ids_from_action = set(csrs_with_relation_ids.keys())
+    csrs: list[dict[str, str | None]] = []
+    relation_map: dict[str, str] = {}
+    is_relation_id_present = certs_to_process[0].get("relation_id") is not None
+    if is_relation_id_present:
+        LOG.debug("Using relation_id to map CSRs")
         try:
             relation_map = jhelper.get_relation_map(ca_provider_app, interface, model)
         except JujuException as e:
             LOG.debug("Unable to get relation map")
             raise click.ClickException("Unable to get relation map") from e
-        relation_ids_from_relations = set(relation_map.keys())
-        if relation_ids_from_action != relation_ids_from_relations:
-            LOG.debug("Mismatch between relation ids from action and from relations")
-            raise click.ClickException(
-                "Unable to get all outstanding certificate requests from CA"
-            )
 
-        for relation_id, csr in csrs_with_relation_ids.items():
-            if (unit := relation_map.get(relation_id)) and csr:
-                csrs[unit] = csr
-    else:
-        csrs = csrs_with_units
+    processed_records = set()
+    for record in certs_to_process:
+        # Avoid processing duplicate records
+        # This can happen if multiple units from same application
+        # request certificates with same CSR and the relation_id
+        # will be same for those units.
+        hashable_record = tuple(sorted(record.items()))
+        if hashable_record in processed_records:
+            continue
+
+        processed_records.add(hashable_record)
+
+        relation_id = record.get("relation_id")
+        if relation_id:
+            record["relation_id"] = str(relation_id)
+            record["app_name"] = relation_map.get(f"{interface}:{relation_id}")
+            record["unit_name"] = None
+        else:
+            # For backward compatibility with older versions of
+            # manual-tls-certificates which do not return relation_id
+            record["app_name"] = record.get("unit_name").split("/")[0]
+            record["relation_id"] = None
+
+        csrs.append(record)
 
     return csrs
 
@@ -529,23 +555,41 @@ class ConfigureTLSCertificatesStep(BaseStep):
             LOG.debug("Unable to get relation map")
             raise click.ClickException("Unable to get relation map") from e
 
+        processed_records = set()
         for record in certs_to_process:
+            # Avoid processing duplicate records
+            # This can happen if multiple units from same application
+            # request certificates with same CSR and the relation_id
+            # will be same for those units.
+            hashable_record = tuple(sorted(record.items()))
+            if hashable_record in processed_records:
+                continue
+
+            processed_records.add(hashable_record)
+
+            # In case of manual-tls-certificates 1/stable, unit_name is not provided
             unit_name = record.get("unit_name")
             csr = record.get("csr")
             app = record.get("application_name")
             relation_id = record.get("relation_id")
+            # In case of manual-tls-certificates 1/stable, get app name from relation_id
+            # fall back to getting application name from unit_name
+            if relation_id:
+                app = relation_map.get(f"{self.interface}:{relation_id}")
+            elif unit_name:
+                app = unit_name.split("/")[0]
 
-            # In case of manual-tls-certificates 1/stable, unit_name is not provided
-            # so we get it from relation map
-            if not unit_name:
-                unit_name = relation_map.get(f"{self.interface}:{relation_id}")
+            if not app:
+                raise click.ClickException(
+                    f"Could not map an application for {relation_id} {unit_name}"
+                )
 
             # Each unit can have multiple CSRs
             subject = get_subject_from_csr(csr)
             if not subject:
                 raise click.ClickException(f"Not a valid CSR for unit {unit_name}")
 
-            cert_questions = certificate_questions(unit_name, subject)
+            cert_questions = certificate_questions(app, unit_name, subject)
             certificates_bank = questions.QuestionBank(
                 questions=cert_questions,
                 console=console,

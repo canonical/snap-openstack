@@ -1521,15 +1521,17 @@ class JujuHelper:
                     f"Failed to remove SaaS {saas_name!r}: {str(e)}"
                 ) from e
 
-    def get_relation_map(self, provider_app: str, interface: str, model: str) -> dict:
-        """Get mapping of relation ids and consumer unit name.
+    def get_relation_map(
+        self, provider_app: str, interface: str, model: str
+    ) -> dict[str, str]:
+        """Get mapping of relation ids and consumer apps.
 
         Given a provider application and interface, return a mapping of relation ids and
-        consumer unit names from the leader unit of provider application.
+        consumer apps from the leader unit of provider application.
 
         :provider_app: Provider application name
         :interface: Interface name
-        :returns: Mapping of relation ids and consumer unit names
+        :returns: Mapping of relation id and consumer app name
         :raises: JujuException
         """
         try:
@@ -1563,7 +1565,7 @@ class JujuHelper:
             f"{provider_app!r} in model {model!r}: {relation_ids}"
         )
         for relation_id in relation_ids:
-            cmd = f"relation-list -r {relation_id}"
+            cmd = f"relation-list -r {relation_id} --app"
             try:
                 result = self.run_cmd_on_machine_unit_payload(
                     provider_leader_unit, model, cmd, timeout=60
@@ -1579,8 +1581,8 @@ class JujuHelper:
                     f"on provider application {provider_app!r} in model {model!r}: "
                     f"{result.stderr}"
                 )
-            unit_name = result.stdout.strip()
-            relation_map[relation_id] = unit_name
+            app_name = result.stdout.strip()
+            relation_map[relation_id] = app_name
 
         LOG.debug(
             f"Relation map for interface {interface!r} on provider application "
