@@ -84,7 +84,7 @@ class VaultTlsFeature(TlsFeature):
     def preseed_questions_content(self) -> list:
         """Generate preseed manifest content."""
         certificate_question_bank = questions.QuestionBank(
-            questions=certificate_questions("unit", "subject"),
+            questions=certificate_questions("app", "unit", "subject"),
             console=console,
             previous_answers={},
         )
@@ -271,10 +271,17 @@ class VaultTlsFeature(TlsFeature):
 
         if format == FORMAT_TABLE:
             table = Table()
-            table.add_column("Unit name")
+            table.add_column("App")
+            table.add_column("Unit")
+            table.add_column("Relation ID")
             table.add_column("CSR")
-            for unit, csr in csrs.items():
-                table.add_row(unit, csr)
+            for record in csrs:
+                table.add_row(
+                    record.get("app_name"),
+                    record.get("unit_name"),
+                    record.get("relation_id"),
+                    record.get("csr"),
+                )
             console.print(table)
         elif format == FORMAT_YAML:
             yaml.add_representer(str, str_presenter)
