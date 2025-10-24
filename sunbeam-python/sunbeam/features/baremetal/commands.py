@@ -3,9 +3,12 @@
 
 import logging
 import queue
+import typing
 
 import click
+from rich import box
 from rich.console import Console
+from rich.table import Column, Table
 
 from sunbeam.clusterd.service import (
     ConfigItemNotFoundException,
@@ -19,6 +22,7 @@ from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import (
     ActionFailedException,
     JujuHelper,
+    JujuSecretNotFound,
     JujuWaitException,
     LeaderNotFoundException,
 )
@@ -26,7 +30,7 @@ from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.core.terraform import (
     TerraformException,
 )
-from sunbeam.features.baremetal import constants
+from sunbeam.features.baremetal import constants, feature_config
 from sunbeam.features.interface.v1.openstack import (
     OpenStackControlPlaneFeature,
 )
@@ -158,6 +162,255 @@ def conductor_group_delete(
     )
 
 
+def _switch_config_secret_name(name: str) -> str:
+    return f"switch-config-{name}"
+
+
+@click.command()
+@click.argument("protocol", type=click.Choice(["netconf", "generic"]))
+@click.argument("name")
+@click.option(
+    "--config",
+    required=True,
+    type=click.File("r"),
+    help="The path to a baremetal / generic switch config file.",
+)
+@click.option(
+    "--additional-file",
+    multiple=True,
+    type=(str, click.File("r")),
+    help="The path to an additional file. Can be repeated for multiple files",
+)
+@click_option_show_hints
+@pass_method_obj
+def switch_config_add(*args, **kwargs):
+    """Add Neutron baremetal / generic switch configuration."""
+    _switch_config_add(*args, **kwargs)
+
+
+def _switch_config_add(
+    feature: OpenStackControlPlaneFeature,
+    deployment: Deployment,
+    protocol: str,
+    name: str,
+    config: typing.TextIO,
+    additional_file: list[tuple[str, typing.TextIO]],
+    show_hints: bool,
+) -> None:
+    secret_name = _switch_config_secret_name(name)
+    jhelper = JujuHelper(deployment.juju_controller)
+    if jhelper.secret_exists(OPENSTACK_MODEL, secret_name):
+        raise click.ClickException(f"Secret {name} already exists.")
+
+    config_obj = _read_switch_config(protocol, name, config, additional_file)
+
+    # Create secret and grant it to the config charm and neutron.
+    secret_data = {
+        "conf": config_obj.configfile,
+        **config_obj.additional_files,
+    }
+    secret_id = jhelper.add_secret(
+        OPENSTACK_MODEL,
+        secret_name,
+        secret_data,
+        "Neutron switch config",
+    )
+
+    config_charm = "neutron-baremetal-switch-config"
+    if protocol == "generic":
+        config_charm = "neutron-generic-switch-config"
+
+    for app in ["neutron", config_charm]:
+        jhelper.grant_secret(OPENSTACK_MODEL, secret_name, app)
+
+    # Update charm's "conf-secrets" config.
+    tfvars_key = constants.SWITCH_CONFIG_TFVAR[protocol]
+    tfvars = _get_tfvars(feature, deployment)
+
+    val = tfvars.get(tfvars_key)
+    val = ",".join([val, secret_id]) if val else secret_id
+    tfvars[tfvars_key] = val
+
+    # update list of secrets.
+    tfvars_key = constants.NEUTRON_SWITCH_CONF_SECRETS_TFVAR
+    conf_secrets = tfvars.get(tfvars_key, {})
+    secret_list = conf_secrets.get(protocol, [])
+
+    secret_list.append(secret_name)
+    conf_secrets[protocol] = secret_list
+    tfvars[tfvars_key] = conf_secrets
+
+    apps = [config_charm, "neutron"]
+    _apply_tfvars(feature, deployment, tfvars, apps)
+
+
+def _read_switch_config(
+    protocol: str,
+    name: str,
+    configfile: typing.TextIO,
+    additional_files: list[tuple[str, typing.TextIO]],
+) -> feature_config._Config:
+    names = [name for name, _ in additional_files]
+    if len(names) != len(set(names)):
+        raise click.ClickException("Duplicate additional files.")
+
+    additional_files_dict = {}
+    for name, file in additional_files:
+        additional_files_dict[name] = file.read()
+
+    config_obj = feature_config._Config(
+        configfile=configfile.read(),
+        additional_files=additional_files_dict,
+    )
+
+    # validate switch config.
+    config = {protocol: {name: config_obj}}
+    feature_config._SwitchConfigs(**config)
+
+    return config_obj
+
+
+@click.command()
+@pass_method_obj
+def switch_config_list(*args, **kwargs):
+    """List Neutron baremetal / generic switch configurations."""
+    _switch_config_list(*args, **kwargs)
+
+
+def _switch_config_list(
+    feature: OpenStackControlPlaneFeature,
+    deployment: Deployment,
+) -> None:
+    tfvars_key = constants.NEUTRON_SWITCH_CONF_SECRETS_TFVAR
+    tfvars = _get_tfvars(feature, deployment)
+    items = tfvars.get(tfvars_key, {})
+
+    table = Table(
+        Column("Protocol"),
+        Column("Name"),
+        box=box.SIMPLE,
+    )
+    for protocol in ["netconf", "generic"]:
+        for secret_name in items.get(protocol, []):
+            if secret_name.startswith("switch-config-"):
+                name = secret_name.removeprefix("switch-config-")
+                table.add_row(protocol, name)
+
+    console.print(table)
+
+
+@click.command()
+@click.argument("protocol", type=click.Choice(["netconf", "generic"]))
+@click.argument("name")
+@click.option(
+    "--config",
+    required=True,
+    type=click.File("r"),
+    help="The path to a baremetal / generic switch config file.",
+)
+@click.option(
+    "--additional-file",
+    multiple=True,
+    type=(str, click.File("r")),
+    help="The path to an additional file. Can be repeated for multiple files",
+)
+@click_option_show_hints
+@pass_method_obj
+def switch_config_update(*args, **kwargs):
+    """Update Neutron baremetal / generic switch configuration."""
+    _switch_config_update(*args, **kwargs)
+
+
+def _switch_config_update(
+    feature: OpenStackControlPlaneFeature,
+    deployment: Deployment,
+    protocol: str,
+    name: str,
+    config: typing.TextIO,
+    additional_file: list[tuple[str, typing.TextIO]],
+    show_hints: bool,
+) -> None:
+    secret_name = _switch_config_secret_name(name)
+    jhelper = JujuHelper(deployment.juju_controller)
+    if not jhelper.secret_exists(OPENSTACK_MODEL, secret_name):
+        raise click.ClickException(f"Secret {name} does not exist.")
+
+    config_obj = _read_switch_config(protocol, name, config, additional_file)
+
+    # Update secret.
+    secret_data = {
+        "conf": config_obj.configfile,
+        **config_obj.additional_files,
+    }
+    jhelper.update_secret(
+        OPENSTACK_MODEL,
+        secret_name,
+        secret_data,
+    )
+
+    click.echo(f"Switch config {name} updated.")
+
+
+@click.command()
+@click.argument("name")
+@click_option_show_hints
+@pass_method_obj
+def switch_config_delete(*args, **kwargs):
+    """Delete Neutron baremetal / generic switch configuration."""
+    _switch_config_delete(*args, **kwargs)
+
+
+def _switch_config_delete(
+    feature: OpenStackControlPlaneFeature,
+    deployment: Deployment,
+    name: str,
+    show_hints: bool,
+) -> None:
+    secret_name = _switch_config_secret_name(name)
+    jhelper = JujuHelper(deployment.juju_controller)
+
+    try:
+        secret = jhelper.show_secret(OPENSTACK_MODEL, secret_name)
+    except JujuSecretNotFound:
+        raise click.ClickException(f"Secret {name} does not exist.")
+
+    # Remove secret.
+    jhelper.remove_secret(
+        OPENSTACK_MODEL,
+        secret_name,
+    )
+
+    # infer protocol.
+    tfvars_key = constants.NEUTRON_SWITCH_CONF_SECRETS_TFVAR
+    tfvars = _get_tfvars(feature, deployment)
+    conf_secrets = tfvars.get(tfvars_key, {})
+    if secret_name in conf_secrets.get("netconf", []):
+        protocol = "netconf"
+        config_charm = "neutron-baremetal-switch-config"
+    else:
+        protocol = "generic"
+        config_charm = "neutron-generic-switch-config"
+
+    conf_secrets[protocol].remove(secret_name)
+
+    # Update and apply terraform vars.
+    tfvars_key = constants.SWITCH_CONFIG_TFVAR[protocol]
+    conf_secrets = tfvars.get(tfvars_key, "").split(",")
+    secret_id = secret.uri.unique_identifier
+    if secret_id in conf_secrets:
+        conf_secrets.remove(secret_id)
+
+    tfvars[tfvars_key] = ",".join(conf_secrets)
+
+    _apply_tfvars(
+        feature,
+        deployment,
+        tfvars,
+        [config_charm, "neutron"],
+        apps_desired_status=["active", "blocked"],
+    )
+
+
 def _baremetal_resource_add(
     feature: OpenStackControlPlaneFeature,
     deployment: Deployment,
@@ -182,6 +435,8 @@ def _baremetal_resource_add(
 
     apps = [f"{charm_name_prefix}-{suffix}" for suffix in items.keys()]
     _apply_tfvars(feature, deployment, tfvars, apps, apps_desired_status)
+
+    click.echo(f"Resource(s) {apps} added.")
 
 
 def _get_tfvars(
@@ -236,8 +491,6 @@ def _apply_tfvars(
         raise click.ClickException(f"Timed out waiting for {apps} to become active.")
     finally:
         task.stop()
-
-    click.echo(f"Resource(s) {apps} added.")
 
 
 def _baremetal_resource_list(

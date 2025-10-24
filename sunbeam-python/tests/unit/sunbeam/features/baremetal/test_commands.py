@@ -2,13 +2,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-from unittest.mock import ANY, Mock, patch
+from unittest.mock import ANY, Mock, call, patch
 
 import click
 import pytest
+from rich import box
+from rich.table import Column
 
 from sunbeam.core.juju import (
     ActionFailedException,
+    JujuSecretNotFound,
     JujuWaitException,
 )
 from sunbeam.core.openstack import OPENSTACK_MODEL
@@ -18,6 +21,7 @@ from sunbeam.core.terraform import (
 from sunbeam.features.baremetal import commands, constants
 from sunbeam.features.baremetal import feature as ironic_feature
 from sunbeam.features.interface.v1.openstack import OPENSTACK_TERRAFORM_VARS
+from tests.unit.sunbeam.features.baremetal import test_feature_config
 
 
 @pytest.fixture()
@@ -307,4 +311,245 @@ class TestBaremetalCommands:
             ["foo"],
             timeout=constants.IRONIC_APP_TIMEOUT,
             queue=ANY,
+        )
+
+    @patch.object(commands, "JujuHelper")
+    def test_switch_config_add_already_exists(self, mock_JujuHelper, deployment):
+        ironic = ironic_feature.BaremetalFeature()
+        jhelper = mock_JujuHelper.return_value
+        jhelper.secret_exists.return_value = True
+
+        with pytest.raises(click.ClickException):
+            commands._switch_config_add(
+                ironic,
+                deployment,
+                protocol="netconf",
+                name="foo",
+                config="config-file",
+                additional_file=[],
+                show_hints=False,
+            )
+
+        jhelper.add_secret.assert_not_called()
+
+    @patch.object(commands, "JujuHelper")
+    def test_switch_config_add_duplicate_file(self, mock_JujuHelper, deployment):
+        ironic = ironic_feature.BaremetalFeature()
+        jhelper = mock_JujuHelper.return_value
+        jhelper.secret_exists.return_value = False
+
+        with pytest.raises(click.ClickException):
+            commands._switch_config_add(
+                ironic,
+                deployment,
+                protocol="netconf",
+                name="foo",
+                config="config-file",
+                additional_file=[("foo", Mock()), ("foo", Mock())],
+                show_hints=False,
+            )
+
+        jhelper.add_secret.assert_not_called()
+
+    @patch.object(commands, "JujuHelper")
+    def test_switch_config_add(self, mock_JujuHelper, deployment):
+        ironic = ironic_feature.BaremetalFeature()
+
+        jhelper = mock_JujuHelper.return_value
+        jhelper.secret_exists.return_value = False
+        jhelper.add_secret.return_value = "secret_id"
+        client = deployment.get_client.return_value
+        client._cluster_config[OPENSTACK_TERRAFORM_VARS] = {}
+        netconf = test_feature_config._get_netconf_sample_config("foo")
+        config = Mock()
+        config.read.return_value = netconf
+        additional_file = Mock()
+        additional_file.read.return_value = "some-cool-key-here"
+
+        commands._switch_config_add(
+            ironic,
+            deployment,
+            protocol="netconf",
+            name="foo",
+            config=config,
+            additional_file=[("foo-key", additional_file)],
+            show_hints=False,
+        )
+
+        secret_name = "switch-config-foo"
+        secret_data = {
+            "conf": netconf,
+            "foo-key": additional_file.read.return_value,
+        }
+        jhelper.add_secret.assert_called_once_with(
+            OPENSTACK_MODEL,
+            secret_name,
+            secret_data,
+            ANY,
+        )
+        calls = [
+            call(OPENSTACK_MODEL, secret_name, "neutron"),
+            call(OPENSTACK_MODEL, secret_name, "neutron-baremetal-switch-config"),
+        ]
+        jhelper.grant_secret.assert_has_calls(calls)
+
+        expected_tfvars = {
+            constants.NEUTRON_BAREMETAL_SWITCH_CONF_SECRETS_TFVAR: "secret_id",
+            constants.NEUTRON_SWITCH_CONF_SECRETS_TFVAR: {"netconf": [secret_name]},
+        }
+        tfhelper = deployment.get_tfhelper.return_value
+        tfhelper.write_tfvars.assert_called_once_with(expected_tfvars)
+        tfhelper.apply.assert_called_once()
+
+        jhelper.wait_until_desired_status.assert_called_once_with(
+            OPENSTACK_MODEL,
+            ["neutron-baremetal-switch-config", "neutron"],
+            timeout=constants.IRONIC_APP_TIMEOUT,
+            queue=ANY,
+            status=["active"],
+        )
+
+    @patch.object(commands, "Table")
+    @patch.object(commands.console, "print")
+    def test_switch_config_list(self, console_print, mock_Table, deployment):
+        ironic = ironic_feature.BaremetalFeature()
+
+        client = deployment.get_client.return_value
+        client._cluster_config[OPENSTACK_TERRAFORM_VARS] = {
+            constants.NEUTRON_SWITCH_CONF_SECRETS_TFVAR: {
+                "netconf": ["switch-config-foo", "other"],
+                "generic": ["switch-config-lish"],
+            },
+        }
+
+        commands._switch_config_list(
+            ironic,
+            deployment,
+        )
+
+        mock_Table.assert_called_once_with(
+            Column("Protocol"),
+            Column("Name"),
+            box=box.SIMPLE,
+        )
+        table = mock_Table.return_value
+        table.add_row.assert_has_calls(
+            [
+                call("netconf", "foo"),
+                call("generic", "lish"),
+            ]
+        )
+        console_print.assert_called_once_with(table)
+
+    @patch.object(commands, "JujuHelper")
+    def test_switch_config_update_not_found(self, mock_JujuHelper, deployment):
+        ironic = ironic_feature.BaremetalFeature()
+        jhelper = mock_JujuHelper.return_value
+        jhelper.secret_exists.return_value = False
+
+        with pytest.raises(click.ClickException):
+            commands._switch_config_update(
+                ironic,
+                deployment,
+                protocol="netconf",
+                name="foo",
+                config="config-file",
+                additional_file=[],
+                show_hints=False,
+            )
+
+        jhelper.update_secret.assert_not_called()
+
+    @patch.object(commands, "JujuHelper")
+    def test_switch_config_update(self, mock_JujuHelper, deployment):
+        ironic = ironic_feature.BaremetalFeature()
+
+        jhelper = mock_JujuHelper.return_value
+        jhelper.secret_exists.return_value = True
+        netconf = test_feature_config._get_netconf_sample_config("foo")
+        config = Mock()
+        config.read.return_value = netconf
+        additional_file = Mock()
+        additional_file.read.return_value = "some-cool-key-here"
+
+        commands._switch_config_update(
+            ironic,
+            deployment,
+            protocol="netconf",
+            name="foo",
+            config=config,
+            additional_file=[("foo-key", additional_file)],
+            show_hints=False,
+        )
+
+        secret_name = "switch-config-foo"
+        secret_data = {
+            "conf": netconf,
+            "foo-key": additional_file.read.return_value,
+        }
+        jhelper.update_secret.assert_called_once_with(
+            OPENSTACK_MODEL,
+            secret_name,
+            secret_data,
+        )
+
+    @patch.object(commands, "JujuHelper")
+    def test_switch_config_delete_not_found(self, mock_JujuHelper, deployment):
+        ironic = ironic_feature.BaremetalFeature()
+        jhelper = mock_JujuHelper.return_value
+        jhelper.show_secret.side_effect = JujuSecretNotFound
+
+        with pytest.raises(click.ClickException):
+            commands._switch_config_delete(
+                ironic,
+                deployment,
+                "foo",
+                False,
+            )
+
+        jhelper.remove_secret.assert_not_called()
+
+    @patch.object(commands, "JujuHelper")
+    def test_switch_config_delete(self, mock_JujuHelper, deployment):
+        ironic = ironic_feature.BaremetalFeature()
+
+        jhelper = mock_JujuHelper.return_value
+        secret = jhelper.show_secret.return_value
+        secret.uri.unique_identifier = "secret_id"
+
+        client = deployment.get_client.return_value
+        client._cluster_config[OPENSTACK_TERRAFORM_VARS] = {
+            constants.NEUTRON_GENERIC_SWITCH_CONF_SECRETS_TFVAR: "secret_id",
+            constants.NEUTRON_SWITCH_CONF_SECRETS_TFVAR: {
+                "generic": ["switch-config-foo"],
+            },
+        }
+
+        commands._switch_config_delete(
+            ironic,
+            deployment,
+            name="foo",
+            show_hints=False,
+        )
+
+        secret_name = "switch-config-foo"
+        jhelper.show_secret.assert_called_once_with(OPENSTACK_MODEL, secret_name)
+        jhelper.remove_secret.assert_called_once_with(OPENSTACK_MODEL, secret_name)
+
+        expected_tfvars = {
+            constants.NEUTRON_GENERIC_SWITCH_CONF_SECRETS_TFVAR: "",
+            constants.NEUTRON_SWITCH_CONF_SECRETS_TFVAR: {
+                "generic": [],
+            },
+        }
+        tfhelper = deployment.get_tfhelper.return_value
+        tfhelper.write_tfvars.assert_called_once_with(expected_tfvars)
+        tfhelper.apply.assert_called_once()
+
+        jhelper.wait_until_desired_status.assert_called_once_with(
+            OPENSTACK_MODEL,
+            ["neutron-generic-switch-config", "neutron"],
+            timeout=constants.IRONIC_APP_TIMEOUT,
+            queue=ANY,
+            status=["active", "blocked"],
         )
