@@ -42,6 +42,10 @@ core:
         channel: OS_CHARM
       manila-data:
         channel: OS_CHARM
+      neutron-baremetal-switch-config-k8s:
+        channel: OS_CHARM
+      neutron-generic-switch-config-k8s:
+        channel: OS_CHARM
       neutron-k8s:
         channel: OS_CHARM
       nova-ironic-k8s:
