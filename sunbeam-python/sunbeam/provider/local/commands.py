@@ -569,6 +569,67 @@ def deploy_and_migrate_juju_controller(
     run_plan(plan7, console, show_hints)
 
 
+def _connect_to_region_controller(
+    region_controller_token: str,
+    initial_controller: str,
+    show_hints: bool = False,
+) -> str:
+    """Connect to the region controller using the specified token."""
+    LOG.debug("Connecting to the region controller.")
+    snap = Snap()
+    data_location = snap.paths.user_data
+
+    region_controller_info = json.loads(
+        base64.b64decode(region_controller_token).decode()
+    )
+    region_controller_juju_ctrl = JujuController(
+        **region_controller_info["juju_controller"]
+    )
+    # We'll probably get the default "sunbeam-controller" name,
+    # let's add the "-region-controller" suffix to avoid duplicates.
+    region_controller_juju_ctrl.name += "-region-controller"
+    region_ctrl_name = region_controller_juju_ctrl.name
+
+    juju_registration_token = region_controller_info["juju_registration_token"]
+    try:
+        region_ctrl_account = JujuAccount.load(
+            data_location, f"{region_ctrl_name}.yaml"
+        )
+        already_registered = True
+    except JujuAccountNotFound:
+        region_ctrl_account = None
+        already_registered = False
+
+    region_plan: list[BaseStep] = []
+    if already_registered:
+        region_plan += [
+            SwitchToController(region_ctrl_name),
+            JujuLoginStep(region_ctrl_account),
+        ]
+    else:
+        region_plan += [
+            CheckJujuReachableStep(region_controller_juju_ctrl),
+            RegisterRemoteJujuUserStep(
+                juju_registration_token, region_ctrl_name, data_location
+            ),
+        ]
+    # TODO: consider saving controller info to clusterd, SaveControllerStep
+    run_plan(region_plan, console, show_hints)
+
+    region_jhelper = JujuHelper(region_controller_juju_ctrl)
+    openstack_model_with_owner = region_jhelper.get_model_name_with_owner("openstack")
+    external_keystone_model = f"{region_ctrl_name}:{openstack_model_with_owner}"
+
+    # Switch back to the bootstrap controller.
+    region_plan2: list[BaseStep] = []
+    region_plan2 += [
+        SwitchToController(initial_controller),
+    ]
+    run_plan(region_plan2, console, show_hints)
+
+    return external_keystone_model
+
+
 @click.command()
 @click.option("-a", "--accept-defaults", help="Accept all defaults.", is_flag=True)
 @click.option(
@@ -749,57 +810,11 @@ def bootstrap(  # noqa: C901
 
     external_keystone_model = None
     if region_controller_token:
-        LOG.debug("Connecting to the region controller.")
-        region_controller_info = json.loads(
-            base64.b64decode(region_controller_token).decode()
+        external_keystone_model = _connect_to_region_controller(
+            region_controller_token,
+            bootstrap_controller,
+            show_hints=show_hints,
         )
-        region_controller_juju_ctrl = JujuController(
-            **region_controller_info["juju_controller"]
-        )
-        # We'll probably get the default "sunbeam-controller" name,
-        # let's add the "-region-controller" suffix to avoid duplicates.
-        region_controller_juju_ctrl.name += "-region-controller"
-        region_ctrl_name = region_controller_juju_ctrl.name
-
-        juju_registration_token = region_controller_info["juju_registration_token"]
-        try:
-            region_ctrl_account = JujuAccount.load(
-                data_location, f"{region_ctrl_name}.yaml"
-            )
-            already_registered = True
-        except JujuAccountNotFound:
-            region_ctrl_account = None
-            already_registered = False
-
-        region_plan: list[BaseStep] = []
-        if already_registered:
-            region_plan += [
-                SwitchToController(region_ctrl_name),
-                JujuLoginStep(region_ctrl_account),
-            ]
-        else:
-            region_plan += [
-                CheckJujuReachableStep(region_controller_juju_ctrl),
-                RegisterRemoteJujuUserStep(
-                    juju_registration_token, region_ctrl_name, data_location
-                ),
-                SaveJujuRemoteUserLocallyStep(region_ctrl_name, data_location),
-            ]
-        # TODO: consider saving controller info to clusterd, SaveControllerStep
-        run_plan(region_plan, console, show_hints)
-
-        region_jhelper = JujuHelper(region_controller_juju_ctrl)
-        openstack_model_with_owner = region_jhelper.get_model_name_with_owner(
-            "openstack"
-        )
-        external_keystone_model = f"{region_ctrl_name}:{openstack_model_with_owner}"
-
-        # Switch back to the bootstrap controller.
-        region_plan2: list[BaseStep] = []
-        region_plan2 += [
-            SwitchToController(bootstrap_controller),
-        ]
-        run_plan(region_plan2, console, show_hints)
 
     if juju_controller:
         plan11: list[BaseStep] = []
@@ -1321,14 +1336,21 @@ def add_secondary_region_node(
         " Can be repeated and comma separated."
     ),
 )
+@click.option(
+    "--region-controller-token",
+    "region_controller_token",
+    help="Token obtained from the region controller.",
+    type=str,
+)
 @click_option_show_hints
 @click.pass_context
-def join(
+def join(  # noqa: C901
     ctx: click.Context,
     token: str,
     roles: list[Role],
     accept_defaults: bool = False,
     show_hints: bool = False,
+    region_controller_token: str | None = None,
 ) -> None:
     """Join node to the cluster.
 
@@ -1420,6 +1442,18 @@ def join(
         RegisterJujuUserStep(client, name, deployment.controller, data_location),
     ]
     run_plan(plan2, console, show_hints)
+
+    external_keystone_model = None
+    if region_controller_token:
+        if not (deployment.juju_controller and deployment.juju_controller.name):
+            # We shouldn't reach this, the controller is validated
+            # through CheckJujuReachableStep.
+            raise ValueError("Missing Juju controller name.")
+        external_keystone_model = _connect_to_region_controller(
+            region_controller_token,
+            deployment.juju_controller.name,
+            show_hints=show_hints,
+        )
 
     # Loads juju account
     deployment.reload_credentials()
@@ -1569,6 +1603,8 @@ def join(
                     manifest,
                     "auto",
                     deployment.openstack_machines_model,
+                    external_keystone_model=external_keystone_model,
+                    is_region_controller=is_region_controller,
                 )
             )
 
