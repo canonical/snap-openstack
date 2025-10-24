@@ -13,6 +13,7 @@ from sunbeam.core.common import (
     Result,
     ResultType,
     run_plan,
+    update_config,
 )
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import (
@@ -24,13 +25,12 @@ from sunbeam.core.manifest import (
     CharmManifest,
     SoftwareConfig,
 )
+from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.core.terraform import (
+    TerraformHelper,
     TerraformInitStep,
 )
-from sunbeam.features.baremetal import commands, constants
-from sunbeam.features.baremetal.feature_config import (
-    BaremetalFeatureConfig,
-)
+from sunbeam.features.baremetal import commands, constants, feature_config
 from sunbeam.features.interface.v1.openstack import (
     EnableOpenStackApplicationStep,
     OpenStackControlPlaneFeature,
@@ -154,6 +154,98 @@ class DeployIronicConductorGroupsStep(BaseStep, JujuStepHelper):
         return Result(ResultType.COMPLETED)
 
 
+class UpdateSwitchConfigSecretsStep(BaseStep, JujuStepHelper):
+    """Update Neutron baremetal / generic switch config secrets."""
+
+    def __init__(
+        self,
+        deployment: Deployment,
+        tfhelper: TerraformHelper,
+        jhelper: JujuHelper,
+        feature: "BaremetalFeature",
+        switch_configs: feature_config._SwitchConfigs,
+    ):
+        super().__init__(
+            "Update neutron baremetal / generic switch configs",
+            "Updating neutron baremetal / generic switch configs",
+        )
+        self.deployment = deployment
+        self.tfhelper = tfhelper
+        self.jhelper = jhelper
+        self.feature = feature
+        self.switch_configs = switch_configs
+
+    def run(self, status: Status | None = None) -> Result:
+        """Update juju secrets containing switch configs."""
+        try:
+            tfvars = commands._get_tfvars(self.feature, self.deployment)
+            tfvars_key = constants.NEUTRON_SWITCH_CONF_SECRETS_TFVAR
+            conf_secrets = tfvars.get(tfvars_key, {})
+            tfvars[tfvars_key] = conf_secrets
+
+            # Remove existing secrets and add new ones.
+            secrets = conf_secrets.get("netconf", [])
+            self._remove_secrets(secrets)
+            secret_ids = self._add_secrets("netconf", self.switch_configs.netconf)
+            opt = ",".join(secret_ids)
+            tfvars[constants.NEUTRON_BAREMETAL_SWITCH_CONF_SECRETS_TFVAR] = opt
+            new_names = self.switch_configs.netconf.keys()
+            conf_secrets["netconf"] = [f"switch-config-{name}" for name in new_names]
+
+            secrets = conf_secrets.get("generic", [])
+            self._remove_secrets(secrets)
+            secret_ids = self._add_secrets("generic", self.switch_configs.generic)
+            opt = ",".join(secret_ids)
+            tfvars[constants.NEUTRON_GENERIC_SWITCH_CONF_SECRETS_TFVAR] = opt
+            new_names = self.switch_configs.generic.keys()
+            conf_secrets["generic"] = [f"switch-config-{name}" for name in new_names]
+
+            # write and apply terraform changes.
+            apps = ["neutron"]
+            if self.switch_configs.netconf:
+                apps.append("neutron-baremetal-switch-config")
+            if self.switch_configs.generic:
+                apps.append("neutron-generic-switch-config")
+            commands._apply_tfvars(self.feature, self.deployment, tfvars, apps)
+        except Exception as ex:
+            LOG.error("Encountered error: %s", ex)
+            return Result(ResultType.FAILED, str(ex))
+
+        return Result(ResultType.COMPLETED)
+
+    def _remove_secrets(self, secrets_list: list[str]):
+        for secret in secrets_list:
+            self.jhelper.remove_secret(OPENSTACK_MODEL, secret)
+            secrets_list.remove(secret)
+
+    def _add_secrets(self, protocol: str, configs: dict[str, feature_config._Config]):
+        config_charm = "neutron-baremetal-switch-config"
+        if protocol == "generic":
+            config_charm = "neutron-generic-switch-config"
+
+        secret_ids = []
+        for config_name, config in configs.items():
+            secret_name = f"switch-config-{config_name}"
+            secret_data = {
+                "conf": config.configfile,
+                **config.additional_files,
+            }
+
+            secret_id = self.jhelper.add_secret(
+                OPENSTACK_MODEL,
+                secret_name,
+                secret_data,
+                "Neutron switch config",
+            )
+
+            for app in ["neutron", config_charm]:
+                self.jhelper.grant_secret(OPENSTACK_MODEL, secret_name, app)
+
+            secret_ids.append(secret_id)
+
+        return secret_ids
+
+
 class BaremetalFeature(OpenStackControlPlaneFeature):
     version = Version("0.0.1")
 
@@ -162,7 +254,7 @@ class BaremetalFeature(OpenStackControlPlaneFeature):
 
     def config_type(self) -> type | None:
         """Return the config type for the feature."""
-        return BaremetalFeatureConfig
+        return feature_config.BaremetalFeatureConfig
 
     def default_software_overrides(self) -> SoftwareConfig:
         """Feature software configuration."""
@@ -171,6 +263,12 @@ class BaremetalFeature(OpenStackControlPlaneFeature):
                 "ironic-k8s": CharmManifest(channel=OPENSTACK_CHANNEL),
                 "nova-ironic-k8s": CharmManifest(channel=OPENSTACK_CHANNEL),
                 "ironic-conductor-k8s": CharmManifest(channel=OPENSTACK_CHANNEL),
+                "neutron-baremetal-switch-config-k8s": CharmManifest(
+                    channel=OPENSTACK_CHANNEL
+                ),
+                "neutron-generic-switch-config-k8s": CharmManifest(
+                    channel=OPENSTACK_CHANNEL
+                ),
             },
         )
 
@@ -194,6 +292,14 @@ class BaremetalFeature(OpenStackControlPlaneFeature):
                         "revision": "ironic-conductor-revision",
                         "config": "ironic-conductor-config",
                     },
+                    "neutron-baremetal-switch-config-k8s": {
+                        "channel": "neutron-baremetal-switch-config-channel",
+                        "revision": "neutron-baremetal-switch-config-revision",
+                    },
+                    "neutron-generic-switch-config-k8s": {
+                        "channel": "neutron-generic-switch-config-channel",
+                        "revision": "neutron-generic-switch-config-revision",
+                    },
                 },
             },
         }
@@ -207,6 +313,8 @@ class BaremetalFeature(OpenStackControlPlaneFeature):
             "nova-ironic-mysql-router",
             "ironic-conductor",
             "ironic-conductor-mysql-router",
+            "neutron-baremetal-switch-config",
+            "neutron-generic-switch-config",
         ]
 
         if self.get_database_topology(deployment) == "multi":
@@ -215,7 +323,10 @@ class BaremetalFeature(OpenStackControlPlaneFeature):
         return apps
 
     def run_enable_plans(
-        self, deployment: Deployment, config: BaremetalFeatureConfig, show_hints: bool
+        self,
+        deployment: Deployment,
+        config: feature_config.BaremetalFeatureConfig,
+        show_hints: bool,
     ):
         """Run the enablement plans."""
         jhelper = JujuHelper(deployment.juju_controller)
@@ -241,6 +352,13 @@ class BaremetalFeature(OpenStackControlPlaneFeature):
                 RunSetTempUrlSecretStep(
                     deployment,
                     self,
+                ),
+                UpdateSwitchConfigSecretsStep(
+                    deployment,
+                    tfhelper,
+                    jhelper,
+                    self,
+                    config.switchconfigs or feature_config._SwitchConfigs(),
                 ),
             ]
         )
@@ -278,7 +396,7 @@ class BaremetalFeature(OpenStackControlPlaneFeature):
         click.echo("Baremetal enabled.")
 
     def set_tfvars_on_enable(
-        self, deployment: Deployment, config: BaremetalFeatureConfig
+        self, deployment: Deployment, config: feature_config.BaremetalFeatureConfig
     ) -> dict:
         """Set terraform variables to enable the application."""
         return {
@@ -293,10 +411,12 @@ class BaremetalFeature(OpenStackControlPlaneFeature):
             "enable-ceph-rgw": False,
             constants.NOVA_IRONIC_SHARDS_TFVAR: {},
             constants.IRONIC_CONDUCTOR_GROUPS_TFVAR: {},
+            constants.NEUTRON_BAREMETAL_SWITCH_CONF_SECRETS_TFVAR: "",
+            constants.NEUTRON_GENERIC_SWITCH_CONF_SECRETS_TFVAR: "",
         }
 
     def set_tfvars_on_resize(
-        self, deployment: Deployment, config: BaremetalFeatureConfig
+        self, deployment: Deployment, config: feature_config.BaremetalFeatureConfig
     ) -> dict:
         """Set terraform variables to resize the application."""
         return {}
@@ -318,7 +438,7 @@ class BaremetalFeature(OpenStackControlPlaneFeature):
         if feature:
             config = feature.config
         else:
-            config = BaremetalFeatureConfig()
+            config = feature_config.BaremetalFeatureConfig()
 
         self.enable_feature(deployment, config, show_hints)
 
@@ -341,6 +461,10 @@ class BaremetalFeature(OpenStackControlPlaneFeature):
     def conductor_groups(self):
         """Manage baremetal ironic-conductor groups."""
 
+    @click.group()
+    def switch_config_group(self):
+        """Manage baremetal switch configurations."""
+
     def enabled_commands(self) -> dict[str, list[dict]]:
         """Dict of clickgroup along with commands.
 
@@ -357,6 +481,9 @@ class BaremetalFeature(OpenStackControlPlaneFeature):
                 # Add the baremetal conductor-groups group:
                 # sunbeam baremetal conductor-groups ...
                 {"name": "conductor-groups", "command": self.conductor_groups},
+                # Add the baremetal switch-config group:
+                # sunbeam baremetal switch-config ...
+                {"name": "switch-config", "command": self.switch_config_group},
             ],
             # Add the baremetal shard subcommands:
             "init.baremetal.shard": [
@@ -371,5 +498,13 @@ class BaremetalFeature(OpenStackControlPlaneFeature):
                 {"name": "add", "command": commands.conductor_group_add},
                 {"name": "list", "command": commands.conductor_group_list},
                 {"name": "delete", "command": commands.conductor_group_delete},
+            ],
+            # Add the baremetal switch-config subcommands:
+            "init.baremetal.switch-config": [
+                # sunbeam baremetal switch-config action ...
+                {"name": "add", "command": commands.switch_config_add},
+                {"name": "list", "command": commands.switch_config_list},
+                {"name": "update", "command": commands.switch_config_update},
+                {"name": "delete", "command": commands.switch_config_delete},
             ],
         }
