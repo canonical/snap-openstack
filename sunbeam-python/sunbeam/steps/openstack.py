@@ -422,6 +422,7 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
         machine_model: str,
         proxy_settings: dict | None = None,
         external_keystone_model: str | None = None,
+        is_region_controller: bool = False,
     ):
         super().__init__(
             "Deploying OpenStack Control Plane",
@@ -438,6 +439,7 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
         self.cloud = K8SHelper.get_cloud(deployment.name)
         self.database = DEFAULT_DATABASE_TOPOLOGY
         self.external_keystone_model = external_keystone_model
+        self.is_region_controller = is_region_controller
 
     def get_storage_tfvars(self, storage_nodes: list[dict]) -> dict:
         """Create terraform variables related to storage."""
@@ -543,6 +545,47 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
                 pass
 
         return apps_to_remove
+
+    def remove_blocked_apps_from_role(self) -> list:
+        """Juju apps that are in blocked state because of the node role.
+
+        Some Openstack services may be disabled based on the node role.
+        For example, Keystone and Horizon will be the only services running on
+        region controllers.
+
+        Unfortunately we have to avoid Terraform schema changes, so the
+        corresponding Juju applications will still be deployed, however the scale
+        will be set to 0.
+
+        This helper returns a list of applications that are expected to remain
+        in blocked state
+        """
+        apps = []
+        if self.external_keystone_model:
+            # Secondary region, Horizon and Keystone will be disabled.
+            apps += [
+                "keystone",
+                "keystone-mysql-router",
+                "horizon",
+                "horizon-mysql-router",
+            ]
+        if self.is_region_controller:
+            apps += [
+                "glance-mysql-router",
+                "glance",
+                "neutron-mysql-router",
+                "nova-cell-mysql-router",
+                "placement",
+                "neutron",
+                "placement-mysql-router",
+                "ovn-relay",
+                "cinder-mysql-router",
+                "ovn-central",
+                "nova",
+                "nova-api-mysql-router",
+                "nova-mysql-router",
+            ]
+        return apps
 
     def is_skip(self, status: Status | None = None) -> Result:
         """Determines if the step should be skipped or not.
@@ -687,6 +730,7 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
             # Cinder will be blocked in this case
             apps.remove("cinder")
         apps = list(set(apps) - set(self.remove_blocked_apps_from_features()))
+        apps = list(set(apps) - set(self.remove_blocked_apps_from_role()))
 
         LOG.debug(f"Applications monitored for readiness: {apps}")
         status_queue: queue.Queue[str] = queue.Queue()

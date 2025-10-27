@@ -147,7 +147,7 @@ parts:
     source-depth: 1
     source-type: git
     # source-branch: multiregion
-    source-commit: b880d820ecacfff5122f504d152a27559cf68619
+    source-commit: 2ed277bb81d94c1c44b7f1d6f77e864fd98f734a
     organize:
       '*': etc/deploy-openstack/
     override-build: |
