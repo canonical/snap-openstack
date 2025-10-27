@@ -906,6 +906,7 @@ def bootstrap(  # noqa: C901
                 deployment.openstack_machines_model,
                 proxy_settings=proxy_settings,
                 external_keystone_model=external_keystone_model,
+                is_region_controller=is_region_controller,
             )
         )
         plan1.append(
