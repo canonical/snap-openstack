@@ -74,7 +74,8 @@ jobs:
           # have more than 32 GiB of memory where Sunbeam selects the multi mysql
           # mode instead. So we have to override the Sunbeam's decision to be
           # closer to the tutorial scenario.
-          sg snap_daemon "openstack.sunbeam cluster bootstrap --manifest .github/assets/testing/edge.yml --accept-defaults --topology single --database single"
+          yq eval-all 'select(fileIndex == 0) * select(fileIndex == 1)' .github/assets/testing/edge.yml manifests/candidate.yml > manifest.yml
+          sg snap_daemon "openstack.sunbeam cluster bootstrap --manifest manifest.yml --accept-defaults --topology single --database single"
           sg snap_daemon "openstack.sunbeam cluster list"
           # Note: Moving configure before enabling caas just to ensure caas images are not downloaded
           # To download caas image, require ports to open on firewall to access fedora images.

@@ -73,14 +73,7 @@ jobs:
           sudo snap connect openstack:juju-bin juju:juju-bin
           sudo snap set openstack k8s.provider=${{ inputs.k8s-provider }}
 
-          # New manifest is applicable from 2024.1/edge
-          # Change this condition once 2024.1/edge is released to beta
-          if [[ ${{ inputs.snap-channel }} =~ "2024.1/edge" ]];
-          then
-              cp .github/assets/testing/manifest.yml manifest.yml
-          else
-              cp .github/assets/testing/manifest_2023.x.yml manifest.yml
-          fi
+          yq eval-all 'select(fileIndex == 0) * select(fileIndex == 1)' .github/assets/testing/manifest.yml manifests/candidate.yml > manifest.yml
           sed -i 's|OS_CHARM|${{ inputs.os-charm-channel }}|' manifest.yml
           sed -i 's|OVN_CHARM|${{ inputs.ovn-charm-channel }}|' manifest.yml
           sed -i 's|MICROCEPH_CHARM|${{ inputs.microceph-charm-channel }}|' manifest.yml
