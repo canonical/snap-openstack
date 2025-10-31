@@ -31,6 +31,9 @@ from sunbeam.core.manifest import (
     FeatureGroupManifest,
     FeatureManifest,
     Manifest,
+    StorageBackendManifests,
+    StorageInstanceManifest,
+    StorageManifest,
     embedded_manifest_path,
 )
 from sunbeam.core.proxy import patch_process_env, should_bypass
@@ -40,9 +43,11 @@ from sunbeam.versions import MANIFEST_ATTRIBUTES_TFVAR_MAP, TERRAFORM_DIR_NAMES
 if TYPE_CHECKING:
     from sunbeam.feature_manager import FeatureManager
     from sunbeam.features.interface.v1.base import BaseFeature
+    from sunbeam.storage.manager import StorageBackendManager
 else:
     FeatureManager = object
     BaseFeature = object
+    StorageBackendManager = object
 
 LOG = logging.getLogger(__name__)
 PROXY_CONFIG_KEY = "ProxySettings"
@@ -98,6 +103,7 @@ class Deployment(pydantic.BaseModel):
     _manifest: Manifest | None = pydantic.PrivateAttr(default=None)
     _tfhelpers: dict[str, TerraformHelper] = pydantic.PrivateAttr(default={})
     _feature_manager: FeatureManager | None = pydantic.PrivateAttr(default=None)
+    _storage_manager: StorageBackendManager | None = pydantic.PrivateAttr(default=None)
 
     @property
     def openstack_machines_model(self) -> str:
@@ -188,6 +194,15 @@ class Deployment(pydantic.BaseModel):
 
         return self._feature_manager
 
+    def get_storage_manager(self) -> "StorageBackendManager":
+        """Return the storage backend manager for the deployment."""
+        from sunbeam.storage.manager import StorageBackendManager
+
+        if self._storage_manager is None:
+            self._storage_manager = StorageBackendManager()
+
+        return self._storage_manager
+
     def get_proxy_settings(self) -> dict:
         """Fetch proxy settings from clusterd, if not available use defaults."""
         proxy = {}
@@ -269,12 +284,44 @@ class Deployment(pydantic.BaseModel):
 
         return feature_manifests
 
+    def parse_storage_manifest(
+        self, storage_manifest_data: dict[str, dict]
+    ) -> StorageManifest:
+        """Parse storage manifest data."""
+        if not storage_manifest_data:
+            return StorageManifest(root={})
+        backends = self.get_storage_manager().backends()
+
+        storage_manifest: StorageManifest = StorageManifest(root={})
+        for backend_type, backends_dict in storage_manifest_data.items():
+            backend = backends[backend_type]
+            backend_config_type = backend.config_type()
+            backends_config = storage_manifest.root.setdefault(
+                backend_type, StorageBackendManifests(root={})
+            )
+            for name, manifest_dict in backends_dict.items():
+                manifest_dict_config = manifest_dict.pop("config", None)
+                backends_config.root[name] = StorageInstanceManifest.model_validate(
+                    manifest_dict, by_alias=True
+                )
+                if manifest_dict_config:
+                    backends_config.root[
+                        name
+                    ].config = backend_config_type.model_validate(
+                        manifest_dict_config, by_alias=True
+                    )
+
+        return storage_manifest
+
     def parse_manifest(self, manifest_data: dict) -> Manifest:
         """Parse manifest data."""
         features = manifest_data.pop("features", {})
+        storage = manifest_data.pop("storage", {})
         manifest = Manifest.model_validate(manifest_data)
         if features:
             manifest.features = self.parse_feature_manifest(features)
+        if storage:
+            manifest.storage = self.parse_storage_manifest(storage)
         return manifest
 
     def get_manifest(self, manifest_file: pathlib.Path | None = None) -> Manifest:

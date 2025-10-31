@@ -9,7 +9,7 @@ from typing import Any, Union
 from requests import codes
 from requests.models import HTTPError
 
-from sunbeam.clusterd import service
+from sunbeam.clusterd import models, service
 
 LOG = logging.getLogger(__name__)
 
@@ -238,6 +238,58 @@ class ExtendedAPIService(service.BaseService):
             }
             for member in members
         }
+
+    def get_storage_backends(self) -> models.StorageBackends:
+        """List all storage backends."""
+        backends = self._get("/1.0/storage-backend")
+        return models.StorageBackends(root=backends.get("metadata", []))
+
+    def get_storage_backend(self, name: str) -> models.StorageBackend:
+        """Get storage backend by name."""
+        backend = self._get(f"/1.0/storage-backend/{name}")
+        return models.StorageBackend(**backend.get("metadata", {}))
+
+    def add_storage_backend(
+        self,
+        name: str,
+        backend_type: str,
+        config: dict[str, Any],
+        principal: str,
+        model_uuid: str,
+    ) -> None:
+        """Add a new storage backend."""
+        data = {
+            "name": name,
+            "type": backend_type,
+            "config": json.dumps(config),
+            "principal": principal,
+            "model-uuid": model_uuid,
+        }
+        self._post("/1.0/storage-backend", data=json.dumps(data))
+
+    def delete_storage_backend(self, name: str) -> None:
+        """Delete storage backend by name."""
+        self._delete(f"/1.0/storage-backend/{name}")
+
+    def update_storage_backend(
+        self,
+        name: str,
+        backend_type: str | None = None,
+        config: dict[str, Any] | None = None,
+        principal: str | None = None,
+        model_uuid: str | None = None,
+    ) -> None:
+        """Update an existing storage backend."""
+        data: dict[str, Any] = {}
+        if backend_type is not None:
+            data["type"] = backend_type
+        if config is not None:
+            data["config"] = json.dumps(config)
+        if principal is not None:
+            data["principal"] = principal
+        if model_uuid is not None:
+            data["model-uuid"] = model_uuid
+        self._put(f"/1.0/storage-backend/{name}", data=json.dumps(data))
 
 
 class ClusterService(MicroClusterService, ExtendedAPIService):

@@ -16,6 +16,7 @@ var SchemaExtensions = []schema.Update{
 	JujuUserSchemaUpdate,
 	ManifestsSchemaUpdate,
 	AddSystemIDToNodes,
+	StorageBackendSchemaUpdate,
 }
 
 // NodesSchemaUpdate is schema for table nodes
@@ -94,5 +95,23 @@ ALTER TABLE nodes ADD COLUMN system_id TEXT default '';
 
 	_, err := tx.Exec(stmt)
 
+	return err
+}
+
+// StorageBackendSchemaUpdate is schema for table storage_backends
+func StorageBackendSchemaUpdate(_ context.Context, tx *sql.Tx) error {
+	stmt := `
+CREATE TABLE storage_backends (
+  id                            INTEGER  PRIMARY KEY AUTOINCREMENT NOT NULL,
+  name                          TEXT     NOT NULL,
+  type                          TEXT     NOT NULL,
+  principal                     TEXT,
+  model_uuid                    TEXT,
+  config                        TEXT,
+  UNIQUE(name)
+);
+  `
+
+	_, err := tx.Exec(stmt)
 	return err
 }
