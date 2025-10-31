@@ -1923,6 +1923,9 @@ class MaasSetHypervisorUnitsOptionsStep(SetHypervisorUnitsOptionsStep):
         result = super().is_skip(status)
         if result.result_type == ResultType.FAILED:
             return result
+        # Skip if no compute nodes to configure
+        if not self.names:
+            return Result(ResultType.SKIPPED, "No compute nodes to configure.")
         nics = self._get_maas_nics()
         LOG.debug("Nics: %r", nics)
 
@@ -1995,6 +1998,9 @@ class MaasConfigureOpenstackNetworkAgentsStep(
         result = super().is_skip(status)
         if result.result_type == ResultType.FAILED:
             return result
+        # Skip if no network nodes to configure
+        if not self.names:
+            return Result(ResultType.SKIPPED, "No network nodes to configure.")
         nics = self._get_maas_nics()
         LOG.debug("Nics: %r", nics)
 
