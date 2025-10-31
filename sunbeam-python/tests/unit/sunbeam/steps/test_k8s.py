@@ -7,7 +7,6 @@ import unittest
 from unittest.mock import MagicMock, Mock, patch
 
 import httpx
-import lightkube
 import lightkube.core.exceptions
 import pytest
 import tenacity
