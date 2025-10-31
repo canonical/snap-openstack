@@ -57,7 +57,6 @@ ROLE_NETWORK_MAPPING = {
         Networks.STORAGE,
     ],
     RoleTags.STORAGE: [
-        Networks.DATA,
         Networks.INTERNAL,
         Networks.MANAGEMENT,
         Networks.STORAGE,
