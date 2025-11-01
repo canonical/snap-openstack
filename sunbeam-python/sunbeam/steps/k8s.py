@@ -204,7 +204,7 @@ class DeployK8SApplicationStep(DeployMachineApplicationStep):
             K8S_CONFIG_KEY,
             APPLICATION,
             model,
-            [Role.CONTROL],
+            [Role.CONTROL, Role.REGION_CONTROLLER],
             "Deploy K8S",
             "Deploying K8S",
         )
@@ -473,9 +473,11 @@ class EnsureK8SUnitsTaggedStep(BaseStep):
                 ResultType.COMPLETED or ResultType.FAILED otherwise
         """
         control = Role.CONTROL.name.lower()
+        region_controller = Role.REGION_CONTROLLER.name.lower()
         if self.fqdn:
             node = self.client.cluster.get_node_info(self.fqdn)
-            if control not in node.get("role", []):
+            node_roles = node.get("role", [])
+            if control not in node_roles and region_controller not in node_roles:
                 return Result(ResultType.FAILED, f"{self.fqdn} is not a control node")
             control_nodes = [node]
         else:
@@ -831,7 +833,11 @@ class _CommonK8SStepMixin:
             node_info = self.client.cluster.get_node_info(self.node)
         except NodeNotExistInClusterException:
             return Result(ResultType.FAILED, f"Node {self.node} not found in cluster")
-        if Role.CONTROL.name.lower() not in node_info.get("role", ""):
+
+        control = Role.CONTROL.name.lower()
+        region_controller = Role.REGION_CONTROLLER.name.lower()
+        node_roles = node_info.get("role", "")
+        if control not in node_roles and region_controller not in node_roles:
             LOG.debug("Node %s is not a control node", self.node)
             return Result(ResultType.SKIPPED)
         try:
@@ -1384,9 +1390,11 @@ class EnsureL2AdvertisementByHostStep(BaseStep):
                  ResultType.COMPLETED or ResultType.FAILED otherwise
         """
         control = Role.CONTROL.name.lower()
+        region_controller = Role.REGION_CONTROLLER.name.lower()
         if self.fqdn:
             node = self.client.cluster.get_node_info(self.fqdn)
-            if control not in node.get("role", []):
+            node_roles = node.get("role", [])
+            if control not in node_roles and region_controller not in node_roles:
                 return Result(ResultType.FAILED, f"{self.fqdn} is not a control node")
             self.control_nodes = [node]
         else:

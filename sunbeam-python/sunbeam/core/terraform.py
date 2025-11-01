@@ -204,7 +204,9 @@ class TerraformHelper:
             cmd.extend(["-auto-approve", "-no-color"])
             if self.parallelism is not None:
                 cmd.append(f"-parallelism={self.parallelism}")
-            LOG.debug(f"Running command {' '.join(cmd)}")
+            LOG.debug(
+                f"Running command {' '.join(cmd)}, cwd: {self.path}, tf log: {tf_log}"
+            )
             process = subprocess.run(
                 cmd,
                 capture_output=True,
