@@ -76,7 +76,7 @@ from sunbeam.core.juju import (
 )
 from sunbeam.core.k8s import K8S_CLOUD_SUFFIX
 from sunbeam.core.manifest import AddManifestStep, Manifest
-from sunbeam.core.openstack import OPENSTACK_MODEL
+from sunbeam.core.openstack import OPENSTACK_MODEL, REGION_CONFIG_KEY
 from sunbeam.core.questions import get_stdin_reopen_tty
 from sunbeam.core.terraform import TerraformInitStep
 from sunbeam.provider.base import ProviderBase
@@ -570,18 +570,26 @@ def deploy_and_migrate_juju_controller(
 
 
 def _connect_to_region_controller(
+    deployment: LocalDeployment,
     region_controller_token: str,
     initial_controller: str,
     show_hints: bool = False,
 ) -> str:
-    """Connect to the region controller using the specified token."""
+    """Connect to the region controller using the specified token.
+
+    Returns a tuple containing the Juju controller name and the
+    primary region name.
+    """
     LOG.debug("Connecting to the region controller.")
     snap = Snap()
     data_location = snap.paths.user_data
 
+    this_region_name = read_config(deployment.get_client(), REGION_CONFIG_KEY)["region"]
+
     region_controller_info = json.loads(
         base64.b64decode(region_controller_token).decode()
     )
+    primary_region_name = region_controller_info["primary_region_name"]
     region_controller_juju_ctrl = JujuController(
         **region_controller_info["juju_controller"]
     )
@@ -589,6 +597,27 @@ def _connect_to_region_controller(
     # let's add the "-region-controller" suffix to avoid duplicates.
     region_controller_juju_ctrl.name += "-region-controller"
     region_ctrl_name = region_controller_juju_ctrl.name
+
+    if (
+        deployment.primary_region_name
+        and deployment.primary_region_name != primary_region_name
+    ):
+        raise ValueError(
+            "The primary region name associated with this deployment "
+            f"({deployment.primary_region_name}) does not match the region "
+            f"of the token ({primary_region_name})"
+        )
+    if this_region_name == primary_region_name:
+        raise ValueError(
+            "The secondary region can not have the same name "
+            f"as the primary region: {this_region_name}"
+        )
+
+    logging.debug(
+        "Primary region name: %s, secondary region name: %s",
+        primary_region_name,
+        this_region_name,
+    )
 
     juju_registration_token = region_controller_info["juju_registration_token"]
     try:
@@ -627,6 +656,8 @@ def _connect_to_region_controller(
     ]
     run_plan(region_plan2, console, show_hints)
 
+    if not deployment.primary_region_name:
+        deployment.primary_region_name = primary_region_name
     return external_keystone_model
 
 
@@ -804,17 +835,19 @@ def bootstrap(  # noqa: C901
     plan.append(ValidateIdentityManifest(client, manifest))
     run_plan(plan, console, show_hints)
 
-    update_config(client, DEPLOYMENTS_CONFIG_KEY, deployments.get_minimal_info())
-    proxy_settings = deployment.get_proxy_settings()
-    LOG.debug(f"Proxy settings: {proxy_settings}")
-
     external_keystone_model = None
     if region_controller_token:
         external_keystone_model = _connect_to_region_controller(
+            deployment,
             region_controller_token,
             bootstrap_controller,
             show_hints=show_hints,
         )
+        deployments.update_deployment(deployment)
+
+    update_config(client, DEPLOYMENTS_CONFIG_KEY, deployments.get_minimal_info())
+    proxy_settings = deployment.get_proxy_settings()
+    LOG.debug(f"Proxy settings: {proxy_settings}")
 
     if juju_controller:
         plan11: list[BaseStep] = []
@@ -1288,6 +1321,10 @@ def add_secondary_region_node(
     client = deployment.get_client()
     jhelper = JujuHelper(deployment.juju_controller)
 
+    primary_region_name = read_config(deployment.get_client(), REGION_CONFIG_KEY)[
+        "region"
+    ]
+
     plan1: list[BaseStep] = [
         JujuLoginStep(deployment.juju_account),
         CreateJujuUserStep(name),
@@ -1312,6 +1349,7 @@ def add_secondary_region_node(
         "juju_registration_token": juju_registration_token,
         "juju_controller": deployment.juju_controller.to_dict(),
         "name": name,
+        "primary_region_name": primary_region_name,
     }
     token = base64.b64encode(json.dumps(token_dict).encode()).decode()
 
@@ -1450,6 +1488,7 @@ def join(  # noqa: C901
             # through CheckJujuReachableStep.
             raise ValueError("Missing Juju controller name.")
         external_keystone_model = _connect_to_region_controller(
+            deployment,
             region_controller_token,
             deployment.juju_controller.name,
             show_hints=show_hints,

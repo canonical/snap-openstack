@@ -95,6 +95,7 @@ class Deployment(pydantic.BaseModel):
     juju_account: JujuAccount | None = None
     juju_controller: JujuController | None = None
     clusterd_certpair: CertPair | None = None
+    primary_region_name: str | None = None
     _manifest: Manifest | None = pydantic.PrivateAttr(default=None)
     _tfhelpers: dict[str, TerraformHelper] = pydantic.PrivateAttr(default={})
     _feature_manager: FeatureManager | None = pydantic.PrivateAttr(default=None)
