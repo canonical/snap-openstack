@@ -14,11 +14,6 @@ from sunbeam.core.terraform import TerraformException
 
 
 @pytest.fixture()
-def cclient():
-    yield Mock()
-
-
-@pytest.fixture()
 def load_answers():
     with patch.object(sunbeam.core.questions, "load_answers") as p:
         yield p
@@ -34,16 +29,6 @@ def write_answers():
 def question_bank():
     with patch.object(sunbeam.core.questions, "QuestionBank") as p:
         yield p
-
-
-@pytest.fixture()
-def jhelper():
-    yield Mock()
-
-
-@pytest.fixture()
-def tfhelper():
-    yield Mock(path=Path())
 
 
 class TestUserQuestions:

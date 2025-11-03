@@ -21,19 +21,9 @@ TEST_OFFER_INTERFACES = [
 
 
 @pytest.fixture()
-def jhelper():
-    yield Mock()
-
-
-@pytest.fixture()
 def mock_open():
     with patch.object(Path, "open") as p:
         yield p
-
-
-@pytest.fixture()
-def cclient():
-    yield Mock()
 
 
 class TestWriteJujuStatusStep:

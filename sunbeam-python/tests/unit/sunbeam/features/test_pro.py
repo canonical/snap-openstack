@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: 2023 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
-import unittest
-from unittest.mock import Mock
+
+import pytest
 
 from sunbeam.core.common import ResultType
 from sunbeam.core.terraform import TerraformException
@@ -11,97 +11,110 @@ from sunbeam.features.pro.feature import (
     EnableUbuntuProApplicationStep,
 )
 
+# No additional fixtures needed - using all shared fixtures
 
-class TestEnableUbuntuProApplicationStep(unittest.TestCase):
-    def setUp(self):
-        self.client = Mock()
-        self.tfhelper = Mock()
-        self.jhelper = Mock()
-        self.manifest = Mock()
-        self.model = "test-model"
-        self.token = "TOKENFORTESTING"
-        self.step = EnableUbuntuProApplicationStep(
-            self.client,
-            self.tfhelper,
-            self.jhelper,
-            self.manifest,
-            self.token,
-            self.model,
+
+class TestEnableUbuntuProApplicationStep:
+    @pytest.fixture
+    def enable_step(
+        self,
+        basic_client,
+        basic_tfhelper,
+        basic_jhelper,
+        basic_manifest,
+        test_model,
+        test_token,
+    ):
+        """Enable Ubuntu Pro step instance for testing."""
+        return EnableUbuntuProApplicationStep(
+            basic_client,
+            basic_tfhelper,
+            basic_jhelper,
+            basic_manifest,
+            test_token,
+            test_model,
         )
 
-    def test_is_skip(self):
-        result = self.step.is_skip()
+    def test_is_skip(self, enable_step):
+        result = enable_step.is_skip()
         assert result.result_type == ResultType.COMPLETED
 
-    def test_has_prompts(self):
-        assert not self.step.has_prompts()
+    def test_has_prompts(self, enable_step):
+        assert not enable_step.has_prompts()
 
-    def test_enable(self):
-        result = self.step.run()
-        self.tfhelper.update_tfvars_and_apply_tf.assert_called_with(
-            self.client,
-            self.manifest,
+    def test_enable(
+        self,
+        enable_step,
+        basic_client,
+        basic_tfhelper,
+        basic_jhelper,
+        basic_manifest,
+        test_model,
+        test_token,
+    ):
+        result = enable_step.run()
+        basic_tfhelper.update_tfvars_and_apply_tf.assert_called_with(
+            basic_client,
+            basic_manifest,
             tfvar_config=None,
-            override_tfvars={"machine-model": self.model, "token": self.token},
+            override_tfvars={"machine-model": test_model, "token": test_token},
         )
-        self.jhelper.wait_application_ready.assert_called_once()
+        basic_jhelper.wait_application_ready.assert_called_once()
         assert result.result_type == ResultType.COMPLETED
 
-    def test_enable_tf_apply_failed(self):
-        self.tfhelper.update_tfvars_and_apply_tf.side_effect = TerraformException(
+    def test_enable_tf_apply_failed(self, enable_step, basic_tfhelper):
+        basic_tfhelper.update_tfvars_and_apply_tf.side_effect = TerraformException(
             "apply failed..."
         )
 
-        result = self.step.run()
+        result = enable_step.run()
 
-        self.tfhelper.update_tfvars_and_apply_tf.assert_called_once()
+        basic_tfhelper.update_tfvars_and_apply_tf.assert_called_once()
         assert result.result_type == ResultType.FAILED
         assert result.message == "apply failed..."
 
-    def test_enable_waiting_timed_out(self):
-        self.jhelper.wait_application_ready.side_effect = TimeoutError("timed out")
+    def test_enable_waiting_timed_out(self, enable_step, basic_jhelper):
+        basic_jhelper.wait_application_ready.side_effect = TimeoutError("timed out")
 
-        result = self.step.run()
+        result = enable_step.run()
 
-        self.jhelper.wait_application_ready.assert_called_once()
+        basic_jhelper.wait_application_ready.assert_called_once()
         assert result.result_type == ResultType.FAILED
         assert result.message == "timed out"
 
 
-class TestDisableUbuntuProApplicationStep(unittest.TestCase):
-    def setUp(self):
-        self.client = Mock()
-        self.tfhelper = Mock()
-        self.jhelper = Mock()
-        self.manifest = Mock()
-        self.step = DisableUbuntuProApplicationStep(
-            self.client, self.tfhelper, self.manifest
+class TestDisableUbuntuProApplicationStep:
+    @pytest.fixture
+    def disable_step(self, basic_client, basic_tfhelper, basic_manifest):
+        """Disable Ubuntu Pro step instance for testing."""
+        return DisableUbuntuProApplicationStep(
+            basic_client, basic_tfhelper, basic_manifest
         )
 
-    def test_is_skip(self):
-        result = self.step.is_skip()
+    def test_is_skip(self, disable_step):
+        result = disable_step.is_skip()
         assert result.result_type == ResultType.COMPLETED
 
-    def test_has_prompts(self):
-        assert not self.step.has_prompts()
+    def test_has_prompts(self, disable_step):
+        assert not disable_step.has_prompts()
 
-    def test_disable(self):
-        result = self.step.run()
-        self.tfhelper.update_tfvars_and_apply_tf.assert_called_with(
-            self.client,
-            self.manifest,
+    def test_disable(self, disable_step, basic_client, basic_tfhelper, basic_manifest):
+        result = disable_step.run()
+        basic_tfhelper.update_tfvars_and_apply_tf.assert_called_with(
+            basic_client,
+            basic_manifest,
             tfvar_config=None,
             override_tfvars={"token": ""},
         )
         assert result.result_type == ResultType.COMPLETED
 
-    def test_disable_tf_apply_failed(self):
-        self.tfhelper.update_tfvars_and_apply_tf.side_effect = TerraformException(
+    def test_disable_tf_apply_failed(self, disable_step, basic_tfhelper):
+        basic_tfhelper.update_tfvars_and_apply_tf.side_effect = TerraformException(
             "apply failed..."
         )
 
-        result = self.step.run()
+        result = disable_step.run()
 
-        self.tfhelper.update_tfvars_and_apply_tf.assert_called_once()
+        basic_tfhelper.update_tfvars_and_apply_tf.assert_called_once()
         assert result.result_type == ResultType.FAILED
         assert result.message == "apply failed..."

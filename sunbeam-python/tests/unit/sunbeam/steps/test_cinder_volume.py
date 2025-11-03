@@ -1,8 +1,9 @@
 # SPDX-FileCopyrightText: 2025 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
-import unittest
 from unittest.mock import MagicMock, Mock, patch
+
+import pytest
 
 from sunbeam.steps.cinder_volume import (
     CINDER_VOLUME_APP_TIMEOUT,
@@ -12,125 +13,171 @@ from sunbeam.steps.cinder_volume import (
 )
 
 
-class TestDeployCinderVolumeApplicationStep(unittest.TestCase):
-    def setUp(self):
-        self.deployment = MagicMock()
-        self.client = MagicMock()
-        self.tfhelper = MagicMock()
-        self.os_tfhelper = MagicMock()
-        self.mceph_tfhelper = MagicMock()
-        self.jhelper = MagicMock()
-        self.manifest = MagicMock()
-        self.model = "test-model"
-        self.deployment.get_tfhelper.side_effect = lambda plan: {
-            "microceph-plan": self.mceph_tfhelper,
-            "openstack-plan": self.os_tfhelper,
-        }[plan]
-        self.deploy_cinder_volume_step = DeployCinderVolumeApplicationStep(
-            self.deployment,
-            self.client,
-            self.tfhelper,
-            self.jhelper,
-            self.manifest,
-            self.model,
+# Common fixtures
+# Additional fixtures specific to cinder volume tests
+@pytest.fixture
+def os_tfhelper():
+    """OpenStack tfhelper mock."""
+    return MagicMock()
+
+
+@pytest.fixture
+def mceph_tfhelper():
+    """MicroCeph tfhelper mock."""
+    return MagicMock()
+
+
+@pytest.fixture
+def deployment_with_tfhelpers(basic_deployment, os_tfhelper, mceph_tfhelper):
+    """Deployment mock with configured tfhelpers."""
+    basic_deployment.get_tfhelper.side_effect = lambda plan: {
+        "microceph-plan": mceph_tfhelper,
+        "openstack-plan": os_tfhelper,
+    }[plan]
+    return basic_deployment
+
+
+class TestDeployCinderVolumeApplicationStep:
+    @pytest.fixture
+    def deploy_cinder_volume_step(
+        self,
+        deployment_with_tfhelpers,
+        basic_client,
+        tfhelper,
+        basic_jhelper,
+        basic_manifest,
+        test_model,
+    ):
+        """Create DeployCinderVolumeApplicationStep instance for testing."""
+        return DeployCinderVolumeApplicationStep(
+            deployment_with_tfhelpers,
+            basic_client,
+            tfhelper,
+            basic_jhelper,
+            basic_manifest,
+            test_model,
         )
 
-    def test_get_unit_timeout(self):
-        self.assertEqual(
-            self.deploy_cinder_volume_step.get_application_timeout(),
-            CINDER_VOLUME_APP_TIMEOUT,
+    def test_get_unit_timeout(self, deploy_cinder_volume_step):
+        assert (
+            deploy_cinder_volume_step.get_application_timeout()
+            == CINDER_VOLUME_APP_TIMEOUT
         )
 
     @patch(
         "sunbeam.steps.cinder_volume.get_mandatory_control_plane_offers",
         return_value={"keystone-offer-url": "url"},
     )
-    def test_get_offers(self, mandatory_control_plane_offers):
-        self.assertDictEqual(self.deploy_cinder_volume_step._offers, {})
-        self.deploy_cinder_volume_step._get_offers()
+    def test_get_offers(
+        self, mandatory_control_plane_offers, deploy_cinder_volume_step
+    ):
+        assert deploy_cinder_volume_step._offers == {}
+        deploy_cinder_volume_step._get_offers()
         mandatory_control_plane_offers.assert_called_once()
-        self.assertDictEqual(
-            self.deploy_cinder_volume_step._offers,
-            mandatory_control_plane_offers.return_value,
+        assert (
+            deploy_cinder_volume_step._offers
+            == mandatory_control_plane_offers.return_value
         )
         mandatory_control_plane_offers.reset_mock()
-        self.deploy_cinder_volume_step._get_offers()
+        deploy_cinder_volume_step._get_offers()
         # Should not call again
         mandatory_control_plane_offers.assert_not_called()
 
-    def test_get_accepted_application_status(self):
-        self.deploy_cinder_volume_step._get_offers = Mock(
+    def test_get_accepted_application_status(self, deploy_cinder_volume_step):
+        deploy_cinder_volume_step._get_offers = Mock(
             return_value={"keystone-offer-url": None}
         )
 
-        accepted_status = (
-            self.deploy_cinder_volume_step.get_accepted_application_status()
-        )
-        self.assertIn("blocked", accepted_status)
+        accepted_status = deploy_cinder_volume_step.get_accepted_application_status()
+        assert "blocked" in accepted_status
 
-    def test_get_accepted_application_status_with_offers(self):
-        self.deploy_cinder_volume_step._get_offers = Mock(
+    def test_get_accepted_application_status_with_offers(
+        self, deploy_cinder_volume_step
+    ):
+        deploy_cinder_volume_step._get_offers = Mock(
             return_value={"keystone-offer-url": "url"}
         )
 
-        accepted_status = (
-            self.deploy_cinder_volume_step.get_accepted_application_status()
-        )
-        self.assertNotIn("blocked", accepted_status)
+        accepted_status = deploy_cinder_volume_step.get_accepted_application_status()
+        assert "blocked" not in accepted_status
 
     @patch("sunbeam.steps.cinder_volume.microceph.ceph_replica_scale", return_value=3)
-    def test_extra_tfvars(self, mock_ceph_replica_scale):
-        self.client.cluster.list_nodes_by_role.return_value = ["node1"]
-        self.mceph_tfhelper.output.return_value = {"ceph-application-name": "ceph-app"}
-        tfvars = self.deploy_cinder_volume_step.extra_tfvars()
-        self.assertEqual(tfvars["ceph-application-name"], "ceph-app")
-        self.assertEqual(
-            tfvars["charm_cinder_volume_ceph_config"]["ceph-osd-replication-count"], 3
+    def test_extra_tfvars(
+        self,
+        mock_ceph_replica_scale,
+        deploy_cinder_volume_step,
+        basic_client,
+        mceph_tfhelper,
+    ):
+        basic_client.cluster.list_nodes_by_role.return_value = ["node1"]
+        mceph_tfhelper.output.return_value = {"ceph-application-name": "ceph-app"}
+        tfvars = deploy_cinder_volume_step.extra_tfvars()
+        assert tfvars["ceph-application-name"] == "ceph-app"
+        assert (
+            tfvars["charm_cinder_volume_ceph_config"]["ceph-osd-replication-count"] == 3
         )
 
-    def test_extra_tfvars_after_openstack_model(self):
-        self.client.cluster.list_nodes_by_role.return_value = ["node1"]
-        self.os_tfhelper.output.return_value = {
+    def test_extra_tfvars_after_openstack_model(
+        self,
+        deploy_cinder_volume_step,
+        basic_client,
+        os_tfhelper,
+        mceph_tfhelper,
+        basic_manifest,
+    ):
+        basic_client.cluster.list_nodes_by_role.return_value = ["node1"]
+        os_tfhelper.output.return_value = {
             "keystone-offer-url": "keystone-offer",
             "database-offer-url": "database-offer",
             "amqp-offer-url": "amqp-offer",
         }
-        self.mceph_tfhelper.output.return_value = {"ceph-application-name": "ceph-app"}
-        self.manifest.get_model.return_value = "openstack"
-        tfvars = self.deploy_cinder_volume_step.extra_tfvars()
-        self.assertEqual(tfvars["ceph-application-name"], "ceph-app")
-        self.assertEqual(
-            tfvars["charm_cinder_volume_ceph_config"]["ceph-osd-replication-count"], 1
+        mceph_tfhelper.output.return_value = {"ceph-application-name": "ceph-app"}
+        basic_manifest.get_model.return_value = "openstack"
+        tfvars = deploy_cinder_volume_step.extra_tfvars()
+        assert tfvars["ceph-application-name"] == "ceph-app"
+        assert (
+            tfvars["charm_cinder_volume_ceph_config"]["ceph-osd-replication-count"] == 1
         )
 
     @patch(
         "sunbeam.steps.cinder_volume.get_mandatory_control_plane_offers",
         return_value={"keystone-offer-url": "url"},
     )
-    def test_extra_tfvars_no_storage_nodes(self, get_mandatory_control_plane_offers):
-        self.client.cluster.list_nodes_by_role.return_value = []
-        tfvars = self.deploy_cinder_volume_step.extra_tfvars()
-        self.mceph_tfhelper.output.assert_not_called()
+    def test_extra_tfvars_no_storage_nodes(
+        self,
+        get_mandatory_control_plane_offers,
+        deploy_cinder_volume_step,
+        basic_client,
+        mceph_tfhelper,
+    ):
+        basic_client.cluster.list_nodes_by_role.return_value = []
+        tfvars = deploy_cinder_volume_step.extra_tfvars()
+        mceph_tfhelper.output.assert_not_called()
         get_mandatory_control_plane_offers.assert_not_called()
-        self.assertNotIn("ceph-application-name", tfvars)
-        self.assertNotIn("keystone-offer-url", tfvars)
+        assert "ceph-application-name" not in tfvars
+        assert "keystone-offer-url" not in tfvars
 
 
-class TestRemoveCinderVolumeUnitsStep(unittest.TestCase):
-    def setUp(self):
-        self.client = MagicMock()
-        self.names = ["node1"]
-        self.jhelper = MagicMock()
-        self.model = "test-model"
-        self.remove_cinder_volume_units_step = RemoveCinderVolumeUnitsStep(
-            self.client,
-            self.names,
-            self.jhelper,
-            self.model,
+class TestRemoveCinderVolumeUnitsStep:
+    @pytest.fixture
+    def test_names(self):
+        """Test node names."""
+        return ["node1"]
+
+    @pytest.fixture
+    def remove_cinder_volume_units_step(
+        self, basic_client, test_names, basic_jhelper, test_model
+    ):
+        """Create RemoveCinderVolumeUnitsStep instance for testing."""
+        return RemoveCinderVolumeUnitsStep(
+            basic_client,
+            test_names,
+            basic_jhelper,
+            test_model,
         )
 
-    def test_get_unit_timeout(self):
-        self.assertEqual(
-            self.remove_cinder_volume_units_step.get_unit_timeout(),
-            CINDER_VOLUME_UNIT_TIMEOUT,
+    def test_get_unit_timeout(self, remove_cinder_volume_units_step):
+        assert (
+            remove_cinder_volume_units_step.get_unit_timeout()
+            == CINDER_VOLUME_UNIT_TIMEOUT
         )

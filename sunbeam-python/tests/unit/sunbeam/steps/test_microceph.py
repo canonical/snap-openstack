@@ -3,21 +3,9 @@
 
 from unittest.mock import Mock
 
-import pytest
-
 from sunbeam.core.common import ResultType
 from sunbeam.core.juju import ActionFailedException
 from sunbeam.steps.microceph import ConfigureMicrocephOSDStep, SetCephMgrPoolSizeStep
-
-
-@pytest.fixture()
-def cclient():
-    yield Mock()
-
-
-@pytest.fixture()
-def jhelper():
-    yield Mock()
 
 
 class TestConfigureMicrocephOSDStep:

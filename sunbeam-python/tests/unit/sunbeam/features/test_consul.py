@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2024 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -9,26 +9,6 @@ from sunbeam.core.common import ResultType
 from sunbeam.core.deployment import Networks
 from sunbeam.core.terraform import TerraformException
 from sunbeam.features.instance_recovery import consul as consul_feature
-
-
-@pytest.fixture()
-def tfhelper():
-    yield Mock()
-
-
-@pytest.fixture()
-def jhelper():
-    yield Mock()
-
-
-@pytest.fixture()
-def deployment():
-    yield Mock()
-
-
-@pytest.fixture()
-def manifest():
-    yield MagicMock()
 
 
 @pytest.fixture()
@@ -44,7 +24,7 @@ def update_config():
 
 
 class TestDeployConsulClientStep:
-    def test_run(self, deployment, tfhelper, jhelper, consulfeature):
+    def test_run(self, deployment, tfhelper, jhelper, consulfeature, manifest):
         step = consul_feature.DeployConsulClientStep(
             deployment, tfhelper, tfhelper, jhelper, manifest
         )
@@ -54,7 +34,9 @@ class TestDeployConsulClientStep:
         jhelper.wait_until_desired_status.assert_called_once()
         assert result.result_type == ResultType.COMPLETED
 
-    def test_run_tf_apply_failed(self, deployment, tfhelper, jhelper, consulfeature):
+    def test_run_tf_apply_failed(
+        self, deployment, tfhelper, jhelper, consulfeature, manifest
+    ):
         tfhelper.update_tfvars_and_apply_tf.side_effect = TerraformException(
             "apply failed..."
         )
@@ -68,7 +50,9 @@ class TestDeployConsulClientStep:
         assert result.result_type == ResultType.FAILED
         assert result.message == "apply failed..."
 
-    def test_run_waiting_timed_out(self, deployment, tfhelper, jhelper, consulfeature):
+    def test_run_waiting_timed_out(
+        self, deployment, tfhelper, jhelper, consulfeature, manifest
+    ):
         jhelper.wait_until_desired_status.side_effect = TimeoutError("timed out")
 
         step = consul_feature.DeployConsulClientStep(
