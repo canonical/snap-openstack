@@ -16,16 +16,6 @@ from sunbeam.core.juju import ActionFailedException, LeaderNotFoundException
 
 
 @pytest.fixture()
-def cclient():
-    yield Mock()
-
-
-@pytest.fixture()
-def jhelper():
-    yield Mock()
-
-
-@pytest.fixture()
 def load_answers():
     with patch.object(sunbeam.core.questions, "load_answers") as p:
         yield p
@@ -422,7 +412,7 @@ class TestConfigureCAStep:
         jhelper.run_action.assert_not_called()
         assert result.result_type == ResultType.COMPLETED
 
-    def test_run_when_action_returns_failed_return_code(self, jhelper):
+    def test_run_when_action_returns_failed_return_code(self, cclient, jhelper):
         jhelper.run_action.return_value = {"return-code": 2}
         step = ca.ConfigureCAStep(cclient, jhelper, "fake-cert", "fake-chain")
         step.process_certs = {
@@ -439,7 +429,7 @@ class TestConfigureCAStep:
         jhelper.run_action.assert_called_once()
         assert result.result_type == ResultType.FAILED
 
-    def test_run_when_action_failed(self, jhelper):
+    def test_run_when_action_failed(self, cclient, jhelper):
         jhelper.run_action.side_effect = ActionFailedException("action failed...")
         step = ca.ConfigureCAStep(cclient, jhelper, "fake-cert", "fake-chain")
         step.process_certs = {
@@ -457,7 +447,7 @@ class TestConfigureCAStep:
         assert result.result_type == ResultType.FAILED
         assert result.message == "action failed..."
 
-    def test_run_when_leader_not_found(self, jhelper):
+    def test_run_when_leader_not_found(self, cclient, jhelper):
         jhelper.get_leader_unit.side_effect = LeaderNotFoundException(
             "not able to get leader..."
         )

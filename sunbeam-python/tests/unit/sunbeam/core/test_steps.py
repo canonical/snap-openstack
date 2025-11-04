@@ -16,34 +16,9 @@ from sunbeam.core.terraform import TerraformException, TerraformStateLockedExcep
 
 
 @pytest.fixture()
-def deployment():
-    yield Mock()
-
-
-@pytest.fixture()
-def cclient():
-    yield Mock()
-
-
-@pytest.fixture()
-def tfhelper():
-    yield Mock()
-
-
-@pytest.fixture()
-def jhelper():
-    yield Mock()
-
-
-@pytest.fixture()
 def read_config():
     with patch("sunbeam.core.steps.read_config", return_value={}) as p:
         yield p
-
-
-@pytest.fixture()
-def manifest():
-    yield Mock()
 
 
 class TestDeployMachineApplicationStep:

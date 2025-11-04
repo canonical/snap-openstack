@@ -1,23 +1,13 @@
 # SPDX-FileCopyrightText: 2023 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 import pytest
 
 import sunbeam.commands.generate_cloud_config as generate
 import sunbeam.core.questions
 from sunbeam.core.common import ResultType
-
-
-@pytest.fixture()
-def cclient():
-    yield Mock()
-
-
-@pytest.fixture()
-def tfhelper():
-    yield Mock()
 
 
 @pytest.fixture()

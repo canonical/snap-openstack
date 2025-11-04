@@ -24,11 +24,6 @@ from sunbeam.features.interface.v1.base import (
 
 
 @pytest.fixture()
-def deployment():
-    yield Mock()
-
-
-@pytest.fixture()
 def utils():
     with patch("sunbeam.features.interface.v1.base.utils") as p:
         yield p

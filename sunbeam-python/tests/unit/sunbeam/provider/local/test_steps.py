@@ -13,11 +13,6 @@ from sunbeam.provider.common import nic_utils
 
 
 @pytest.fixture()
-def cclient():
-    yield Mock()
-
-
-@pytest.fixture()
 def load_answers():
     with patch.object(sunbeam.core.questions, "load_answers") as p:
         yield p
@@ -45,16 +40,6 @@ def prompt_question():
 def confirm_question():
     with patch.object(sunbeam.core.questions, "ConfirmQuestion") as p:
         yield p
-
-
-@pytest.fixture()
-def jhelper():
-    yield Mock()
-
-
-@pytest.fixture()
-def deployment():
-    yield Mock()
 
 
 @pytest.fixture()

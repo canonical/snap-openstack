@@ -11,21 +11,6 @@ from sunbeam.features.observability import feature as observability_feature
 
 
 @pytest.fixture()
-def tfhelper():
-    yield Mock()
-
-
-@pytest.fixture()
-def jhelper():
-    yield Mock()
-
-
-@pytest.fixture()
-def deployment():
-    yield Mock()
-
-
-@pytest.fixture()
 def observabilityfeature():
     with patch("sunbeam.features.observability.feature.ObservabilityFeature") as p:
         yield p

@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: 2023 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
-from pathlib import Path
 from unittest.mock import Mock, patch
 
 import pytest
@@ -12,31 +11,11 @@ from sunbeam.core.terraform import TerraformException
 
 
 @pytest.fixture()
-def jhelper():
-    yield Mock()
-
-
-@pytest.fixture()
-def tfhelper():
-    yield Mock(path=Path())
-
-
-@pytest.fixture()
 def osfeature():
     with patch(
         "sunbeam.features.interface.v1.openstack.OpenStackControlPlaneFeature"
     ) as p:
         yield p
-
-
-@pytest.fixture()
-def manifest():
-    yield Mock()
-
-
-@pytest.fixture()
-def deployment():
-    yield Mock()
 
 
 class TestEnableOpenStackApplicationStep:
