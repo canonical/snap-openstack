@@ -3,6 +3,8 @@ core:
     charms:
       cinder-volume:
         channel: 2024.1/beta
+        config:
+          snap-channel: 2024.1/beta
       cinder-volume-ceph:
         channel: 2024.1/beta
       cinder-k8s:
