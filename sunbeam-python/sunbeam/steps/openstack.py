@@ -658,10 +658,9 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
         extra_tfvars.update(self.get_region_tfvars())
 
         # This is used to calculate the "experimental-max-connections" mysql setting.
-        database_service_scale = len(control_nodes) or len(region_controllers) or 1
         extra_tfvars.update(
             self.get_database_tfvars(
-                service_scale_function(os_api_scale, database_service_scale)
+                service_scale_function(os_api_scale, len(storage_nodes))
             )
         )
         extra_tfvars.update(self.get_endpoints_tfvars())

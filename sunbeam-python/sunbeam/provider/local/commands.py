@@ -1007,7 +1007,7 @@ def bootstrap(  # noqa: C901
 
     if not is_region_controller:
         # NOTE(jamespage):
-        # As with MicroCeph, always deploy the openstack-hypervsor charm
+        # As with MicroCeph, always deploy the openstack-hypervisor charm
         # and add a unit to the bootstrap node if required.
         hypervisor_tfhelper = deployment.get_tfhelper("hypervisor-plan")
         plan2.append(TerraformInitStep(hypervisor_tfhelper))
