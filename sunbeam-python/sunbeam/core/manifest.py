@@ -145,6 +145,26 @@ class FeatureConfig(pydantic.BaseModel):
     pass
 
 
+class StorageBackendConfig(pydantic.BaseModel):
+    """Base configuration model for storage backends."""
+
+    model_config = pydantic.ConfigDict(
+        alias_generator=pydantic.AliasGenerator(
+            validation_alias=utils.to_kebab,
+            serialization_alias=utils.to_kebab,
+        ),
+    )
+
+    volume_backend_name: typing.Annotated[
+        str | None,
+        Field(description="Name that Cinder will report for this backend"),
+    ] = None
+    backend_availability_zone: typing.Annotated[
+        str | None,
+        Field(description="Availability zone to associate with this backend"),
+    ] = None
+
+
 def _default_software_config() -> SoftwareConfig:
     snap = Snap()
     return SoftwareConfig(
@@ -287,15 +307,18 @@ class CoreManifest(pydantic.BaseModel):
         return type(self)(config=config, software=software)
 
 
-class FeatureManifest(pydantic.BaseModel):
-    config: pydantic.SerializeAsAny[FeatureConfig] | None = None
+T = typing.TypeVar("T", bound=pydantic.BaseModel)
+
+
+class _AddonManifest(pydantic.BaseModel, typing.Generic[T]):
+    config: pydantic.SerializeAsAny[T] | None = None
     software: SoftwareConfig = SoftwareConfig()
 
-    def merge(self, other: "FeatureManifest") -> "FeatureManifest":
-        """Merge the feature manifest with the provided manifest."""
+    def merge(self, other: "typing.Self") -> "typing.Self":
+        """Merge the addon manifest with the provided manifest."""
         if self.config and other.config:
             if type(self.config) is not type(other.config):
-                raise ValueError("Feature config types do not match")
+                raise ValueError("Config types do not match")
             config = type(self.config).model_validate(
                 utils.merge_dict(
                     self.config.model_dump(by_alias=True),
@@ -310,6 +333,30 @@ class FeatureManifest(pydantic.BaseModel):
             config = None
         software = self.software.merge(other.software)
         return type(self)(config=config, software=software)
+
+
+class FeatureManifest(_AddonManifest[FeatureConfig]):
+    pass
+
+
+class StorageInstanceManifest(_AddonManifest[StorageBackendConfig]):
+    pass
+
+
+class StorageBackendManifests(pydantic.RootModel[dict[str, StorageInstanceManifest]]):
+    """Storage backend manifests.
+
+    Key: Instance name
+    Value: Storage backend manifest
+    """
+
+
+class StorageManifest(pydantic.RootModel[dict[str, StorageBackendManifests]]):
+    """Storage manifest containing all storage backends.
+
+    Key: Storage type
+    Value: Storage backend manifests
+    """
 
 
 class FeatureGroupManifest(pydantic.RootModel[dict[str, FeatureManifest]]):
@@ -336,6 +383,7 @@ class FeatureGroupManifest(pydantic.RootModel[dict[str, FeatureManifest]]):
 class Manifest(pydantic.BaseModel):
     core: CoreManifest = pydantic.Field(default_factory=CoreManifest)
     features: dict[str, FeatureManifest | FeatureGroupManifest] = {}
+    storage: StorageManifest = StorageManifest(root={})
 
     def get_features(self) -> typing.Generator[tuple[str, FeatureManifest], None, None]:
         """Return all the features."""
@@ -370,6 +418,8 @@ class Manifest(pydantic.BaseModel):
     def merge(self, other: "Manifest") -> "Manifest":
         """Merge the manifest with the provided manifest."""
         core = self.core.merge(other.core)
+        # Storage has no defaults, and will be fully replaced
+        storage = other.storage
         features: dict[str, FeatureManifest | FeatureGroupManifest] = {}
         for feature, feature_or_group_manifest in self.features.items():
             if other_manifest := other.features.get(feature):
@@ -384,7 +434,7 @@ class Manifest(pydantic.BaseModel):
             else:
                 features[feature] = feature_or_group_manifest
 
-        return type(self)(core=core, features=features)
+        return type(self)(core=core, features=features, storage=storage)
 
     def validate_against_default(self, default_manifest: "Manifest") -> None:
         """Validate the manifest against the default manifest."""

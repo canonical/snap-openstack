@@ -160,6 +160,9 @@ def main():
     juju.add_command(juju_cmds.register_controller)
     juju.add_command(juju_cmds.unregister_controller)
 
+    # Register storage backend commands
+    deployment.get_storage_manager().register(cli, deployment)
+
     # Register the features after all groups,commands are registered
     deployment.get_feature_manager().register(cli, deployment)
 
