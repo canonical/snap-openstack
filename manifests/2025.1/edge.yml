@@ -45,6 +45,19 @@ core:
         channel: latest/stable
         revision: 236
 features:
+  baremetal:
+    software:
+      charms:
+        ironic-conductor-k8s:
+          channel: 2025.1/edge
+        ironic-k8s:
+          channel: 2025.1/edge
+        nova-ironic-k8s:
+          channel: 2025.1/edge
+        neutron-baremetal-switch-config-k8s:
+          channel: 2025.1/edge
+        neutron-generic-switch-config-k8s:
+          channel: 2025.1/edge
   caas:
     software:
       charms:
