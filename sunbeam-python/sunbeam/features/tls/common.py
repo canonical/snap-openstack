@@ -30,12 +30,13 @@ from sunbeam.core.manifest import (
     FeatureConfig,
     SoftwareConfig,
 )
-from sunbeam.core.openstack import OPENSTACK_MODEL
+from sunbeam.core.openstack import OPENSTACK_MODEL, REGION_CONFIG_KEY
 from sunbeam.features.interface.v1.base import BaseFeatureGroup
 from sunbeam.features.interface.v1.openstack import (
     OpenStackControlPlaneFeature,
     WaitForApplicationsStep,
 )
+from sunbeam.steps.juju import SwitchToController
 from sunbeam.utils import pass_method_obj
 
 CERTIFICATE_FEATURE_KEY = "TlsProvider"
@@ -69,13 +70,13 @@ class TlsFeature(OpenStackControlPlaneFeature):
     version = Version("0.0.1")
     group = TlsFeatureGroup
 
-    @property
-    def ca_cert_name(self) -> str:
+    def ca_cert_name(self, region: str | None) -> str:
         """CA Cert name to be used to add to keystone."""
         # Keystone lists ca cert names with any .'s replaced
         # with -.
         # https://opendev.org/openstack/sunbeam-charms/src/commit/c8761241f3b7be381101fbe5942aa2174daf1797/charms/keystone-k8s/src/charm.py#L629
-        return self.feature_key.replace(".", "-")
+        region = region or "RegionOne"
+        return self.feature_key.replace(".", "-") + f"-{region}"
 
     @click.group()
     def enable_tls(self) -> None:
@@ -139,15 +140,39 @@ class TlsFeature(OpenStackControlPlaneFeature):
         self, deployment: Deployment, config: TlsFeatureConfig, show_hints: bool
     ) -> None:
         """Handler to perform tasks after the feature is enabled."""
-        jhelper = JujuHelper(deployment.juju_controller)
-        plan = [
+        if deployment.region_ctrl_juju_controller:
+            # This is a secondary region, Keystone is expected to run in the
+            # primary region.
+            jhelper = JujuHelper(deployment.region_ctrl_juju_controller)
+        else:
+            jhelper = JujuHelper(deployment.juju_controller)
+        this_region_name = read_config(deployment.get_client(), REGION_CONFIG_KEY)[
+            "region"
+        ]
+        plan: list[BaseStep] = [
             AddCACertsToKeystoneStep(
                 jhelper,
-                self.ca_cert_name,
+                self.ca_cert_name(this_region_name),
                 config.ca,  # type: ignore
                 config.ca_chain,  # type: ignore
             )
         ]
+        if deployment.region_ctrl_juju_controller and deployment.juju_controller:
+            # Some of the JujuHelper methods ignore the specified controller and
+            # will continue to run against the current controller (e.g. self._model).
+            #
+            # If we add "$controller:" to the model name before passing it to
+            # Juju/Jubilant, then the output of some of the commands will change.
+            #
+            # For example, some of the "list" commands will include the model owners,
+            # which breaks the lookups performed by Sunbeam.
+            #
+            # For now, we'll just switch the controller before and after this step.
+            plan = [
+                SwitchToController(deployment.region_ctrl_juju_controller.name),
+                *plan,
+                SwitchToController(deployment.juju_controller.name),
+            ]
         run_plan(plan, console, show_hints)
 
         stored_config = {
@@ -163,19 +188,43 @@ class TlsFeature(OpenStackControlPlaneFeature):
         super().post_disable(deployment, show_hints)
 
         client = deployment.get_client()
-        jhelper = JujuHelper(deployment.juju_controller)
+
+        jhelper_current = JujuHelper(deployment.juju_controller)
+        if deployment.region_ctrl_juju_controller:
+            # This is a secondary region, Keystone is expected to run in the
+            # primary region.
+            jhelper_keystone = JujuHelper(deployment.region_ctrl_juju_controller)
+        else:
+            jhelper_keystone = jhelper_current
+
+        this_region_name = read_config(deployment.get_client(), REGION_CONFIG_KEY)[
+            "region"
+        ]
 
         model = OPENSTACK_MODEL
         apps_to_monitor = ["traefik", "traefik-public", "keystone"]
         if client.cluster.list_nodes_by_role("storage"):
             apps_to_monitor.append("traefik-rgw")
 
-        plan = [
-            RemoveCACertsFromKeystoneStep(jhelper, self.ca_cert_name, self.feature_key),
-            WaitForApplicationsStep(
-                jhelper, apps_to_monitor, model, INGRESS_CHANGE_APPLICATION_TIMEOUT
+        plan: list[BaseStep] = [
+            RemoveCACertsFromKeystoneStep(
+                jhelper_keystone, self.ca_cert_name(this_region_name), self.feature_key
             ),
         ]
+        if deployment.region_ctrl_juju_controller and deployment.juju_controller:
+            plan = [
+                SwitchToController(deployment.region_ctrl_juju_controller.name),
+                *plan,
+                SwitchToController(deployment.juju_controller.name),
+            ]
+        plan.append(
+            WaitForApplicationsStep(
+                jhelper_current,
+                apps_to_monitor,
+                model,
+                INGRESS_CHANGE_APPLICATION_TIMEOUT,
+            )
+        )
         run_plan(plan, console, show_hints)
 
         config: dict = {}

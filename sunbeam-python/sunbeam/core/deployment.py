@@ -94,6 +94,8 @@ class Deployment(pydantic.BaseModel):
     type: str
     juju_account: JujuAccount | None = None
     juju_controller: JujuController | None = None
+    region_ctrl_juju_account: JujuAccount | None = None
+    region_ctrl_juju_controller: JujuController | None = None
     clusterd_certpair: CertPair | None = None
     primary_region_name: str | None = None
     _manifest: Manifest | None = pydantic.PrivateAttr(default=None)

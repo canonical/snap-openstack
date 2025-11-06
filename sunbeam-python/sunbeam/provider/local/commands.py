@@ -658,6 +658,10 @@ def _connect_to_region_controller(
 
     if not deployment.primary_region_name:
         deployment.primary_region_name = primary_region_name
+    if not deployment.region_ctrl_juju_account:
+        deployment.region_ctrl_juju_account = region_ctrl_account
+    if not deployment.region_ctrl_juju_controller:
+        deployment.region_ctrl_juju_controller = region_controller_juju_ctrl
     return external_keystone_model
 
 
