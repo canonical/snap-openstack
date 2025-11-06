@@ -8,11 +8,11 @@ import click
 import pytest
 
 import sunbeam.core.questions
-import sunbeam.features.tls.ca as ca
 import sunbeam.features.tls.common as tls
 import sunbeam.features.tls.vault as vault
 from sunbeam.core.common import ResultType
 from sunbeam.core.juju import ActionFailedException, LeaderNotFoundException
+from sunbeam.features.interface.utils import encode_base64_as_string
 
 
 @pytest.fixture()
@@ -35,13 +35,13 @@ def question_bank():
 
 @pytest.fixture()
 def get_subject_from_csr():
-    with patch.object(ca, "get_subject_from_csr") as p:
+    with patch.object(tls, "get_subject_from_csr") as p:
         yield p
 
 
 @pytest.fixture()
 def is_certificate_valid():
-    with patch.object(ca, "is_certificate_valid") as p:
+    with patch.object(tls, "is_certificate_valid") as p:
         yield p
 
 
@@ -225,7 +225,7 @@ class TestRemoveCACertsFromKeystoneStep:
         assert result.message == "not able to get leader..."
 
 
-class TestConfigureCAStep:
+class TestConfigureTLSCertificatesStep:
     def test_prompt(
         self,
         cclient,
@@ -247,7 +247,9 @@ class TestConfigureCAStep:
             "return-code": 0,
             "result": json.dumps(certs_to_process),
         }
-        step = ca.ConfigureCAStep(cclient, jhelper, "fake-cert", "fake-chain")
+        step = tls.ConfigureTLSCertificatesStep(
+            cclient, jhelper, "fake-cert", "fake-chain"
+        )
         step.prompt()
 
         jhelper.run_action.assert_called_once()
@@ -267,7 +269,9 @@ class TestConfigureCAStep:
             "return-code": 0,
             "result": json.dumps(certs_to_process),
         }
-        step = ca.ConfigureCAStep(cclient, jhelper, "fake-cert", "fake-chain")
+        step = tls.ConfigureTLSCertificatesStep(
+            cclient, jhelper, "fake-cert", "fake-chain"
+        )
         step.prompt()
 
         jhelper.run_action.assert_called_once()
@@ -297,7 +301,9 @@ class TestConfigureCAStep:
             "return-code": 0,
             "result": json.dumps(certs_to_process),
         }
-        step = ca.ConfigureCAStep(cclient, jhelper, "fake-cert", "fake-chain")
+        step = tls.ConfigureTLSCertificatesStep(
+            cclient, jhelper, "fake-cert", "fake-chain"
+        )
         with pytest.raises(click.ClickException):
             step.prompt()
 
@@ -328,7 +334,9 @@ class TestConfigureCAStep:
             "return-code": 0,
             "result": json.dumps(certs_to_process),
         }
-        step = ca.ConfigureCAStep(cclient, jhelper, "fake-cert", "fake-chain")
+        step = tls.ConfigureTLSCertificatesStep(
+            cclient, jhelper, "fake-cert", "fake-chain"
+        )
         with pytest.raises(click.ClickException):
             step.prompt()
 
@@ -344,7 +352,9 @@ class TestConfigureCAStep:
         write_answers,
     ):
         jhelper.run_action.return_value = {"return-code": 2}
-        step = ca.ConfigureCAStep(cclient, jhelper, "fake-cert", "fake-chain")
+        step = tls.ConfigureTLSCertificatesStep(
+            cclient, jhelper, "fake-cert", "fake-chain"
+        )
         with pytest.raises(click.ClickException):
             step.prompt()
 
@@ -360,7 +370,9 @@ class TestConfigureCAStep:
         write_answers,
     ):
         jhelper.run_action.side_effect = ActionFailedException("action failed...")
-        step = ca.ConfigureCAStep(cclient, jhelper, "fake-cert", "fake-chain")
+        step = tls.ConfigureTLSCertificatesStep(
+            cclient, jhelper, "fake-cert", "fake-chain"
+        )
         with pytest.raises(ActionFailedException):
             step.prompt()
 
@@ -378,7 +390,9 @@ class TestConfigureCAStep:
         jhelper.get_leader_unit.side_effect = LeaderNotFoundException(
             "not able to get leader..."
         )
-        step = ca.ConfigureCAStep(cclient, jhelper, "fake-cert", "fake-chain")
+        step = tls.ConfigureTLSCertificatesStep(
+            cclient, jhelper, "fake-cert", "fake-chain"
+        )
         with pytest.raises(LeaderNotFoundException):
             step.prompt()
 
@@ -388,14 +402,19 @@ class TestConfigureCAStep:
 
     def test_run(self, cclient, jhelper):
         jhelper.run_action.return_value = {"return-code": 0}
-        step = ca.ConfigureCAStep(cclient, jhelper, "fake-cert", "fake-chain")
+        step = tls.ConfigureTLSCertificatesStep(
+            cclient,
+            jhelper,
+            encode_base64_as_string("fake-cert"),
+            encode_base64_as_string("fake-chain"),
+        )
         step.process_certs = {
             "subject1": {
                 "app": "traefik",
                 "unit": "traefik/0",
                 "relation_id": 1,
                 "csr": "fake-csr",
-                "certificate": "fake-cert",
+                "certificate": encode_base64_as_string("fake-cert"),
             }
         }
 
@@ -406,7 +425,12 @@ class TestConfigureCAStep:
 
     def test_run_with_no_certs_to_process(self, cclient, jhelper):
         jhelper.run_action.return_value = {"return-code": 0}
-        step = ca.ConfigureCAStep(cclient, jhelper, "fake-cert", "fake-chain")
+        step = tls.ConfigureTLSCertificatesStep(
+            cclient,
+            jhelper,
+            encode_base64_as_string("fake-cert"),
+            encode_base64_as_string("fake-chain"),
+        )
         result = step.run()
 
         jhelper.run_action.assert_not_called()
@@ -414,14 +438,19 @@ class TestConfigureCAStep:
 
     def test_run_when_action_returns_failed_return_code(self, cclient, jhelper):
         jhelper.run_action.return_value = {"return-code": 2}
-        step = ca.ConfigureCAStep(cclient, jhelper, "fake-cert", "fake-chain")
+        step = tls.ConfigureTLSCertificatesStep(
+            cclient,
+            jhelper,
+            encode_base64_as_string("fake-cert"),
+            encode_base64_as_string("fake-chain"),
+        )
         step.process_certs = {
             "subject1": {
                 "app": "traefik",
                 "unit": "traefik/0",
                 "relation_id": 1,
                 "csr": "fake-csr",
-                "certificate": "fake-cert",
+                "certificate": encode_base64_as_string("fake-cert"),
             }
         }
         result = step.run()
@@ -431,14 +460,19 @@ class TestConfigureCAStep:
 
     def test_run_when_action_failed(self, cclient, jhelper):
         jhelper.run_action.side_effect = ActionFailedException("action failed...")
-        step = ca.ConfigureCAStep(cclient, jhelper, "fake-cert", "fake-chain")
+        step = tls.ConfigureTLSCertificatesStep(
+            cclient,
+            jhelper,
+            encode_base64_as_string("fake-cert"),
+            encode_base64_as_string("fake-chain"),
+        )
         step.process_certs = {
             "subject1": {
                 "app": "traefik",
                 "unit": "traefik/0",
                 "relation_id": 1,
                 "csr": "fake-csr",
-                "certificate": "fake-cert",
+                "certificate": encode_base64_as_string("fake-cert"),
             }
         }
         result = step.run()
@@ -451,14 +485,19 @@ class TestConfigureCAStep:
         jhelper.get_leader_unit.side_effect = LeaderNotFoundException(
             "not able to get leader..."
         )
-        step = ca.ConfigureCAStep(cclient, jhelper, "fake-cert", "fake-chain")
+        step = tls.ConfigureTLSCertificatesStep(
+            cclient,
+            jhelper,
+            encode_base64_as_string("fake-cert"),
+            encode_base64_as_string("fake-chain"),
+        )
         step.process_certs = {
             "subject1": {
                 "app": "traefik",
                 "unit": "traefik/0",
                 "relation_id": 1,
                 "csr": "fake-csr",
-                "certificate": "fake-cert",
+                "certificate": encode_base64_as_string("fake-cert"),
             }
         }
         result = step.run()
@@ -467,165 +506,25 @@ class TestConfigureCAStep:
         assert result.result_type == ResultType.FAILED
         assert result.message == "not able to get leader..."
 
-
-class TestConfigureVaultCAStepPrompt:
-    def test_prompt_normal(
-        self,
-        cclient,
-        jhelper,
-        load_answers,
-        write_answers,
-        question_bank,
-        vault_get_subject_from_csr,
-        vault_is_certificate_valid,
-        get_outstanding,
-    ):
-        # one outstanding CSR
-        rec = {"unit_name": "app/0", "csr": "fake-csr", "relation_id": 42}
-        get_outstanding.return_value = {"return-code": 0, "result": json.dumps([rec])}
-
-        vault_get_subject_from_csr.return_value = "subj"
-        vault_is_certificate_valid.return_value = True
-
-        step = vault.ConfigureVaultCAStep(cclient, jhelper, "fake-ca", "fake-chain")
-        step.prompt()
-
-        get_outstanding.assert_called_once_with(step.app, step.model, step.jhelper)
-        load_answers.assert_called_once_with(cclient, step._CONFIG)
-        write_answers.assert_called_once()
-
-    def test_prompt_no_certs(
-        self, cclient, jhelper, load_answers, write_answers, get_outstanding
-    ):
-        get_outstanding.return_value = {"return-code": 0, "result": "[]"}
-        step = vault.ConfigureVaultCAStep(cclient, jhelper, "fake-ca", "fake-chain")
-        step.prompt()
-        load_answers.assert_not_called()
-        write_answers.assert_not_called()
-
-    def test_prompt_invalid_csr(
-        self,
-        cclient,
-        jhelper,
-        load_answers,
-        write_answers,
-        get_subject_from_csr,
-        get_outstanding,
-    ):
-        rec = {"unit_name": "app/0", "csr": "bad", "relation_id": 1}
-        get_outstanding.return_value = {"return-code": 0, "result": json.dumps([rec])}
-        get_subject_from_csr.return_value = None
-
-        step = vault.ConfigureVaultCAStep(cclient, jhelper, "fake-ca", "fake-chain")
-        with pytest.raises(click.ClickException) as exc:
-            step.prompt()
-        assert "Not a valid CSR" in str(exc.value)
-
-        write_answers.assert_not_called()
-
-    def test_prompt_invalid_cert(
-        self,
-        cclient,
-        jhelper,
-        load_answers,
-        write_answers,
-        question_bank,
-        vault_get_subject_from_csr,
-        vault_is_certificate_valid,
-        get_outstanding,
-    ):
-        rec = {"unit_name": "app/0", "csr": "fake", "relation_id": 1}
-        get_outstanding.return_value = {"return-code": 0, "result": json.dumps([rec])}
-        vault_get_subject_from_csr.return_value = "subj"
-
-        question_bank.return_value.certificate.ask.return_value = "invalid-cert"
-        vault_is_certificate_valid.return_value = False
-
-        step = vault.ConfigureVaultCAStep(cclient, jhelper, "fake-ca", "fake-chain")
-        with pytest.raises(click.ClickException) as exc:
-            step.prompt()
-
-        assert "Not a valid certificate" in str(exc.value)
-        write_answers.assert_not_called()
-
-    def test_prompt_error_return_code(
-        self, cclient, jhelper, load_answers, write_answers, get_outstanding
-    ):
-        get_outstanding.return_value = {"return-code": 2}
-        step = vault.ConfigureVaultCAStep(cclient, jhelper, "fake-ca", "fake-chain")
-        with pytest.raises(click.ClickException):
-            step.prompt()
-
-        load_answers.assert_not_called()
-
-    def test_prompt_action_failed(
-        self, cclient, jhelper, load_answers, write_answers, get_outstanding
-    ):
-        get_outstanding.side_effect = ActionFailedException("juju oops")
-        step = vault.ConfigureVaultCAStep(cclient, jhelper, "fake-ca", "fake-chain")
-        with pytest.raises(ActionFailedException):
-            step.prompt()
-
-    def test_prompt_leader_not_found(
-        self, cclient, jhelper, load_answers, write_answers, get_outstanding
-    ):
-        get_outstanding.side_effect = LeaderNotFoundException("no leader")
-        step = vault.ConfigureVaultCAStep(cclient, jhelper, "fake-ca", "fake-chain")
-        with pytest.raises(LeaderNotFoundException):
-            step.prompt()
-
-
-class TestConfigureVaultCAStepRun:
-    def test_run_normal(self, jhelper):
-        jhelper.get_leader_unit.return_value = "lead"
+    def test_run_with_no_ca_chain(self, cclient, jhelper):
         jhelper.run_action.return_value = {"return-code": 0}
-        step = vault.ConfigureVaultCAStep(None, jhelper, "fake-ca", "fake-chain")
+        step = tls.ConfigureTLSCertificatesStep(
+            cclient, jhelper, encode_base64_as_string("fake-cert")
+        )
         step.process_certs = {
-            "subj": {
-                "csr": "csr",
-                "certificate": "cert",
+            "subject1": {
+                "app": "traefik",
+                "unit": "traefik/0",
+                "relation_id": 1,
+                "csr": "fake-csr",
+                "certificate": encode_base64_as_string("fake-cert"),
             }
         }
 
         result = step.run()
-        assert result.result_type == ResultType.COMPLETED
-        jhelper.get_leader_unit.assert_called_once()
+
         jhelper.run_action.assert_called_once()
-
-    def test_run_no_certs(self, jhelper):
-        jhelper.get_leader_unit.return_value = "lead"
-        step = vault.ConfigureVaultCAStep(None, jhelper, "fake-ca", "fake-chain")
-        result = step.run()
         assert result.result_type == ResultType.COMPLETED
-        jhelper.run_action.assert_not_called()
-
-    def test_run_action_error_code(self, jhelper):
-        jhelper.get_leader_unit.return_value = "lead"
-        jhelper.run_action.return_value = {"return-code": 2}
-        step = vault.ConfigureVaultCAStep(None, jhelper, "fake-ca", "fake-chain")
-        step.process_certs = {"s": {"csr": "csr", "certificate": "cert"}}
-
-        result = step.run()
-        assert result.result_type == ResultType.FAILED
-
-    def test_run_action_failed_exception(self, jhelper):
-        jhelper.get_leader_unit.return_value = "lead"
-        jhelper.run_action.side_effect = ActionFailedException("run oops")
-        step = vault.ConfigureVaultCAStep(None, jhelper, "fake-ca", "fake-chain")
-        step.process_certs = {"s": {"csr": "csr", "certificate": "cert"}}
-
-        result = step.run()
-        assert result.result_type == ResultType.FAILED
-        assert "run oops" in result.message
-
-    def test_run_leader_not_found(self, jhelper):
-        jhelper.get_leader_unit.side_effect = LeaderNotFoundException("no leader")
-        step = vault.ConfigureVaultCAStep(None, jhelper, "fake-ca", "fake-chain")
-        step.process_certs = {"s": {"csr": "csr", "certificate": "cert"}}
-
-        result = step.run()
-        assert result.result_type == ResultType.FAILED
-        assert "no leader" in result.message
 
 
 class FakeUnit:
