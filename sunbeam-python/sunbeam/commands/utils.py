@@ -12,7 +12,7 @@ from sunbeam.core.common import (
     run_plan,
 )
 from sunbeam.core.deployment import Deployment
-from sunbeam.steps.juju import JujuLoginStep
+from sunbeam.steps.juju import JujuLoginStep, SwitchToController
 from sunbeam.utils import click_option_show_hints
 
 LOG = logging.getLogger(__name__)
@@ -31,6 +31,14 @@ def juju_login(ctx: click.Context, show_hints: bool) -> None:
     run_preflight_checks(preflight_checks, console)
 
     plan = []
+
+    if deployment.region_ctrl_juju_controller and deployment.juju_controller:
+        plan = [
+            SwitchToController(deployment.region_ctrl_juju_controller.name),
+            JujuLoginStep(deployment.region_ctrl_juju_account),
+            SwitchToController(deployment.juju_controller.name),
+        ]
+
     plan.append(JujuLoginStep(deployment.juju_account))
 
     run_plan(plan, console, show_hints)

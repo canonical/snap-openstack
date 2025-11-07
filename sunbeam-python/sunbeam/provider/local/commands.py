@@ -1955,7 +1955,22 @@ def configure_cmd(
         JujuLoginStep(deployment.juju_account),
     ]
 
-    admin_credentials = retrieve_admin_credentials(jhelper, OPENSTACK_MODEL)
+    if deployment.region_ctrl_juju_controller and deployment.juju_controller:
+        jhelper_keystone = JujuHelper(deployment.region_ctrl_juju_controller)
+        run_plan(
+            [
+                SwitchToController(deployment.region_ctrl_juju_controller.name),
+                JujuLoginStep(deployment.juju_account),
+            ],
+            console,
+        )
+        admin_credentials = retrieve_admin_credentials(
+            jhelper_keystone, OPENSTACK_MODEL
+        )
+        run_plan([SwitchToController(deployment.juju_controller.name)], console)
+    else:
+        admin_credentials = retrieve_admin_credentials(jhelper, OPENSTACK_MODEL)
+
     # Add OS_INSECURE as https not working with terraform openstack provider.
     admin_credentials["OS_INSECURE"] = "true"
     tfplan = "demo-setup"

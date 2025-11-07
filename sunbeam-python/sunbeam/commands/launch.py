@@ -11,11 +11,13 @@ from rich.console import Console
 from snaphelpers import Snap
 
 from sunbeam.commands.configure import retrieve_admin_credentials
+from sunbeam.core.common import run_plan
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import JujuHelper
 from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.core.terraform import TerraformException
 from sunbeam.lazy import LazyImport
+from sunbeam.steps.juju import SwitchToController
 
 if typing.TYPE_CHECKING:
     import openstack
@@ -72,7 +74,18 @@ def launch(
                 f"Cannot find {OPENSTACK_MODEL}. Please destroy and re-bootstrap."
             )
 
-        admin_auth_info = retrieve_admin_credentials(jhelper, OPENSTACK_MODEL)
+        if deployment.region_ctrl_juju_controller and deployment.juju_controller:
+            jhelper_keystone = JujuHelper(deployment.region_ctrl_juju_controller)
+            run_plan(
+                [SwitchToController(deployment.region_ctrl_juju_controller.name)],
+                console,
+            )
+            admin_auth_info = retrieve_admin_credentials(
+                jhelper_keystone, OPENSTACK_MODEL
+            )
+            run_plan([SwitchToController(deployment.juju_controller.name)], console)
+        else:
+            admin_auth_info = retrieve_admin_credentials(jhelper, OPENSTACK_MODEL)
 
         tfplan = "demo-setup"
         tfhelper = deployment.get_tfhelper(tfplan)
