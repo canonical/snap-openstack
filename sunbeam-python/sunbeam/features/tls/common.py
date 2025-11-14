@@ -30,7 +30,7 @@ from sunbeam.core.manifest import (
     FeatureConfig,
     SoftwareConfig,
 )
-from sunbeam.core.openstack import OPENSTACK_MODEL, REGION_CONFIG_KEY
+from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.features.interface.v1.base import BaseFeatureGroup
 from sunbeam.features.interface.v1.openstack import (
     OpenStackControlPlaneFeature,
@@ -146,13 +146,10 @@ class TlsFeature(OpenStackControlPlaneFeature):
             jhelper = JujuHelper(deployment.region_ctrl_juju_controller)
         else:
             jhelper = JujuHelper(deployment.juju_controller)
-        this_region_name = read_config(deployment.get_client(), REGION_CONFIG_KEY)[
-            "region"
-        ]
         plan: list[BaseStep] = [
             AddCACertsToKeystoneStep(
                 jhelper,
-                self.ca_cert_name(this_region_name),
+                self.ca_cert_name(deployment.get_region_name()),
                 config.ca,  # type: ignore
                 config.ca_chain,  # type: ignore
             )
@@ -197,10 +194,6 @@ class TlsFeature(OpenStackControlPlaneFeature):
         else:
             jhelper_keystone = jhelper_current
 
-        this_region_name = read_config(deployment.get_client(), REGION_CONFIG_KEY)[
-            "region"
-        ]
-
         model = OPENSTACK_MODEL
         apps_to_monitor = ["traefik", "traefik-public", "keystone"]
         if client.cluster.list_nodes_by_role("storage"):
@@ -208,7 +201,9 @@ class TlsFeature(OpenStackControlPlaneFeature):
 
         plan: list[BaseStep] = [
             RemoveCACertsFromKeystoneStep(
-                jhelper_keystone, self.ca_cert_name(this_region_name), self.feature_key
+                jhelper_keystone,
+                self.ca_cert_name(deployment.get_region_name()),
+                self.feature_key,
             ),
         ]
         if deployment.region_ctrl_juju_controller and deployment.juju_controller:

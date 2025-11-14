@@ -76,7 +76,7 @@ from sunbeam.core.juju import (
 )
 from sunbeam.core.k8s import K8S_CLOUD_SUFFIX
 from sunbeam.core.manifest import AddManifestStep, Manifest
-from sunbeam.core.openstack import OPENSTACK_MODEL, REGION_CONFIG_KEY
+from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.core.questions import get_stdin_reopen_tty
 from sunbeam.core.terraform import TerraformInitStep
 from sunbeam.provider.base import ProviderBase
@@ -584,8 +584,6 @@ def _connect_to_region_controller(
     snap = Snap()
     data_location = snap.paths.user_data
 
-    this_region_name = read_config(deployment.get_client(), REGION_CONFIG_KEY)["region"]
-
     region_controller_info = json.loads(
         base64.b64decode(region_controller_token).decode()
     )
@@ -607,16 +605,16 @@ def _connect_to_region_controller(
             f"({deployment.primary_region_name}) does not match the region "
             f"of the token ({primary_region_name})"
         )
-    if this_region_name == primary_region_name:
+    if deployment.get_region_name() == primary_region_name:
         raise ValueError(
             "The secondary region can not have the same name "
-            f"as the primary region: {this_region_name}"
+            f"as the primary region: {deployment.get_region_name()}"
         )
 
     logging.debug(
         "Primary region name: %s, secondary region name: %s",
         primary_region_name,
-        this_region_name,
+        deployment.get_region_name(),
     )
 
     juju_registration_token = region_controller_info["juju_registration_token"]
@@ -1325,10 +1323,6 @@ def add_secondary_region_node(
     client = deployment.get_client()
     jhelper = JujuHelper(deployment.juju_controller)
 
-    primary_region_name = read_config(deployment.get_client(), REGION_CONFIG_KEY)[
-        "region"
-    ]
-
     plan1: list[BaseStep] = [
         JujuLoginStep(deployment.juju_account),
         CreateJujuUserStep(name),
@@ -1353,7 +1347,7 @@ def add_secondary_region_node(
         "juju_registration_token": juju_registration_token,
         "juju_controller": deployment.juju_controller.to_dict(),
         "name": name,
-        "primary_region_name": primary_region_name,
+        "primary_region_name": deployment.get_region_name(),
     }
     token = base64.b64encode(json.dumps(token_dict).encode()).decode()
 
