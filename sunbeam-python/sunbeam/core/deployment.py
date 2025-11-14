@@ -36,6 +36,7 @@ from sunbeam.core.manifest import (
     StorageManifest,
     embedded_manifest_path,
 )
+from sunbeam.core.openstack import REGION_CONFIG_KEY
 from sunbeam.core.proxy import patch_process_env, should_bypass
 from sunbeam.core.terraform import TerraformHelper
 from sunbeam.versions import MANIFEST_ATTRIBUTES_TFVAR_MAP, TERRAFORM_DIR_NAMES
@@ -99,7 +100,11 @@ class Deployment(pydantic.BaseModel):
     type: str
     juju_account: JujuAccount | None = None
     juju_controller: JujuController | None = None
+    region_ctrl_juju_account: JujuAccount | None = None
+    region_ctrl_juju_controller: JujuController | None = None
     clusterd_certpair: CertPair | None = None
+    primary_region_name: str | None = None
+    region_name: str | None = None
     _manifest: Manifest | None = pydantic.PrivateAttr(default=None)
     _tfhelpers: dict[str, TerraformHelper] = pydantic.PrivateAttr(default={})
     _feature_manager: FeatureManager | None = pydantic.PrivateAttr(default=None)
@@ -474,3 +479,11 @@ class Deployment(pydantic.BaseModel):
     def public_ip_pool(self):
         """Name of the public IP pool."""
         raise NotImplementedError
+
+    def get_region_name(self) -> str:
+        """Retrieve the region name of this deployment."""
+        if not self.region_name:
+            self.region_name = read_config(self.get_client(), REGION_CONFIG_KEY)[
+                "region"
+            ]
+        return self.region_name

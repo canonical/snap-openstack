@@ -149,7 +149,10 @@ class DeploymentsConfig(pydantic.BaseModel):
         self_dict = self.model_dump(by_alias=True)
         # self_dict has deployments with Deployment dict but not of provider
         # so workaround to add each deployment based on provider
-        deployments = [d.model_dump(include={"name", "type"}) for d in self.deployments]
+        deployments = [
+            d.model_dump(include={"name", "type", "primary_region_name"})
+            for d in self.deployments
+        ]
         self_dict["deployments"] = deployments
         return self_dict
 

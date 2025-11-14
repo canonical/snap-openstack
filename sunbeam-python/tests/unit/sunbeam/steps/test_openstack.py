@@ -48,6 +48,7 @@ def basic_client():
     client.cluster.list_nodes_by_role.side_effect = [
         [{"name": f"control-{i}"} for i in range(4)],
         [{"name": f"storage-{i}"} for i in range(4)],
+        [],
     ]
     return client
 

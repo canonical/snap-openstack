@@ -1400,11 +1400,13 @@ class WriteCharmLogStep(BaseStep, JujuStepHelper):
 class JujuLoginStep(BaseStep, JujuStepHelper):
     """Login to Juju Controller."""
 
-    def __init__(self, juju_account: JujuAccount | None):
+    def __init__(self, juju_account: JujuAccount | None, controller: str | None = None):
         super().__init__(
-            "Login to Juju controller", "Authenticating with Juju controller"
+            "Login to Juju controller: %s" % (controller or "current"),
+            "Authenticating with Juju controller: %s" % (controller or "current"),
         )
         self.juju_account = juju_account
+        self.controller = controller
 
     def is_skip(self, status: Status | None = None) -> Result:
         """Determines if the step should be skipped or not.
@@ -1422,6 +1424,8 @@ class JujuLoginStep(BaseStep, JujuStepHelper):
                 "show-user",
             ]
         )
+        if self.controller:
+            cmd += f" -c {self.controller}"
         LOG.debug(f"Running command {cmd}")
         expect_list = ["^please enter password", "{}", pexpect.EOF]
         with pexpect.spawn(cmd) as process:
@@ -1458,6 +1462,8 @@ class JujuLoginStep(BaseStep, JujuStepHelper):
                 self.juju_account.user,
             ]
         )
+        if self.controller:
+            cmd += f" -c {self.controller}"
         LOG.debug(f"Running command {cmd}")
         process = pexpect.spawn(cmd)
         try:

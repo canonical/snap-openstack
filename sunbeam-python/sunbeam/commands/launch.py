@@ -72,7 +72,13 @@ def launch(
                 f"Cannot find {OPENSTACK_MODEL}. Please destroy and re-bootstrap."
             )
 
-        admin_auth_info = retrieve_admin_credentials(jhelper, OPENSTACK_MODEL)
+        if deployment.region_ctrl_juju_controller and deployment.juju_controller:
+            jhelper_keystone = JujuHelper(deployment.region_ctrl_juju_controller)
+            admin_auth_info = retrieve_admin_credentials(
+                jhelper_keystone, OPENSTACK_MODEL
+            )
+        else:
+            admin_auth_info = retrieve_admin_credentials(jhelper, OPENSTACK_MODEL)
 
         tfplan = "demo-setup"
         tfhelper = deployment.get_tfhelper(tfplan)
