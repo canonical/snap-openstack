@@ -630,8 +630,7 @@ def _connect_to_region_controller(
     region_plan: list[BaseStep] = []
     if already_registered:
         region_plan += [
-            SwitchToController(region_ctrl_name),
-            JujuLoginStep(region_ctrl_account),
+            JujuLoginStep(region_ctrl_account, region_ctrl_name),
         ]
     else:
         region_plan += [
@@ -639,20 +638,13 @@ def _connect_to_region_controller(
             RegisterRemoteJujuUserStep(
                 juju_registration_token, region_ctrl_name, data_location
             ),
+            SwitchToController(initial_controller),
         ]
-    # TODO: consider saving controller info to clusterd, SaveControllerStep
     run_plan(region_plan, console, show_hints)
 
     region_jhelper = JujuHelper(region_controller_juju_ctrl)
     openstack_model_with_owner = region_jhelper.get_model_name_with_owner("openstack")
     external_keystone_model = f"{region_ctrl_name}:{openstack_model_with_owner}"
-
-    # Switch back to the bootstrap controller.
-    region_plan2: list[BaseStep] = []
-    region_plan2 += [
-        SwitchToController(initial_controller),
-    ]
-    run_plan(region_plan2, console, show_hints)
 
     if not deployment.primary_region_name:
         deployment.primary_region_name = primary_region_name
@@ -1951,18 +1943,17 @@ def configure_cmd(
 
     if deployment.region_ctrl_juju_controller and deployment.juju_controller:
         jhelper_keystone = JujuHelper(deployment.region_ctrl_juju_controller)
-        run_plan(
-            [
-                SwitchToController(deployment.region_ctrl_juju_controller.name),
-                JujuLoginStep(deployment.juju_account),
-            ],
-            console,
+        plan.append(
+            JujuLoginStep(
+                deployment.region_ctrl_juju_account,
+                deployment.region_ctrl_juju_controller.name,
+            ),
         )
         admin_credentials = retrieve_admin_credentials(
             jhelper_keystone, OPENSTACK_MODEL
         )
-        run_plan([SwitchToController(deployment.juju_controller.name)], console)
     else:
+        jhelper_keystone = jhelper
         admin_credentials = retrieve_admin_credentials(jhelper, OPENSTACK_MODEL)
 
     # Add OS_INSECURE as https not working with terraform openstack provider.
@@ -2043,7 +2034,7 @@ def configure_cmd(
         )
 
     run_plan(plan, console, show_hints)
-    dashboard_url = retrieve_dashboard_url(jhelper)
+    dashboard_url = retrieve_dashboard_url(jhelper_keystone)
     console.print("The cloud has been configured for sample usage.")
     console.print(
         "You can start using the OpenStack client"

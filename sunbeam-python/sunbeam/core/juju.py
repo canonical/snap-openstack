@@ -243,6 +243,8 @@ class JujuHelper:
     def _model(self, model: str) -> Generator["jubilant.Juju"]:
         """Context manager to set model for juju commands."""
         _model = self.get_model(model)["name"]  # ensure model is long name
+        if self.controller:
+            _model = f"{self.controller}:{_model}"
         old_model = self._juju.model
         self._juju.model = _model
         try:

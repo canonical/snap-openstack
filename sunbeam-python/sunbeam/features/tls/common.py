@@ -36,7 +36,6 @@ from sunbeam.features.interface.v1.openstack import (
     OpenStackControlPlaneFeature,
     WaitForApplicationsStep,
 )
-from sunbeam.steps.juju import SwitchToController
 from sunbeam.utils import pass_method_obj
 
 CERTIFICATE_FEATURE_KEY = "TlsProvider"
@@ -154,22 +153,6 @@ class TlsFeature(OpenStackControlPlaneFeature):
                 config.ca_chain,  # type: ignore
             )
         ]
-        if deployment.region_ctrl_juju_controller and deployment.juju_controller:
-            # Some of the JujuHelper methods ignore the specified controller and
-            # will continue to run against the current controller (e.g. self._model).
-            #
-            # If we add "$controller:" to the model name before passing it to
-            # Juju/Jubilant, then the output of some of the commands will change.
-            #
-            # For example, some of the "list" commands will include the model owners,
-            # which breaks the lookups performed by Sunbeam.
-            #
-            # For now, we'll just switch the controller before and after this step.
-            plan = [
-                SwitchToController(deployment.region_ctrl_juju_controller.name),
-                *plan,
-                SwitchToController(deployment.juju_controller.name),
-            ]
         run_plan(plan, console, show_hints)
 
         stored_config = {
@@ -205,21 +188,13 @@ class TlsFeature(OpenStackControlPlaneFeature):
                 self.ca_cert_name(deployment.get_region_name()),
                 self.feature_key,
             ),
-        ]
-        if deployment.region_ctrl_juju_controller and deployment.juju_controller:
-            plan = [
-                SwitchToController(deployment.region_ctrl_juju_controller.name),
-                *plan,
-                SwitchToController(deployment.juju_controller.name),
-            ]
-        plan.append(
             WaitForApplicationsStep(
                 jhelper_current,
                 apps_to_monitor,
                 model,
                 INGRESS_CHANGE_APPLICATION_TIMEOUT,
-            )
-        )
+            ),
+        ]
         run_plan(plan, console, show_hints)
 
         config: dict = {}
