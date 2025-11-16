@@ -11,13 +11,11 @@ from sunbeam.core.common import SunbeamException
 from sunbeam.core.deployment import Deployment
 
 
-@patch("sunbeam.core.watcher.JujuHelper")
 @patch("sunbeam.core.watcher.get_admin_connection")
 @patch("sunbeam.core.watcher.watcher_client.Client")
 def test_get_watcher_client(
     mock_watcher_client,
     mock_get_admin_connection,
-    mock_jhelper,
 ):
     mock_conn = Mock()
     mock_conn.session.get_endpoint.return_value = "fake_endpoint"
@@ -29,7 +27,9 @@ def test_get_watcher_client(
 
     client = watcher_helper.get_watcher_client(mock_deployment)
 
-    mock_get_admin_connection.assert_called_once_with(jhelper=mock_jhelper.return_value)
+    mock_get_admin_connection.assert_called_once_with(
+        jhelper=mock_deployment.get_juju_helper.return_value
+    )
 
     mock_conn.session.get_endpoint.assert_called_once_with(
         service_type="infra-optim",

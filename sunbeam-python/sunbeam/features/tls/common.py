@@ -169,13 +169,8 @@ class TlsFeature(OpenStackControlPlaneFeature):
 
         client = deployment.get_client()
 
-        jhelper_current = JujuHelper(deployment.juju_controller)
-        if deployment.region_ctrl_juju_controller:
-            # This is a secondary region, Keystone is expected to run in the
-            # primary region.
-            jhelper_keystone = JujuHelper(deployment.region_ctrl_juju_controller)
-        else:
-            jhelper_keystone = jhelper_current
+        jhelper_current = deployment.get_juju_helper()
+        jhelper_keystone = deployment.get_juju_helper(keystone=True)
 
         model = OPENSTACK_MODEL
         apps_to_monitor = ["traefik", "traefik-public", "keystone"]

@@ -1083,9 +1083,10 @@ def configure_sriov(
         return
 
     manifest = deployment.get_manifest(manifest_path)
-    jhelper = JujuHelper(deployment.juju_controller)
+    jhelper = deployment.get_juju_helper()
+    jhelper_keystone = deployment.get_juju_helper(keystone=True)
 
-    admin_credentials = retrieve_admin_credentials(jhelper, OPENSTACK_MODEL)
+    admin_credentials = retrieve_admin_credentials(jhelper_keystone, OPENSTACK_MODEL)
     admin_credentials["OS_INSECURE"] = "true"
 
     tfhelper_hypervisor = deployment.get_tfhelper("hypervisor-plan")
@@ -1151,9 +1152,10 @@ def configure_dpdk(
         return
 
     manifest = deployment.get_manifest(manifest_path)
-    jhelper = JujuHelper(deployment.juju_controller)
+    jhelper = deployment.get_juju_helper()
+    jhelper_keystone = deployment.get_juju_helper(keystone=True)
 
-    admin_credentials = retrieve_admin_credentials(jhelper, OPENSTACK_MODEL)
+    admin_credentials = retrieve_admin_credentials(jhelper_keystone, OPENSTACK_MODEL)
     admin_credentials["OS_INSECURE"] = "true"
 
     tfhelper_hypervisor = deployment.get_tfhelper("hypervisor-plan")
@@ -1929,7 +1931,8 @@ def configure_cmd(
     LOG.debug(f"Manifest used for deployment - features: {manifest.features}")
 
     name = utils.get_fqdn(deployment.get_management_cidr())
-    jhelper = JujuHelper(deployment.juju_controller)
+    jhelper = deployment.get_juju_helper()
+    jhelper_keystone = deployment.get_juju_helper(keystone=True)
     if not jhelper.model_exists(OPENSTACK_MODEL):
         LOG.error(f"Expected model {OPENSTACK_MODEL} missing")
         raise click.ClickException("Please run `sunbeam cluster bootstrap` first")
@@ -1940,21 +1943,15 @@ def configure_cmd(
         AddManifestStep(client, manifest_path),
         JujuLoginStep(deployment.juju_account),
     ]
-
-    if deployment.region_ctrl_juju_controller and deployment.juju_controller:
-        jhelper_keystone = JujuHelper(deployment.region_ctrl_juju_controller)
+    if deployment.region_ctrl_juju_controller:
         plan.append(
             JujuLoginStep(
                 deployment.region_ctrl_juju_account,
                 deployment.region_ctrl_juju_controller.name,
             ),
         )
-        admin_credentials = retrieve_admin_credentials(
-            jhelper_keystone, OPENSTACK_MODEL
-        )
-    else:
-        jhelper_keystone = jhelper
-        admin_credentials = retrieve_admin_credentials(jhelper, OPENSTACK_MODEL)
+
+    admin_credentials = retrieve_admin_credentials(jhelper_keystone, OPENSTACK_MODEL)
 
     # Add OS_INSECURE as https not working with terraform openstack provider.
     admin_credentials["OS_INSECURE"] = "true"

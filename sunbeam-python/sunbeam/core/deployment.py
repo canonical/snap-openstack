@@ -26,7 +26,7 @@ from sunbeam.core.common import (
     infer_version,
     read_config,
 )
-from sunbeam.core.juju import JujuAccount, JujuController
+from sunbeam.core.juju import JujuAccount, JujuController, JujuHelper
 from sunbeam.core.manifest import (
     FeatureGroupManifest,
     FeatureManifest,
@@ -418,6 +418,17 @@ class Deployment(pydantic.BaseModel):
             return tfhelper
 
         raise ValueError(f"{tfplan} not found in tfhelpers")
+
+    def get_juju_helper(self, keystone=False) -> JujuHelper:
+        """Retrieve a Juju helper for this deployment.
+
+        If the "keystone" flag is set and this is a secondary region
+        of a multi-region environment, the region controller will be used.
+        """
+        if keystone and self.region_ctrl_juju_controller:
+            return JujuHelper(self.region_ctrl_juju_controller)
+        else:
+            return JujuHelper(self.juju_controller)
 
     def get_space(self, network: Networks) -> str:
         """Get space associated to network."""

@@ -9,7 +9,6 @@ from rich.status import Status
 
 from sunbeam.core.common import BaseStep, SunbeamException
 from sunbeam.core.deployment import Deployment
-from sunbeam.core.juju import JujuHelper
 from sunbeam.core.openstack_api import get_admin_connection
 from sunbeam.lazy import LazyImport
 
@@ -46,7 +45,7 @@ class WatcherActionFailedException(Exception):
 
 
 def get_watcher_client(deployment: Deployment) -> "watcher_client.Client":
-    conn = get_admin_connection(jhelper=JujuHelper(deployment.juju_controller))
+    conn = get_admin_connection(jhelper=deployment.get_juju_helper(keystone=True))
 
     watcher_endpoint = conn.session.get_endpoint(
         service_type="infra-optim",
