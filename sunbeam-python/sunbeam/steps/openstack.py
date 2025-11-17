@@ -561,29 +561,38 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
         in blocked state
         """
         apps = []
+
         if self.external_keystone_model:
             # Secondary region, Horizon and Keystone will be disabled.
             apps += [
                 "keystone",
+                "keystone-mysql",
                 "keystone-mysql-router",
                 "horizon",
+                "horizon-mysql",
                 "horizon-mysql-router",
             ]
         if self.is_region_controller:
             apps += [
-                "glance-mysql-router",
-                "glance",
-                "neutron-mysql-router",
-                "nova-cell-mysql-router",
-                "placement",
-                "neutron",
-                "placement-mysql-router",
-                "ovn-relay",
                 "cinder-mysql-router",
-                "ovn-central",
+                "glance",
+                "glance-mysql",
+                "glance-mysql-router",
+                "neutron",
+                "neutron-mysql",
+                "neutron-mysql-router",
                 "nova",
-                "nova-api-mysql-router",
+                "nova-mysql",
                 "nova-mysql-router",
+                "nova-api-mysql",
+                "nova-api-mysql-router",
+                "nova-cell-mysql",
+                "nova-cell-mysql-router",
+                "ovn-relay",
+                "ovn-central",
+                "placement",
+                "placement-mysql",
+                "placement-mysql-router",
             ]
         return apps
 
