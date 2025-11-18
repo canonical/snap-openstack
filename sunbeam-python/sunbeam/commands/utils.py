@@ -30,8 +30,14 @@ def juju_login(ctx: click.Context, show_hints: bool) -> None:
     preflight_checks = [VerifyBootstrappedCheck(client)]
     run_preflight_checks(preflight_checks, console)
 
-    plan = []
-    plan.append(JujuLoginStep(deployment.juju_account))
+    plan = [JujuLoginStep(deployment.juju_account)]
+    if deployment.region_ctrl_juju_controller:
+        plan.append(
+            JujuLoginStep(
+                deployment.region_ctrl_juju_account,
+                deployment.region_ctrl_juju_controller.name,
+            ),
+        )
 
     run_plan(plan, console, show_hints)
 

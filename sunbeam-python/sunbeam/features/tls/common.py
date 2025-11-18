@@ -69,13 +69,13 @@ class TlsFeature(OpenStackControlPlaneFeature):
     version = Version("0.0.1")
     group = TlsFeatureGroup
 
-    @property
-    def ca_cert_name(self) -> str:
+    def ca_cert_name(self, region: str | None) -> str:
         """CA Cert name to be used to add to keystone."""
         # Keystone lists ca cert names with any .'s replaced
         # with -.
         # https://opendev.org/openstack/sunbeam-charms/src/commit/c8761241f3b7be381101fbe5942aa2174daf1797/charms/keystone-k8s/src/charm.py#L629
-        return self.feature_key.replace(".", "-")
+        region = region or "RegionOne"
+        return self.feature_key.replace(".", "-") + f"-{region}"
 
     @click.group()
     def enable_tls(self) -> None:
@@ -139,11 +139,16 @@ class TlsFeature(OpenStackControlPlaneFeature):
         self, deployment: Deployment, config: TlsFeatureConfig, show_hints: bool
     ) -> None:
         """Handler to perform tasks after the feature is enabled."""
-        jhelper = JujuHelper(deployment.juju_controller)
-        plan = [
+        if deployment.region_ctrl_juju_controller:
+            # This is a secondary region, Keystone is expected to run in the
+            # primary region.
+            jhelper = JujuHelper(deployment.region_ctrl_juju_controller)
+        else:
+            jhelper = JujuHelper(deployment.juju_controller)
+        plan: list[BaseStep] = [
             AddCACertsToKeystoneStep(
                 jhelper,
-                self.ca_cert_name,
+                self.ca_cert_name(deployment.get_region_name()),
                 config.ca,  # type: ignore
                 config.ca_chain,  # type: ignore
             )
@@ -163,17 +168,26 @@ class TlsFeature(OpenStackControlPlaneFeature):
         super().post_disable(deployment, show_hints)
 
         client = deployment.get_client()
-        jhelper = JujuHelper(deployment.juju_controller)
+
+        jhelper_current = deployment.get_juju_helper()
+        jhelper_keystone = deployment.get_juju_helper(keystone=True)
 
         model = OPENSTACK_MODEL
         apps_to_monitor = ["traefik", "traefik-public", "keystone"]
         if client.cluster.list_nodes_by_role("storage"):
             apps_to_monitor.append("traefik-rgw")
 
-        plan = [
-            RemoveCACertsFromKeystoneStep(jhelper, self.ca_cert_name, self.feature_key),
+        plan: list[BaseStep] = [
+            RemoveCACertsFromKeystoneStep(
+                jhelper_keystone,
+                self.ca_cert_name(deployment.get_region_name()),
+                self.feature_key,
+            ),
             WaitForApplicationsStep(
-                jhelper, apps_to_monitor, model, INGRESS_CHANGE_APPLICATION_TIMEOUT
+                jhelper_current,
+                apps_to_monitor,
+                model,
+                INGRESS_CHANGE_APPLICATION_TIMEOUT,
             ),
         ]
         run_plan(plan, console, show_hints)

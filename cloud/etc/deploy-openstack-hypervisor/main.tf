@@ -50,6 +50,9 @@ resource "juju_integration" "hypervisor-amqp" {
 }
 
 resource "juju_integration" "hypervisor-identity" {
+  # TODO: make the keystone offer mandatory once the Terraform
+  # Juju provider supports cross-controller relations.
+  count = can(coalesce(var.keystone-offer-url)) ? 1 : 0
   model = var.machine_model
 
   application {

@@ -7,7 +7,6 @@ import click
 from rich.console import Console
 
 from sunbeam.commands.configure import retrieve_admin_credentials
-from sunbeam.core import juju
 from sunbeam.core.checks import VerifyBootstrappedCheck, run_preflight_checks
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.openstack import OPENSTACK_MODEL
@@ -26,7 +25,7 @@ def openrc(ctx: click.Context) -> None:
     preflight_checks.append(VerifyBootstrappedCheck(client))
     run_preflight_checks(preflight_checks, console)
 
-    jhelper = juju.JujuHelper(deployment.juju_controller)
+    jhelper = deployment.get_juju_helper(keystone=True)
 
     with console.status("Retrieving openrc from Keystone service ... "):
         creds = retrieve_admin_credentials(jhelper, OPENSTACK_MODEL)

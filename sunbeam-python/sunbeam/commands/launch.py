@@ -12,7 +12,6 @@ from snaphelpers import Snap
 
 from sunbeam.commands.configure import retrieve_admin_credentials
 from sunbeam.core.deployment import Deployment
-from sunbeam.core.juju import JujuHelper
 from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.core.terraform import TerraformException
 from sunbeam.lazy import LazyImport
@@ -63,7 +62,8 @@ def launch(
     if not compute_nodes:
         raise click.ClickException("No compute role found. Cannot launch instance.")
 
-    jhelper = JujuHelper(deployment.juju_controller)
+    jhelper = deployment.get_juju_helper()
+    jhelper_keystone = deployment.get_juju_helper(keystone=True)
 
     with console.status("Fetching user credentials ... "):
         if not jhelper.model_exists(OPENSTACK_MODEL):
@@ -72,7 +72,7 @@ def launch(
                 f"Cannot find {OPENSTACK_MODEL}. Please destroy and re-bootstrap."
             )
 
-        admin_auth_info = retrieve_admin_credentials(jhelper, OPENSTACK_MODEL)
+        admin_auth_info = retrieve_admin_credentials(jhelper_keystone, OPENSTACK_MODEL)
 
         tfplan = "demo-setup"
         tfhelper = deployment.get_tfhelper(tfplan)

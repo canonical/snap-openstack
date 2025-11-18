@@ -64,6 +64,7 @@ class Role(enum.Enum):
     COMPUTE = 2
     STORAGE = 3
     NETWORK = 4
+    REGION_CONTROLLER = 5
 
     def is_control_node(self) -> bool:
         """Returns True if the node requires control services.
@@ -112,6 +113,17 @@ class Role(enum.Enum):
                  False otherwise
         """
         return self == Role.NETWORK
+
+    def is_region_controller(self) -> bool:
+        """Returns True if the node is a region controller.
+
+        Region controllers are used in multi-region environments, running
+        services such as Keystone or Horizon.
+
+        :return: True if the node should have region controller services,
+                 False otherwise
+        """
+        return self == Role.REGION_CONTROLLER
 
 
 def roles_to_str_list(roles: list[Role]) -> list[str]:

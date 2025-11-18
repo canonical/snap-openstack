@@ -25,7 +25,6 @@ from sunbeam.core.common import (
     run_plan,
 )
 from sunbeam.core.deployment import Deployment
-from sunbeam.core.juju import JujuHelper
 from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.core.terraform import TerraformHelper
 from sunbeam.utils import click_option_show_hints
@@ -247,11 +246,11 @@ def cloud_config(
     preflight_checks = []
     preflight_checks.append(VerifyBootstrappedCheck(client))
     run_preflight_checks(preflight_checks, console)
-    jhelper = JujuHelper(deployment.juju_controller)
-    if not jhelper.model_exists(OPENSTACK_MODEL):
+    jhelper_keystone = deployment.get_juju_helper(keystone=True)
+    if not jhelper_keystone.model_exists(OPENSTACK_MODEL):
         LOG.error(f"Expected model {OPENSTACK_MODEL} missing")
         raise click.ClickException("Please run `sunbeam cluster bootstrap` first")
-    admin_credentials = retrieve_admin_credentials(jhelper, OPENSTACK_MODEL)
+    admin_credentials = retrieve_admin_credentials(jhelper_keystone, OPENSTACK_MODEL)
     tfplan = "demo-setup"
     tfhelper = deployment.get_tfhelper(tfplan)
     tfhelper.env = (tfhelper.env or {}) | admin_credentials
