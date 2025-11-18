@@ -812,7 +812,16 @@ class TestMaasScaleJujuStep:
         mocker.patch.object(
             step, "get_controller", return_value={"controller-machines": [1, 2]}
         )
-        mocker.patch("sunbeam.provider.maas.client.list_machines", return_value=[1, 2])
+        mocker.patch(
+            "sunbeam.provider.maas.client.list_machines",
+            side_effect=[
+                [
+                    {"hostname": "machine1", "system_id": "1st"},
+                    {"hostname": "machine2", "system_id": "2nd"},
+                ],
+                [],
+            ],
+        )
         result = step.is_skip()
         assert result.result_type == ResultType.SKIPPED
 

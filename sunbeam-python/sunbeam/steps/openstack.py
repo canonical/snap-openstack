@@ -421,7 +421,6 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
         topology: str,
         machine_model: str,
         proxy_settings: dict | None = None,
-        external_keystone_model: str | None = None,
         is_region_controller: bool = False,
     ):
         super().__init__(
@@ -438,7 +437,7 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
         self.model = OPENSTACK_MODEL
         self.cloud = K8SHelper.get_cloud(deployment.name)
         self.database = DEFAULT_DATABASE_TOPOLOGY
-        self.external_keystone_model = external_keystone_model
+        self.external_keystone_model = deployment.external_keystone_model
         self.is_region_controller = is_region_controller
 
     def get_storage_tfvars(self, storage_nodes: list[dict]) -> dict:
