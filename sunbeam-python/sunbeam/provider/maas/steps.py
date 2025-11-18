@@ -539,9 +539,11 @@ class MachineRequirementsCheck(DiagnosticsCheck):
 
     def run(self) -> DiagnosticsResult:
         """Check machine meets requirements."""
-        if [maas_deployment.RoleTags.JUJU_CONTROLLER.value] == self.machine[
-            "roles"
-        ] or [maas_deployment.RoleTags.SUNBEAM.value] == self.machine["roles"]:
+        ctrl_roles = [
+            maas_deployment.RoleTags.JUJU_CONTROLLER.value,
+            maas_deployment.RoleTags.SUNBEAM.value,
+        ]
+        if len(self.machine["roles"]) == 1 and self.machine["roles"][0] in ctrl_roles:
             memory_min = RAM_4_GB_IN_MB
             core_min = 2
         else:
@@ -629,7 +631,12 @@ class DeploymentRolesCheck(DiagnosticsCheck):
     """Check deployment as enough nodes with given role."""
 
     def __init__(
-        self, machines: list[dict], role_name: str, role_tag: str, min_count: int = 3
+        self,
+        machines: list[dict],
+        role_name: str,
+        role_tag: str,
+        min_count: int = 3,
+        max_count: int | None = None,
     ):
         super().__init__(
             "Minimum role check",
@@ -639,6 +646,7 @@ class DeploymentRolesCheck(DiagnosticsCheck):
         self.role_name = role_name
         self.role_tag = role_tag
         self.min_count = min_count
+        self.max_count = max_count
 
     def run(self) -> DiagnosticsResult:
         """Checks if there's enough machines with given role."""
@@ -654,7 +662,7 @@ class DeploymentRolesCheck(DiagnosticsCheck):
             More on using tags: https://maas.io/docs/how-to-use-machine-tags
             """
         )
-        if machines == 0:
+        if machines == 0 and self.min_count > 0:
             return DiagnosticsResult.fail(
                 self.name,
                 "no machine with role: " + self.role_name,
@@ -673,6 +681,13 @@ class DeploymentRolesCheck(DiagnosticsCheck):
                     role_name=self.role_name,
                     role_tag=self.role_tag,
                 ),
+            )
+        if self.max_count is not None and machines > self.max_count:
+            return DiagnosticsResult.fail(
+                self.name,
+                f"{self.role_tag} not allowed",
+                "This type of deployment is not allowed to have "
+                f"{self.role_tag} nodes.",
             )
         return DiagnosticsResult.success(
             self.name,
@@ -883,6 +898,12 @@ class DeploymentTopologyCheck(DiagnosticsCheck):
         )
         self.machines = machines
 
+    def _has_region_controllers(self):
+        for machine in self.machines:
+            if maas_deployment.RoleTags.REGION_CONTROLLER.value in machine["roles"]:
+                return True
+        return False
+
     def run(self) -> list[DiagnosticsResult]:
         """Run a sequence of checks to validate deployment topology."""
         if len(self.machines) < 2:
@@ -894,6 +915,12 @@ class DeploymentTopologyCheck(DiagnosticsCheck):
                     " to be a part of an openstack deployment.",
                 )
             ]
+
+        has_region_controllers = self._has_region_controllers()
+        # A deployment that contains a region controller is not allowed to contain
+        # other roles such as control, storage or network.
+        # However, regular deployments can also act as primary regions.
+
         machines_by_zone = maas_client._group_machines_by_zone(self.machines)
         checks: list[DiagnosticsCheck] = []
         if JujuStepHelper().get_external_controllers():
@@ -918,17 +945,29 @@ class DeploymentTopologyCheck(DiagnosticsCheck):
         )
         checks.append(
             DeploymentRolesCheck(
-                self.machines, "control nodes", maas_deployment.RoleTags.CONTROL.value
+                self.machines,
+                "control nodes",
+                maas_deployment.RoleTags.CONTROL.value,
+                min_count=(0 if has_region_controllers else 3),
+                max_count=(0 if has_region_controllers else None),
             )
         )
         checks.append(
             DeploymentRolesCheck(
-                self.machines, "compute nodes", maas_deployment.RoleTags.COMPUTE.value
+                self.machines,
+                "compute nodes",
+                maas_deployment.RoleTags.COMPUTE.value,
+                min_count=(0 if has_region_controllers else 3),
+                max_count=(0 if has_region_controllers else None),
             )
         )
         checks.append(
             DeploymentRolesCheck(
-                self.machines, "storage nodes", maas_deployment.RoleTags.STORAGE.value
+                self.machines,
+                "storage nodes",
+                maas_deployment.RoleTags.STORAGE.value,
+                min_count=(0 if has_region_controllers else 3),
+                max_count=(0 if has_region_controllers else None),
             )
         )
         checks.append(ZonesCheck(list(machines_by_zone.keys())))
@@ -1160,6 +1199,9 @@ class MaasScaleJujuStep(ScaleJujuStep):
         machines = maas_client.list_machines(
             self.client, tags=maas_deployment.RoleTags.JUJU_CONTROLLER.value
         )
+        machines += maas_client.list_machines(
+            self.client, tags=maas_deployment.RoleTags.REGION_CONTROLLER.value
+        )
 
         if len(machines) < self.n:
             LOG.debug(
@@ -1350,6 +1392,7 @@ class MaasAddMachinesToClusterdStep(BaseStep):
                     maas_deployment.RoleTags.COMPUTE.value,
                     maas_deployment.RoleTags.STORAGE.value,
                     maas_deployment.RoleTags.NETWORK.value,
+                    maas_deployment.RoleTags.REGION_CONTROLLER.value,
                 }
             ):
                 filtered_machines.append(machine)

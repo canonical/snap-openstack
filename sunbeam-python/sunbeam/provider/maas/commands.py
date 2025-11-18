@@ -63,6 +63,7 @@ from sunbeam.core.manifest import AddManifestStep
 from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.core.terraform import TerraformInitStep
 from sunbeam.provider.base import ProviderBase
+from sunbeam.provider.common.multiregion import connect_to_region_controller
 from sunbeam.provider.maas.client import (
     MaasClient,
     MaasDeployment,
@@ -293,6 +294,12 @@ class MaasProvider(ProviderBase):
     type=str,
     help="Juju controller name",
 )
+@click.option(
+    "--region-controller-token",
+    "region_controller_token",
+    help="Token obtained from the region controller.",
+    type=str,
+)
 @click_option_show_hints
 @click.pass_context
 def bootstrap(
@@ -301,6 +308,7 @@ def bootstrap(
     manifest_path: Path | None = None,
     accept_defaults: bool = False,
     show_hints: bool = False,
+    region_controller_token: str | None = None,
 ) -> None:
     """Bootstrap the MAAS-backed deployment.
 
@@ -494,6 +502,23 @@ def bootstrap(
     )
     run_plan(plan3, console, show_hints)
 
+    if region_controller_token:
+        if not deployment.juju_controller:
+            # Shouldn't reach this.
+            raise ValueError("Missing juju controller.")
+
+        plan4: list[BaseStep] = []
+        plan4.append(PromptRegionStep(client, manifest, accept_defaults))
+        run_plan(plan4, console, show_hints)
+
+        connect_to_region_controller(
+            deployment,
+            region_controller_token,
+            deployment.juju_controller.name,
+            show_hints=show_hints,
+        )
+        deployments.update_deployment(deployment)
+
     if proxy_from_user and isinstance(proxy_from_user, dict):
         LOG.debug(f"Writing proxy information to clusterdb: {proxy_from_user}")
         client.cluster.update_config(PROXY_CONFIG_KEY, json.dumps(proxy_from_user))
@@ -622,11 +647,31 @@ def deploy(
         map(_name_mapper, client.cluster.list_nodes_by_role(RoleTags.STORAGE.value))
     )
     nb_storage = len(storage)
-    workers = list(set(compute + control + storage))
+    region_controllers = list(
+        map(
+            _name_mapper,
+            client.cluster.list_nodes_by_role(RoleTags.REGION_CONTROLLER.value),
+        ),
+    )
+    nb_region_controllers = len(region_controllers)
 
-    if nb_control < 1 or nb_compute < 1 or nb_storage < 1:
+    workers = list(set(compute + control + storage + region_controllers))
+
+    if nb_region_controllers:
+        if nb_control > 0 or nb_compute > 0 or nb_storage > 0:
+            console.print(
+                "Region controller deployments can only contain region controller "
+                "nodes. Regular control nodes can also act as region controllers. "
+                "Node roles:"
+                f"\n\rregion_controller: {len(region_controllers)}"
+                f"\n\tcontrol: {len(control)}"
+                f"\n\tcompute: {len(compute)}"
+                f"\n\tstorage: {len(storage)}"
+            )
+            sys.exit(1)
+    elif nb_control < 1 or nb_compute < 1 or nb_storage < 1:
         console.print(
-            "Deployments needs at least one of each role to work correctly:"
+            "Deployments need at least one of each role to work correctly:"
             f"\n\tcontrol: {len(control)}"
             f"\n\tcompute: {len(compute)}"
             f"\n\tstorage: {len(storage)}"
@@ -748,6 +793,7 @@ def deploy(
             topology,
             deployment.openstack_machines_model,
             proxy_settings=proxy_settings,
+            is_region_controller=bool(nb_region_controllers),
         )
     )
     plan2.append(
@@ -822,63 +868,66 @@ def deploy(
         )
     )
     plan2.append(OpenStackPatchLoadBalancerServicesIPStep(client))
-    plan2.append(TerraformInitStep(tfhelper_hypervisor_deploy))
-    plan2.append(
-        DeployHypervisorApplicationStep(
-            deployment,
-            client,
-            tfhelper_hypervisor_deploy,
-            tfhelper_openstack_deploy,
-            tfhelper_cinder_volume,
-            jhelper,
-            manifest,
-            deployment.openstack_machines_model,
-        )
-    )
 
-    plan2 += [
-        MaasConfigSRIOVStep(
-            deployment,
-            client,
-            jhelper,
-            deployment.openstack_machines_model,
-            manifest,
-            accept_defaults,
-        ),
-        MaasConfigDPDKStep(
-            deployment,
-            client,
-            jhelper,
-            deployment.openstack_machines_model,
-            manifest,
-            accept_defaults,
-        ),
-        ReapplyHypervisorTerraformPlanStep(
-            client,
-            tfhelper_hypervisor_deploy,
-            jhelper,
-            manifest,
-            model=deployment.openstack_machines_model,
-        ),
-    ]
-
-    if manifest and manifest.core.config.pci and manifest.core.config.pci.aliases:
+    if nb_compute:
+        plan2.append(TerraformInitStep(tfhelper_hypervisor_deploy))
         plan2.append(
-            ReapplyOpenStackTerraformPlanStep(
+            DeployHypervisorApplicationStep(
+                deployment,
                 client,
+                tfhelper_hypervisor_deploy,
                 tfhelper_openstack_deploy,
+                tfhelper_cinder_volume,
                 jhelper,
                 manifest,
+                deployment.openstack_machines_model,
             )
         )
+
+        plan2 += [
+            MaasConfigSRIOVStep(
+                deployment,
+                client,
+                jhelper,
+                deployment.openstack_machines_model,
+                manifest,
+                accept_defaults,
+            ),
+            MaasConfigDPDKStep(
+                deployment,
+                client,
+                jhelper,
+                deployment.openstack_machines_model,
+                manifest,
+                accept_defaults,
+            ),
+            ReapplyHypervisorTerraformPlanStep(
+                client,
+                tfhelper_hypervisor_deploy,
+                jhelper,
+                manifest,
+                model=deployment.openstack_machines_model,
+            ),
+        ]
+
+        if manifest and manifest.core.config.pci and manifest.core.config.pci.aliases:
+            plan2.append(
+                ReapplyOpenStackTerraformPlanStep(
+                    client,
+                    tfhelper_openstack_deploy,
+                    jhelper,
+                    manifest,
+                )
+            )
 
     plan2.append(SetBootstrapped(client))
     run_plan(plan2, console, show_hints)
 
     console.print(
-        f"Deployment complete with {nb_control} control,"
-        f" {nb_compute} compute and {nb_storage} storage nodes."
-        f" Total nodes in cluster: {len(workers)}"
+        f"Deployment complete with {nb_control} control, "
+        f"{nb_compute} compute and {nb_storage} storage nodes. "
+        f"Region controllers: {nb_region_controllers}. "
+        f"Total nodes in cluster: {len(workers)}"
     )
 
 
