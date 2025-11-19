@@ -54,17 +54,24 @@ def install_bootstrap_prerequisites():
     subprocess.check_output(["bash", "-x"], input=script)
 
 
-def bootstrap_local_cluster(manifest_path=None):
+def bootstrap_local_cluster(
+    manifest_path: str | None = None,
+    roles: list[str] | None = None,
+):
     install_bootstrap_prerequisites()
 
-    logging.info("Bootstrapping Sunbeam. Manifest: %s", manifest_path)
-    cmd = "cluster bootstrap --accept-defaults"
+    if not roles:
+        roles = ["control", "compute", "storage"]
+    role_arg = ",".join(roles)
+
+    logging.info("Bootstrapping Sunbeam. Manifest: %s, roles: %s", manifest_path, roles)
+    cmd = f"-v cluster bootstrap --accept-defaults --role {role_arg}"
     if manifest_path:
         cmd += f" --manifest {manifest_path}"
     sunbeam_command(cmd)
 
 
-def ensure_openstack_snap_installed(snap_channel=None):
+def ensure_openstack_snap_installed(snap_channel: str | None = None):
     logging.info("Ensuring that the Openstack snap in installed.")
     snap_cache = snap.SnapCache()
     openstack_snap = snap_cache["openstack"]
@@ -72,7 +79,11 @@ def ensure_openstack_snap_installed(snap_channel=None):
         openstack_snap.ensure(snap.SnapState.Present, channel=snap_channel)
 
 
-def ensure_local_cluster_bootstrapped(manifest_path=None, openstack_snap_channel=None):
+def ensure_local_cluster_bootstrapped(
+    manifest_path: str | None = None,
+    openstack_snap_channel: str | None = None,
+    roles: list[str] | None = None,
+):
     ensure_openstack_snap_installed(openstack_snap_channel)
 
     info = get_sunbeam_deployments() or {}
@@ -81,7 +92,7 @@ def ensure_local_cluster_bootstrapped(manifest_path=None, openstack_snap_channel
 
     if not deployments:
         logging.info("No Sunbeam deployment found, bootstrapping a new cluster.")
-        return bootstrap_local_cluster(manifest_path)
+        return bootstrap_local_cluster(manifest_path, roles)
 
     active_deployment = None
     for deployment in deployments:
@@ -302,3 +313,10 @@ def create_sunbeam_demo_resources(manifest_path: str | None):
 def get_libvirt_domain_xml(domain_name: str) -> str:
     cmd = ["sudo", "openstack-hypervisor.virsh", "dumpxml", domain_name]
     return subprocess.check_output(cmd, text=True)
+
+
+def add_secondary_cluster_node(node_fqdn: str) -> str:
+    cmd = f"cluster add-secondary-region-node {node_fqdn}"
+    out = sunbeam_command(cmd, capture_output=True)
+    token = str(out).split(":")[-1].strip(" ")
+    return token
