@@ -451,6 +451,9 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
             tfvars["ceph-nfs-offer-url"] = (
                 f"{model_with_owner}.{microceph.NFS_OFFER_NAME}"
             )
+            tfvars["ceph-rgw-offer-url"] = (
+                f"{model_with_owner}.{microceph.RGW_OFFER_NAME}"
+            )
             tfvars["ceph-osd-replication-count"] = microceph.ceph_replica_scale(
                 len(storage_nodes)
             )

@@ -26,6 +26,10 @@ core:
         channel: OS_CHARM
       horizon-k8s:
         channel: OS_CHARM
+      ironic-conductor-k8s:
+        channel: OS_CHARM
+      ironic-k8s:
+        channel: OS_CHARM
       keystone-k8s:
         channel: OS_CHARM
       keystone-ldap-k8s:
@@ -38,7 +42,13 @@ core:
         channel: OS_CHARM
       manila-data:
         channel: OS_CHARM
+      neutron-baremetal-switch-config-k8s:
+        channel: OS_CHARM
+      neutron-generic-switch-config-k8s:
+        channel: OS_CHARM
       neutron-k8s:
+        channel: OS_CHARM
+      nova-ironic-k8s:
         channel: OS_CHARM
       nova-k8s:
         channel: OS_CHARM
