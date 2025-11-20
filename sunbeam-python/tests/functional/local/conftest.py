@@ -59,7 +59,7 @@ def physnet(request) -> str:
     return request.config.getoption("physnet")
 
 
-@pytest.fixture(scope="session", autouse=True)
+@pytest.fixture(scope="session")
 def ensure_local_cluster_bootstrapped(manifest_path, openstack_snap_channel):
     utils.ensure_local_cluster_bootstrapped(manifest_path, openstack_snap_channel)
 
