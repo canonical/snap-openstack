@@ -855,3 +855,54 @@ def test_is_desired_status_achieved(
         expected_workload_status_message,
     )
     assert result == expected_result
+
+
+def test_get_relation_map(jhelper, status, juju):
+    status.apps["app"] = Mock(units={"app/0": Mock(leader=True)})
+    juju.exec = Mock(
+        side_effect=[
+            Mock(return_code=0, stdout="121"),
+            Mock(return_code=0, stdout="traefik/0"),
+        ]
+    )
+
+    relation_map = jhelper.get_relation_map("app", "certificates", "test-model")
+    expected_map = {"121": "traefik/0"}
+    assert relation_map == expected_map
+
+
+def test_get_relation_map_no_leader(jhelper, status):
+    status.apps["app"] = Mock(units={"app/0": Mock(leader=False)})
+
+    with pytest.raises(jujulib.JujuException):
+        jhelper.get_relation_map("app", "certificates", "test-model")
+
+
+def test_get_relation_map_exec_fail(jhelper, status, juju):
+    status.apps["app"] = Mock(units={"app/0": Mock(leader=True)})
+    juju.exec = Mock(side_effect=jubilant.TaskError("exec failed"))
+
+    with pytest.raises(jujulib.JujuException):
+        jhelper.get_relation_map("app", "certificates", "test-model")
+
+
+def test_get_relation_map_exec_returns_nonzero(jhelper, status, juju):
+    status.apps["app"] = Mock(units={"app/0": Mock(leader=True)})
+    juju.exec = Mock(
+        side_effect=[
+            Mock(return_code=1, stdout=""),
+            Mock(return_code=0, stdout="traefik/0"),
+        ]
+    )
+
+    with pytest.raises(jujulib.JujuException):
+        jhelper.get_relation_map("app", "certificates", "test-model")
+
+
+def test_get_relation_map_no_related_units(jhelper, status):
+    status.apps["app"] = Mock(
+        units={"app/0": Mock(leader=True), "app/1": Mock(leader=False)}
+    )
+
+    with pytest.raises(jujulib.JujuException):
+        jhelper.get_relation_map("app", "certificates", "test-model")
