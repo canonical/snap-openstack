@@ -1284,7 +1284,12 @@ class MaasSaveClusterdCredentialsStep(BaseStep):
         certificate_authority = credentials.get("certificate-authority")
         certificate = credentials.get("certificate")
         private_key = None
-        if private_key_secret := credentials.get("private-key-secret"):
+        private_key_secret = credentials.get("private-key-secret")
+        if "PRIVATE KEY" in (private_key_secret or ""):
+            # "juju run clusterd/leader get-credentials" gave us the secret payload,
+            # not a Juju secret id.
+            private_key = private_key_secret
+        elif private_key_secret:
             try:
                 secret = self.jhelper.get_secret(self.model, private_key_secret)
             except JujuSecretNotFound as e:
