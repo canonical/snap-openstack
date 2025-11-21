@@ -649,17 +649,18 @@ def deploy(
 
     workers = list(set(compute + control + storage + region_controllers))
 
-    if nb_region_controllers and (nb_control > 0 or nb_compute > 0 or nb_storage > 0):
-        console.print(
-            "Region controller deployments can only contain region controller nodes."
-            "Regular control nodes can also act as region controllers. "
-            "Node roles:"
-            f"\n\rregion-controller: {len(region_controllers)}"
-            f"\n\tcontrol: {len(control)}"
-            f"\n\tcompute: {len(compute)}"
-            f"\n\tstorage: {len(storage)}"
-        )
-        sys.exit(1)
+    if nb_region_controllers:
+        if nb_control > 0 or nb_compute > 0 or nb_storage > 0:
+            console.print(
+                "Region controller deployments can only contain region controller "
+                "nodes. Regular control nodes can also act as region controllers. "
+                "Node roles:"
+                f"\n\rregion-controller: {len(region_controllers)}"
+                f"\n\tcontrol: {len(control)}"
+                f"\n\tcompute: {len(compute)}"
+                f"\n\tstorage: {len(storage)}"
+            )
+            sys.exit(1)
     elif nb_control < 1 or nb_compute < 1 or nb_storage < 1:
         console.print(
             "Deployments need at least one of each role to work correctly:"
