@@ -102,6 +102,7 @@ class Deployment(pydantic.BaseModel):
     juju_controller: JujuController | None = None
     region_ctrl_juju_account: JujuAccount | None = None
     region_ctrl_juju_controller: JujuController | None = None
+    external_keystone_model: str | None = None
     clusterd_certpair: CertPair | None = None
     primary_region_name: str | None = None
     region_name: str | None = None
