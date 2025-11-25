@@ -68,9 +68,6 @@ from sunbeam.core.common import (
 from sunbeam.core.deployment import Deployment, Networks
 from sunbeam.core.deployments import DeploymentsConfig, deployment_path
 from sunbeam.core.juju import (
-    JujuAccount,
-    JujuAccountNotFound,
-    JujuController,
     JujuHelper,
     JujuStepHelper,
 )
@@ -80,6 +77,7 @@ from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.core.questions import get_stdin_reopen_tty
 from sunbeam.core.terraform import TerraformInitStep
 from sunbeam.provider.base import ProviderBase
+from sunbeam.provider.common.multiregion import connect_to_region_controller
 from sunbeam.provider.local.deployment import LOCAL_TYPE, LocalDeployment
 from sunbeam.provider.local.steps import (
     LocalClusterStatusStep,
@@ -127,7 +125,6 @@ from sunbeam.steps.juju import (
     JujuLoginStep,
     MigrateModelStep,
     RegisterJujuUserStep,
-    RegisterRemoteJujuUserStep,
     RemoveJujuMachineStep,
     SaveControllerStep,
     SaveJujuAdminUserLocallyStep,
@@ -569,92 +566,6 @@ def deploy_and_migrate_juju_controller(
     run_plan(plan7, console, show_hints)
 
 
-def _connect_to_region_controller(
-    deployment: LocalDeployment,
-    region_controller_token: str,
-    initial_controller: str,
-    show_hints: bool = False,
-) -> str:
-    """Connect to the region controller using the specified token.
-
-    Returns a tuple containing the Juju controller name and the
-    primary region name.
-    """
-    LOG.debug("Connecting to the region controller.")
-    snap = Snap()
-    data_location = snap.paths.user_data
-
-    region_controller_info = json.loads(
-        base64.b64decode(region_controller_token).decode()
-    )
-    primary_region_name = region_controller_info["primary_region_name"]
-    region_controller_juju_ctrl = JujuController(
-        **region_controller_info["juju_controller"]
-    )
-    # We'll probably get the default "sunbeam-controller" name,
-    # let's add the "-region-controller" suffix to avoid duplicates.
-    region_controller_juju_ctrl.name += "-region-controller"
-    region_ctrl_name = region_controller_juju_ctrl.name
-
-    if (
-        deployment.primary_region_name
-        and deployment.primary_region_name != primary_region_name
-    ):
-        raise ValueError(
-            "The primary region name associated with this deployment "
-            f"({deployment.primary_region_name}) does not match the region "
-            f"of the token ({primary_region_name})"
-        )
-    if deployment.get_region_name() == primary_region_name:
-        raise ValueError(
-            "The secondary region can not have the same name "
-            f"as the primary region: {deployment.get_region_name()}"
-        )
-
-    logging.debug(
-        "Primary region name: %s, secondary region name: %s",
-        primary_region_name,
-        deployment.get_region_name(),
-    )
-
-    juju_registration_token = region_controller_info["juju_registration_token"]
-    try:
-        region_ctrl_account = JujuAccount.load(
-            data_location, f"{region_ctrl_name}.yaml"
-        )
-        already_registered = True
-    except JujuAccountNotFound:
-        region_ctrl_account = None
-        already_registered = False
-
-    region_plan: list[BaseStep] = []
-    if already_registered:
-        region_plan += [
-            JujuLoginStep(region_ctrl_account, region_ctrl_name),
-        ]
-    else:
-        region_plan += [
-            CheckJujuReachableStep(region_controller_juju_ctrl),
-            RegisterRemoteJujuUserStep(
-                juju_registration_token, region_ctrl_name, data_location
-            ),
-            SwitchToController(initial_controller),
-        ]
-    run_plan(region_plan, console, show_hints)
-
-    region_jhelper = JujuHelper(region_controller_juju_ctrl)
-    openstack_model_with_owner = region_jhelper.get_model_name_with_owner("openstack")
-    external_keystone_model = f"{region_ctrl_name}:{openstack_model_with_owner}"
-
-    if not deployment.primary_region_name:
-        deployment.primary_region_name = primary_region_name
-    if not deployment.region_ctrl_juju_account:
-        deployment.region_ctrl_juju_account = region_ctrl_account
-    if not deployment.region_ctrl_juju_controller:
-        deployment.region_ctrl_juju_controller = region_controller_juju_ctrl
-    return external_keystone_model
-
-
 @click.command()
 @click.option("-a", "--accept-defaults", help="Accept all defaults.", is_flag=True)
 @click.option(
@@ -671,7 +582,7 @@ def _connect_to_region_controller(
     default=["control", "compute"],
     callback=validate_roles,
     help="Specify additional roles for the bootstrap node. "
-    "Possible values: compute, storage, network, region-controller. "
+    "Possible values: compute, storage, network, region_controller. "
     "Defaults to the compute role. Can be repeated and comma separated.",
 )
 @click_option_topology
@@ -772,8 +683,6 @@ def bootstrap(  # noqa: C901
         preflight_checks.append(LxdGroupCheck())
         preflight_checks.append(LXDJujuControllerRegistrationCheck())
 
-    # TODO: validate the region controller as part of preflight checks.
-
     run_preflight_checks(preflight_checks, console)
 
     # Mark deployment as active if not yet already
@@ -829,9 +738,8 @@ def bootstrap(  # noqa: C901
     plan.append(ValidateIdentityManifest(client, manifest))
     run_plan(plan, console, show_hints)
 
-    external_keystone_model = None
     if region_controller_token:
-        external_keystone_model = _connect_to_region_controller(
+        connect_to_region_controller(
             deployment,
             region_controller_token,
             bootstrap_controller,
@@ -947,7 +855,6 @@ def bootstrap(  # noqa: C901
                 topology,
                 deployment.openstack_machines_model,
                 proxy_settings=proxy_settings,
-                external_keystone_model=external_keystone_model,
                 is_region_controller=is_region_controller,
             )
         )
@@ -1473,13 +1380,12 @@ def join(  # noqa: C901
     ]
     run_plan(plan2, console, show_hints)
 
-    external_keystone_model = None
     if region_controller_token:
         if not (deployment.juju_controller and deployment.juju_controller.name):
             # We shouldn't reach this, the controller is validated
             # through CheckJujuReachableStep.
             raise ValueError("Missing Juju controller name.")
-        external_keystone_model = _connect_to_region_controller(
+        connect_to_region_controller(
             deployment,
             region_controller_token,
             deployment.juju_controller.name,
@@ -1634,7 +1540,6 @@ def join(  # noqa: C901
                     manifest,
                     "auto",
                     deployment.openstack_machines_model,
-                    external_keystone_model=external_keystone_model,
                     is_region_controller=is_region_controller,
                 )
             )
