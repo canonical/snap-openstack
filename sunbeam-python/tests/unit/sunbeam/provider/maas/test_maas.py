@@ -846,6 +846,36 @@ class TestMaasScaleJujuStep:
         result = step.is_skip()
         assert result.result_type == ResultType.COMPLETED
 
+    def test_is_skip_with_no_region_controller_machines(self, mocker):
+        """Test that the step continues when no region controller machines are found."""
+        maas_client = mocker.Mock()
+        controller = "test_controller"
+        step = MaasScaleJujuStep(maas_client, controller)
+        step.n = 3
+        mocker.patch.object(
+            step,
+            "get_controller",
+            return_value={"controller-machines": {"1": {"instance-id": "1st"}}},
+        )
+        # First call returns juju-controller machines, second call raises ValueError
+        mocker.patch(
+            "sunbeam.provider.maas.client.list_machines",
+            side_effect=[
+                [
+                    {"hostname": "machine1", "system_id": "1st"},
+                    {"hostname": "machine2", "system_id": "2nd"},
+                    {"hostname": "machine3", "system_id": "3rd"},
+                ],
+                ValueError(
+                    "No machines found"
+                ),  # Simulates no region controller machines
+            ],
+        )
+        result = step.is_skip()
+        # Should complete successfully even without region controller machines
+        assert result.result_type == ResultType.COMPLETED
+        assert "--to" in " ".join(step.extra_args)
+
 
 class TestMaasAddMachinesToClusterdStep:
     @pytest.fixture
