@@ -1199,9 +1199,12 @@ class MaasScaleJujuStep(ScaleJujuStep):
         machines = maas_client.list_machines(
             self.client, tags=maas_deployment.RoleTags.JUJU_CONTROLLER.value
         )
-        machines += maas_client.list_machines(
-            self.client, tags=maas_deployment.RoleTags.REGION_CONTROLLER.value
-        )
+        try:
+            machines += maas_client.list_machines(
+                self.client, tags=maas_deployment.RoleTags.REGION_CONTROLLER.value
+            )
+        except ValueError:
+            LOG.debug("No machines with region controller tag found")
 
         if len(machines) < self.n:
             LOG.debug(
