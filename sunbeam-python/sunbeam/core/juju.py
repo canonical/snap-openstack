@@ -953,16 +953,15 @@ class JujuHelper:
         clouds = {
             cloud_name: {
                 "type": "kubernetes",
-                "auth_types": ["oauth2", "clientcertificate"],
+                "auth-types": ["oauth2", "clientcertificate"],
                 "ca_certificates": [ca_cert],
                 "endpoint": ep,
                 "host_cloud_region": "k8s/localhost",
-                "regions": [
-                    {
+                "regions": {
+                    "localhost": {
                         "endpoint": ep,
-                        "name": "localhost",
                     }
-                ],
+                },
             }
         }
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml") as cloud_file:
