@@ -7,7 +7,7 @@ from typing import Tuple
 
 from sunbeam import devspec
 from sunbeam.clusterd.client import Client
-from sunbeam.core.juju import JujuHelper
+from sunbeam.core.juju import JujuHelper, JujuStepHelper
 
 LOG = logging.getLogger(__name__)
 
@@ -18,6 +18,27 @@ def fetch_nics(client: Client, node_name: str, jhelper: JujuHelper, model: str):
     machine_id = str(node.get("machineid"))
     unit = jhelper.get_unit_from_machine("openstack-hypervisor", machine_id, model)
     action_result = jhelper.run_action(unit, model, "list-nics")
+    return json.loads(action_result.get("result", "{}"))
+
+
+def fetch_nics_from_subordinate(
+    client: Client,
+    node_name: str,
+    jhelper: JujuHelper,
+    model: str,
+    principal_app: str,
+    subordinate_app: str,
+):
+    LOG.debug("Fetching nics from subordinate...")
+    node = client.cluster.get_node_info(node_name)
+    machine_id = str(node.get("machineid"))
+    principal_unit = jhelper.get_unit_from_machine(principal_app, machine_id, model)
+    jstephelper = JujuStepHelper()
+    jstephelper.jhelper = jhelper
+    subordinate_unit = jstephelper.find_subordinate_unit_for(
+        principal_unit, subordinate_app, model
+    )
+    action_result = jhelper.run_action(subordinate_unit, model, "list-nics")
     return json.loads(action_result.get("result", "{}"))
 
 

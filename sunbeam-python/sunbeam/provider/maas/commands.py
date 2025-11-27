@@ -22,7 +22,6 @@ from sunbeam.commands.configure import (
     DemoSetup,
     TerraformDemoInitStep,
     UserOpenRCStep,
-    get_external_network_configs,
     retrieve_admin_credentials,
 )
 from sunbeam.commands.dashboard_url import retrieve_dashboard_url
@@ -90,7 +89,6 @@ from sunbeam.provider.maas.steps import (
     MaasConfigDPDKStep,
     MaasConfigSRIOVStep,
     MaasConfigureMicrocephOSDStep,
-    MaasConfigureOpenstackNetworkAgentsStep,
     MaasCreateLoadBalancerIPPoolsStep,
     MaasDeployInfraMachinesStep,
     MaasDeployK8SApplicationStep,
@@ -102,6 +100,7 @@ from sunbeam.provider.maas.steps import (
     MaasSaveControllerStep,
     MaasScaleJujuStep,
     MaasSetHypervisorUnitsOptionsStep,
+    MaasSetOpenStackNetworkAgentsStep,
     MaasUserQuestions,
     MachineComputeNicCheck,
     MachineNetworkCheck,
@@ -643,6 +642,10 @@ def deploy(
         map(_name_mapper, client.cluster.list_nodes_by_role(RoleTags.COMPUTE.value))
     )
     nb_compute = len(compute)
+    network = list(
+        map(_name_mapper, client.cluster.list_nodes_by_role(RoleTags.NETWORK.value))
+    )
+    nb_network = len(network)
     storage = list(
         map(_name_mapper, client.cluster.list_nodes_by_role(RoleTags.STORAGE.value))
     )
@@ -813,10 +816,7 @@ def deploy(
         )
     )
     # Deploy MicroOVN and subordinate openstack-network-agents on network nodes
-    network_nodes = list(
-        map(_name_mapper, client.cluster.list_nodes_by_role(RoleTags.NETWORK.value))
-    )
-    if len(network_nodes) > 0:
+    if nb_network > 0:
         plan2.append(TerraformInitStep(tfhelper_microovn))
         plan2.append(
             DeployMicroOVNApplicationStep(
@@ -925,7 +925,7 @@ def deploy(
 
     console.print(
         f"Deployment complete with {nb_control} control, "
-        f"{nb_compute} compute and {nb_storage} storage nodes. "
+        f"{nb_compute} compute, {nb_network} network and {nb_storage} storage nodes. "
         f"Region controllers: {nb_region_controllers}. "
         f"Total nodes in cluster: {len(workers)}"
     )
@@ -1026,19 +1026,13 @@ def configure_cmd(
             deployment.openstack_machines_model,
             manifest,
         ),
-        # Configure network agents on network nodes using MAAS NIC tags
-        MaasConfigureOpenstackNetworkAgentsStep(
+        MaasSetOpenStackNetworkAgentsStep(
             client,
             maas_client,
             network,
             jhelper,
             deployment.openstack_machines_model,
-            bridge_name=get_external_network_configs(client).get(
-                "external-bridge", "br-ex"
-            ),
-            physnet_name=get_external_network_configs(client).get(
-                "physnet-name", "physnet1"
-            ),
+            manifest,
         ),
     ]
 

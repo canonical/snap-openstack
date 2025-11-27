@@ -68,29 +68,44 @@ resource "openstack_images_image_v2" "ubuntu" {
   }
 }
 
+# Keep backwards compatibility for single external network definition
+# Each move to physnet1 can be removed once we're confident all users
+# have updated their configurations.
+moved {
+  from = openstack_networking_network_v2.external_network
+  to   = openstack_networking_network_v2.external_network["physnet1"]
+}
+
 # External networking
 resource "openstack_networking_network_v2" "external_network" {
-  name           = "external-network"
+  for_each       = var.external_network
+  name           = each.key == "physnet1" ? "external-network" : "external-network-${each.key}"
   admin_state_up = true
   external       = true
   segments {
-    physical_network = var.external_network.physical_network
-    network_type     = var.external_network.network_type
-    segmentation_id  = var.external_network.segmentation_id
+    physical_network = each.key
+    network_type     = each.value.network_type
+    segmentation_id  = each.value.segmentation_id
   }
 }
 
+moved {
+  from = openstack_networking_subnet_v2.external_subnet
+  to   = openstack_networking_subnet_v2.external_subnet["physnet1"]
+}
+
 resource "openstack_networking_subnet_v2" "external_subnet" {
-  name        = "external-subnet"
-  network_id  = openstack_networking_network_v2.external_network.id
-  cidr        = var.external_network.cidr
+  for_each    = var.external_network
+  name        = each.key == "physnet1" ? "external-subnet" : "external-subnet-${each.key}"
+  network_id  = openstack_networking_network_v2.external_network[each.key].id
+  cidr        = each.value.cidr
   ip_version  = 4
   enable_dhcp = false
   allocation_pool {
-    start = split("-", var.external_network.range)[0]
-    end   = split("-", var.external_network.range)[1]
+    start = split("-", each.value.range)[0]
+    end   = split("-", each.value.range)[1]
   }
-  gateway_ip = var.external_network.gateway
+  gateway_ip = each.value.gateway
 }
 
 # User configuration
@@ -142,7 +157,7 @@ resource "openstack_networking_router_v2" "user_router" {
   name                = format("%s-router", var.user.username)
   tenant_id           = openstack_identity_project_v3.user_project.id
   admin_state_up      = true
-  external_network_id = openstack_networking_network_v2.external_network.id
+  external_network_id = openstack_networking_network_v2.external_network[var.user.physnet].id
   # Ensure router is created after external subnet to avoid
   # https://bugs.launchpad.net/snap-openstack/+bug/2034063
   depends_on = [
