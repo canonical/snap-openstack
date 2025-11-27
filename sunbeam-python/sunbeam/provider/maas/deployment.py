@@ -8,11 +8,6 @@ import pydantic
 
 from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import ClusterServiceUnavailableException
-from sunbeam.commands.configure import (
-    CLOUD_CONFIG_SECTION,
-    ext_net_questions,
-    user_questions,
-)
 from sunbeam.commands.proxy import proxy_questions
 from sunbeam.core.deployment import PROXY_CONFIG_KEY, Deployment, Networks
 from sunbeam.core.k8s import K8SHelper
@@ -22,6 +17,11 @@ from sunbeam.core.openstack import (
     generate_endpoint_preseed_questions,
 )
 from sunbeam.core.questions import Question, QuestionBank, load_answers, show_questions
+from sunbeam.steps.configure import (
+    CLOUD_CONFIG_SECTION,
+    ext_net_questions,
+    user_questions,
+)
 from sunbeam.steps.openstack import (
     TOPOLOGY_KEY,
     database_topology_questions,

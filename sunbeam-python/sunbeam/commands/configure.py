@@ -14,11 +14,10 @@ from rich.console import Console
 import sunbeam.core.questions
 from sunbeam import utils
 from sunbeam.clusterd.client import Client
-from sunbeam.core.common import BaseStep, Result, ResultType, Status, validate_ip_range
+from sunbeam.core.common import BaseStep, Result, ResultType, Status
 from sunbeam.core.juju import (
     ActionFailedException,
     JujuHelper,
-    JujuStepHelper,
     LeaderNotFoundException,
 )
 from sunbeam.core.manifest import Manifest
@@ -27,152 +26,13 @@ from sunbeam.core.terraform import (
     TerraformHelper,
     TerraformInitStep,
 )
+from sunbeam.steps.configure import CLOUD_CONFIG_SECTION
 
-CLOUD_CONFIG_SECTION = "CloudConfig"
 PCI_CONFIG_SECTION = "PCI"
 DPDK_CONFIG_SECTION = "DPDK"
-MICROOVN_APPLICATION = "microovn"
-OPENSTACK_NETWORK_AGENTS_APP = "openstack-network-agents"
 
 LOG = logging.getLogger(__name__)
 console = Console()
-
-EXT_NETWORK_DESCRIPTION = """\
-Network from which the instances will be remotely \
-accessed (outside OpenStack). Takes the form of a CIDR block.\
-"""
-EXT_NETWORK_RANGE_DESCRIPTION = """\
-VMs intended to be accessed from remote hosts will \
-be assigned dedicated addresses from a portion of the physical \
-network (outside OpenStack). Takes the form of an IP range.\
-"""
-EXT_NETWORK_TYPE_DESCRIPTION = "Type of network to use for external access."
-EXT_NETWORK_SEGMENTATION_ID_DESCRIPTION = "Vlan ID the external network is on."
-
-
-def user_questions():
-    return {
-        "run_demo_setup": sunbeam.core.questions.ConfirmQuestion(
-            "Populate OpenStack cloud with demo user, default images, flavors etc",
-            default_value=True,
-            description=(
-                "If enabled, demonstration resources will be created on the cloud."
-            ),
-        ),
-        "username": sunbeam.core.questions.PromptQuestion(
-            "Username to use for access to OpenStack",
-            default_value="demo",
-            description="Username for the demonstration user.",
-        ),
-        "password": sunbeam.core.questions.PasswordPromptQuestion(
-            "Password to use for access to OpenStack",
-            default_function=utils.generate_password,
-            password=True,
-            description="Password for the demonstration user.",
-        ),
-        "cidr": sunbeam.core.questions.PromptQuestion(
-            "Project network",
-            default_value="192.168.0.0/24",
-            validation_function=ipaddress.ip_network,
-            description=(
-                "Network range for the private network for the demonstration user's"
-                " project. Typically an unroutable network (RFC 1918)."
-            ),
-        ),
-        "nameservers": sunbeam.core.questions.PromptQuestion(
-            "Project network's nameservers",
-            default_function=lambda: " ".join(utils.get_nameservers()),
-            description=(
-                "A list of DNS server IP addresses (comma separated)"
-                " that should be used for external DNS resolution from"
-                " cloud instances. If not specified, the system's default"
-                " nameservers will be used."
-            ),
-        ),
-        "security_group_rules": sunbeam.core.questions.ConfirmQuestion(
-            "Enable ping and SSH access to instances?",
-            default_value=True,
-            description=(
-                "If enabled, security groups will be created with"
-                " rules to allow ICMP and SSH access to instances."
-            ),
-        ),
-        "remote_access_location": sunbeam.core.questions.PromptQuestion(
-            "Local or remote access to VMs",
-            choices=[utils.LOCAL_ACCESS, utils.REMOTE_ACCESS],
-            default_value=utils.LOCAL_ACCESS,
-            # This is not true
-            description=(
-                "VMs will be accessible only from the local host"
-                " or only from remote hosts. For remote, you must"
-                " specify the network interface dedicated to VM"
-                " access traffic. The intended remote hosts must"
-                " have connectivity to this interface."
-            ),
-        ),
-    }
-
-
-def ext_net_questions():
-    return {
-        "cidr": sunbeam.core.questions.PromptQuestion(
-            "External network",
-            default_value="172.16.2.0/24",
-            validation_function=ipaddress.ip_network,
-            description=EXT_NETWORK_DESCRIPTION,
-        ),
-        "gateway": sunbeam.core.questions.PromptQuestion(
-            "External network's gateway",
-            default_value=None,
-            validation_function=ipaddress.ip_address,
-            description="Router IP address connecting the network for outside use.",
-        ),
-        "range": sunbeam.core.questions.PromptQuestion(
-            "External network's allocation range",
-            default_value=None,
-            validation_function=validate_ip_range,
-            description=EXT_NETWORK_RANGE_DESCRIPTION,
-        ),
-        "network_type": sunbeam.core.questions.PromptQuestion(
-            "External network's type [flat/vlan]",
-            choices=["flat", "vlan"],
-            default_value="flat",
-            description=EXT_NETWORK_TYPE_DESCRIPTION,
-        ),
-        "segmentation_id": sunbeam.core.questions.PromptQuestion(
-            "External network's segmentation id",
-            default_value=0,
-            description=EXT_NETWORK_SEGMENTATION_ID_DESCRIPTION,
-        ),
-    }
-
-
-def ext_net_questions_local_only():
-    return {
-        "cidr": sunbeam.core.questions.PromptQuestion(
-            "External network - arbitrary but must not be in use",
-            default_value="172.16.2.0/24",
-            validation_function=ipaddress.ip_network,
-            description=EXT_NETWORK_DESCRIPTION,
-        ),
-        "range": sunbeam.core.questions.PromptQuestion(
-            "External network's allocation range",
-            default_value=None,
-            validation_function=validate_ip_range,
-            description=EXT_NETWORK_RANGE_DESCRIPTION,
-        ),
-        "network_type": sunbeam.core.questions.PromptQuestion(
-            "External network's type [flat/vlan]",
-            choices=["flat", "vlan"],
-            default_value="flat",
-            description=EXT_NETWORK_TYPE_DESCRIPTION,
-        ),
-        "segmentation_id": sunbeam.core.questions.PromptQuestion(
-            "External network's segmentation id",
-            default_value=0,
-            description=EXT_NETWORK_SEGMENTATION_ID_DESCRIPTION,
-        ),
-    }
 
 
 def dpdk_questions():
@@ -221,23 +81,6 @@ def dpdk_questions():
             default_value="vfio-pci",
         ),
     }
-
-
-VARIABLE_DEFAULTS: dict[str, dict[str, str | int | bool | None]] = {
-    "user": {
-        "username": "demo",
-        "cidr": "192.168.0.0/24",
-        "security_group_rules": True,
-    },
-    "external_network": {
-        "cidr": "172.16.2.0/24",
-        "gateway": None,
-        "range": None,
-        "physical_network": "physnet1",
-        "network_type": "flat",
-        "segmentation_id": 0,
-    },
-}
 
 
 def retrieve_admin_credentials(jhelper: JujuHelper, model: str) -> dict:
@@ -314,22 +157,19 @@ def get_external_network_configs(client: Client) -> dict:
 
     variables = sunbeam.core.questions.load_answers(client, CLOUD_CONFIG_SECTION)
     ext_network = variables.get("external_network", {})
-    charm_config["external-bridge"] = "br-ex"
     if (
         variables.get("user", {}).get("remote_access_location", "")
         == utils.LOCAL_ACCESS
     ):
-        external_network = ipaddress.ip_network(
-            variables.get("external_network", {}).get("cidr")
-        )
+        # In local access, we only support a single external network
+        # get the first one
+        ext_network = ext_network.get(next(iter(ext_network)))
+        external_network = ipaddress.ip_network(ext_network.get("cidr"))
         bridge_interface = f"{ext_network.get('gateway')}/{external_network.prefixlen}"
         charm_config["external-bridge-address"] = bridge_interface
     else:
         charm_config["external-bridge-address"] = utils.IPVANYNETWORK_UNSET
 
-    charm_config["physnet-name"] = variables.get("external_network", {}).get(
-        "physical_network", VARIABLE_DEFAULTS["external_network"]["physical_network"]
-    )
     return charm_config
 
 
@@ -428,172 +268,6 @@ export OS_IDENTITY_API_VERSION={self.auth_version}"""
             console.print(_openrc)
 
 
-class UserQuestions(BaseStep):
-    """Ask user configuration questions."""
-
-    def __init__(
-        self,
-        client: Client,
-        answer_file: Path,
-        manifest: Manifest | None = None,
-        accept_defaults: bool = False,
-    ):
-        super().__init__(
-            "Collect cloud configuration", "Collecting cloud configuration"
-        )
-        self.client = client
-        self.accept_defaults = accept_defaults
-        self.manifest = manifest
-        self.answer_file = answer_file
-
-    def has_prompts(self) -> bool:
-        """Returns true if the step has prompts that it can ask the user."""
-        return True
-
-    def prompt(
-        self,
-        console: Console | None = None,
-        show_hint: bool = False,
-    ) -> None:
-        """Prompt the user for basic cloud configuration.
-
-        Prompts the user for required information for cloud configuration.
-
-        :param console: the console to prompt on
-        :type console: rich.console.Console (Optional)
-        """
-        self.variables = sunbeam.core.questions.load_answers(
-            self.client, CLOUD_CONFIG_SECTION
-        )
-        for section in ["user", "external_network"]:
-            if not self.variables.get(section):
-                self.variables[section] = {}
-        preseed = {}
-        if self.manifest and (user := self.manifest.core.config.user):
-            preseed = user.model_dump(by_alias=True)
-
-        # Check if there is a single compute node in the cluster
-        is_compute_node = False
-        is_bootstrap_node = False
-
-        try:
-            cluster_nodes = self.client.cluster.list_nodes()
-            is_bootstrap_node = len(cluster_nodes) == 1
-
-            # Check if current node has the compute role
-            fqdn = utils.get_fqdn()
-            node_info = self.client.cluster.get_node_info(fqdn)
-            roles = node_info.get("role", [])
-            if isinstance(roles, str):
-                roles = [roles]
-            is_compute_node = "compute" in [r.lower() for r in roles]
-        except Exception:
-            LOG.debug("Could not determine cluster node")
-
-        user_bank = sunbeam.core.questions.QuestionBank(
-            questions=user_questions(),
-            console=console,
-            preseed=preseed,
-            previous_answers=self.variables.get("user"),
-            accept_defaults=self.accept_defaults,
-            show_hint=show_hint,
-        )
-
-        # Only ask local/remote question for bootstrap node with compute role
-        if is_bootstrap_node and is_compute_node:
-            # Ask for remote/local access since this is first node and a compute node
-            self.variables["user"]["remote_access_location"] = (
-                user_bank.remote_access_location.ask()
-            )
-            LOG.debug("Bootstrap node with compute role, asked for remote/local access")
-        else:
-            # All other cases: not single node, set to remote access
-            self.variables["user"]["remote_access_location"] = utils.REMOTE_ACCESS
-            LOG.debug("Not a bootstrap compute node, defaulting to remote access")
-        # External Network Configuration
-        preseed = {}
-        if self.manifest and (
-            ext_network := self.manifest.core.config.external_network
-        ):
-            preseed = ext_network.model_dump(by_alias=True)
-        if self.variables["user"]["remote_access_location"] == utils.LOCAL_ACCESS:
-            ext_net_bank = sunbeam.core.questions.QuestionBank(
-                questions=ext_net_questions_local_only(),
-                console=console,
-                preseed=preseed,
-                previous_answers=self.variables.get("external_network"),
-                accept_defaults=self.accept_defaults,
-                show_hint=show_hint,
-            )
-        else:
-            ext_net_bank = sunbeam.core.questions.QuestionBank(
-                questions=ext_net_questions(),
-                console=console,
-                preseed=preseed,
-                previous_answers=self.variables.get("external_network"),
-                accept_defaults=self.accept_defaults,
-                show_hint=show_hint,
-            )
-        self.variables["external_network"]["cidr"] = ext_net_bank.cidr.ask()
-        external_network = ipaddress.ip_network(
-            self.variables["external_network"]["cidr"]
-        )
-        external_network_hosts = list(external_network.hosts())
-        default_gateway = self.variables["external_network"].get("gateway") or str(
-            external_network_hosts[0]
-        )
-        if self.variables["user"]["remote_access_location"] == utils.LOCAL_ACCESS:
-            self.variables["external_network"]["gateway"] = default_gateway
-        else:
-            self.variables["external_network"]["gateway"] = ext_net_bank.gateway.ask(
-                new_default=default_gateway
-            )
-
-        default_allocation_range = (
-            self.variables["external_network"].get("range")
-            or f"{external_network_hosts[1]}-{external_network_hosts[-1]}"
-        )
-        self.variables["external_network"]["range"] = ext_net_bank.range.ask(
-            new_default=default_allocation_range
-        )
-
-        self.variables["external_network"]["physical_network"] = VARIABLE_DEFAULTS[
-            "external_network"
-        ]["physical_network"]
-
-        self.variables["external_network"]["network_type"] = (
-            ext_net_bank.network_type.ask()
-        )
-        if self.variables["external_network"]["network_type"] == "vlan":
-            self.variables["external_network"]["segmentation_id"] = (
-                ext_net_bank.segmentation_id.ask()
-            )
-        else:
-            self.variables["external_network"]["segmentation_id"] = 0
-
-        self.variables["user"]["run_demo_setup"] = user_bank.run_demo_setup.ask()
-        if self.variables["user"]["run_demo_setup"]:
-            # User configuration
-            self.variables["user"]["username"] = user_bank.username.ask()
-            self.variables["user"]["password"] = user_bank.password.ask()
-            self.variables["user"]["cidr"] = user_bank.cidr.ask()
-            nameservers = user_bank.nameservers.ask()
-            self.variables["user"]["dns_nameservers"] = (
-                nameservers.split() if nameservers else None
-            )
-            self.variables["user"]["security_group_rules"] = (
-                user_bank.security_group_rules.ask()
-            )
-
-        sunbeam.core.questions.write_answers(
-            self.client, CLOUD_CONFIG_SECTION, self.variables
-        )
-
-    def run(self, status: Status | None = None) -> Result:
-        """Run the step to completion."""
-        return Result(ResultType.COMPLETED)
-
-
 class DemoSetup(BaseStep):
     """Default cloud configuration for all-in-one install."""
 
@@ -662,184 +336,6 @@ class TerraformDemoInitStep(TerraformInitStep):
             return Result(ResultType.COMPLETED)
         else:
             return Result(ResultType.SKIPPED)
-
-
-class SetHypervisorUnitsOptionsStep(BaseStep):
-    def __init__(
-        self,
-        client: Client,
-        names: list[str] | str,
-        jhelper: JujuHelper,
-        model: str,
-        manifest: Manifest | None = None,
-        msg: str = "Apply hypervisor settings",
-        description: str = "Applying hypervisor settings",
-    ):
-        super().__init__(msg, description)
-        self.client = client
-        if isinstance(names, str):
-            names = [names]
-        self.names = names
-        self.jhelper = jhelper
-        self.model = model
-        self.manifest = manifest
-        self.nics: dict[str, str | None] = {}
-
-    def run(self, status: Status | None = None) -> Result:
-        """Apply individual hypervisor settings."""
-        app = "openstack-hypervisor"
-        action_cmd = "set-hypervisor-local-settings"
-        for name in self.names:
-            self.update_status(status, f"setting hypervisor configuration for {name}")
-            nic = self.nics.get(name)
-            if nic is None:
-                LOG.debug(f"No NIC found for hypervisor {name}, skipping.")
-                continue
-            node = self.client.cluster.get_node_info(name)
-            self.machine_id = str(node.get("machineid"))
-            unit = self.jhelper.get_unit_from_machine(app, self.machine_id, self.model)
-            try:
-                self.jhelper.run_action(
-                    unit,
-                    self.model,
-                    action_cmd,
-                    action_params={
-                        "external-nic": nic,
-                    },
-                )
-            except (ActionFailedException, TimeoutError):
-                _message = f"Unable to set hypervisor {name!r} configuration"
-                LOG.debug(_message, exc_info=True)
-                return Result(ResultType.FAILED, _message)
-        return Result(ResultType.COMPLETED)
-
-
-class ConfigureOpenStackNetworkAgentsLocalSettingsStep(BaseStep, JujuStepHelper):
-    """Configure openstack-network-agents local settings via charm config.
-
-    This is intended to run after microovn optional integrations are applied,
-    so juju-info relation to openstack-network-agents exists.
-    """
-
-    def __init__(
-        self,
-        client: Client,
-        names: list[str] | str,
-        jhelper: JujuHelper,
-        bridge_name: str,
-        physnet_name: str,
-        model: str,
-        enable_chassis_as_gw: bool = True,
-    ):
-        super().__init__(
-            "Configure OpenStack network agents",
-            "Setting openstack-network-agents local settings",
-        )
-        self.client = client
-        if isinstance(names, str):
-            names = [names]
-        self.names = names
-        self.jhelper = jhelper
-        self.model = model
-        self.bridge_name = bridge_name
-        self.physnet_name = physnet_name
-        self.enable_chassis_as_gw = enable_chassis_as_gw
-        self.external_interfaces: dict[str, str | None] = {}
-
-    def is_skip(self, status: Status | None = None) -> Result:
-        """Check if openstack-network-agents is deployed."""
-        try:
-            self.jhelper.get_application(OPENSTACK_NETWORK_AGENTS_APP, self.model)
-        except Exception:
-            return Result(ResultType.SKIPPED, "openstack-network-agents not deployed")
-        return Result(ResultType.COMPLETED)
-
-    def run(self, status: Status | None = None) -> Result:
-        """Run action to configure openstack-network-agents local settings.
-
-        For each node name, identify the principal microovn unit on that
-        machine and run the action on its openstack-network-agents subordinate.
-        """
-        try:
-            self.jhelper.wait_application_ready(
-                OPENSTACK_NETWORK_AGENTS_APP,
-                self.model,
-                accepted_status=["active", "blocked", "waiting"],
-                timeout=600,
-            )
-
-            for name in self.names:
-                self.update_status(
-                    status,
-                    f"setting openstack-network-agents local settings for {name}",
-                )
-
-                external_iface = self.external_interfaces.get(name)
-                if external_iface is None or external_iface == "":
-                    msg = f"No external interface specified for node {name}"
-                    LOG.debug(msg)
-                    return Result(ResultType.FAILED, msg)
-
-                node = self.client.cluster.get_node_info(name)
-                machine_id = str(node.get("machineid"))
-
-                # Principal unit on this machine
-                principal = self.jhelper.get_unit_from_machine(
-                    MICROOVN_APPLICATION, machine_id, self.model
-                )
-
-                try:
-                    unit_name = self.find_subordinate_unit_for(
-                        principal, OPENSTACK_NETWORK_AGENTS_APP, self.model
-                    )
-                except Exception as e:
-                    LOG.debug(
-                        "Failed to find subordinate unit for %s on principal %s: %s",
-                        OPENSTACK_NETWORK_AGENTS_APP,
-                        principal,
-                        e,
-                        exc_info=True,
-                    )
-                    return Result(
-                        ResultType.FAILED,
-                        f"Could not find {
-                            OPENSTACK_NETWORK_AGENTS_APP
-                        } unit for principal {principal}",
-                    )
-
-                LOG.debug(
-                    "Running set-network-agents-local-settings on %s"
-                    " (bridge=%s, physnet=%s, iface=%s, gw=%s)",
-                    unit_name,
-                    self.bridge_name,
-                    self.physnet_name,
-                    external_iface,
-                    self.enable_chassis_as_gw,
-                )
-
-                self.jhelper.run_action(
-                    unit_name,
-                    self.model,
-                    "set-network-agents-local-settings",
-                    action_params={
-                        "external-interface": external_iface,
-                        "bridge-name": self.bridge_name,
-                        "physnet-name": self.physnet_name,
-                        "enable-chassis-as-gw": self.enable_chassis_as_gw,
-                    },
-                )
-
-            return Result(ResultType.COMPLETED)
-
-        except Exception as e:
-            LOG.debug(
-                "Failed to configure openstack-network-agents via action: %s",
-                e,
-                exc_info=True,
-            )
-            return Result(
-                ResultType.FAILED, "Failed to configure openstack-network-agents"
-            )
 
 
 class BaseConfigDPDKStep(BaseStep):

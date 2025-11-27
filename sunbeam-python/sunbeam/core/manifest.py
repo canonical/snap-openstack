@@ -211,6 +211,8 @@ class CoreConfig(pydantic.BaseModel):
         nameservers: str | None = None
         security_group_rules: bool | None = None
         remote_access_location: typing.Literal["local", "remote"] | None = None
+        # Default physnet for user demo network
+        physnet: str | None = None
 
     class _ExternalNetwork(pydantic.BaseModel):
         nic: str | None = pydantic.Field(
@@ -285,7 +287,16 @@ class CoreConfig(pydantic.BaseModel):
     k8s_addons: _K8sAddons | None = pydantic.Field(default=None, alias="k8s-addons")
     endpoints: _Endpoints | None = None
     user: _User | None = None
-    external_network: _ExternalNetwork | None = None
+    external_network: _ExternalNetwork | None = pydantic.Field(
+        default=None,
+        alias="external-network",
+        description="Deprecated, use `external-networks` instead.",
+    )
+    external_networks: dict[str, _ExternalNetwork] | None = pydantic.Field(
+        default=None,
+        alias="external-networks",
+        description="Mapping of physnet to external network.",
+    )
     microceph_config: pydantic.RootModel[dict[str, _HostMicroCephConfig]] | None = None
     pci: _PCI | None = None
     dpdk: _DPDK | None = None

@@ -5,7 +5,9 @@ import contextlib
 import ipaddress
 import json
 import logging
+import typing
 from functools import cache
+from pathlib import Path
 from typing import Any
 
 import click
@@ -17,11 +19,8 @@ from sunbeam import utils
 from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import ClusterServiceUnavailableException
 from sunbeam.commands.configure import (
-    CLOUD_CONFIG_SECTION,
     PCI_CONFIG_SECTION,
     BaseConfigDPDKStep,
-    ConfigureOpenStackNetworkAgentsLocalSettingsStep,
-    SetHypervisorUnitsOptionsStep,
 )
 from sunbeam.core.common import (
     BaseStep,
@@ -37,9 +36,18 @@ from sunbeam.core.juju import (
 )
 from sunbeam.core.manifest import Manifest
 from sunbeam.provider.common import nic_utils
-from sunbeam.steps import hypervisor
+from sunbeam.steps import hypervisor, microovn
 from sunbeam.steps.cluster_status import ClusterStatusStep
 from sunbeam.steps.clusterd import CLUSTERD_PORT
+from sunbeam.steps.configure import (
+    CLOUD_CONFIG_SECTION,
+    BaseUserQuestions,
+    OpenstackNetworkAgentsUnitGetterMixin,
+    PrincipalUnitGetterMixin,
+    SetExternalNetworkUnitsOptionsStep,
+    physical_network_question,
+    user_questions,
+)
 from sunbeam.steps.k8s import get_loadbalancer_config
 from sunbeam.steps.openstack import EndpointsConfigurationStep
 
@@ -47,7 +55,7 @@ LOG = logging.getLogger(__name__)
 console = Console()
 
 
-def local_hypervisor_questions():
+def local_external_network_agent_questions():
     return {
         "nics": sunbeam.core.questions.PromptQuestion(
             "External network's interface",
@@ -60,7 +68,7 @@ def local_hypervisor_questions():
     }
 
 
-class LocalSetHypervisorUnitsOptionsStep(SetHypervisorUnitsOptionsStep):
+class LocalSetExternalNetworkUnitsOptionsStep(SetExternalNetworkUnitsOptionsStep):
     def __init__(
         self,
         client: Client,
@@ -76,8 +84,6 @@ class LocalSetHypervisorUnitsOptionsStep(SetHypervisorUnitsOptionsStep):
             jhelper,
             model,
             manifest,
-            "Apply local hypervisor settings",
-            "Applying local hypervisor settings",
         )
         self.join_mode = join_mode
 
@@ -85,43 +91,48 @@ class LocalSetHypervisorUnitsOptionsStep(SetHypervisorUnitsOptionsStep):
         """Returns true if the step has prompts that it can ask the user."""
         return True
 
-    def prompt_for_nic(self, console: Console | None = None) -> str | None:
+    def _pick_candidate(
+        self, all_nics: list[dict], candidate_nics: list[str]
+    ) -> str | None:
+        """Pick a candidate nic from the list of all nics."""
+        for cand_nic in candidate_nics:
+            for iface in all_nics:
+                if iface["name"] != cand_nic:
+                    continue
+                if iface["configured"] or not iface["up"]:
+                    continue
+                return cand_nic
+        return None
+
+    def prompt_for_nic(
+        self,
+        nics: list[dict],
+        candidates: list[str],
+        physnet: str,
+        console: Console | None = None,
+    ) -> str:
         """Prompt user for nic to use and do some validation."""
-        if console:
-            context: Any = console.status("Fetching candidate nics from hypervisor")
-        else:
-            context = contextlib.nullcontext()
-
-        with context:
-            nics = nic_utils.fetch_nics(
-                self.client, self.names[0], self.jhelper, self.model
-            )
-
-        all_nics: list[dict] | None = nics.get("nics")
-        candidate_nics: list[str] | None = nics.get("candidates")
-
-        if not all_nics:
-            # all_nics should contain every nics of the hypervisor
-            # how did we get a response if there's no nics?
-            raise SunbeamException("No nics found on hyperisor")
-
-        if not candidate_nics:
-            raise SunbeamException("No candidate nics found")
-
-        local_hypervisor_bank = sunbeam.core.questions.QuestionBank(
-            questions=local_hypervisor_questions(),
+        local_external_network_bank = sunbeam.core.questions.QuestionBank(
+            questions=local_external_network_agent_questions(),
             console=console,
             accept_defaults=False,
         )
         nic = None
         while True:
-            nic = local_hypervisor_bank.nics.ask(
-                new_default=candidate_nics[0], new_choices=candidate_nics
+            candidate_nic = self._pick_candidate(nics, candidates) or candidates[0]
+            local_external_network_bank.nics.question += (
+                f" (physical network: {physnet})"
+            )
+            nic = typing.cast(
+                str,
+                local_external_network_bank.nics.ask(
+                    new_default=candidate_nic, new_choices=candidates
+                ),
             )
             if not nic:
                 continue
             nic_state = None
-            for interface in all_nics:
+            for interface in nics:
                 if interface["name"] == nic:
                     nic_state = interface
                     break
@@ -150,6 +161,76 @@ class LocalSetHypervisorUnitsOptionsStep(SetHypervisorUnitsOptionsStep):
             break
         return nic
 
+    def _fetch_nics(
+        self,
+    ) -> dict:
+        """Fetch nics from the network agent."""
+        raise NotImplementedError
+
+    def prompt_for_nics(
+        self,
+        console: Console | None = None,
+        physnets: list[str] | None = None,
+    ) -> list[tuple[str, str]]:
+        """Prompt user for nic to use and do some validation.
+
+        If we don't have physnets, we need to ask the user for which physnet
+        at each prompt.
+        """
+        if console:
+            context: Any = console.status("Fetching candidate nics from network agent")
+        else:
+            context = contextlib.nullcontext()
+
+        with context:
+            nics = self._fetch_nics()
+
+        all_nics: list[dict] | None = nics.get("nics")
+        candidate_nics: list[str] | None = nics.get("candidates")
+
+        if not all_nics:
+            # all_nics should contain every nics of the hypervisor
+            # how did we get a response if there's no nics?
+            raise SunbeamException("No nics found on network agent")
+
+        if not candidate_nics:
+            raise SunbeamException("No candidate nics found")
+
+        physnet_qs = physical_network_question()
+
+        current = 0
+        physnet_mapping = []
+        while True:
+            if not physnets:
+                physnet = typing.cast(
+                    str,
+                    physnet_qs["physnet_name"].ask(new_default=f"physnet{current + 1}"),
+                )
+            else:
+                physnet = physnets[current]
+            nic = self.prompt_for_nic(all_nics, candidate_nics, physnet, console)
+            physnet_mapping.append((physnet, nic))
+            candidate_nics.remove(nic)
+            current += 1
+            if not physnets:
+                if len(candidate_nics) == 0:
+                    LOG.debug("No more candidate nics available, stopping prompt.")
+                    break
+                another = physnet_qs["configure_more"].ask()
+                if not another:
+                    LOG.debug(
+                        "User chose not to configure more physnets, stopping prompt."
+                    )
+                    break
+            else:
+                if current >= len(physnets):
+                    LOG.debug("Reached the end of physnets, stopping prompt.")
+                    break
+                if len(candidate_nics) == 0:
+                    raise SunbeamException("No more candidate nics available.")
+
+        return physnet_mapping
+
     def prompt(
         self,
         console: Console | None = None,
@@ -164,31 +245,145 @@ class LocalSetHypervisorUnitsOptionsStep(SetHypervisorUnitsOptionsStep):
         remote_access_location = self.variables.get("user", {}).get(
             "remote_access_location"
         )
+        external_network = self.variables.get("external_network", {})
+
+        preseed = {}
+        if self.manifest:
+            if ext_networks := self.manifest.core.config.external_networks:
+                # Preseed with first external network
+                preseed = {
+                    physnet: network.model_dump(by_alias=True)
+                    for physnet, network in ext_networks.items()
+                }
+            elif ext_network := self.manifest.core.config.external_network:
+                # Using deprecated single external_network field
+                LOG.warning(
+                    "Manifest uses deprecated 'external_network' field, please "
+                    "update to 'external-networks'"
+                )
+                preseed = {"physnet1": ext_network.model_dump(by_alias=True)}
+
         # If adding new nodes to the cluster then local access makes no sense
         # so always prompt for the nic.
-        preseed = {}
-        if self.manifest and (
-            ext_network := self.manifest.core.config.external_network
-        ):
-            preseed = ext_network.model_dump(by_alias=True)
-
         if self.join_mode or remote_access_location == utils.REMOTE_ACCESS:
             # If nic is in the preseed assume the user knows what they are doing and
             # bypass validation
             host = self.names[0]
-            nics = preseed.get("nics")
-            if nics and (nic := nics.get(host)):
-                self.nics[host] = nic
+            physnet_mapping = []
+            for physnet, network in preseed.items():
+                nics = network.get("nics")
+                if nics and (nic := nics.get(host)):
+                    physnet_mapping.append((physnet, nic))
+
+                if nic := preseed.get("nic"):
+                    LOG.warning(
+                        "DEPRECATED: Using deprecated `nic` field for host %r", host
+                    )
+                    physnet_mapping.append((physnet, nic))
+
+            if physnet_mapping:
+                self.bridge_mappings[host] = self._build_bridge_mapping(physnet_mapping)
                 return
 
-            if nic := preseed.get("nic"):
-                LOG.warning(
-                    "DEPRECATED: Using deprecated `nic` field for host %r", host
-                )
-                self.nics[host] = nic
-                return
+            physnets = list(external_network.keys())
+            self.bridge_mappings[host] = self._build_bridge_mapping(
+                self.prompt_for_nics(console, physnets=physnets)
+            )
 
-            self.nics[host] = self.prompt_for_nic(console)
+
+class LocalSetHypervisorUnitsOptionsStep(
+    LocalSetExternalNetworkUnitsOptionsStep, PrincipalUnitGetterMixin
+):
+    APP = hypervisor.APPLICATION
+    DISPLAY_NAME = "hypervisor"
+    ACTION = "set-hypervisor-local-settings"
+
+    def _fetch_nics(self) -> dict:
+        return nic_utils.fetch_nics(
+            self.client, self.names[0], self.jhelper, self.model
+        )
+
+
+class LocalSetOpenStackNetworkAgentsStep(
+    LocalSetExternalNetworkUnitsOptionsStep, OpenstackNetworkAgentsUnitGetterMixin
+):
+    APP = microovn.AGENT_APP
+    DISPLAY_NAME = "network agents"
+    ACTION = "set-network-agents-local-settings"
+
+    def _fetch_nics(self) -> dict:
+        """Fetch nics from the network agent."""
+        return nic_utils.fetch_nics_from_subordinate(
+            self.client,
+            self.names[0],
+            self.jhelper,
+            self.model,
+            microovn.APPLICATION,
+            self.APP,
+        )
+
+
+class LocalUserQuestions(BaseUserQuestions):
+    """Ask user configuration questions."""
+
+    def __init__(
+        self,
+        client: Client,
+        answer_file: Path,
+        manifest: Manifest | None = None,
+        accept_defaults: bool = False,
+    ):
+        super().__init__(client, manifest, accept_defaults)
+        self.answer_file = answer_file
+
+    def _get_question_bank(
+        self,
+        console: Console | None,
+        preseed: dict,
+        show_hint: bool,
+    ) -> sunbeam.core.questions.QuestionBank:
+        return sunbeam.core.questions.QuestionBank(
+            questions=user_questions(),
+            console=console,
+            preseed=preseed,
+            previous_answers=self.variables.get("user"),
+            accept_defaults=self.accept_defaults,
+            show_hint=show_hint,
+        )
+
+    def _configure_remote_access(
+        self,
+        user_bank: sunbeam.core.questions.QuestionBank,
+    ) -> None:
+        # Check if there is a single compute node in the cluster
+        is_compute_node = False
+        is_bootstrap_node = False
+
+        try:
+            cluster_nodes = self.client.cluster.list_nodes()
+            is_bootstrap_node = len(cluster_nodes) == 1
+
+            # Check if current node has the compute role
+            fqdn = utils.get_fqdn()
+            node_info = self.client.cluster.get_node_info(fqdn)
+            roles = node_info.get("role", [])
+            if isinstance(roles, str):
+                roles = [roles]
+            is_compute_node = "compute" in [r.lower() for r in roles]
+        except Exception:
+            LOG.debug("Could not determine cluster node")
+
+        # Only ask local/remote question for bootstrap node with compute role
+        if is_bootstrap_node and is_compute_node:
+            # Ask for remote/local access since this is first node and a compute node
+            self.variables["user"]["remote_access_location"] = (
+                user_bank.remote_access_location.ask()
+            )
+            LOG.debug("Bootstrap node with compute role, asked for remote/local access")
+        else:
+            # All other cases: not single node, set to remote access
+            self.variables["user"]["remote_access_location"] = utils.REMOTE_ACCESS
+            LOG.debug("Not a bootstrap compute node, defaulting to remote access")
 
 
 class LocalClusterStatusStep(ClusterStatusStep):
@@ -423,7 +618,10 @@ class LocalConfigSRIOVStep(BaseStep):
             show_hint=show_hint,
         )
         nics = nic_utils.fetch_nics(
-            self.client, self.node_name, self.jhelper, self.model
+            self.client,
+            self.node_name,
+            self.jhelper,
+            self.model,
         )
 
         pci_address_map: dict[str, str] = {}
@@ -791,107 +989,3 @@ class LocalConfigDPDKStep(BaseConfigDPDKStep):
             return Result(ResultType.FAILED, msg)
 
         return Result(ResultType.COMPLETED)
-
-
-def network_node_questions():
-    return {
-        "external_interface": sunbeam.core.questions.PromptQuestion(
-            "External network's interface",
-            description=(
-                "Interface used by networking layer to allow remote access to cloud"
-                " instances. This interface must be unconfigured"
-                " (no IP address assigned) and connected to the external network."
-            ),
-        ),
-    }
-
-
-class LocalConfigureOpenStackNetworkAgentsStep(
-    ConfigureOpenStackNetworkAgentsLocalSettingsStep
-):
-    """Prompt for external interface (or use manifest) and configure agents."""
-
-    def __init__(
-        self,
-        client: Client,
-        node_name: str,
-        jhelper: JujuHelper,
-        model: str,
-        manifest: Manifest | None = None,
-        accept_defaults: bool = False,
-        bridge_name: str = "br-ex",
-        physnet_name: str = "physnet1",
-        enable_chassis_as_gw: bool = True,
-    ):
-        super().__init__(
-            client=client,
-            names=[node_name],
-            jhelper=jhelper,
-            bridge_name=bridge_name,
-            physnet_name=physnet_name,
-            model=model,
-            enable_chassis_as_gw=enable_chassis_as_gw,
-        )
-        self.client = client
-        self.node_name = node_name
-        self.manifest = manifest
-        self.accept_defaults = accept_defaults
-
-    def has_prompts(self) -> bool:
-        """Returns true if the step has prompts that it can ask the user."""
-        return True
-
-    def _prompt_for_external_nic(self, console: Console | None) -> str:
-        candidates: list[str] = []
-        all_nics: list[dict] = []
-
-        qbank = sunbeam.core.questions.QuestionBank(
-            questions=network_node_questions(),
-            console=console,
-            accept_defaults=self.accept_defaults,
-        )
-
-        if not candidates:
-            return qbank.external_interface.ask()
-
-        while True:
-            nic = qbank.external_interface.ask(
-                new_default=candidates[0], new_choices=candidates
-            )
-            if not nic:
-                continue
-            state = next((i for i in all_nics if i.get("name") == nic), None) or {}
-            if state.get("configured"):
-                if not sunbeam.core.questions.ConfirmQuestion(
-                    f"WARNING: Interface {nic} is configured. "
-                    "Any configuration will be lost. Continue?"
-                ).ask():
-                    continue
-            if state.get("up") and not state.get("connected"):
-                if not sunbeam.core.questions.ConfirmQuestion(
-                    f"WARNING: Interface {nic} is not detected as connected. Continue?",
-                    description="It may not work as expected.",
-                ).ask():
-                    continue
-            return nic
-
-    def prompt(self, console: Console | None = None, show_hint: bool = False) -> None:
-        """Prompt for external interface if not provided in manifest."""
-        if self.manifest and (ext := self.manifest.core.config.external_network):
-            hostmap = (ext.nics or {}) if hasattr(ext, "nics") else {}
-            nic = hostmap.get(self.node_name)
-            if not nic and hasattr(ext, "nic"):
-                nic = getattr(ext, "nic")
-            if nic:
-                self.external_interfaces[self.node_name] = nic
-                return
-        self.external_interfaces[self.node_name] = self._prompt_for_external_nic(
-            console
-        )
-
-    def run(self, status: Status | None = None) -> Result:
-        """Configure openstack-network-agents local settings via action."""
-        if not self.external_interfaces.get(self.node_name):
-            return Result(ResultType.FAILED, "No external interface selected")
-
-        return super().run(status)
