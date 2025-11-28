@@ -39,6 +39,14 @@ core:
         channel: squid/stable
         config:
           snap-channel: squid/stable
+      microovn:
+        channel: 25.03/stable
+      openstack-network-agents:
+        channel: 2025.1/candidate
+        config:
+          snap-channel: 2025.1/candidate
+      microcluster-token-distributor:
+        channel: latest/edge
 features:
   caas:
     software:

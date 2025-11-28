@@ -2,14 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 import pytest
 
 import sunbeam.commands.configure as configure
 import sunbeam.core
 from sunbeam.core.common import ResultType
-from sunbeam.core.juju import ActionFailedException
 from sunbeam.core.terraform import TerraformException
 
 
@@ -29,103 +28,6 @@ def write_answers():
 def question_bank():
     with patch.object(sunbeam.core.questions, "QuestionBank") as p:
         yield p
-
-
-class TestUserQuestions:
-    def test_has_prompts(self, cclient, jhelper):
-        step = configure.UserQuestions(cclient, jhelper)
-        assert step.has_prompts()
-
-    def check_common_questions(self, bank_mock):
-        assert bank_mock.username.ask.called
-
-    def check_demo_questions(self, user_bank_mock, net_bank_mock):
-        assert user_bank_mock.username.ask.called
-        assert user_bank_mock.password.ask.called
-        assert user_bank_mock.cidr.ask.called
-        assert user_bank_mock.security_group_rules.ask.called
-
-    def check_not_demo_questions(self, user_bank_mock, net_bank_mock):
-        assert not user_bank_mock.username.ask.called
-        assert not user_bank_mock.password.ask.called
-        assert not user_bank_mock.cidr.ask.called
-        assert not user_bank_mock.security_group_rules.ask.called
-
-    def check_remote_questions(self, net_bank_mock):
-        assert net_bank_mock.gateway.ask.called
-
-    def check_not_remote_questions(self, net_bank_mock):
-        assert not net_bank_mock.gateway.ask.called
-
-    def set_net_common_answers(self, net_bank_mock):
-        net_bank_mock.network_type.ask.return_value = "vlan"
-        net_bank_mock.cidr.ask.return_value = "10.0.0.0/24"
-
-    def configure_mocks(self, question_bank):
-        user_bank_mock = Mock()
-        net_bank_mock = Mock()
-        bank_mocks = [net_bank_mock, user_bank_mock]
-        question_bank.side_effect = lambda *args, **kwargs: bank_mocks.pop()
-        self.set_net_common_answers(net_bank_mock)
-        return user_bank_mock, net_bank_mock
-
-    def test_prompt_remote_demo_setup(
-        self, cclient, load_answers, question_bank, jhelper, write_answers
-    ):
-        load_answers.return_value = {}
-        user_bank_mock, net_bank_mock = self.configure_mocks(question_bank)
-        user_bank_mock.remote_access_location.ask.return_value = "remote"
-        user_bank_mock.run_demo_setup.ask.return_value = True
-        step = configure.UserQuestions(cclient, jhelper)
-        step.prompt()
-        self.check_demo_questions(user_bank_mock, net_bank_mock)
-        self.check_remote_questions(net_bank_mock)
-
-    def test_prompt_remote_no_demo_setup(
-        self, cclient, load_answers, question_bank, jhelper, write_answers
-    ):
-        load_answers.return_value = {}
-        user_bank_mock, net_bank_mock = self.configure_mocks(question_bank)
-        user_bank_mock.remote_access_location.ask.return_value = "remote"
-        user_bank_mock.run_demo_setup.ask.return_value = False
-        step = configure.UserQuestions(cclient, jhelper)
-        step.prompt()
-        self.check_not_demo_questions(user_bank_mock, net_bank_mock)
-        self.check_remote_questions(net_bank_mock)
-
-    def test_prompt_local_demo_setup(
-        self, cclient, load_answers, question_bank, jhelper, write_answers
-    ):
-        load_answers.return_value = {}
-        cclient.cluster.list_nodes.return_value = [{"name": "test-node"}]
-        cclient.cluster.get_node_info.return_value = {"role": ["compute", "control"]}
-        user_bank_mock, net_bank_mock = self.configure_mocks(question_bank)
-        user_bank_mock.remote_access_location.ask.return_value = "local"
-        user_bank_mock.run_demo_setup.ask.return_value = True
-        step = configure.UserQuestions(cclient, jhelper)
-        with patch(
-            "sunbeam.commands.configure.utils.get_fqdn", return_value="test-node"
-        ):
-            step.prompt()
-        self.check_demo_questions(user_bank_mock, net_bank_mock)
-        self.check_not_remote_questions(net_bank_mock)
-
-    def test_prompt_local_no_demo_setup(
-        self, cclient, load_answers, question_bank, jhelper, write_answers
-    ):
-        load_answers.return_value = {}
-        cclient.cluster.list_nodes.return_value = [{"name": "test-node"}]
-        cclient.cluster.get_node_info.return_value = {"role": ["compute", "control"]}
-        user_bank_mock, net_bank_mock = self.configure_mocks(question_bank)
-        user_bank_mock.remote_access_location.ask.return_value = "local"
-        user_bank_mock.run_demo_setup.ask.return_value = False
-        step = configure.UserQuestions(cclient, jhelper)
-        with patch(
-            "sunbeam.commands.configure.utils.get_fqdn", return_value="test-node"
-        ):
-            step.prompt()
-        self.check_not_demo_questions(user_bank_mock, net_bank_mock)
-        self.check_not_remote_questions(net_bank_mock)
 
 
 class TestUserOpenRCStep:
@@ -217,37 +119,3 @@ class TestTerraformDemoInitStep:
         step = configure.TerraformDemoInitStep(cclient, tfhelper)
         result = step.is_skip()
         assert result.result_type == ResultType.SKIPPED
-
-
-class TestSetLocalHypervisorOptions:
-    def test_run(self, cclient, jhelper):
-        jhelper.get_unit_from_machine.return_value = "openstack-hypervisor/0"
-        step = configure.SetHypervisorUnitsOptionsStep(
-            cclient, "maas0.local", jhelper, "test-model"
-        )
-        step.nics["maas0.local"] = "eth11"
-        result = step.run()
-        jhelper.run_action.assert_called_once_with(
-            "openstack-hypervisor/0",
-            "test-model",
-            "set-hypervisor-local-settings",
-            action_params={"external-nic": "eth11"},
-        )
-        assert result.result_type == ResultType.COMPLETED
-
-    def test_run_fail(self, cclient, jhelper):
-        jhelper.run_action.side_effect = ActionFailedException("Action failed")
-        jhelper.get_leader_unit.return_value = "openstack-hypervisor/0"
-        step = configure.SetHypervisorUnitsOptionsStep(
-            cclient, "maas0.local", jhelper, "test-model"
-        )
-        step.nics["maas0.local"] = "eth11"
-        result = step.run()
-        assert result.result_type == ResultType.FAILED
-
-    def test_run_skipped(self, cclient, jhelper):
-        step = configure.SetHypervisorUnitsOptionsStep(
-            cclient, "maas0.local", jhelper, "test-model"
-        )
-        step.run()
-        assert not jhelper.run_action.called

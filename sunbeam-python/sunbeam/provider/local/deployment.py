@@ -16,12 +16,6 @@ from sunbeam.clusterd.service import (
     ConfigItemNotFoundException,
     URLNotFoundException,
 )
-from sunbeam.commands.configure import (
-    CLOUD_CONFIG_SECTION,
-    ext_net_questions,
-    ext_net_questions_local_only,
-    user_questions,
-)
 from sunbeam.commands.proxy import proxy_questions
 from sunbeam.core.checks import DaemonGroupCheck
 from sunbeam.core.common import SunbeamException
@@ -39,11 +33,17 @@ from sunbeam.core.openstack import (
     generate_endpoint_preseed_questions,
 )
 from sunbeam.core.questions import QuestionBank, load_answers, show_questions
-from sunbeam.provider.local.steps import local_hypervisor_questions
+from sunbeam.provider.local.steps import local_external_network_agent_questions
 from sunbeam.steps.clusterd import (
     BOOTSTRAP_CONFIG_KEY,
     CLUSTERD_PORT,
     bootstrap_questions,
+)
+from sunbeam.steps.configure import (
+    CLOUD_CONFIG_SECTION,
+    ext_net_questions,
+    ext_net_questions_local_only,
+    user_questions,
 )
 from sunbeam.steps.k8s import K8S_ADDONS_CONFIG_KEY, k8s_addons_questions
 from sunbeam.steps.microceph import CONFIG_DISKS_KEY, microceph_questions
@@ -261,7 +261,7 @@ class LocalDeployment(Deployment):
             )
         )
         ext_net_bank_remote = QuestionBank(
-            questions=ext_net_questions() | local_hypervisor_questions(),
+            questions=ext_net_questions() | local_external_network_agent_questions(),
             console=console,
             previous_answers=variables.get("external_network"),
         )

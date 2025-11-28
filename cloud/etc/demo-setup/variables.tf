@@ -3,14 +3,13 @@
 
 # External networking
 variable "external_network" {
-  type = object({
+  type = map(object({
     cidr             = string
     gateway          = string
     range            = string
-    physical_network = string
     network_type     = string
     segmentation_id  = number
-  })
+  }))
 }
 
 
@@ -22,6 +21,7 @@ variable "user" {
     cidr                 = string
     security_group_rules = bool
     dns_nameservers      = list(string)
+    physnet              = string
   })
   sensitive = true
 }
@@ -29,13 +29,13 @@ variable "user" {
 
 # Image resource distro, e.g noble etc
 variable "distro_version" {
-  type = string
+  type    = string
   default = "noble"
 }
 
 
 # Image resource arch, e.g amd64
 variable "distro_arch" {
-  type = string
+  type    = string
   default = "amd64"
 }

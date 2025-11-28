@@ -24,8 +24,6 @@ from sunbeam.commands.configure import (
     DemoSetup,
     TerraformDemoInitStep,
     UserOpenRCStep,
-    UserQuestions,
-    get_external_network_configs,
     retrieve_admin_credentials,
 )
 from sunbeam.commands.dashboard_url import retrieve_dashboard_url
@@ -83,9 +81,10 @@ from sunbeam.provider.local.steps import (
     LocalClusterStatusStep,
     LocalConfigDPDKStep,
     LocalConfigSRIOVStep,
-    LocalConfigureOpenStackNetworkAgentsStep,
     LocalEndpointsConfigurationStep,
     LocalSetHypervisorUnitsOptionsStep,
+    LocalSetOpenStackNetworkAgentsStep,
+    LocalUserQuestions,
 )
 from sunbeam.steps import cluster_status
 from sunbeam.steps.bootstrap_state import SetBootstrapped
@@ -1494,6 +1493,16 @@ def join(  # noqa: C901
                 deployment.openstack_machines_model,
             )
         )
+        plan4.append(
+            LocalSetOpenStackNetworkAgentsStep(
+                client,
+                name,
+                jhelper,
+                deployment.openstack_machines_model,
+                join_mode=True,
+                manifest=manifest,
+            ),
+        )
 
     if is_storage_node:
         plan4.append(TerraformInitStep(microceph_tfhelper))
@@ -1867,7 +1876,7 @@ def configure_cmd(
 
     plan.extend(
         [
-            UserQuestions(
+            LocalUserQuestions(
                 client,
                 answer_file=answer_file,
                 manifest=manifest,
@@ -1888,10 +1897,6 @@ def configure_cmd(
 
     if "compute" in node["role"]:
         tfhelper_hypervisor = deployment.get_tfhelper("hypervisor-plan")
-        machine_id = str(node.get("machineid"))
-        jhelper.get_unit_from_machine(
-            "openstack-hypervisor", machine_id, deployment.openstack_machines_model
-        )
         plan.append(
             LocalSetHypervisorUnitsOptionsStep(
                 client,
@@ -1916,22 +1921,16 @@ def configure_cmd(
         )
 
     if "network" in node["role"]:
-        # Get external network configuration from user answers
-        ext_net_config = get_external_network_configs(client)
-        bridge_name = ext_net_config.get("external-bridge", "br-ex")
-        physnet_name = ext_net_config.get("physnet-name", "physnet1")
-
         plan.append(
-            LocalConfigureOpenStackNetworkAgentsStep(
+            LocalSetOpenStackNetworkAgentsStep(
                 client,
                 name,
                 jhelper,
                 deployment.openstack_machines_model,
-                manifest,
-                accept_defaults,
-                bridge_name=bridge_name,
-                physnet_name=physnet_name,
-                enable_chassis_as_gw=True,
+                # Accept preseed file but do not allow 'accept_defaults' as nic
+                # selection may vary from machine to machine and is potentially
+                # destructive if it takes over an unintended nic.
+                manifest=manifest,
             )
         )
 
