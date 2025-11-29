@@ -43,6 +43,7 @@ CONFIG_DISKS_KEY = "TerraformVarsMicroceph"
 APPLICATION = "microceph"
 CEPH_NFS_RELATION = "ceph-nfs"
 NFS_OFFER_NAME = "microceph-ceph-nfs"
+RGW_READY_OFFER_NAME = "microceph-ceph-rgw-ready"
 MICROCEPH_APP_TIMEOUT = (
     1800  # 30 minutes, can trigger to deploy mutliple units in parallel
 )
