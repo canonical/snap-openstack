@@ -87,6 +87,31 @@ class DeployConsulClientStep(BaseStep):
         self.client = self.deployment.get_client()
         self.model = self.deployment.openstack_machines_model
 
+    def _get_enable_tcp_check_options(
+        self, clients_to_enable: dict[ConsulServerNetworks, bool]
+    ) -> dict[ConsulServerNetworks, bool]:
+        """Determine if TCP health check should be enabled.
+
+        TCP health check is required for Consul storage network.
+        https://opendev.org/openstack/sunbeam-charms/src/commit/fc884608f9524d133347b9f18046c49cfb5c8340/charms/masakari-k8s/src/charm.py#L141
+
+        In case Consul storage network does not exist, Consul management is used
+        for storage access.
+        """
+        # If storage network exists, enable TCP check for storage network
+        if clients_to_enable.get(ConsulServerNetworks.STORAGE):
+            return {
+                ConsulServerNetworks.MANAGEMENT: False,
+                ConsulServerNetworks.TENANT: False,
+                ConsulServerNetworks.STORAGE: True,
+            }
+
+        return {
+            ConsulServerNetworks.MANAGEMENT: True,
+            ConsulServerNetworks.TENANT: False,
+            ConsulServerNetworks.STORAGE: False,
+        }
+
     def _get_tfvars(self) -> dict:
         """Construct tfvars for consul client."""
         openstack_backend_config = self.openstack_tfhelper.backend_config()
@@ -98,11 +123,12 @@ class DeployConsulClientStep(BaseStep):
             "openstack-state-config": openstack_backend_config,
         }
 
-        servers_to_enable = ConsulFeature.consul_servers_to_enable(self.deployment)
+        clients_to_enable = ConsulFeature.consul_servers_to_enable(self.deployment)
+        tcp_check_options = self._get_enable_tcp_check_options(clients_to_enable)
 
         consul_config_map = {}
         consul_endpoint_bindings_map = {}
-        if servers_to_enable.get(ConsulServerNetworks.MANAGEMENT):
+        if clients_to_enable.get(ConsulServerNetworks.MANAGEMENT):
             tfvars["enable-consul-management"] = True
             _management_config = {
                 "serf-lan-port": CONSUL_CLIENT_MANAGEMENT_SERF_LAN_PORT,
@@ -112,6 +138,10 @@ class DeployConsulClientStep(BaseStep):
                     self.manifest, "consul-client", ConsulServerNetworks.MANAGEMENT
                 )
             )
+            if "enable-tcp-health-check" not in _management_config:
+                _management_config["enable-tcp-health-check"] = tcp_check_options[
+                    ConsulServerNetworks.MANAGEMENT
+                ]
             consul_config_map["consul-management"] = _management_config
             consul_endpoint_bindings_map["consul-management"] = [
                 {"space": self.deployment.get_space(Networks.MANAGEMENT)},
@@ -127,7 +157,7 @@ class DeployConsulClientStep(BaseStep):
         else:
             tfvars["enable-consul-management"] = False
 
-        if servers_to_enable.get(ConsulServerNetworks.TENANT):
+        if clients_to_enable.get(ConsulServerNetworks.TENANT):
             tfvars["enable-consul-tenant"] = True
             _tenant_config = {
                 "serf-lan-port": CONSUL_CLIENT_TENANT_SERF_LAN_PORT,
@@ -137,6 +167,10 @@ class DeployConsulClientStep(BaseStep):
                     self.manifest, "consul-client", ConsulServerNetworks.TENANT
                 )
             )
+            if "enable-tcp-health-check" not in _tenant_config:
+                _tenant_config["enable-tcp-health-check"] = tcp_check_options[
+                    ConsulServerNetworks.TENANT
+                ]
             consul_config_map["consul-tenant"] = _tenant_config
             consul_endpoint_bindings_map["consul-tenant"] = [
                 {"space": self.deployment.get_space(Networks.MANAGEMENT)},
@@ -152,7 +186,7 @@ class DeployConsulClientStep(BaseStep):
         else:
             tfvars["enable-consul-tenant"] = False
 
-        if servers_to_enable.get(ConsulServerNetworks.STORAGE):
+        if clients_to_enable.get(ConsulServerNetworks.STORAGE):
             tfvars["enable-consul-storage"] = True
             _storage_config = {
                 "serf-lan-port": CONSUL_CLIENT_STORAGE_SERF_LAN_PORT,
@@ -162,6 +196,10 @@ class DeployConsulClientStep(BaseStep):
                     self.manifest, "consul-client", ConsulServerNetworks.STORAGE
                 )
             )
+            if "enable-tcp-health-check" not in _storage_config:
+                _storage_config["enable-tcp-health-check"] = tcp_check_options[
+                    ConsulServerNetworks.STORAGE
+                ]
             consul_config_map["consul-storage"] = _storage_config
             consul_endpoint_bindings_map["consul-storage"] = [
                 {"space": self.deployment.get_space(Networks.MANAGEMENT)},
