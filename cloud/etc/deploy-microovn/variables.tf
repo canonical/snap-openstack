@@ -6,10 +6,16 @@ variable "charm_microovn_channel" {
   default = "latest/edge"
 }
 
-variable "microovn_snap_channel" {
-  description = "MicroOVN snap channel to install via the charm"
-  type        = string
-  default     = "latest/edge"
+variable "charm_microovn_revision" {
+  description = "Operator channel revision for microovn deployment"
+  type        = number
+  default     = null
+}
+
+variable "charm_microovn_config" {
+  description = "Operator config for microovn deployment"
+  type        = map(string)
+  default     = {}
 }
 
 variable "charm_openstack_network_agents_channel" {
@@ -18,14 +24,32 @@ variable "charm_openstack_network_agents_channel" {
   default     = "latest/edge"
 }
 
+variable "charm_openstack_network_agents_revision" {
+  description = "Operator channel revision for openstack-network-agents deployment"
+  type        = number
+  default     = null
+}
+
+variable "charm_openstack_network_agents_config" {
+  description = "Operator config for openstack-network-agents deployment"
+  type        = map(string)
+  default     = {}
+}
+
 variable "charm_microcluster_token_distributor_channel" {
   description = "Operator channel for microcluster-token-distributor deployment"
   type        = string
   default     = "latest/edge"
 }
 
-variable "charm_microovn_config" {
-  description = "Operator config for microovn deployment"
+variable "charm_microcluster_token_distributor_revision" {
+  description = "Operator channel revision for microcluster-token-distributor deployment"
+  type        = number
+  default     = null
+}
+
+variable "charm_microcluster_token_distributor_config" {
+  description = "Operator config for microcluster-token-distributor deployment"
   type        = map(string)
   default     = {}
 }

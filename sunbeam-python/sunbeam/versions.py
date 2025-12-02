@@ -27,7 +27,7 @@ OVN_CHANNEL = "24.03/stable"
 RABBITMQ_CHANNEL = "3.12/stable"
 TRAEFIK_CHANNEL = "latest/stable"
 MICROCEPH_CHANNEL = "squid/stable"
-MICROOVN_CHANNEL = "latest/edge"
+MICROOVN_CHANNEL = "24.03/stable"
 MYSQL_CHANNEL = "8.0/stable"
 CERT_AUTH_CHANNEL = "1/stable"
 BIND_CHANNEL = "9/stable"
@@ -72,6 +72,9 @@ MISC_CHARMS_K8S = {
 MACHINE_CHARMS = {
     "microceph": MICROCEPH_CHANNEL,
     "microovn": MICROOVN_CHANNEL,
+    "openstack-network-agents": OPENSTACK_CHANNEL,
+    # TODO: ensure correct channel for the distributor
+    "microcluster-token-distributor": "latest/edge",
     "k8s": K8S_CHANNEL,
     "openstack-hypervisor": OPENSTACK_CHANNEL,
     "sunbeam-machine": OPENSTACK_CHANNEL,
@@ -227,7 +230,17 @@ DEPLOY_MICROOVN_TFVAR_MAP: VarMap = {
             "channel": "charm_microovn_channel",
             "revision": "charm_microovn_revision",
             "config": "charm_microovn_config",
-        }
+        },
+        "openstack-network-agents": {
+            "channel": "charm_openstack_network_agents_channel",
+            "revision": "charm_openstack_network_agents_revision",
+            "config": "charm_openstack_network_agents_config",
+        },
+        "microcluster-token-distributor": {
+            "channel": "charm_microcluster_token_distributor_channel",
+            "revision": "charm_microcluster_token_distributor_revision",
+            "config": "charm_microcluster_token_distributor_config",
+        },
     }
 }
 DEPLOY_OPENSTACK_HYPERVISOR_TFVAR_MAP: VarMap = {

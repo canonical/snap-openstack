@@ -15,7 +15,7 @@ from rich.console import Console
 
 import sunbeam.core.questions
 from sunbeam.clusterd.client import Client
-from sunbeam.commands.configure import CLOUD_CONFIG_SECTION, retrieve_admin_credentials
+from sunbeam.commands.configure import retrieve_admin_credentials
 from sunbeam.core.checks import VerifyBootstrappedCheck, run_preflight_checks
 from sunbeam.core.common import (
     BaseStep,
@@ -27,6 +27,7 @@ from sunbeam.core.common import (
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.core.terraform import TerraformHelper
+from sunbeam.steps.configure import CLOUD_CONFIG_SECTION
 from sunbeam.utils import click_option_show_hints
 
 LOG = logging.getLogger(__name__)

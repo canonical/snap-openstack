@@ -19,7 +19,10 @@ resource "juju_application" "openstack-network-agents" {
     name    = "openstack-network-agents"
     channel = var.charm_openstack_network_agents_channel
     base    = "ubuntu@24.04"
+    revision = var.charm_openstack_network_agents_revision
   }
+
+  config = var.charm_openstack_network_agents_config
 }
 
 resource "juju_application" "microcluster-token-distributor" {
@@ -33,7 +36,10 @@ resource "juju_application" "microcluster-token-distributor" {
     name    = "microcluster-token-distributor"
     channel = var.charm_microcluster_token_distributor_channel
     base    = "ubuntu@24.04"
+    revision = var.charm_microcluster_token_distributor_revision
   }
+
+  config = var.charm_microcluster_token_distributor_config
 }
 
 resource "juju_application" "microovn" {
@@ -47,7 +53,10 @@ resource "juju_application" "microovn" {
     name    = "microovn"
     channel = var.charm_microovn_channel
     base    = "ubuntu@24.04"
+    revision = var.charm_microovn_revision
   }
+
+  config = var.charm_microovn_config
 
   endpoint_bindings = var.endpoint_bindings
 }

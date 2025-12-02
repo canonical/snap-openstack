@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
-import typing
 
 from rich.status import Status
 
@@ -26,12 +25,6 @@ from sunbeam.core.manifest import Manifest
 from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.core.steps import DeployMachineApplicationStep, RemoveMachineUnitsStep
 from sunbeam.core.terraform import TerraformHelper
-from sunbeam.lazy import LazyImport
-
-if typing.TYPE_CHECKING:
-    import openstack
-else:
-    openstack = LazyImport("openstack")
 
 LOG = logging.getLogger(__name__)
 CONFIG_KEY = "TerraformVarsMicroovnPlan"
@@ -39,6 +32,7 @@ CONFIG_DISKS_KEY = "TerraformVarsMicroovn"
 APPLICATION = "microovn"
 MICROOVN_APP_TIMEOUT = 1200
 MICROOVN_UNIT_TIMEOUT = 1200
+AGENT_APP = "openstack-network-agents"
 
 
 class DeployMicroOVNApplicationStep(DeployMachineApplicationStep):
@@ -63,8 +57,8 @@ class DeployMicroOVNApplicationStep(DeployMachineApplicationStep):
             APPLICATION,
             model,
             [Role.NETWORK],
-            "Deploy OpenStack microovn",
-            "Deploying OpenStack microovn",
+            "Deploy MicroOVN",
+            "Deploying MicroOVN",
         )
         self.openstack_model = OPENSTACK_MODEL
 
