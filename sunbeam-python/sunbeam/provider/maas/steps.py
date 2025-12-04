@@ -2127,13 +2127,20 @@ class MaasCreateLoadBalancerIPPoolsStep(CreateLoadBalancerIPPoolsStep):
         return lb_range
 
     def ippools(self) -> dict[str, list[str]]:
-        """IPAddress pools.
+        """Return IP address pools for public and storage networks.
 
-        Pools should be in format of
-        {<pool name>: <List of ipaddresses>}
+        Returns IP pool definitions for public and storage networks.
+        Public network is required; if unavailable, no pools are created.
+        Storage network is optional.
+
+        Returns:
+        Dict mapping pool names to lists of IP address ranges.
+        Format: {<pool_name>: [<ip_ranges>]}
         """
         public_space = self.deployment.get_space(Networks.PUBLIC)
+        storage_space = self.deployment.get_space(Networks.STORAGE)
 
+        ippools: dict[str, list[str]] = {}
         try:
             public_ranges = maas_client.get_ip_ranges_from_space(
                 self.maas_client, public_space
@@ -2143,11 +2150,29 @@ class MaasCreateLoadBalancerIPPoolsStep(CreateLoadBalancerIPPoolsStep):
             LOG.debug("Failed to ip ranges for space: %r", public_space, exc_info=True)
             return {}
 
+        # Create metallb ipaddresspool for storage if the label exists in maas
+        try:
+            storage_ranges = maas_client.get_ip_ranges_from_space(
+                self.maas_client, storage_space
+            )
+            LOG.debug("Storage ip ranges: %r", storage_ranges)
+        except ValueError:
+            LOG.debug("Failed to ip ranges for space: %r", storage_space)
+            storage_ranges = {}
+
         public_metallb_range = self._to_range(  # noqa
             public_ranges, self.deployment.public_api_label
         )
+        ippools.update({self.deployment.public_ip_pool: public_metallb_range})
 
-        return {self.deployment.public_ip_pool: public_metallb_range}
+        if storage_ranges:
+            storage_metallb_range = self._to_range(
+                storage_ranges, self.deployment.storage_ippool_label
+            )
+            if storage_metallb_range:
+                ippools.update({self.deployment.storage_ip_pool: storage_metallb_range})
+
+        return ippools
 
 
 class MaasConfigSRIOVStep(BaseStep):

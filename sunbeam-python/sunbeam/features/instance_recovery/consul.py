@@ -33,6 +33,11 @@ from sunbeam.core.manifest import (
     FeatureConfig,
     Manifest,
 )
+from sunbeam.core.openstack import OPENSTACK_MODEL
+from sunbeam.core.steps import (
+    PatchLoadBalancerServicesIPPoolStep,
+    PatchLoadBalancerServicesIPStep,
+)
 from sunbeam.core.terraform import (
     TerraformException,
     TerraformHelper,
@@ -55,6 +60,7 @@ CONSUL_CLIENT_STORAGE_SERF_LAN_PORT = 8321
 CONSUL_CLIENT_TFPLAN = "consul-client-plan"
 CONSUL_CLIENT_CONFIG_KEY = "TerraformVarsFeatureConsulPlanConsulClient"
 PRINCIPAL_APP = "openstack-hypervisor"
+CONSUL_STORAGE_LB_SERVICE = "consul-storage-lb"
 
 
 class ConsulServerNetworks(enum.Enum):
@@ -87,31 +93,6 @@ class DeployConsulClientStep(BaseStep):
         self.client = self.deployment.get_client()
         self.model = self.deployment.openstack_machines_model
 
-    def _get_enable_tcp_check_options(
-        self, clients_to_enable: dict[ConsulServerNetworks, bool]
-    ) -> dict[ConsulServerNetworks, bool]:
-        """Determine if TCP health check should be enabled.
-
-        TCP health check is required for Consul storage network.
-        https://opendev.org/openstack/sunbeam-charms/src/commit/fc884608f9524d133347b9f18046c49cfb5c8340/charms/masakari-k8s/src/charm.py#L141
-
-        In case Consul storage network does not exist, Consul management is used
-        for storage access.
-        """
-        # If storage network exists, enable TCP check for storage network
-        if clients_to_enable.get(ConsulServerNetworks.STORAGE):
-            return {
-                ConsulServerNetworks.MANAGEMENT: False,
-                ConsulServerNetworks.TENANT: False,
-                ConsulServerNetworks.STORAGE: True,
-            }
-
-        return {
-            ConsulServerNetworks.MANAGEMENT: True,
-            ConsulServerNetworks.TENANT: False,
-            ConsulServerNetworks.STORAGE: False,
-        }
-
     def _get_tfvars(self) -> dict:
         """Construct tfvars for consul client."""
         openstack_backend_config = self.openstack_tfhelper.backend_config()
@@ -124,7 +105,7 @@ class DeployConsulClientStep(BaseStep):
         }
 
         clients_to_enable = ConsulFeature.consul_servers_to_enable(self.deployment)
-        tcp_check_options = self._get_enable_tcp_check_options(clients_to_enable)
+        health_check_options = ConsulFeature.health_checks_to_enable(clients_to_enable)
 
         consul_config_map = {}
         consul_endpoint_bindings_map = {}
@@ -138,8 +119,8 @@ class DeployConsulClientStep(BaseStep):
                     self.manifest, "consul-client", ConsulServerNetworks.MANAGEMENT
                 )
             )
-            if "enable-tcp-health-check" not in _management_config:
-                _management_config["enable-tcp-health-check"] = tcp_check_options[
+            if "enable-health-check" not in _management_config:
+                _management_config["enable-health-check"] = health_check_options[
                     ConsulServerNetworks.MANAGEMENT
                 ]
             consul_config_map["consul-management"] = _management_config
@@ -167,8 +148,8 @@ class DeployConsulClientStep(BaseStep):
                     self.manifest, "consul-client", ConsulServerNetworks.TENANT
                 )
             )
-            if "enable-tcp-health-check" not in _tenant_config:
-                _tenant_config["enable-tcp-health-check"] = tcp_check_options[
+            if "enable-health-check" not in _tenant_config:
+                _tenant_config["enable-health-check"] = health_check_options[
                     ConsulServerNetworks.TENANT
                 ]
             consul_config_map["consul-tenant"] = _tenant_config
@@ -196,8 +177,8 @@ class DeployConsulClientStep(BaseStep):
                     self.manifest, "consul-client", ConsulServerNetworks.STORAGE
                 )
             )
-            if "enable-tcp-health-check" not in _storage_config:
-                _storage_config["enable-tcp-health-check"] = tcp_check_options[
+            if "enable-health-check" not in _storage_config:
+                _storage_config["enable-health-check"] = health_check_options[
                     ConsulServerNetworks.STORAGE
                 ]
             consul_config_map["consul-storage"] = _storage_config
@@ -342,6 +323,34 @@ class ConsulFeature:
         return enable
 
     @staticmethod
+    def health_checks_to_enable(
+        clients_to_enable: dict[ConsulServerNetworks, bool],
+    ) -> dict[ConsulServerNetworks, bool]:
+        """Determine if health check should be enabled.
+
+        Health check is required for Consul storage network.
+        https://opendev.org/openstack/sunbeam-charms/src/commit/fc884608f9524d133347b9f18046c49cfb5c8340/charms/masakari-k8s/src/charm.py#L141
+
+        In case Consul storage network does not exist, Consul management is used
+        for storage access.
+        """
+        # If storage network exists, enable TCP check for storage network
+        if clients_to_enable.get(ConsulServerNetworks.STORAGE):
+            return {
+                ConsulServerNetworks.MANAGEMENT: False,
+                ConsulServerNetworks.TENANT: False,
+                ConsulServerNetworks.STORAGE: True,
+            }
+
+        # This is a case where storage network does not exist but storage is handled via
+        # management network. So enable health check on management network.
+        return {
+            ConsulServerNetworks.MANAGEMENT: True,
+            ConsulServerNetworks.TENANT: False,
+            ConsulServerNetworks.STORAGE: False,
+        }
+
+    @staticmethod
     def get_config_from_manifest(
         manifest: Manifest, charm: str, network: ConsulServerNetworks
     ) -> dict:
@@ -402,55 +411,102 @@ class ConsulFeature:
         """Set terraform variables to enable the consul-k8s application."""
         tfvars: dict[str, Any] = {}
         servers_to_enable = ConsulFeature.consul_servers_to_enable(deployment)
+        health_check_options = ConsulFeature.health_checks_to_enable(servers_to_enable)
 
         consul_config_map = {}
         if servers_to_enable.get(ConsulServerNetworks.MANAGEMENT):
             tfvars["enable-consul-management"] = True
-            _management_config = {
-                "expose-gossip-and-rpc-ports": True,
-                "serflan-node-port": CONSUL_MANAGEMENT_SERF_LAN_PORT,
-            }
+            _management_config = {}
             # Manifest takes precedence
             _management_config.update(
                 ConsulFeature.get_config_from_manifest(
                     manifest, "consul-k8s", ConsulServerNetworks.MANAGEMENT
                 )
             )
+            if "expose-gossip-and-rpc-ports" not in _management_config:
+                if health_check_options[ConsulServerNetworks.MANAGEMENT]:
+                    _management_config["expose-gossip-and-rpc-ports"] = "loadbalancer"
+                else:
+                    _management_config["expose-gossip-and-rpc-ports"] = "nodeport"
+            if "serflan-node-port" not in _management_config:
+                _management_config["serflan-node-port"] = (
+                    CONSUL_MANAGEMENT_SERF_LAN_PORT
+                )
             consul_config_map["consul-management"] = _management_config
         else:
             tfvars["enable-consul-management"] = False
 
         if servers_to_enable.get(ConsulServerNetworks.TENANT):
             tfvars["enable-consul-tenant"] = True
-            _tenant_config = {
-                "expose-gossip-and-rpc-ports": True,
-                "serflan-node-port": CONSUL_TENANT_SERF_LAN_PORT,
-            }
+            _tenant_config = {}
             # Manifest takes precedence
             _tenant_config.update(
                 ConsulFeature.get_config_from_manifest(
                     manifest, "consul-k8s", ConsulServerNetworks.TENANT
                 )
             )
+            if "expose-gossip-and-rpc-ports" not in _tenant_config:
+                if health_check_options[ConsulServerNetworks.TENANT]:
+                    _tenant_config["expose-gossip-and-rpc-ports"] = "loadbalancer"
+                else:
+                    _tenant_config["expose-gossip-and-rpc-ports"] = "nodeport"
+            if "serflan-node-port" not in _tenant_config:
+                _tenant_config["serflan-node-port"] = CONSUL_TENANT_SERF_LAN_PORT
             consul_config_map["consul-tenant"] = _tenant_config
         else:
             tfvars["enable-consul-tenant"] = False
 
         if servers_to_enable.get(ConsulServerNetworks.STORAGE):
             tfvars["enable-consul-storage"] = True
-            _storage_config = {
-                "expose-gossip-and-rpc-ports": True,
-                "serflan-node-port": CONSUL_STORAGE_SERF_LAN_PORT,
-            }
+            _storage_config = {}
             # Manifest takes precedence
             _storage_config.update(
                 ConsulFeature.get_config_from_manifest(
                     manifest, "consul-k8s", ConsulServerNetworks.STORAGE
                 )
             )
+            # Given the logic for masakarimonitors matrix to determine when to
+            # apply action recovery, recovery is needed only when storage network
+            # is used. In some cases, the storage network is same as management
+            # network. No health check is required for management network as
+            # consul-client already have the necessary endpoints exposed on
+            # management network.
+            # For storage network, the consul-server should expose the gossip port
+            # as loadbalancer to enable health check from consul-client.
+            # So only update option expose-gossip-and-rpc-ports for Storage
+            # network and ignore for other networks.
+            # This also reduces the number of metallb ip allocations for
+            # instance-recovery feature to 1, that too only if storage network exists.
+            if "expose-gossip-and-rpc-ports" not in _storage_config:
+                if health_check_options[ConsulServerNetworks.STORAGE]:
+                    _storage_config["expose-gossip-and-rpc-ports"] = "loadbalancer"
+                else:
+                    _storage_config["expose-gossip-and-rpc-ports"] = "nodeport"
+            if "serflan-node-port" not in _storage_config:
+                _storage_config["serflan-node-port"] = CONSUL_STORAGE_SERF_LAN_PORT
             consul_config_map["consul-storage"] = _storage_config
         else:
             tfvars["enable-consul-storage"] = False
 
         tfvars["consul-config-map"] = consul_config_map
         return tfvars
+
+
+class PatchConsulStorageLoadBalancerIPStep(PatchLoadBalancerServicesIPStep):
+    def services(self) -> list[str]:
+        """List of services to patch."""
+        return [CONSUL_STORAGE_LB_SERVICE]
+
+    def model(self) -> str:
+        """Name of the model to use."""
+        return OPENSTACK_MODEL
+
+
+class PatchConsulStorageLoadBalancerIPPoolStep(PatchLoadBalancerServicesIPPoolStep):
+    def services(self) -> list[str]:
+        """List of services to patch."""
+        return [CONSUL_STORAGE_LB_SERVICE]
+
+    def model(self) -> str:
+        """Name of the model to use."""
+        return OPENSTACK_MODEL

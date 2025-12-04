@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2024 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
+import logging
 from pathlib import Path
 
 import click
@@ -25,6 +26,7 @@ from sunbeam.features.interface.v1.openstack import (
     OpenStackControlPlaneFeature,
     TerraformPlanLocation,
 )
+from sunbeam.provider.maas.deployment import is_maas_deployment
 from sunbeam.steps.hypervisor import ReapplyHypervisorTerraformPlanStep
 from sunbeam.steps.juju import RemoveSaasApplicationsStep
 from sunbeam.utils import click_option_show_hints, pass_method_obj
@@ -33,6 +35,7 @@ from sunbeam.versions import CONSUL_CHANNEL, OPENSTACK_CHANNEL
 from . import consul
 
 console = Console()
+LOG = logging.getLogger(__name__)
 
 
 class InstanceRecoveryFeature(OpenStackControlPlaneFeature):
@@ -116,6 +119,31 @@ class InstanceRecoveryFeature(OpenStackControlPlaneFeature):
                 EnableOpenStackApplicationStep(
                     deployment, config, tfhelper, jhelper, self
                 ),
+            ]
+        )
+        run_plan(plan1, console, show_hints)
+
+        plan2: list[BaseStep] = []
+        if is_maas_deployment(deployment):
+            message = (
+                "Detected MAAS deployment, adding consul storage LoadBalancer patching "
+                "steps"
+            )
+            LOG.debug(message)
+            plan2.extend(
+                [
+                    consul.PatchConsulStorageLoadBalancerIPPoolStep(
+                        deployment.get_client(),
+                        deployment.storage_ippool_label,
+                        ignore_errors=True,
+                    ),
+                    consul.PatchConsulStorageLoadBalancerIPStep(
+                        deployment.get_client(), ignore_errors=True
+                    ),
+                ]
+            )
+        plan2.extend(
+            [
                 TerraformInitStep(tfhelper_consul_client),
                 consul.DeployConsulClientStep(
                     deployment=deployment,
@@ -127,14 +155,14 @@ class InstanceRecoveryFeature(OpenStackControlPlaneFeature):
                 ),
             ]
         )
-        run_plan(plan1, console, show_hints)
+        run_plan(plan2, console, show_hints)
 
         openstack_tf_output = tfhelper_openstack.output()
         extra_tfvars = {
             "masakari-offer-url": openstack_tf_output.get("masakari-offer-url")
         }
-        plan2: list[BaseStep] = []
-        plan2.extend(
+        plan3: list[BaseStep] = []
+        plan3.extend(
             [
                 TerraformInitStep(tfhelper_hypervisor),
                 ReapplyHypervisorTerraformPlanStep(
@@ -147,7 +175,7 @@ class InstanceRecoveryFeature(OpenStackControlPlaneFeature):
                 ),
             ]
         )
-        run_plan(plan2, console, show_hints)
+        run_plan(plan3, console, show_hints)
         click.echo(f"OpenStack {self.display_name} application enabled.")
 
     def run_disable_plans(self, deployment: Deployment, show_hints: bool) -> None:

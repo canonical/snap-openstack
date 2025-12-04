@@ -141,6 +141,11 @@ class MaasDeployment(Deployment):
         """Return internal API label."""
         return self.name + "-internal-api"
 
+    @property
+    def storage_ippool_label(self) -> str:
+        """Return storage ippool label."""
+        return self.name + "-storage-ippool"
+
     @pydantic.validator("type")
     def type_validator(cls, v: str, values: dict) -> str:  # noqa N805
         if v != MAAS_TYPE:
@@ -332,6 +337,11 @@ class MaasDeployment(Deployment):
     def public_ip_pool(self) -> str:
         """Name of the public IP pool."""
         return self.public_api_label
+
+    @property
+    def storage_ip_pool(self) -> str:
+        """Name of the storage IP pool."""
+        return self.storage_ippool_label
 
 
 def is_maas_deployment(deployment: Deployment) -> TypeGuard[MaasDeployment]:
