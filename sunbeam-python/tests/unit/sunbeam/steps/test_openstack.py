@@ -362,10 +362,13 @@ class PatchLoadBalancerServicesIPStepTest:
             step.is_skip()
             result = step.run()
         assert result.result_type == ResultType.COMPLETED
-        annotation = step.kube.patch.mock_calls[0][2]["obj"].metadata.annotations[
-            METALLB_IP_ANNOTATION
-        ]
-        assert annotation == "fake-ip"
+        # Verify apply was called instead of patch
+        step.kube.apply.assert_called_once()
+        # Check that managedFields was cleared before apply
+        service_arg = step.kube.apply.mock_calls[0][1][0]
+        assert service_arg.metadata.annotations[METALLB_IP_ANNOTATION] == "fake-ip"
+        # Verify field_manager was passed
+        assert step.kube.apply.mock_calls[0][2]["field_manager"] == "sunbeam"
 
 
 class PatchLoadBalancerServicesIPPoolStepTest:
@@ -418,10 +421,16 @@ class PatchLoadBalancerServicesIPPoolStepTest:
             step = OpenStackPatchLoadBalancerServicesIPPoolStep(pool_client, pool_name)
             result = step.run()
         assert result.result_type == ResultType.COMPLETED
-        annotation = step.kube.patch.mock_calls[0][2]["obj"].metadata.annotations[
-            METALLB_ADDRESS_POOL_ANNOTATION
-        ]
-        assert annotation == pool_name
+        # Verify apply was called instead of patch
+        step.kube.apply.assert_called_once()
+        # Check the annotation
+        service_arg = step.kube.apply.mock_calls[0][1][0]
+        assert (
+            service_arg.metadata.annotations[METALLB_ADDRESS_POOL_ANNOTATION]
+            == pool_name
+        )
+        # Verify field_manager was passed
+        assert step.kube.apply.mock_calls[0][2]["field_manager"] == "sunbeam"
 
     def test_run_missing_annotation(
         self, pool_client, pool_name, read_config_patch, snap_patch, snap_mock
@@ -454,10 +463,16 @@ class PatchLoadBalancerServicesIPPoolStepTest:
             step = OpenStackPatchLoadBalancerServicesIPPoolStep(pool_client, pool_name)
             result = step.run()
         assert result.result_type == ResultType.COMPLETED
-        annotation = step.kube.patch.mock_calls[0][2]["obj"].metadata.annotations[
-            METALLB_ADDRESS_POOL_ANNOTATION
-        ]
-        assert annotation == pool_name
+        # Verify apply was called instead of patch
+        step.kube.apply.assert_called_once()
+        # Check the annotation
+        service_arg = step.kube.apply.mock_calls[0][1][0]
+        assert (
+            service_arg.metadata.annotations[METALLB_ADDRESS_POOL_ANNOTATION]
+            == pool_name
+        )
+        # Verify field_manager was passed
+        assert step.kube.apply.mock_calls[0][2]["field_manager"] == "sunbeam"
 
     def test_run_missing_config(self, pool_client, pool_name, snap_patch, snap_mock):
         snap_mock().config.get.return_value = "k8s"
@@ -493,7 +508,7 @@ class PatchLoadBalancerServicesIPPoolStepTest:
             step = OpenStackPatchLoadBalancerServicesIPPoolStep(pool_client, pool_name)
             result = step.run()
         assert result.result_type == ResultType.COMPLETED
-        step.kube.patch.assert_not_called()
+        step.kube.apply.assert_not_called()
 
     def test_run_different_ippool_already_allocated(
         self, pool_client, pool_name, read_config_patch, snap_patch, snap_mock
@@ -544,10 +559,16 @@ class PatchLoadBalancerServicesIPPoolStepTest:
             )
             result = step.run()
         assert result.result_type == ResultType.COMPLETED
-        annotation = step.kube.patch.mock_calls[0][2]["obj"].metadata.annotations[
-            METALLB_ADDRESS_POOL_ANNOTATION
-        ]
-        assert annotation == pool_name
+        # Verify apply was called instead of patch
+        step.kube.apply.assert_called_once()
+        # Check the annotation
+        service_arg = step.kube.apply.mock_calls[0][1][0]
+        assert (
+            service_arg.metadata.annotations[METALLB_ADDRESS_POOL_ANNOTATION]
+            == pool_name
+        )
+        # Verify field_manager was passed
+        assert step.kube.apply.mock_calls[0][2]["field_manager"] == "sunbeam"
 
 
 @pytest.mark.parametrize(

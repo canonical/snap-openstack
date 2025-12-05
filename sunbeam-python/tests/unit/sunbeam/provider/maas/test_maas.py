@@ -1489,6 +1489,8 @@ class TestMaasCreateLoadBalancerIPPoolsStep:
                         side_effect=[
                             FakeIPPool(["10.149.100.200-10.149.100.210"]),
                             FakeL2Advertisement(pool_name),
+                            FakeIPPool(["10.149.100.200-10.149.100.210"]),
+                            FakeL2Advertisement(pool_name),
                         ]
                     )
                 )
@@ -1521,12 +1523,18 @@ class TestMaasCreateLoadBalancerIPPoolsStep:
         mocker.patch("sunbeam.core.k8s.Snap", k8s_snap)
         mocker.patch(
             "sunbeam.core.steps.l_client.Client",
-            new=Mock(return_value=Mock(get=Mock(side_effect=[None, None]))),
+            new=Mock(return_value=Mock(get=Mock(side_effect=[None, None, None, None]))),
         )
         k8s_snap().config.get.return_value = "k8s"
+
+        def get_ip_ranges_side_effect(client, space):
+            if space == "public_space":
+                return ippool_from_maas
+            return {}  # No storage ranges
+
         get_ip_ranges_from_space_mock = mocker.patch(
             "sunbeam.provider.maas.client.get_ip_ranges_from_space",
-            return_value=ippool_from_maas,
+            side_effect=get_ip_ranges_side_effect,
         )
 
         step = MaasCreateLoadBalancerIPPoolsStep(deployment_k8s, cclient, maas_client)
@@ -1534,6 +1542,7 @@ class TestMaasCreateLoadBalancerIPPoolsStep:
         result = step.run()
         assert result.result_type == ResultType.COMPLETED
         get_ip_ranges_from_space_mock.assert_any_call(maas_client, "public_space")
+        # Only public pool is created when storage ranges don't exist
         assert step.kube.create.call_count == 1
         assert step.kube.create.mock_calls[0][1][0].get("spec", {}).get(
             "addresses"
@@ -1563,15 +1572,23 @@ class TestMaasCreateLoadBalancerIPPoolsStep:
                         side_effect=[
                             FakeIPPool(["10.149.100.200-10.149.100.210"]),
                             api_error,
+                            FakeIPPool(["10.149.100.200-10.149.100.210"]),
+                            api_error,
                         ]
                     )
                 )
             ),
         )
         k8s_snap().config.get.return_value = "k8s"
+
+        def get_ip_ranges_side_effect(client, space):
+            if space == "public_space":
+                return ippool_from_maas
+            return {}  # No storage ranges
+
         get_ip_ranges_from_space_mock = mocker.patch(
             "sunbeam.provider.maas.client.get_ip_ranges_from_space",
-            return_value=ippool_from_maas,
+            side_effect=get_ip_ranges_side_effect,
         )
 
         step = MaasCreateLoadBalancerIPPoolsStep(deployment_k8s, cclient, maas_client)
@@ -1579,6 +1596,7 @@ class TestMaasCreateLoadBalancerIPPoolsStep:
         result = step.run()
         assert result.result_type == ResultType.COMPLETED
         get_ip_ranges_from_space_mock.assert_any_call(maas_client, "public_space")
+        # Only 2 get calls for public pool (ipaddresspool + l2advertisement)
         assert step.kube.get.call_count == 2
         assert step.kube.delete.call_count == 0
 
@@ -1602,15 +1620,23 @@ class TestMaasCreateLoadBalancerIPPoolsStep:
                         side_effect=[
                             FakeIPPool(["10.149.100.120-10.149.100.130"]),
                             FakeL2Advertisement(pool_name),
+                            FakeIPPool(["10.149.100.120-10.149.100.130"]),
+                            FakeL2Advertisement(pool_name),
                         ]
                     )
                 )
             ),
         )
         k8s_snap().config.get.return_value = "k8s"
+
+        def get_ip_ranges_side_effect(client, space):
+            if space == "public_space":
+                return ippool_from_maas
+            return {}  # No storage ranges
+
         get_ip_ranges_from_space_mock = mocker.patch(
             "sunbeam.provider.maas.client.get_ip_ranges_from_space",
-            return_value=ippool_from_maas,
+            side_effect=get_ip_ranges_side_effect,
         )
 
         step = MaasCreateLoadBalancerIPPoolsStep(deployment_k8s, cclient, maas_client)
@@ -1618,6 +1644,7 @@ class TestMaasCreateLoadBalancerIPPoolsStep:
         result = step.run()
         assert result.result_type == ResultType.COMPLETED
         get_ip_ranges_from_space_mock.assert_any_call(maas_client, "public_space")
+        # Only public pool is replaced when storage ranges don't exist
         assert step.kube.replace.call_count == 1
         assert step.kube.replace.mock_calls[0][1][0].spec.get("addresses") == [
             "10.149.100.200-10.149.100.210"
@@ -1729,3 +1756,66 @@ class TestMachineComputeNicCheckNetworkNode:
             result = check.run()
             assert result.passed is DiagnosticResultType.SUCCESS
             assert result.message and NicTags.COMPUTE.value in result.message
+
+
+class TestMaasDeploymentProperties:
+    """Test MAAS deployment properties."""
+
+    def test_storage_ippool_label(self):
+        """Test storage_ippool_label property returns correct value."""
+        deployment = MaasDeployment(
+            name="test-deployment",
+            url="http://maas.local",
+            token="test-token",
+        )
+        assert deployment.storage_ippool_label == "test-deployment-storage-ippool"
+
+    def test_storage_ip_pool(self):
+        """Test storage_ip_pool property returns correct value."""
+        deployment = MaasDeployment(
+            name="test-deployment",
+            url="http://maas.local",
+            token="test-token",
+        )
+        assert deployment.storage_ip_pool == "test-deployment-storage-ippool"
+
+    def test_storage_ippool_label_with_different_names(self):
+        """Test storage_ippool_label with different deployment names."""
+        test_cases = [
+            ("my-cloud", "my-cloud-storage-ippool"),
+            ("prod-deployment", "prod-deployment-storage-ippool"),
+            ("dev", "dev-storage-ippool"),
+        ]
+
+        for deployment_name, expected_label in test_cases:
+            deployment = MaasDeployment(
+                name=deployment_name,
+                url="http://maas.local",
+                token="test-token",
+            )
+            assert deployment.storage_ippool_label == expected_label
+            assert deployment.storage_ip_pool == expected_label
+
+
+class TestIsMaasDeployment:
+    """Test is_maas_deployment TypeGuard function."""
+
+    def test_is_maas_deployment_with_maas_deployment(self):
+        """Test that MaasDeployment returns True."""
+        from sunbeam.provider.maas.deployment import is_maas_deployment
+
+        deployment = MaasDeployment(
+            name="test-deployment",
+            url="http://maas.local",
+            token="test-token",
+        )
+        assert is_maas_deployment(deployment) is True
+
+    def test_is_maas_deployment_with_base_deployment(self, mocker):
+        """Test that non-MAAS Deployment returns False."""
+        from sunbeam.core.deployment import Deployment
+        from sunbeam.provider.maas.deployment import is_maas_deployment
+
+        # Create a mock non-MAAS deployment
+        deployment = mocker.Mock(spec=Deployment)
+        assert is_maas_deployment(deployment) is False

@@ -28,17 +28,13 @@ class TestDeployConsulClientStep:
         self, deployment, tfhelper, jhelper, manifest
     ):
         """Test TCP check option when storage network exists."""
-        step = consul_feature.DeployConsulClientStep(
-            deployment, tfhelper, tfhelper, jhelper, manifest
-        )
-
         clients_to_enable = {
             consul_feature.ConsulServerNetworks.MANAGEMENT: True,
             consul_feature.ConsulServerNetworks.TENANT: True,
             consul_feature.ConsulServerNetworks.STORAGE: True,
         }
 
-        result = step._get_enable_tcp_check_options(clients_to_enable)
+        result = consul_feature.ConsulFeature.health_checks_to_enable(clients_to_enable)
 
         assert result[consul_feature.ConsulServerNetworks.MANAGEMENT] is False
         assert result[consul_feature.ConsulServerNetworks.TENANT] is False
@@ -48,17 +44,13 @@ class TestDeployConsulClientStep:
         self, deployment, tfhelper, jhelper, manifest
     ):
         """Test TCP check option when storage network doesn't exist."""
-        step = consul_feature.DeployConsulClientStep(
-            deployment, tfhelper, tfhelper, jhelper, manifest
-        )
-
         clients_to_enable = {
             consul_feature.ConsulServerNetworks.MANAGEMENT: True,
             consul_feature.ConsulServerNetworks.TENANT: True,
             consul_feature.ConsulServerNetworks.STORAGE: False,
         }
 
-        result = step._get_enable_tcp_check_options(clients_to_enable)
+        result = consul_feature.ConsulFeature.health_checks_to_enable(clients_to_enable)
 
         assert result[consul_feature.ConsulServerNetworks.MANAGEMENT] is True
         assert result[consul_feature.ConsulServerNetworks.TENANT] is False
@@ -68,17 +60,13 @@ class TestDeployConsulClientStep:
         self, deployment, tfhelper, jhelper, manifest
     ):
         """Test TCP check option when storage network doesn't exist."""
-        step = consul_feature.DeployConsulClientStep(
-            deployment, tfhelper, tfhelper, jhelper, manifest
-        )
-
         clients_to_enable = {
             consul_feature.ConsulServerNetworks.MANAGEMENT: True,
             consul_feature.ConsulServerNetworks.TENANT: False,
             consul_feature.ConsulServerNetworks.STORAGE: False,
         }
 
-        result = step._get_enable_tcp_check_options(clients_to_enable)
+        result = consul_feature.ConsulFeature.health_checks_to_enable(clients_to_enable)
 
         assert result[consul_feature.ConsulServerNetworks.MANAGEMENT] is True
         assert result[consul_feature.ConsulServerNetworks.TENANT] is False
@@ -115,12 +103,11 @@ class TestDeployConsulClientStep:
 
         # Management should be False, Storage should be True
         assert (
-            result["consul-config-map"]["consul-management"]["enable-tcp-health-check"]
+            result["consul-config-map"]["consul-management"]["enable-health-check"]
             is False
         )
         assert (
-            result["consul-config-map"]["consul-storage"]["enable-tcp-health-check"]
-            is True
+            result["consul-config-map"]["consul-storage"]["enable-health-check"] is True
         )
 
     @patch(
@@ -144,8 +131,8 @@ class TestDeployConsulClientStep:
             consul_feature.ConsulServerNetworks.TENANT: False,
             consul_feature.ConsulServerNetworks.STORAGE: False,
         }
-        # Manifest explicitly sets enable-tcp-health-check
-        mock_get_config.return_value = {"enable-tcp-health-check": False}
+        # Manifest explicitly sets enable-health-check
+        mock_get_config.return_value = {"enable-health-check": False}
 
         step = consul_feature.DeployConsulClientStep(
             deployment, tfhelper, tfhelper, jhelper, manifest
@@ -155,7 +142,7 @@ class TestDeployConsulClientStep:
 
         # Should respect manifest value (False) instead of default (True)
         assert (
-            result["consul-config-map"]["consul-management"]["enable-tcp-health-check"]
+            result["consul-config-map"]["consul-management"]["enable-health-check"]
             is False
         )
 
@@ -190,16 +177,14 @@ class TestDeployConsulClientStep:
 
         # Only storage should have TCP check enabled
         assert (
-            result["consul-config-map"]["consul-management"]["enable-tcp-health-check"]
+            result["consul-config-map"]["consul-management"]["enable-health-check"]
             is False
         )
         assert (
-            result["consul-config-map"]["consul-tenant"]["enable-tcp-health-check"]
-            is False
+            result["consul-config-map"]["consul-tenant"]["enable-health-check"] is False
         )
         assert (
-            result["consul-config-map"]["consul-storage"]["enable-tcp-health-check"]
-            is True
+            result["consul-config-map"]["consul-storage"]["enable-health-check"] is True
         )
 
     def test_run(self, deployment, tfhelper, jhelper, consulfeature, manifest):
