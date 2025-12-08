@@ -22,7 +22,7 @@ resource "juju_secret" "secret" {
   model = data.juju_model.model.name
   name  = "${var.name}-config-secret"
   value = {
-    for k, v in var.secrets : v => var.charm_config[k]
+    for k, v in var.secrets : v => var.charm_config[k] if can(var.charm_config[k])
   }
 }
 
