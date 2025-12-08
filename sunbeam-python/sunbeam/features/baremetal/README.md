@@ -4,7 +4,7 @@ This feature provides Baremetal service for Sunbeam. It's based on [Ironic](http
 
 ## Installation
 
-To enable the Baremetal service, you need an already bootstraped Sunbeam instance, and the storage role enabled. Then, you can install the feature with:
+To enable the Baremetal service, you need an already bootstrapped Sunbeam instance, and the storage role enabled. Then, you can install the feature with:
 
 ```bash
 sunbeam enable baremetal

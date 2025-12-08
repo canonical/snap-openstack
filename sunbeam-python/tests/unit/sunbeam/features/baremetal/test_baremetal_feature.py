@@ -7,6 +7,7 @@ from unittest.mock import ANY, Mock, patch
 import pytest
 
 from sunbeam.core.openstack import OPENSTACK_MODEL
+from sunbeam.features.baremetal import constants
 from sunbeam.features.baremetal import feature as ironic_feature
 from sunbeam.steps import openstack
 
@@ -71,13 +72,13 @@ class TestBaremetalFeature:
         # RunSetTempUrlSecretStep calls.
         jhelper = mock_JujuHelper.return_value
         jhelper.get_leader_unit.assert_called_once_with(
-            ironic_feature.IRONIC_CONDUCTOR_APP,
+            constants.IRONIC_CONDUCTOR_APP,
             OPENSTACK_MODEL,
         )
         jhelper.wait_until_active.assert_called_once_with(
             OPENSTACK_MODEL,
-            [ironic_feature.IRONIC_CONDUCTOR_APP],
-            timeout=ironic_feature.IRONIC_APP_TIMEOUT,
+            [constants.IRONIC_CONDUCTOR_APP],
+            timeout=constants.IRONIC_APP_TIMEOUT,
             queue=ANY,
         )
 
