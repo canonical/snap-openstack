@@ -5,6 +5,7 @@
 
 import enum
 import ipaddress
+import json
 import logging
 import re
 import types
@@ -17,10 +18,15 @@ import pydantic
 from packaging.version import Version
 from rich.console import Console
 from rich.table import Table
+from snaphelpers import Snap, UnknownConfigKey
 
 from sunbeam import utils
 from sunbeam.clusterd.client import Client
-from sunbeam.core.common import BaseStep, RiskLevel, run_plan
+from sunbeam.clusterd.service import (
+    ClusterServiceUnavailableException,
+    ConfigItemNotFoundException,
+)
+from sunbeam.core.common import BaseStep, run_plan
 from sunbeam.core.deployment import Deployment, Networks
 from sunbeam.core.juju import JujuHelper
 from sunbeam.core.manifest import Manifest, StorageBackendConfig
@@ -87,6 +93,7 @@ def validate_juju_application_name(name: str) -> bool:
 
 
 BackendConfig = typing.TypeVar("BackendConfig", bound=StorageBackendConfig)
+ENABLED_BACKENDS_CONFIG_KEY = "StorageBackendsEnabled"
 
 
 class StorageBackendBase(typing.Generic[BackendConfig]):
@@ -96,16 +103,70 @@ class StorageBackendBase(typing.Generic[BackendConfig]):
     display_name: str = "Base Storage Backend"
     version = Version("0.0.1")
     user_manifest = None  # Path to user manifest file
-    # By default, any storage backend is considered edge risk.
-    # It will be needed to override in subclasses if the backend is
-    # considered stable.
-    risk_availability: RiskLevel = RiskLevel.EDGE
+    # By default, storage backends are not generally available.
+    generally_available: bool = False
 
     def __init__(self) -> None:
         """Initialize storage backend."""
         self.tfplan = "storage-backend-plan"
         self.tfplan_dir = "deploy-storage-backend"
         self._manifest: Manifest | None = None
+
+    def is_enabled(self, client: Client | None, snap: Snap) -> bool:
+        """Check if the backend is enabled in the deployment.
+
+        This function checks if the backend is available based on:
+        - generally_available flag
+        - enabled backends in clusterd config
+        - snap config for feature flag
+
+        Args:
+            client: Client instance
+            snap: Snap instance
+        Returns:
+            True if enabled, False otherwise
+        """
+        if self.generally_available:
+            return True
+        if client is not None:
+            try:
+                enabled_backends = client.cluster.get_config(
+                    ENABLED_BACKENDS_CONFIG_KEY
+                )
+                if self.backend_type in json.loads(enabled_backends):
+                    return True
+            except (ConfigItemNotFoundException, ClusterServiceUnavailableException):
+                pass
+        try:
+            return snap.config.get(self._feature_key)
+        except UnknownConfigKey:
+            pass
+
+        return False
+
+    def enable_backend(self, client: Client) -> None:
+        """Enable the backend in the deployment.
+
+        Args:
+            client: Client instance
+        """
+        try:
+            enabled_backends = json.loads(
+                client.cluster.get_config(ENABLED_BACKENDS_CONFIG_KEY)
+            )
+        except ConfigItemNotFoundException:
+            enabled_backends = []
+
+        if self.backend_type not in enabled_backends:
+            enabled_backends.append(self.backend_type)
+            client.cluster.update_config(
+                ENABLED_BACKENDS_CONFIG_KEY, json.dumps(enabled_backends)
+            )
+
+    @property
+    def _feature_key(self) -> str:
+        """Return the feature key for this backend."""
+        return "storage." + self.backend_type
 
     # Common CLI registration pattern (Abstraction 3: CLI registration)
     def register_add_cli(self, add: click.Group) -> None:  # noqa: F811

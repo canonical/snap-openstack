@@ -505,3 +505,114 @@ class TestStorageBackendBase(BaseStorageBackendTests):
         with patch("click.get_current_context", return_value=mock_click_context):
             with pytest.raises(ValueError, match="Failed to load manifest"):
                 _ = backend.manifest
+
+    def test_is_enabled_generally_available(self, backend):
+        """Test is_enabled when backend is generally available."""
+        backend.generally_available = True
+        mock_client = Mock()
+        mock_snap = Mock()
+
+        result = backend.is_enabled(mock_client, mock_snap)
+        assert result is True
+
+    def test_is_enabled_via_clusterd_config(self, backend):
+        """Test is_enabled via clusterd configuration."""
+        import json
+
+        backend.generally_available = False
+        mock_client = Mock()
+        mock_snap = Mock()
+
+        mock_client.cluster.get_config.return_value = json.dumps([backend.backend_type])
+
+        result = backend.is_enabled(mock_client, mock_snap)
+        assert result is True
+        mock_client.cluster.get_config.assert_called_once_with("StorageBackendsEnabled")
+
+    def test_is_enabled_via_snap_config(self, backend):
+        """Test is_enabled via snap configuration."""
+        from sunbeam.clusterd.service import ConfigItemNotFoundException
+
+        backend.generally_available = False
+        mock_client = Mock()
+        mock_snap = Mock()
+
+        # Clusterd config not found
+        mock_client.cluster.get_config.side_effect = ConfigItemNotFoundException("")
+
+        # Snap config returns True
+        mock_snap.config.get.return_value = True
+
+        result = backend.is_enabled(mock_client, mock_snap)
+        assert result is True
+        mock_snap.config.get.assert_called_once_with(backend._feature_key)
+
+    def test_is_enabled_disabled(self, backend):
+        """Test is_enabled when backend is disabled."""
+        from snaphelpers import UnknownConfigKey
+
+        from sunbeam.clusterd.service import ConfigItemNotFoundException
+
+        backend.generally_available = False
+        mock_client = Mock()
+        mock_snap = Mock()
+
+        # Clusterd config not found
+        mock_client.cluster.get_config.side_effect = ConfigItemNotFoundException("")
+
+        # Snap config key not found
+        mock_snap.config.get.side_effect = UnknownConfigKey("")
+
+        result = backend.is_enabled(mock_client, mock_snap)
+        assert result is False
+
+    def test_enable_backend_new(self, backend):
+        """Test enabling a backend that is not yet enabled."""
+        import json
+
+        from sunbeam.clusterd.service import ConfigItemNotFoundException
+
+        mock_client = Mock()
+
+        # Simulate no existing config
+        mock_client.cluster.get_config.side_effect = ConfigItemNotFoundException("")
+
+        backend.enable_backend(mock_client)
+
+        # Should create new config with this backend
+        mock_client.cluster.update_config.assert_called_once_with(
+            "StorageBackendsEnabled", json.dumps([backend.backend_type])
+        )
+
+    def test_enable_backend_already_in_list(self, backend):
+        """Test enabling a backend that is already enabled."""
+        import json
+
+        mock_client = Mock()
+
+        # Simulate existing config with this backend already enabled
+        mock_client.cluster.get_config.return_value = json.dumps(
+            [backend.backend_type, "other-backend"]
+        )
+
+        backend.enable_backend(mock_client)
+
+        # Should not update since already present
+        mock_client.cluster.update_config.assert_not_called()
+
+    def test_enable_backend_add_to_existing_list(self, backend):
+        """Test enabling a backend when other backends are already enabled."""
+        import json
+
+        mock_client = Mock()
+
+        # Simulate existing config with other backends
+        mock_client.cluster.get_config.return_value = json.dumps(["other-backend"])
+
+        backend.enable_backend(mock_client)
+
+        # Should add this backend to the list
+        expected_backends = ["other-backend", backend.backend_type]
+        mock_client.cluster.update_config.assert_called_once_with(
+            "StorageBackendsEnabled", json.dumps(expected_backends)
+        )

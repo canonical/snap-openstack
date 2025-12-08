@@ -453,6 +453,8 @@ class BaseStorageBackendDeployStep(BaseStep):
             LOG.warning(str(e))
             return Result(ResultType.FAILED, str(e))
 
+        self.backend_instance.enable_backend(self.client)
+
         console.print(
             f"Successfully deployed {self.backend_instance.display_name} "
             f"backend {self.backend_name!r}"
