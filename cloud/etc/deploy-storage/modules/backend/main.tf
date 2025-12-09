@@ -22,7 +22,8 @@ resource "juju_secret" "secret" {
   model = data.juju_model.model.name
   name  = "${var.name}-config-secret"
   value = {
-    for k, v in var.secrets : v => var.charm_config[k]
+    # Only template secrets that have a corresponding charm config value
+    for k, v in var.secrets : v => var.charm_config[k] if can(var.charm_config[k])
   }
 }
 
@@ -36,7 +37,8 @@ locals {
   charm_config = merge(
     { volume-backend-name = var.name },
     var.charm_config,
-    { for k, v in var.secrets : k => juju_secret.secret.secret_uri }
+    # Only template secrets uris in charm config if they have a value
+    { for k, v in var.secrets : k => juju_secret.secret.secret_uri if can(var.charm_config[k]) }
   )
 }
 

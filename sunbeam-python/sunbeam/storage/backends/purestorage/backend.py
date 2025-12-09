@@ -151,6 +151,7 @@ class PureStorageBackend(StorageBackendBase):
 
     backend_type = "purestorage"
     display_name = "Pure Storage FlashArray"
+    generally_available = True
 
     @property
     def charm_name(self) -> str:

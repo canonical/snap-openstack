@@ -13,15 +13,6 @@ from sunbeam.storage.models import StorageBackendInfo
 
 
 @pytest.fixture
-def manager():
-    """Create a fresh manager instance."""
-    # Reset the class-level state before each test
-    StorageBackendManager._backends = {}
-    StorageBackendManager._loaded = False
-    return StorageBackendManager()
-
-
-@pytest.fixture
 def mock_backend():
     """Create a mock backend."""
     from sunbeam.core.common import RiskLevel
@@ -32,7 +23,17 @@ def mock_backend():
     backend.register_add_cli = Mock()
     backend.register_options_cli = Mock()
     backend.risk_availability = RiskLevel.STABLE
+    backend.is_enabled = Mock(return_value=True)
     return backend
+
+
+@pytest.fixture
+def manager(mock_backend):
+    """Create a fresh manager instance."""
+    # Reset the class-level state before each test
+    StorageBackendManager._backends = {mock_backend.backend_type: mock_backend}
+    StorageBackendManager._loaded = True
+    return StorageBackendManager()
 
 
 @pytest.fixture
@@ -41,6 +42,8 @@ def mock_deployment():
     deployment = Mock()
     deployment.openstack_machines_model = "openstack"
     deployment.juju_controller = "test-controller"
+    mock_client = Mock()
+    deployment.get_client = Mock(return_value=mock_client)
     return deployment
 
 
@@ -225,16 +228,12 @@ class TestStorageBackendManager:
 
     def test_register_cli_commands(self, manager, mock_backend, mock_deployment):
         """Test CLI command registration."""
-        from sunbeam.core.common import RiskLevel
-
         manager._backends["test-backend"] = mock_backend
         manager._loaded = True
 
         mock_storage_group = Mock(spec=click.Group)
 
-        # Mock infer_risk to return a default risk level
-        with patch("sunbeam.storage.manager.infer_risk", return_value=RiskLevel.STABLE):
-            manager.register_cli_commands(mock_storage_group, mock_deployment)
+        manager.register_cli_commands(mock_storage_group, mock_deployment)
 
         # Verify that backend's register_add_cli was called
         mock_backend.register_add_cli.assert_called_once()
@@ -246,18 +245,14 @@ class TestStorageBackendManager:
         self, manager, mock_backend, mock_deployment
     ):
         """Test that CLI registration handles backend errors."""
-        from sunbeam.core.common import RiskLevel
-
         manager._backends["test-backend"] = mock_backend
         manager._loaded = True
         mock_backend.register_add_cli.side_effect = ValueError("Backend error")
 
         mock_storage_group = Mock(spec=click.Group)
 
-        # Mock infer_risk to return a default risk level
-        with patch("sunbeam.storage.manager.infer_risk", return_value=RiskLevel.STABLE):
-            with pytest.raises(ValueError):
-                manager.register_cli_commands(mock_storage_group, mock_deployment)
+        with pytest.raises(ValueError):
+            manager.register_cli_commands(mock_storage_group, mock_deployment)
 
     def test_display_backends_table_empty(self, manager):
         """Test displaying empty backend list."""
@@ -304,7 +299,6 @@ class TestStorageCLICommands:
 
     def test_list_all_command(self, manager, mock_deployment):
         """Test the list command."""
-        from sunbeam.core.common import RiskLevel
         from sunbeam.storage.service import StorageBackendService
 
         mock_service = Mock(spec=StorageBackendService)
@@ -314,35 +308,29 @@ class TestStorageCLICommands:
             "sunbeam.storage.manager.StorageBackendService", return_value=mock_service
         ):
             with patch.object(manager, "_display_backends_table"):
-                with patch(
-                    "sunbeam.storage.manager.infer_risk", return_value=RiskLevel.STABLE
-                ):
-                    manager._loaded = True
-                    mock_storage_group = Mock(spec=click.Group)
-                    manager.register_cli_commands(mock_storage_group, mock_deployment)
+                manager._loaded = True
+                mock_storage_group = Mock(spec=click.Group)
+                manager.register_cli_commands(mock_storage_group, mock_deployment)
 
-                    # Get the list command that was registered
-                    calls = mock_storage_group.add_command.call_args_list
-                    list_command = None
-                    for call in calls:
-                        if call[0][0].name == "list":
-                            list_command = call[0][0]
-                            break
+                # Get the list command that was registered
+                calls = mock_storage_group.add_command.call_args_list
+                list_command = None
+                for call in calls:
+                    if call[0][0].name == "list":
+                        list_command = call[0][0]
+                        break
 
-                    assert list_command is not None
+                assert list_command is not None
 
     def test_remove_backend_command_success(self, manager, mock_deployment):
         """Test the remove command with successful removal."""
-        from sunbeam.core.common import RiskLevel
-
-        manager._backends["test-backend"] = Mock()
+        mock_backend = Mock()
+        manager._backends["test-backend"] = mock_backend
         manager._loaded = True
 
         mock_storage_group = Mock(spec=click.Group)
 
-        # Mock infer_risk to return a default risk level
-        with patch("sunbeam.storage.manager.infer_risk", return_value=RiskLevel.STABLE):
-            manager.register_cli_commands(mock_storage_group, mock_deployment)
+        manager.register_cli_commands(mock_storage_group, mock_deployment)
 
         # Verify remove command was registered
         calls = mock_storage_group.add_command.call_args_list
@@ -356,15 +344,9 @@ class TestStorageCLICommands:
 
     def test_show_backend_command(self, manager, mock_deployment):
         """Test the show command."""
-        from sunbeam.core.common import RiskLevel
-
-        manager._loaded = True
-
         mock_storage_group = Mock(spec=click.Group)
 
-        # Mock infer_risk to return a default risk level
-        with patch("sunbeam.storage.manager.infer_risk", return_value=RiskLevel.STABLE):
-            manager.register_cli_commands(mock_storage_group, mock_deployment)
+        manager.register_cli_commands(mock_storage_group, mock_deployment)
 
         # Verify show command was registered
         calls = mock_storage_group.add_command.call_args_list

@@ -12,10 +12,10 @@ from rich.console import Console
 from rich.table import Table
 from snaphelpers import Snap
 
-from sunbeam.core.common import infer_risk
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import JujuHelper
 from sunbeam.core.manifest import StorageInstanceManifest
+from sunbeam.errors import SunbeamException
 from sunbeam.storage.base import StorageBackendBase
 from sunbeam.storage.models import BackendNotFoundException, StorageBackendInfo
 from sunbeam.storage.service import StorageBackendService
@@ -141,7 +141,7 @@ class StorageBackendManager:
             LOG.error(f"Failed to register storage backend commands: {e}")
             raise e
 
-    def register_cli_commands(
+    def register_cli_commands(  # noqa: C901
         self, storage_group: click.Group, deployment: Deployment
     ) -> None:
         """Register all backend commands with the storage CLI group.
@@ -244,14 +244,18 @@ class StorageBackendManager:
             )
             backend.display_config_table(backend_name, config)
 
-        installation_risk = infer_risk(Snap())
-
+        snap = Snap()
         # Delegate CLI registration to each backend
+        try:
+            client = deployment.get_client()
+        except SunbeamException:
+            # Might be called before bootstrap
+            LOG.debug("Could not get client for deployment", exc_info=True)
+            client = None
         for backend in self._backends.values():
-            if backend.risk_availability > installation_risk:
+            if not backend.is_enabled(client, snap):
                 LOG.debug(
-                    "Not registering backend %r, "
-                    "it is available at a higher risk level",
+                    "Not registering backend %r, it is not enabled",
                     backend.backend_type,
                 )
                 continue
