@@ -248,7 +248,10 @@ class StorageBackendManager:
         # Delegate CLI registration to each backend
         try:
             client = deployment.get_client()
-        except SunbeamException:
+        except (
+            SunbeamException,
+            ValueError,  # raised when no clusterd address is set in maas mode
+        ):
             # Might be called before bootstrap
             LOG.debug("Could not get client for deployment", exc_info=True)
             client = None
