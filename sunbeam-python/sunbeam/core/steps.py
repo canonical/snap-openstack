@@ -374,6 +374,7 @@ class PatchLoadBalancerServicesIPStep(BaseStep, abc.ABC):
     def __init__(
         self,
         client: Client,
+        pool_name: str | None = None,
         # Ignore errors if service of type LoadBalancer is not found
         ignore_errors: bool = False,
     ):
@@ -382,8 +383,33 @@ class PatchLoadBalancerServicesIPStep(BaseStep, abc.ABC):
             "Patch LoadBalancer service IP annotation",
         )
         self.client = client
+        self.pool_name = pool_name
         self.ignore_errors = ignore_errors
         self.lb_ip_annotation = K8SHelper.get_loadbalancer_ip_annotation()
+
+    def _check_ippool_exists(self, kube_client: "l_client.Client") -> Result:
+        """Check if the specified IP pool exists.
+
+        :param kube_client: Kubernetes client instance
+        :return: Result with SKIPPED if pool doesn't exist, COMPLETED if it exists,
+                 or FAILED on error
+        """
+        if not self.pool_name:
+            return Result(ResultType.COMPLETED)
+
+        lbpool_resource = K8SHelper.get_lightkube_loadbalancer_resource()
+        lbpool_model = K8SHelper.get_loadbalancer_namespace()
+        try:
+            pools = kube_client.list(lbpool_resource, namespace=lbpool_model)
+            pool_names = [pool.metadata.name for pool in pools if pool.metadata]
+            if self.pool_name not in pool_names:
+                LOG.debug(f"IPAddresspool {self.pool_name} does not exist, skipping")
+                return Result(ResultType.SKIPPED)
+        except l_exceptions.ApiError as e:
+            LOG.debug("Error listing load balancer pools", exc_info=True)
+            return Result(ResultType.FAILED, str(e))
+
+        return Result(ResultType.COMPLETED)
 
     @abc.abstractmethod
     def services(self) -> list[str]:
@@ -430,6 +456,11 @@ class PatchLoadBalancerServicesIPStep(BaseStep, abc.ABC):
         except l_exceptions.ConfigError as e:
             LOG.debug("Error creating k8s client", exc_info=True)
             return Result(ResultType.FAILED, str(e))
+
+        # Skip if pool does not exist
+        pool_check_result = self._check_ippool_exists(self.kube)
+        if pool_check_result.result_type != ResultType.COMPLETED:
+            return pool_check_result
 
         for service_name in self.services():
             try:
@@ -534,6 +565,27 @@ class PatchLoadBalancerServicesIPPoolStep(BaseStep, abc.ABC):
             K8SHelper.get_loadbalancer_allocated_pool_annotation()
         )
 
+    def _check_ippool_exists(self, kube_client: "l_client.Client") -> Result:
+        """Check if the specified IP pool exists.
+
+        :param kube_client: Kubernetes client instance
+        :return: Result with SKIPPED if pool doesn't exist, COMPLETED if it exists,
+                 or FAILED on error
+        """
+        lbpool_resource = K8SHelper.get_lightkube_loadbalancer_resource()
+        lbpool_model = K8SHelper.get_loadbalancer_namespace()
+        try:
+            pools = kube_client.list(lbpool_resource, namespace=lbpool_model)
+            pool_names = [pool.metadata.name for pool in pools if pool.metadata]
+            if self.pool_name not in pool_names:
+                LOG.debug(f"IPAddresspool {self.pool_name} does not exist, skipping")
+                return Result(ResultType.SKIPPED)
+        except l_exceptions.ApiError as e:
+            LOG.debug("Error listing load balancer pools", exc_info=True)
+            return Result(ResultType.FAILED, str(e))
+
+        return Result(ResultType.COMPLETED)
+
     @abc.abstractmethod
     def services(self) -> list[str]:
         """List of services to patch."""
@@ -607,8 +659,12 @@ class PatchLoadBalancerServicesIPPoolStep(BaseStep, abc.ABC):
                 f" is not updated to {pool_name}"
             )
 
-    def run(self, status: Status | None = None) -> Result:  # noqa: C901
-        """Patch LoadBalancer services annotations with LB IP pool."""
+    def is_skip(self, status: Status | None = None) -> Result:
+        """Determines if the step should be skipped or not.
+
+        :return: ResultType.SKIPPED if the Step should be skipped,
+                ResultType.COMPLETED or ResultType.FAILED otherwise
+        """
         try:
             self.kubeconfig = read_config(self.client, K8SHelper.get_kubeconfig_key())
         except ConfigItemNotFoundException:
@@ -622,6 +678,15 @@ class PatchLoadBalancerServicesIPPoolStep(BaseStep, abc.ABC):
             LOG.debug("Error creating k8s client", exc_info=True)
             return Result(ResultType.FAILED, str(e))
 
+        # Check if pool exists
+        pool_check_result = self._check_ippool_exists(self.kube)
+        if pool_check_result.result_type != ResultType.COMPLETED:
+            return pool_check_result
+
+        return Result(ResultType.COMPLETED)
+
+    def run(self, status: Status | None = None) -> Result:  # noqa: C901
+        """Patch LoadBalancer services annotations with LB IP pool."""
         for service_name in self.services():
             try:
                 service = self._get_service(service_name, find_lb=True)

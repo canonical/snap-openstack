@@ -26,7 +26,9 @@ from sunbeam.features.interface.v1.openstack import (
     OpenStackControlPlaneFeature,
     TerraformPlanLocation,
 )
+from sunbeam.provider.maas.client import MaasClient
 from sunbeam.provider.maas.deployment import is_maas_deployment
+from sunbeam.provider.maas.steps import MaasCreateLoadBalancerIPPoolsStep
 from sunbeam.steps.hypervisor import ReapplyHypervisorTerraformPlanStep
 from sunbeam.steps.juju import RemoveSaasApplicationsStep
 from sunbeam.utils import click_option_show_hints, pass_method_obj
@@ -130,15 +132,20 @@ class InstanceRecoveryFeature(OpenStackControlPlaneFeature):
                 "steps"
             )
             LOG.debug(message)
+            client = deployment.get_client()
+            maas_client = MaasClient.from_deployment(deployment)
             plan2.extend(
                 [
+                    MaasCreateLoadBalancerIPPoolsStep(deployment, client, maas_client),
                     consul.PatchConsulStorageLoadBalancerIPPoolStep(
-                        deployment.get_client(),
+                        client,
                         deployment.storage_ippool_label,
                         ignore_errors=True,
                     ),
                     consul.PatchConsulStorageLoadBalancerIPStep(
-                        deployment.get_client(), ignore_errors=True
+                        client,
+                        pool_name=deployment.storage_ippool_label,
+                        ignore_errors=True,
                     ),
                 ]
             )
