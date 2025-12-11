@@ -96,6 +96,20 @@ COMMON_TEMPLATE = f"""
 # This also gives access to the ssh binary to the snap.
 sudo snap connect openstack:ssh-keys
 
+# Check Juju is already installed with correct version
+if [ -n "$(command -v juju)" ]; then
+    # Check the snap channel of installed Juju
+    INSTALLED_JUJU_CHANNEL=$(snap list juju --unicode=never --color=never | \
+        grep juju | \
+        awk '{{print $4}}')
+
+    # Check if installed Juju channel matches required channel
+    if [ "$INSTALLED_JUJU_CHANNEL" != "{JUJU_CHANNEL}" ]; then
+        echo "Sunbeam requires Juju from snap channel '$INSTALLED_JUJU_CHANNEL'"
+        exit 1
+    fi
+fi
+
 # Install the Juju snap
 sudo snap install --channel {JUJU_CHANNEL} juju
 
