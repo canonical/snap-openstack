@@ -57,6 +57,10 @@ features:
           channel: 2025.1/candidate
         nova-ironic-k8s:
           channel: 2025.1/candidate
+        neutron-baremetal-switch-config-k8s:
+          channel: 2025.1/candidate
+        neutron-generic-switch-config-k8s:
+          channel: 2025.1/candidate
   caas:
     software:
       charms:

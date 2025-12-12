@@ -808,16 +808,37 @@ class JujuHelper:
         :model: Name of the model
         : secret_name: Secret Name
         """
+        secret = self.show_secret(model, secret_name)
+        return secret.uri.unique_identifier
+
+    def show_secret(self, model: str, secret_name: str) -> jubilant.Secret:
+        """Show secret from the secret name.
+
+        :model: Name of the model
+        :secret_name: Secret Name
+        """
         with self._model(model) as juju:
             try:
-                secret = juju.show_secret(secret_name)
-                return secret.uri.unique_identifier
+                return juju.show_secret(secret_name)
             except jubilant.CLIError as e:
                 if "not found" in e.stderr:
                     raise JujuSecretNotFound(f"Secret {secret_name!r} not found") from e
                 raise JujuException(
                     f"Failed to get secret {secret_name!r} from model {model!r}"
                 ) from e
+
+    def secret_exists(self, model: str, name: str) -> bool:
+        """Returns whether the given secret exists in the model.
+
+        :model: Name of the model
+        :name: Secret Name
+        """
+        try:
+            self.get_secret(model, name)
+        except JujuSecretNotFound:
+            return False
+
+        return True
 
     def remove_secret(self, model: str, name: str):
         """Remove secret in the model.
