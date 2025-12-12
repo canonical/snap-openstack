@@ -50,6 +50,15 @@ core:
       microcluster-token-distributor:
         channel: latest/edge
 features:
+  baremetal:
+    software:
+      charms:
+        ironic-conductor-k8s:
+          channel: 2025.1/stable
+        ironic-k8s:
+          channel: 2025.1/stable
+        nova-ironic-k8s:
+          channel: 2025.1/stable
   caas:
     software:
       charms:

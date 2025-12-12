@@ -54,6 +54,14 @@ resource "juju_offer" "microceph_ceph_nfs_offer" {
   model            = data.juju_model.machine_model.name
 }
 
+# juju_offer.microceph_ceph_rgw_offer will be created
+resource "juju_offer" "microceph_ceph_rgw_offer" {
+  name             = "microceph-ceph-rgw"
+  application_name = juju_application.microceph.name
+  endpoints        = ["ceph-rgw-ready"]
+  model            = data.juju_model.machine_model.name
+}
+
 resource "juju_integration" "microceph-identity" {
   count = (var.keystone-endpoints-offer-url != null) ? 1 : 0
   model = var.machine_model

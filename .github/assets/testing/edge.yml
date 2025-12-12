@@ -50,6 +50,15 @@ core:
         storage:
           database: 2G
 features:
+  baremetal:
+    software:
+      charms:
+        ironic-conductor-k8s:
+          channel: 2025.1/edge
+        ironic-k8s:
+          channel: 2025.1/edge
+        nova-ironic-k8s:
+          channel: 2025.1/edge
   caas:
     software:
       charms:
