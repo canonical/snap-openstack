@@ -7,7 +7,7 @@ from unittest.mock import ANY, Mock, patch
 import pytest
 
 from sunbeam.core.openstack import OPENSTACK_MODEL
-from sunbeam.features.baremetal import constants
+from sunbeam.features.baremetal import constants, feature_config, steps
 from sunbeam.features.baremetal import feature as ironic_feature
 from sunbeam.steps import openstack
 
@@ -42,6 +42,12 @@ def deployment():
 
 
 class TestBaremetalFeature:
+    def test_config_type(self):
+        ironic = ironic_feature.BaremetalFeature()
+        config_type = ironic.config_type()
+
+        assert config_type == feature_config.BaremetalFeatureConfig
+
     def test_set_application_names(self, deployment):
         ironic = ironic_feature.BaremetalFeature()
 
@@ -58,16 +64,19 @@ class TestBaremetalFeature:
         ]
         assert expected_apps == apps
 
+    @patch.object(steps._DeployResourcesStep, "_apply_tfvars")
     @patch.object(ironic_feature, "JujuHelper")
     @patch.object(ironic_feature, "click", Mock())
-    def test_run_enable_plans(self, mock_JujuHelper, deployment):
+    def test_run_enable_plans(self, mock_JujuHelper, mock_apply_tfvars, deployment):
         ironic = ironic_feature.BaremetalFeature()
         ironic._manifest = Mock()
         ironic._manifest.core.software.charms = {}
-        feature_config = Mock()
+        config = feature_config.BaremetalFeatureConfig(
+            shards=["foo", "lish"],
+        )
 
         # Run enable plans.
-        ironic.run_enable_plans(deployment, feature_config, False)
+        ironic.run_enable_plans(deployment, config, False)
 
         # RunSetTempUrlSecretStep calls.
         jhelper = mock_JujuHelper.return_value
@@ -80,6 +89,19 @@ class TestBaremetalFeature:
             [constants.IRONIC_CONDUCTOR_APP],
             timeout=constants.IRONIC_APP_TIMEOUT,
             queue=ANY,
+        )
+
+        # DeployNovaIronicShardsStep call.
+        expected_items = {
+            "database": "multi",
+            constants.NOVA_IRONIC_SHARDS_TFVAR: {
+                "foo": {"shard": "foo"},
+                "lish": {"shard": "lish"},
+            },
+        }
+        mock_apply_tfvars.assert_called_once_with(
+            expected_items,
+            ["nova-ironic-foo", "nova-ironic-lish"],
         )
 
     def test_set_tfvars_on_enable(self, deployment):
@@ -100,5 +122,6 @@ class TestBaremetalFeature:
 
         expected_tfvars = {
             "enable-ironic": False,
+            constants.NOVA_IRONIC_SHARDS_TFVAR: {},
         }
         assert extra_tfvars == expected_tfvars

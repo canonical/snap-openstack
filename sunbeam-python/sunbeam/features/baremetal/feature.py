@@ -18,13 +18,15 @@ from sunbeam.core.juju import (
 from sunbeam.core.manifest import (
     AddManifestStep,
     CharmManifest,
-    FeatureConfig,
     SoftwareConfig,
 )
 from sunbeam.core.terraform import (
     TerraformInitStep,
 )
-from sunbeam.features.baremetal import steps
+from sunbeam.features.baremetal import constants, steps
+from sunbeam.features.baremetal.feature_config import (
+    BaremetalFeatureConfig,
+)
 from sunbeam.features.interface.v1.openstack import (
     EnableOpenStackApplicationStep,
     OpenStackControlPlaneFeature,
@@ -42,6 +44,10 @@ class BaremetalFeature(OpenStackControlPlaneFeature):
 
     name = "baremetal"
     tf_plan_location = TerraformPlanLocation.SUNBEAM_TERRAFORM_REPO
+
+    def config_type(self) -> type | None:
+        """Return the config type for the feature."""
+        return BaremetalFeatureConfig
 
     def default_software_overrides(self) -> SoftwareConfig:
         """Feature software configuration."""
@@ -94,7 +100,7 @@ class BaremetalFeature(OpenStackControlPlaneFeature):
         return apps
 
     def run_enable_plans(
-        self, deployment: Deployment, config: FeatureConfig, show_hints: bool
+        self, deployment: Deployment, config: BaremetalFeatureConfig, show_hints: bool
     ):
         """Run the enablement plans."""
         jhelper = JujuHelper(deployment.juju_controller)
@@ -124,12 +130,22 @@ class BaremetalFeature(OpenStackControlPlaneFeature):
             ]
         )
 
+        if config.shards:
+            plan.append(
+                steps.DeployNovaIronicShardsStep(
+                    deployment,
+                    self,
+                    config.shards,
+                    replace=True,
+                )
+            )
+
         run_plan(plan, console, show_hints)
 
         click.echo("Baremetal enabled.")
 
     def set_tfvars_on_enable(
-        self, deployment: Deployment, config: FeatureConfig
+        self, deployment: Deployment, config: BaremetalFeatureConfig
     ) -> dict:
         """Set terraform variables to enable the application."""
         return {
@@ -140,10 +156,11 @@ class BaremetalFeature(OpenStackControlPlaneFeature):
         """Set terraform variables to disable the application."""
         return {
             "enable-ironic": False,
+            constants.NOVA_IRONIC_SHARDS_TFVAR: {},
         }
 
     def set_tfvars_on_resize(
-        self, deployment: Deployment, config: FeatureConfig
+        self, deployment: Deployment, config: BaremetalFeatureConfig
     ) -> dict:
         """Set terraform variables to resize the application."""
         return {}
@@ -153,7 +170,21 @@ class BaremetalFeature(OpenStackControlPlaneFeature):
     @pass_method_obj
     def enable_cmd(self, deployment: Deployment, show_hints: bool) -> None:
         """Enable Baremetal service."""
-        self.enable_feature(deployment, FeatureConfig(), show_hints)
+        ctx = click.get_current_context()
+
+        # The parent context (enable context) has the --manifest parameter.
+        manifest_path = None
+        if ctx.parent:
+            manifest_path = ctx.parent.params["manifest"]
+
+        manifest = deployment.get_manifest(manifest_path)
+        feature = manifest.get_feature(self.name)
+        if feature:
+            config = feature.config
+        else:
+            config = BaremetalFeatureConfig()
+
+        self.enable_feature(deployment, config, show_hints)
 
     @click.command()
     @click_option_show_hints
@@ -161,3 +192,61 @@ class BaremetalFeature(OpenStackControlPlaneFeature):
     def disable_cmd(self, deployment: Deployment, show_hints: bool) -> None:
         """Disable Baremetal service."""
         self.disable_feature(deployment, show_hints)
+
+    @click.group()
+    def baremetal_group(self):
+        """Manage baremetal feature."""
+
+    @click.group()
+    def shard_group(self):
+        """Manage baremetal nova-compute shards."""
+
+    @click.command()
+    @click.argument("shard")
+    @click_option_show_hints
+    @pass_method_obj
+    def compute_shard_add(self, deployment: Deployment, shard: str, show_hints: bool):
+        """Add Ironic nova-compute shard."""
+        step = steps.DeployNovaIronicShardsStep(deployment, self, [shard])
+        run_plan([step], console, show_hints)
+
+    @click.command()
+    @pass_method_obj
+    def compute_shard_list(self, deployment: Deployment):
+        """List Ironic nova-compute shards."""
+        step = steps.ListNovaIronicShardsStep(deployment, self)
+        run_plan([step], console)
+
+    @click.command()
+    @click.argument("shard")
+    @click_option_show_hints
+    @pass_method_obj
+    def compute_shard_delete(
+        self, deployment: Deployment, shard: str, show_hints: bool
+    ):
+        """Delete Ironic nova-compute shard."""
+        step = steps.DeleteNovaIronicShardStep(deployment, self, shard)
+        run_plan([step], console, show_hints)
+
+    def enabled_commands(self) -> dict[str, list[dict]]:
+        """Dict of clickgroup along with commands.
+
+        Return the commands available once the feature is enabled.
+        """
+        return {
+            # Add the baremetal subcommand group to the root group:
+            "init": [{"name": "baremetal", "command": self.baremetal_group}],
+            # Add the baremetal subcommands:
+            "init.baremetal": [
+                # Add the baremetal shard group:
+                # sunbeam baremetal shard ...
+                {"name": "shard", "command": self.shard_group},
+            ],
+            # Add the baremetal shard subcommands:
+            "init.baremetal.shard": [
+                # sunbeam baremetal shard action ...
+                {"name": "add", "command": self.compute_shard_add},
+                {"name": "list", "command": self.compute_shard_list},
+                {"name": "delete", "command": self.compute_shard_delete},
+            ],
+        }
