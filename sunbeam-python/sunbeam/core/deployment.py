@@ -332,7 +332,7 @@ class Deployment(pydantic.BaseModel):
 
     def get_manifest(self, manifest_file: pathlib.Path | None = None) -> Manifest:
         """Return the manifest for the deployment."""
-        if self._manifest is not None and not manifest_file:
+        if self._manifest is not None:
             return self._manifest
 
         feature_manager = self.get_feature_manager()
@@ -381,8 +381,7 @@ class Deployment(pydantic.BaseModel):
             override_manifest.validate_against_default(manifest)
             manifest = manifest.merge(override_manifest)
 
-        if not manifest_file:
-            self._manifest = manifest
+        self._manifest = manifest
         return manifest
 
     def _get_juju_clusterd_env(self) -> dict:
