@@ -8,6 +8,7 @@ import pytest
 
 from sunbeam.core.common import ResultType
 from sunbeam.core.juju import (
+    ActionFailedException,
     JujuWaitException,
 )
 from sunbeam.core.openstack import OPENSTACK_MODEL
@@ -34,6 +35,38 @@ def deployment():
 
 
 class TestBaremetalCommands:
+    def test_run_set_temp_url_secret_failed(self):
+        jhelper = Mock()
+        jhelper.run_action.side_effect = ActionFailedException("expected")
+        step = steps.RunSetTempUrlSecretStep(deployment, jhelper)
+
+        result = step.run()
+
+        assert result.result_type == ResultType.FAILED
+        jhelper.get_leader_unit.assert_called_once_with(
+            "ironic-conductor", OPENSTACK_MODEL
+        )
+        jhelper.run_action.assert_called_once_with(
+            jhelper.get_leader_unit.return_value,
+            OPENSTACK_MODEL,
+            "set-temp-url-secret",
+        )
+
+    def test_run_set_temp_url_secret_timeout(self):
+        jhelper = Mock()
+        jhelper.wait_until_active.side_effect = JujuWaitException
+        step = steps.RunSetTempUrlSecretStep(deployment, jhelper)
+
+        result = step.run()
+
+        assert result.result_type == ResultType.FAILED
+        jhelper.wait_until_active.assert_called_once_with(
+            OPENSTACK_MODEL,
+            ["ironic-conductor"],
+            timeout=constants.IRONIC_APP_TIMEOUT,
+            queue=ANY,
+        )
+
     def test_deploy_nova_ironic_shards_already_exists(self, deployment):
         ironic = ironic_feature.BaremetalFeature()
         ironic._manifest = Mock()
@@ -74,17 +107,18 @@ class TestBaremetalCommands:
         ironic = ironic_feature.BaremetalFeature()
         ironic._manifest = Mock()
         jhelper = mock_JujuHelper.return_value
-        jhelper.wait_until_active.side_effect = JujuWaitException
+        jhelper.wait_until_desired_status.side_effect = JujuWaitException
         step = steps.DeployNovaIronicShardsStep(deployment, ironic, ["foo"])
 
         result = step.run()
 
         assert result.result_type == ResultType.FAILED
-        jhelper.wait_until_active.assert_called_once_with(
+        jhelper.wait_until_desired_status.assert_called_once_with(
             OPENSTACK_MODEL,
             ["nova-ironic-foo"],
             timeout=constants.IRONIC_APP_TIMEOUT,
             queue=ANY,
+            status=["active"],
         )
 
     @patch.object(steps, "JujuHelper")
@@ -108,11 +142,12 @@ class TestBaremetalCommands:
         )
 
         jhelper = mock_JujuHelper.return_value
-        jhelper.wait_until_active.assert_called_once_with(
+        jhelper.wait_until_desired_status.assert_called_once_with(
             OPENSTACK_MODEL,
             ["nova-ironic-foo"],
             timeout=constants.IRONIC_APP_TIMEOUT,
             queue=ANY,
+            status=["active"],
         )
 
     @patch.object(steps, "JujuHelper")
@@ -140,11 +175,12 @@ class TestBaremetalCommands:
         )
 
         jhelper = mock_JujuHelper.return_value
-        jhelper.wait_until_active.assert_called_once_with(
+        jhelper.wait_until_desired_status.assert_called_once_with(
             OPENSTACK_MODEL,
             ["nova-ironic-lish"],
             timeout=constants.IRONIC_APP_TIMEOUT,
             queue=ANY,
+            status=["active"],
         )
 
     @patch.object(steps.console, "print")

@@ -25,3 +25,21 @@ class TestBaremetalFeatureConfig:
         feature_config.BaremetalFeatureConfig()
         feature_config.BaremetalFeatureConfig(shards=[])
         feature_config.BaremetalFeatureConfig(shards=["foo", "lish"])
+
+    def test_validate_conductor_groups(self):
+        # must be list.
+        with pytest.raises(pydantic.ValidationError):
+            feature_config.BaremetalFeatureConfig(conductor_groups="foo")
+
+        # must be strings.
+        with pytest.raises(pydantic.ValidationError):
+            feature_config.BaremetalFeatureConfig(conductor_groups=[5])
+
+        # no duplicates.
+        with pytest.raises(pydantic.ValidationError):
+            feature_config.BaremetalFeatureConfig(conductor_groups=["foo", "foo"])
+
+        # valid examples.
+        feature_config.BaremetalFeatureConfig()
+        feature_config.BaremetalFeatureConfig(conductor_groups=[])
+        feature_config.BaremetalFeatureConfig(conductor_groups=["foo", "lish"])
