@@ -11,22 +11,22 @@ variable "nodes_count" {
 
 variable "node_mem" {
   type    = string
-  default = "2048"
+  default = "16777216"  # 16GiB
 }
 
 variable "node_vcpu" {
   type    = number
-  default = 2
+  default = 4
 }
 
 variable "maas_controller_mem" {
   type    = string
-  default = "4096"  # 4GiB
+  default = "8388608"  # 8GiB
 }
 
 variable "maas_controller_vcpu" {
   type    = number
-  default = 2
+  default = 4
 }
 
 variable "maas_hostname" {
@@ -85,7 +85,7 @@ variable "upstream_dns_server" {
 variable "maas_controller_mac_address" {
   description = "MAC address to assign to the maas controller nic in the management network"
   type        = string
-  default     = "AA:BB:CC:11:11:01"
+  default     = "52:54:00:11:11:01"
 }
 
 variable "maas_controller_rootfs_size" {
