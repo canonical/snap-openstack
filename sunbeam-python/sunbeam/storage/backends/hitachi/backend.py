@@ -43,7 +43,7 @@ class HitachiConfig(StorageBackendConfig):
         SecretDictField(field="san-password"),
     ]
     protocol: Annotated[
-        Literal["FC", "iSCSI"], Field(description="Front-end protocol (FC or iSCSI)")
+        Literal["fc", "iscsi"], Field(description="Front-end protocol (fc or iscsi)")
     ]
 
     # Backend configuration
@@ -53,6 +53,9 @@ class HitachiConfig(StorageBackendConfig):
     backend_availability_zone: Annotated[
         str | None,
         Field(description="Availability zone to associate with this backend"),
+    ] = None
+    driver_ssl_cert: Annotated[
+        str | None, Field(description="SSL certificate content in PEM format")
     ] = None
 
     # Optional host-group / zoning controls
@@ -78,11 +81,6 @@ class HitachiConfig(StorageBackendConfig):
     ] = None
     hitachi_async_copy_check_interval: Annotated[
         int | None, Field(description="Seconds between async copy-status polls")
-    ] = None
-
-    # iSCSI authentication
-    use_chap_auth: Annotated[
-        bool | None, Field(description="Use CHAP authentication for iSCSI")
     ] = None
 
     # Array ranges and controls
@@ -146,20 +144,17 @@ class HitachiConfig(StorageBackendConfig):
     hitachi_mirror_snap_pool: Annotated[
         str | None, Field(description="Snapshot pool on secondary storage")
     ] = None
-    hitachi_mirror_ssl_cert_path: Annotated[
-        str | None, Field(description="CA_BUNDLE for secondary REST endpoint")
-    ] = None
-    hitachi_mirror_ssl_cert_verify: Annotated[
-        bool | None, Field(description="Validate SSL cert of secondary REST")
+    hitachi_mirror_ssl_cert: Annotated[
+        str | None,
+        Field(
+            description="SSL certificate content in PEM format for secondary storage"
+        ),
     ] = None
     hitachi_mirror_storage_id: Annotated[
         str | None, Field(description="Product number of secondary storage")
     ] = None
     hitachi_mirror_target_ports: Annotated[
         str | None, Field(description="Controller node port IDs for GAD")
-    ] = None
-    hitachi_mirror_use_chap_auth: Annotated[
-        bool | None, Field(description="Use CHAP auth for GAD on secondary")
     ] = None
 
     # Replication settings
@@ -242,33 +237,33 @@ class HitachiConfig(StorageBackendConfig):
 
     chap_username: Annotated[
         str | None,
-        Field(description="CHAP username for secret creation"),
+        Field(description="CHAP username for iSCSI authentication"),
         SecretDictField(field="chap-username"),
     ] = None
     chap_password: Annotated[
         str | None,
-        Field(description="CHAP password for secret creation"),
+        Field(description="CHAP password for iSCSI authentication"),
         SecretDictField(field="chap-password"),
     ] = None
-    hitachi_mirror_chap_username: Annotated[
+    hitachi_mirror_auth_username: Annotated[
         str | None,
-        Field(description="Mirror CHAP username for secret creation"),
-        SecretDictField(field="mirror-chap-username"),
+        Field(description="CHAP username for mirror iSCSI authentication"),
+        SecretDictField(field="hitachi-mirror-auth-username"),
     ] = None
-    hitachi_mirror_chap_password: Annotated[
+    hitachi_mirror_auth_password: Annotated[
         str | None,
-        Field(description="Mirror CHAP password for secret creation"),
-        SecretDictField(field="mirror-chap-password"),
+        Field(description="CHAP password for mirror iSCSI authentication"),
+        SecretDictField(field="hitachi-mirror-auth-password"),
     ] = None
     hitachi_mirror_rest_username: Annotated[
         str | None,
-        Field(description="Mirror REST username for secret creation"),
-        SecretDictField(field="mirror-rest-username"),
+        Field(description="Username for secondary storage REST API"),
+        SecretDictField(field="hitachi-mirror-rest-username"),
     ] = None
     hitachi_mirror_rest_password: Annotated[
         str | None,
-        Field(description="Mirror REST password for secret creation"),
-        SecretDictField(field="mirror-rest-password"),
+        Field(description="Password for secondary storage REST API"),
+        SecretDictField(field="hitachi-mirror-rest-password"),
     ] = None
 
 
@@ -286,7 +281,7 @@ class HitachiBackend(StorageBackendBase):
     @property
     def charm_channel(self) -> str:
         """Return the charm channel for this backend."""
-        return "latest/edge"
+        return "2025.1/edge"
 
     @property
     def charm_revision(self) -> str | None:
