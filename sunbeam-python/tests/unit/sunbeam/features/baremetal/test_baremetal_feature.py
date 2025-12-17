@@ -2,14 +2,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-from unittest.mock import ANY, Mock, patch
+from unittest.mock import ANY, Mock, call, patch
 
 import pytest
 
 from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.features.baremetal import constants, feature_config, steps
 from sunbeam.features.baremetal import feature as ironic_feature
+from sunbeam.features.interface.v1.openstack import OPENSTACK_TERRAFORM_VARS
 from sunbeam.steps import openstack
+from tests.unit.sunbeam.features.baremetal import test_feature_config
 
 
 @pytest.fixture()
@@ -17,6 +19,7 @@ def deployment():
     deploy = Mock()
     deploy.openstack_machines_model = "foo"
     client = deploy.get_client.return_value
+    client._openstack_terraform_vars = {}
     nodes = [
         {
             "name": "node1",
@@ -29,6 +32,8 @@ def deployment():
     def get_config(key):
         if key == openstack.DATABASE_MEMORY_KEY:
             return "{}"
+        elif key == OPENSTACK_TERRAFORM_VARS:
+            return json.dumps(client._openstack_terraform_vars)
 
         return json.dumps(
             {
@@ -60,24 +65,131 @@ class TestBaremetalFeature:
             "nova-ironic-mysql-router",
             "ironic-conductor",
             "ironic-conductor-mysql-router",
+            "neutron-baremetal-switch-config",
+            "neutron-generic-switch-config",
             "ironic-mysql",
         ]
         assert expected_apps == apps
 
-    @patch.object(steps._DeployResourcesStep, "_apply_tfvars")
+    @patch.object(steps.DeployIronicConductorGroupsStep, "_apply_tfvars")
+    @patch.object(steps.DeployNovaIronicShardsStep, "_apply_tfvars")
+    @patch.object(steps.UpdateSwitchConfigSecretsStep, "_apply_tfvars")
+    @patch.object(steps, "JujuHelper")
     @patch.object(ironic_feature, "JujuHelper")
     @patch.object(ironic_feature, "click", Mock())
-    def test_run_enable_plans(self, mock_JujuHelper, mock_apply_tfvars, deployment):
+    def test_run_enable_plans(
+        self,
+        mock_JujuHelper,
+        mock_steps_JujuHelper,
+        mock_switch_apply,
+        mock_shards_apply,
+        mock_conductors_apply,
+        deployment,
+    ):
         ironic = ironic_feature.BaremetalFeature()
         ironic._manifest = Mock()
         ironic._manifest.core.software.charms = {}
+
+        # set existing secrets.
+        client = deployment.get_client.return_value
+        client._openstack_terraform_vars = {
+            constants.NEUTRON_SWITCH_CONF_SECRETS_TFVAR: {
+                "netconf": ["switch-config-bar"],
+                "generic": ["switch-config-tender"],
+            }
+        }
+
+        configfile_data = test_feature_config._get_netconf_sample_config("foo")
+        additional_files = {"foo-key": "foo"}
+        valid_netconf = feature_config._Config(
+            configfile=configfile_data,
+        )
+        valid_netconf.additional_files = additional_files
+        configfile_data = test_feature_config._get_generic_sample_config(
+            "lish", "netmiko_arista_eos"
+        )
+        additional_files = {"lish-key": "lish"}
+        valid_generic = feature_config._Config(
+            configfile=configfile_data,
+        )
+        valid_generic.additional_files = additional_files
+        switchconfigs = feature_config._SwitchConfigs(
+            netconf={"foo": valid_netconf},
+            generic={"lish": valid_generic},
+        )
+
         config = feature_config.BaremetalFeatureConfig(
             shards=["foo", "lish"],
             conductor_groups=["foo", "lish"],
+            switchconfigs=switchconfigs,
         )
+        jhelper = mock_steps_JujuHelper.return_value
+        jhelper.add_secret.side_effect = ["foo-id", "lish-id"]
 
         # Run enable plans.
         ironic.run_enable_plans(deployment, config, False)
+
+        # UpdateSwitchConfigSecretsStep calls.
+        jhelper.remove_secret.assert_has_calls(
+            [
+                call(OPENSTACK_MODEL, "switch-config-bar"),
+                call(OPENSTACK_MODEL, "switch-config-tender"),
+            ]
+        )
+        jhelper.add_secret.assert_has_calls(
+            [
+                call(
+                    OPENSTACK_MODEL,
+                    "switch-config-foo",
+                    {
+                        "conf": valid_netconf.configfile,
+                        "foo-key": "foo",
+                    },
+                    ANY,
+                ),
+                call(
+                    OPENSTACK_MODEL,
+                    "switch-config-lish",
+                    {
+                        "conf": valid_generic.configfile,
+                        "lish-key": "lish",
+                    },
+                    ANY,
+                ),
+            ]
+        )
+        jhelper.grant_secret.assert_has_calls(
+            [
+                call(OPENSTACK_MODEL, "switch-config-foo", "neutron"),
+                call(
+                    OPENSTACK_MODEL,
+                    "switch-config-foo",
+                    "neutron-baremetal-switch-config",
+                ),
+                call(OPENSTACK_MODEL, "switch-config-lish", "neutron"),
+                call(
+                    OPENSTACK_MODEL,
+                    "switch-config-lish",
+                    "neutron-generic-switch-config",
+                ),
+            ]
+        )
+        expected_items = {
+            constants.NEUTRON_SWITCH_CONF_SECRETS_TFVAR: {
+                "netconf": ["switch-config-foo"],
+                "generic": ["switch-config-lish"],
+            },
+            constants.NEUTRON_BAREMETAL_SWITCH_CONF_SECRETS_TFVAR: "foo-id",
+            constants.NEUTRON_GENERIC_SWITCH_CONF_SECRETS_TFVAR: "lish-id",
+        }
+        mock_switch_apply.assert_any_call(
+            expected_items,
+            [
+                "neutron",
+                "neutron-baremetal-switch-config",
+                "neutron-generic-switch-config",
+            ],
+        )
 
         # RunSetTempUrlSecretStep calls.
         jhelper = mock_JujuHelper.return_value
@@ -94,26 +206,32 @@ class TestBaremetalFeature:
 
         # DeployNovaIronicShardsStep call.
         expected_items = {
-            "database": "multi",
+            constants.NEUTRON_SWITCH_CONF_SECRETS_TFVAR: {
+                "netconf": ["switch-config-bar"],
+                "generic": ["switch-config-tender"],
+            },
             constants.NOVA_IRONIC_SHARDS_TFVAR: {
                 "foo": {"shard": "foo"},
                 "lish": {"shard": "lish"},
             },
         }
-        mock_apply_tfvars.assert_any_call(
+        mock_shards_apply.assert_any_call(
             expected_items,
             ["nova-ironic-foo", "nova-ironic-lish"],
         )
 
         # DeployIronicConductorGroupsStep call.
         expected_items = {
-            "database": "multi",
+            constants.NEUTRON_SWITCH_CONF_SECRETS_TFVAR: {
+                "netconf": ["switch-config-bar"],
+                "generic": ["switch-config-tender"],
+            },
             constants.IRONIC_CONDUCTOR_GROUPS_TFVAR: {
                 "foo": {"conductor-group": "foo"},
                 "lish": {"conductor-group": "lish"},
             },
         }
-        mock_apply_tfvars.assert_any_call(
+        mock_conductors_apply.assert_any_call(
             expected_items,
             ["ironic-conductor-foo", "ironic-conductor-lish"],
         )
@@ -138,5 +256,7 @@ class TestBaremetalFeature:
             "enable-ironic": False,
             constants.NOVA_IRONIC_SHARDS_TFVAR: {},
             constants.IRONIC_CONDUCTOR_GROUPS_TFVAR: {},
+            constants.NEUTRON_BAREMETAL_SWITCH_CONF_SECRETS_TFVAR: "",
+            constants.NEUTRON_GENERIC_SWITCH_CONF_SECRETS_TFVAR: "",
         }
         assert extra_tfvars == expected_tfvars
