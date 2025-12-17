@@ -19,9 +19,6 @@ from sunbeam.storage.base import (
     JUJU_APP_NAME_PATTERN,
     validate_juju_application_name,
 )
-from sunbeam.storage.models import (
-    BackendAlreadyExistsException,
-)
 
 
 class TestJujuApplicationNameValidation:
@@ -221,28 +218,23 @@ class TestStorageBackendBase(BaseStorageBackendTests):
         mock_manifest.storage.root = {}
 
         # Mock the service and JujuHelper
-        with patch("sunbeam.storage.base.StorageBackendService") as mock_service_class:
-            with patch("sunbeam.storage.base.JujuHelper") as mock_jhelper_class:
-                # Patch the manifest property without accessing it
-                with patch.object(
-                    type(backend),
-                    "manifest",
-                    new_callable=lambda: property(lambda self: mock_manifest),
-                ):
-                    mock_service = Mock()
-                    mock_service.backend_exists.return_value = False
-                    mock_service_class.return_value = mock_service
+        with patch("sunbeam.storage.base.JujuHelper") as mock_jhelper_class:
+            # Patch the manifest property without accessing it
+            with patch.object(
+                type(backend),
+                "manifest",
+                new_callable=lambda: property(lambda self: mock_manifest),
+            ):
+                mock_jhelper = Mock()
+                mock_jhelper_class.return_value = mock_jhelper
 
-                    mock_jhelper = Mock()
-                    mock_jhelper_class.return_value = mock_jhelper
-
-                    # Mock register_terraform_plan
-                    with patch.object(backend, "register_terraform_plan"):
-                        # Mock run_plan
-                        with patch("sunbeam.storage.base.run_plan"):
-                            backend.add_backend_instance(
-                                mock_deployment, backend_name, config, mock_console
-                            )
+                # Mock register_terraform_plan
+                with patch.object(backend, "register_terraform_plan"):
+                    # Mock run_plan
+                    with patch("sunbeam.storage.base.run_plan"):
+                        backend.add_backend_instance(
+                            mock_deployment, backend_name, config, mock_console
+                        )
 
     def test_add_backend_instance_invalid_name(
         self, backend, mock_deployment, mock_console
@@ -256,27 +248,6 @@ class TestStorageBackendBase(BaseStorageBackendTests):
                     mock_deployment, invalid_name, {}, mock_console
                 )
             assert "Invalid backend name" in str(exc_info.value)
-
-    def test_add_backend_instance_already_exists(
-        self, backend, mock_deployment, mock_console
-    ):
-        """Test adding a backend that already exists."""
-        backend_name = "existing-backend"
-        config = {}
-
-        with patch("sunbeam.storage.base.StorageBackendService") as mock_service_class:
-            with patch("sunbeam.storage.base.JujuHelper") as mock_jhelper_class:
-                mock_service = Mock()
-                mock_service.backend_exists.return_value = True
-                mock_service_class.return_value = mock_service
-
-                mock_jhelper = Mock()
-                mock_jhelper_class.return_value = mock_jhelper
-
-                with pytest.raises(BackendAlreadyExistsException):
-                    backend.add_backend_instance(
-                        mock_deployment, backend_name, config, mock_console
-                    )
 
     def test_remove_backend(self, backend, mock_deployment, mock_console, tmp_path):
         """Test removing a backend."""

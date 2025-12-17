@@ -303,3 +303,22 @@ class StorageBackendManager:
             )
 
         console.print(table)
+
+    def list_principal_applications(
+        self, deployment: Deployment
+    ) -> list[tuple[str, str]]:
+        """List all principal applications used by backends.
+
+        Returns:
+            List of  model / principal application names.
+        """
+        client = deployment.get_client()
+        enabled = client.cluster.get_storage_backends()
+
+        principal_apps = []
+        for backend in enabled.root:
+            model_app_tuple = (backend.model_uuid, backend.principal)
+            if model_app_tuple not in principal_apps:
+                principal_apps.append(model_app_tuple)
+
+        return principal_apps
