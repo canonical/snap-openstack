@@ -1,5 +1,9 @@
 #!/bin/bash -ux
 
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+ARTIFACTS_DIR=$(realpath $SCRIPT_DIR/../artifacts)
+mkdir -p $ARTIFACTS_DIR
+
 ## Collect relevant files (if possible)
 sudo mkdir /tmp/sosreport/
 sudo sosreport -a --batch --label hypervisor --all-logs --tmp-dir=/tmp/sosreport/
