@@ -9,7 +9,7 @@ output "nodes" {
   value = [
     for node in libvirt_domain.node : {
       name        = node.name
-      mac_address = node.network_interface[0].mac
+      mac_address = node.devices.interfaces[0].mac.address
     }
   ]
   depends_on = [libvirt_domain.node]

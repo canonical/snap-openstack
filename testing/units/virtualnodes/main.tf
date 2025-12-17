@@ -3,7 +3,7 @@ terraform {
   required_providers {
     libvirt = {
       source = "dmacvicar/libvirt"
-      version = "0.8.3"
+      version = "0.9.1"
     }
     external = {
       source = "hashicorp/external"
@@ -19,42 +19,76 @@ provider "libvirt" {
 #### Locals
 locals {
   maas_controller_ip_addr = "172.16.1.2"
-  generic_net_addresses   = ["172.16.1.0/24"]
-  external_net_addresses  = ["172.16.2.0/24"]
+  generic_net_addresses   = {
+    start   = "172.16.1.2",
+    end     = "172.16.1.254",
+    cidr    = "172.16.1.0/24",
+    gateway = "172.16.1.1"
+  }
+  external_net_addresses   = {
+    start   = "172.16.2.2",
+    end     = "172.16.2.254",
+    cidr    = "172.16.2.0/24",
+    gateway = "172.16.2.1"
+  }
 }
 
 #### Networks
 
 resource "libvirt_network" "generic_net" {
-  name = "generic_net"
-  mode = "nat"
+  name      = "generic_net"
   autostart = true
 
-  domain = var.generic_net_domain
-  addresses = local.generic_net_addresses
-
-  dns {
-    enabled = false
+  domain = {
+    name = var.generic_net_domain
   }
+  forward = {
+    nat = {
+      ports = [
+        {
+          start = 1024
+          end   = 65535
+        }
+      ]
+    }
+  }
+  ips = [
+    {
+      address = local.generic_net_addresses.gateway
+      prefix = 24
+    }
+  ]
 }
 
 resource "libvirt_network" "external_net" {
-  name = "external_net"
-  mode = "nat"
+  name      = "external_net"
   autostart = true
 
-  domain = var.external_net_domain
-  addresses = local.external_net_addresses
-
-  dns {
-    enabled = false
+  domain = {
+    name = var.external_net_domain
   }
+  forward = {
+    nat = {
+      ports = [
+        {
+          start = 1024
+          end   = 65535
+        }
+      ]
+    }
+  }
+  ips = [
+    {
+      address = local.external_net_addresses.gateway
+      prefix = 24
+    }
+  ]
 }
 
 resource "libvirt_pool" "sunbeam" {
   name = "sunbeam"
   type = "dir"
-  target {
+  target = {
     path = var.storage_pool_path
   }
 }
@@ -62,38 +96,52 @@ resource "libvirt_pool" "sunbeam" {
 #### Volumes
 
 resource "libvirt_volume" "node_vol" {
-  name  = "node_${count.index}.qcow2"
-  count = var.nodes_count
-  pool = libvirt_pool.sunbeam.name
-  size  = var.node_rootfs_size
+  name      = "node_${count.index}.qcow2"
+  count     = var.nodes_count
+  pool      = libvirt_pool.sunbeam.name
+  capacity  = var.node_rootfs_size
+  target = { format = { type = "qcow2" } }
 }
 
 resource "libvirt_volume" "node_vol_secondary" {
-  name  = "node_${count.index}_secondary.qcow2"
-  count = var.nodes_count
-  pool = libvirt_pool.sunbeam.name
-  size  = var.node_secondary_disk_size
+  name      = "node_${count.index}_secondary.qcow2"
+  count     = var.nodes_count
+  pool      = libvirt_pool.sunbeam.name
+  capacity  = var.node_secondary_disk_size
+  target = { format = { type = "qcow2" } }
 }
 
 
 resource "libvirt_volume" "ubuntu_noble" {
   name   = "ubuntu-noble.qcow2"
-  source = "https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img"
-  pool = libvirt_pool.sunbeam.name
+  pool   = libvirt_pool.sunbeam.name
+  target = { format = { type = "qcow2" } }
+  create = {
+    content = {
+      url = "https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img"
+    }
+  }
 }
 
 resource "libvirt_volume" "maas_controller_vol" {
-  name           = "maas-controller-vol"
-  base_volume_id = libvirt_volume.ubuntu_noble.id
-  pool = libvirt_pool.sunbeam.name
-  size           = var.maas_controller_rootfs_size
+  name      = "maas-controller-vol"
+  pool      = libvirt_pool.sunbeam.name
+  capacity  = var.maas_controller_rootfs_size
+  target = { format = { type = "qcow2" } }
+  backing_store = {
+    path = libvirt_volume.ubuntu_noble.path
+    format = { type = "qcow2" }
+  }
 }
 
 #### Virtual machines (domains)
 
 resource "libvirt_cloudinit_disk" "maas_controller_cloudinit" {
   name      = "maas_controller_cloudinit.iso"
-  pool = libvirt_pool.sunbeam.name
+  meta_data = yamlencode({
+    instance-id    = "maas-controller"
+    local-hostname = "maas-controller"
+  })
   user_data = templatefile(
     "${path.module}/templates/maas_controller.cloudinit.cfg",
     {
@@ -112,39 +160,76 @@ resource "libvirt_cloudinit_disk" "maas_controller_cloudinit" {
     })
 }
 
+resource "libvirt_volume" "maas_controller_cloudinit_vol" {
+  name   = "maas_controller_cloudinit_vol"
+  pool = libvirt_pool.sunbeam.name
+  create = {
+    content = {
+      url = libvirt_cloudinit_disk.maas_controller_cloudinit.path
+    }
+  }
+}
+
 resource "libvirt_domain" "maas_controller" {
-  name = "maas-controller"
+  name    = "maas-controller"
   memory  = var.maas_controller_mem
   vcpu    = var.maas_controller_vcpu
-  disk {
-    volume_id = libvirt_volume.maas_controller_vol.id
-    scsi      = "true"
-  }
-  cloudinit = libvirt_cloudinit_disk.maas_controller_cloudinit.id
-  boot_device {
-    dev = [ "hd"]
-  }
-  network_interface {
-    network_id     = libvirt_network.generic_net.id
-    hostname       = var.maas_hostname
-    addresses      = [local.maas_controller_ip_addr]
-    mac            = var.maas_controller_mac_address
-  }
-  console {
-    type        = "pty"
-    target_type = "serial"
-    target_port = "0"
-  }
+  running = true
+  type    = "kvm"
+  cpu     = { mode = "host-passthrough" }
 
-  console {
-    type        = "pty"
-    target_type = "virtio"
-    target_port = "1"
+  os = {
+    type         = "hvm"
+    type_arch    = "x86_64"
+    type_machine = "q35"
+    boot_devices = [{ dev = "hd" }]
   }
-  graphics {
-    type        = "spice"
-    listen_type = "address"
-    autoport    = true
+  devices = {
+    disks = [
+      {
+        source = {
+          volume = {
+            pool = libvirt_pool.sunbeam.name
+            volume = libvirt_volume.maas_controller_vol.name
+          }
+        }
+        target = { dev = "sda", bus = "virtio" }
+        driver = { name = "qemu", type = "qcow2" }
+      },
+      {
+        source = {
+          volume = {
+            pool = libvirt_pool.sunbeam.name
+            volume = libvirt_volume.maas_controller_cloudinit_vol.name
+          }
+        }
+        target = { dev = "hdd", bus = "virtio" }
+      }
+    ]
+    interfaces = [
+      {
+        model = { type = "virtio"}
+        source = {
+          network = {
+            network = libvirt_network.generic_net.name
+          }
+        }
+        mac = { address = var.maas_controller_mac_address }
+      }
+    ]
+    consoles = [
+      { target = { type = "serial" } },
+      { target = { type = "virtio", port = "1" }}
+    ]
+    graphics = [
+      {
+        type = "vnc"
+        vnc = {
+          autoport = true
+          listen   = "127.0.0.1"
+        }
+      },
+    ]
   }
 
   connection {
@@ -170,41 +255,74 @@ resource "libvirt_domain" "node" {
   memory  = var.node_mem
   vcpu    = var.node_vcpu
   running = false
-  disk {
-    volume_id = libvirt_volume.node_vol[count.index].id
-    scsi      = "true"
+  type   = "kvm"
+  cpu = {
+    mode = "host-passthrough"
   }
-  disk {
-    volume_id = libvirt_volume.node_vol_secondary[count.index].id
-    scsi      = "true"
+  os = {
+    type         = "hvm"
+    type_arch    = "x86_64"
+    type_machine = "q35"
+    boot_devices = [{ dev = "network" }, { dev = "hd" }]
   }
-  boot_device {
-    dev = [ "network"]
-  }
-  network_interface {
-    network_id     = libvirt_network.generic_net.id
-    hostname       = "node-${count.index}"
-    mac            = format("AA:BB:CC:11:22:%02d", count.index + 10)
-  }
-  network_interface {
-    network_id     = libvirt_network.external_net.id
-    mac            = format("AA:BB:CC:33:44:%02d", count.index + 10)
-  }
-  console {
-    type        = "pty"
-    target_type = "serial"
-    target_port = "0"
-  }
-
-  console {
-    type        = "pty"
-    target_type = "virtio"
-    target_port = "1"
-  }
-  graphics {
-    type        = "spice"
-    listen_type = "address"
-    autoport    = true
+  devices = {
+    disks = [
+      {
+        serial = format("DISK-ROOT-%06d", count.index)
+        source = {
+          volume = {
+            pool = libvirt_pool.sunbeam.name
+            volume = libvirt_volume.node_vol[count.index].name
+          }
+        }
+        target = { dev = "sda", bus = "virtio" }
+        driver = { name = "qemu", type = "qcow2" }
+      },
+      {
+        serial = format("DISK-CEPH-%06d", count.index)
+        source = {
+          volume = {
+            pool = libvirt_pool.sunbeam.name
+            volume = libvirt_volume.node_vol_secondary[count.index].name
+          }
+        }
+        target = { dev = "sdb", bus = "virtio" }
+        driver = { name = "qemu", type = "qcow2" }
+      }
+    ]
+    interfaces = [
+      {
+        model = { type = "virtio"}
+        source = {
+          network = {
+            network = libvirt_network.generic_net.name
+          }
+        }
+        mac = { address = format("52:54:00:11:22:%02d", count.index + 10) }
+      },
+      {
+        model = { type = "virtio"}
+        source = {
+          network = {
+            network = libvirt_network.external_net.name
+          }
+        }
+        mac = { address = format("52:54:00:33:44:%02d", count.index + 10) }
+      }
+    ]
+    consoles = [
+      { target = { type = "serial" } },
+      { target = { type = "virtio", port = "1" }}
+    ]
+    graphics = [
+      {
+        type = "vnc"
+        vnc = {
+          autoport = true
+          listen   = "127.0.0.1"
+        }
+      },
+    ]
   }
 }
 
