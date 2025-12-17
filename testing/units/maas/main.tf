@@ -3,6 +3,8 @@ locals {
   external_net_addresses  = ["172.16.2.0/24"]
   generic_dhcp_start = cidrhost(local.generic_net_addresses[0], 200)
   generic_dhcp_end = cidrhost(local.generic_net_addresses[0], 254)
+  generic_reserved_start = cidrhost(local.generic_net_addresses[0], 1)
+  generic_reserved_end = cidrhost(local.generic_net_addresses[0], 5)
 }
 
 resource "maas_configuration" "kernel_opts" {
@@ -166,6 +168,13 @@ resource "maas_subnet_ip_range" "generic_subnet_dhcp_range" {
   start_ip = local.generic_dhcp_start
   end_ip   = local.generic_dhcp_end
   type     = "dynamic"
+}
+
+resource "maas_subnet_ip_range" "generic_subnet_reserved_range" {
+  subnet   = maas_subnet.generic_subnet.id
+  start_ip = local.generic_reserved_start
+  end_ip   = local.generic_reserved_end
+  type     = "reserved"
 }
 
 resource "maas_vlan_dhcp" "generic_vlan_dhcp" {
