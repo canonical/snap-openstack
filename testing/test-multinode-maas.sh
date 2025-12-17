@@ -30,6 +30,21 @@ if [[ ! -f "$HOME/.ssh/passwordless" ]]; then
     ssh-keygen -b 2048 -t rsa -f $HOME/.ssh/passwordless -q -N ""
 fi
 
+function timeout_loop () {
+    local TIMEOUT=$1; shift
+    while [ "$TIMEOUT" -gt 0 ]; do
+        if "$@" > /dev/null 2>&1; then
+            echo "OK"
+            return 0
+        fi
+        TIMEOUT=$((TIMEOUT - 1))
+        sleep 1
+    done
+    echo "ERROR: $* FAILED"
+    ret=1
+    return 1
+}
+
 function run_snap_daemon {
     sg snap_daemon -c "$*"
 }
@@ -67,6 +82,10 @@ sleep 300
 source demo-openrc
 openstack console log show --lines 200 test
 demo_floating_ip="$(openstack floating ip list -c 'Floating IP Address' -f value | head -n1)"
+
+TIMEOUT=120
+echo "Block until ${demo_floating_ip} on port 22 is reachable (timeout: ${TIMEOUT})"
+timeout_loop ${TIMEOUT} nc -v -z ${demo_floating_ip}
 ssh -oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null -i ~/snap/openstack/current/sunbeam "ubuntu@${demo_floating_ip}" true
 
 run_snap_daemon sunbeam enable orchestration
