@@ -427,7 +427,9 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
             "Deploying OpenStack Control Plane",
             "Deploying OpenStack Control Plane to Kubernetes (this may take a while)",
         )
+        self.deployment = deployment
         self.client = deployment.get_client()
+        self.storage_manager = deployment.get_storage_manager()
         self.tfhelper = tfhelper
         self.jhelper = jhelper
         self.manifest = manifest
@@ -442,7 +444,7 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
 
     def get_storage_tfvars(self, storage_nodes: list[dict]) -> dict:
         """Create terraform variables related to storage."""
-        tfvars: dict[str, str | bool | int] = {}
+        tfvars: dict[str, str | bool | int | list[str]] = {}
         if storage_nodes:
             model_with_owner = self.get_model_name_with_owner(self.machine_model)
             tfvars["enable-ceph"] = True
@@ -457,7 +459,17 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
                 len(storage_nodes)
             )
             tfvars["enable-cinder-volume"] = True
-            tfvars["cinder-volume-offer-url"] = f"{model_with_owner}.cinder-volume"
+            urls = [f"{model_with_owner}.cinder-volume"]
+            principal_apps = self.storage_manager.list_principal_applications(
+                self.deployment
+            )
+            for model, app in principal_apps:
+                model_with_owner = self.get_model_name_with_owner(model)
+                url = f"{model_with_owner}.{app}"
+                if url not in urls:
+                    urls.append(url)
+
+            tfvars["cinder-volume-offer-urls"] = urls
         else:
             tfvars["enable-ceph"] = False
             tfvars["enable-cinder-volume"] = False

@@ -33,3 +33,19 @@ module "backends" {
   endpoint_bindings     = each.value.endpoint_bindings
   secrets               = each.value.secrets
 }
+
+module "cinder-volume" {
+  for_each = var.cinder-volumes
+  source   = "./modules/cinder-volume"
+
+  machine_model      = var.model
+  application_name   = each.value.application_name
+  charm_channel      = each.value.charm_channel
+  charm_revision     = each.value.charm_revision
+  charm_config       = each.value.charm_config
+  machine_ids        = each.value.machine_ids
+  endpoint_bindings  = each.value.endpoint_bindings
+  keystone-offer-url = each.value.keystone-offer-url
+  amqp-offer-url     = each.value.amqp-offer-url
+  database-offer-url = each.value.database-offer-url
+}

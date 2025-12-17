@@ -31,15 +31,16 @@ from sunbeam.core.deployment import Deployment, Networks
 from sunbeam.core.juju import JujuHelper
 from sunbeam.core.manifest import Manifest, StorageBackendConfig
 from sunbeam.core.terraform import TerraformHelper, TerraformInitStep
+from sunbeam.steps.openstack import DeployControlPlaneStep
 from sunbeam.storage.cli_base import StorageBackendCLIBase
 from sunbeam.storage.models import (
-    BackendAlreadyExistsException,
     SecretDictField,
 )
-from sunbeam.storage.service import StorageBackendService
 from sunbeam.storage.steps import (
     BaseStorageBackendDeployStep,
     BaseStorageBackendDestroyStep,
+    DeploySpecificCinderVolumeStep,
+    DestroySpecificCinderVolumeStep,
     ValidateStoragePrerequisitesStep,
 )
 
@@ -57,6 +58,9 @@ FQDN_PATTERN = (
     r"^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?"
     r"(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$"
 )
+
+PRINCIPAL_HA_APPLICATION = "cinder-volume"
+PRINCIPAL_NON_HA_APPLICATION = "cinder-volume-noha"
 
 
 def validate_juju_application_name(name: str) -> bool:
@@ -319,12 +323,7 @@ class StorageBackendBase(typing.Generic[BackendConfig]):
                 "after the final hyphen."
             )
 
-        service = StorageBackendService(
-            deployment, JujuHelper(deployment.juju_controller)
-        )
-        if service.backend_exists(name, self.backend_type):
-            raise BackendAlreadyExistsException(f"Backend {name!r} already exists")
-
+        openstack_tfhelper = deployment.get_tfhelper("openstack-plan")
         # Register our Terraform plan with the deployment system
         self.register_terraform_plan(deployment)
 
@@ -332,10 +331,20 @@ class StorageBackendBase(typing.Generic[BackendConfig]):
         client = deployment.get_client()
         tfhelper = deployment.get_tfhelper(self.tfplan)
         jhelper = JujuHelper(deployment.juju_controller)
-
         plan = [
             ValidateStoragePrerequisitesStep(deployment, client, jhelper),
             TerraformInitStep(tfhelper),
+            TerraformInitStep(openstack_tfhelper),
+            DeploySpecificCinderVolumeStep(
+                deployment,
+                client,
+                tfhelper,
+                jhelper,
+                self.manifest,
+                name,
+                self,
+                deployment.openstack_machines_model,
+            ),
             self.create_deploy_step(
                 deployment,
                 client,
@@ -346,6 +355,14 @@ class StorageBackendBase(typing.Generic[BackendConfig]):
                 name,
                 deployment.openstack_machines_model,
                 accept_defaults,
+            ),
+            DeployControlPlaneStep(
+                deployment,
+                openstack_tfhelper,
+                jhelper,
+                self.manifest,
+                "auto",
+                deployment.openstack_machines_model,
             ),
         ]
 
@@ -516,6 +533,7 @@ class StorageBackendBase(typing.Generic[BackendConfig]):
         self, deployment: Deployment, backend_name: str, console: Console
     ) -> None:
         """Remove a storage backend using Terraform."""
+        openstack_tfhelper = deployment.get_tfhelper("openstack-plan")
         # Register our Terraform plan with the deployment system
         self.register_terraform_plan(deployment)
 
@@ -523,11 +541,11 @@ class StorageBackendBase(typing.Generic[BackendConfig]):
         client = deployment.get_client()
         tfhelper = deployment.get_tfhelper(self.tfplan)
         jhelper = JujuHelper(deployment.juju_controller)
-
         # Create removal plan - each backend should implement its own destroy step
         plan = [
             ValidateStoragePrerequisitesStep(deployment, client, jhelper),
             TerraformInitStep(tfhelper),
+            TerraformInitStep(openstack_tfhelper),
             self.create_destroy_step(
                 deployment,
                 client,
@@ -535,6 +553,24 @@ class StorageBackendBase(typing.Generic[BackendConfig]):
                 jhelper,
                 self.manifest,
                 backend_name,
+                deployment.openstack_machines_model,
+            ),
+            DestroySpecificCinderVolumeStep(
+                deployment,
+                client,
+                tfhelper,
+                jhelper,
+                self.manifest,
+                backend_name,
+                self,
+                deployment.openstack_machines_model,
+            ),
+            DeployControlPlaneStep(
+                deployment,
+                openstack_tfhelper,
+                jhelper,
+                self.manifest,
+                "auto",
                 deployment.openstack_machines_model,
             ),
         ]
@@ -568,11 +604,27 @@ class StorageBackendBase(typing.Generic[BackendConfig]):
 
     @property
     def principal_application(self) -> str:
-        """Principal application for this backend.
+        """Principal application for this backend."""
+        return (
+            PRINCIPAL_HA_APPLICATION
+            if self.supports_ha
+            else PRINCIPAL_NON_HA_APPLICATION
+        )
 
-        To override when supporting non-ha backends.
+    @property
+    def snap_name(self) -> str:
+        """Snap name for this backend.
+
+        Returns a name with an underscore for parallel snap installation.
+        note(gboutry): Backend can redefine which snap to install for principal
+        application.
         """
-        return "cinder-volume"
+        return "cinder-volume" if self.supports_ha else "cinder-volume_noha"
+
+    @property
+    def supports_ha(self) -> bool:
+        """Return whether this backend supports HA deployments."""
+        return False
 
     def get_endpoint_bindings(self, deployment: Deployment) -> list[dict[str, str]]:
         """Endpoint bindings for this backend."""

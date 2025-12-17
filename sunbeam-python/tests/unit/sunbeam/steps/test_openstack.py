@@ -58,6 +58,9 @@ def deployment_with_client(basic_client):
     """Deployment mock with configured client."""
     deployment = Mock()
     deployment.get_client.return_value = basic_client
+    storage_manager = Mock()
+    storage_manager.list_principal_applications.return_value = []
+    deployment.get_storage_manager.return_value = storage_manager
     return deployment
 
 
