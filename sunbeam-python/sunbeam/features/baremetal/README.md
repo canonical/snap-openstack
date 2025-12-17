@@ -150,6 +150,85 @@ configurations and their protocol:
 sunbeam baremetal switch-config list
 ```
 
+## Testing
+
+Instead of physical machines, the baremetal feature can also be tested with virtual machines by using VirtualBMC. Below are instructions on how to setup such an environment.
+
+### Prerequisites
+
+This setup requires a node with the following prerequisites:
+
+- the host must have sufficient resources to host virtual machines (VM size: 4GB RAM, 2 vCPUs, 40GB disk). This can be customized by editing the files `sample/create-machine.sh` and `sample/libvirt/machine1.xml` as needed.
+- the host must be reachable by a Kubernetes Pod (the `ironic-conductor` Pod will send IPMI commands to it).
+- the host's VM network must allow PXE / iPXE traffic, and OVN must be able to respond to DHCP requests on it. The VM's network can be customized by editing the file `sample/libvirt/machine1.xml`.
+- the host's VM must be able to reach `ironic-conductor`'s LoadBalancer IP and the Swift service endpoint.
+
+### Setup
+
+The script `sample/create-machine.sh` can be run on a host that meets the prerequisites above. The script will perform the following actions:
+
+- installs dependencies (`qemu-kvm`, `libvirt-daemon-system`, `libvirt-dev`, `ipmitool`, `virtualbmc`).
+- creates a virtual machine.
+- adds it to VirtualBMC.
+- downloads the `tinyipa-master.vmlinuz` and `tinyipa-master.gz` images, registers into Glance, and copies them to the Swift store.
+- creates the `metallic-flavor` Nova flavor that can be used to create a Nova server on the Ironic node.
+- registers the VM as an Ironic node and configures it.
+- registers a port for the Ironic node and configures it.
+- brings the Ironic node to the `available` provisioning state, allowing it to be usable.
+
+The `sample/create-machine.sh` script assumes admin credentials to be set in `~/.openrc`, and that the admin user has a system scoped role assigned. This can be checked by running the command:
+
+```
+openstack role assignment list --user USERNAME --names
+```
+
+A system-scoped role can be added to a user by running the following command:
+
+```
+openstack role add --system all --user USERNAME ROLE
+```
+
+The `sample/create-machine.sh` script can be executed:
+
+```
+./sample/create-machine.sh IPMI_ADDR IRONIC_NETWORK
+```
+
+The arguments of the scripts are as follows:
+
+- `IPMI_ADDR`: IP address of the VirtualBMC host. This address should be reachable by a Kubernetes Pod (the `ironic-conductor` Pod will send IPMI commands to it).
+- `IRONIC_NETWORK`: A flat or VLAN Neutron network used for provisioning. The network must provide DHCP and allow PXE / iPXE traffic. Instances on the network must be able to reach the `ironic-conductor`'s LoadBalancer IP and the Swift service endpoint.
+
+### Creating an instance
+
+After running the setup above, you can create an instance on the Ironic node:
+
+```
+GLANCE_IMAGE=""  # A Glance image backed by the Swift store (required by Ironic).
+# If the $GLANCE_IMAGE is not in the Swift store, it can be imported into it by running the following command:
+# openstack image import $GLANCE_IMAGE --method copy-image --store swift
+openstack server create --image $GLANCE_IMAGE --flavor metallic-flavor \
+  --nic net-id=$IRONIC_NETWORK --key your-keypair metallic-server
+```
+
+After a while, the Ironic node should have enter the `active` provisioning state, and the Nova server should have an `ACTIVE` status:
+
+```
+openstack baremetal node list
++--------------------------------------+----------+--------------------------------------+-------------+--------------------+-------------+
+| UUID                                 | Name     | Instance UUID                        | Power State | Provisioning State | Maintenance |
++--------------------------------------+----------+--------------------------------------+-------------+--------------------+-------------+
+| 12f9f792-2d7e-4447-929e-1e183798ecff | machine1 | 53a5efd0-acc5-41ac-a683-be67559ca743 | power on    | active             | False       |
++--------------------------------------+----------+--------------------------------------+-------------+--------------------+-------------+
+
+openstack server list
++--------------------------------------+-----------------+--------+-------------------------------+--------------------------+-----------------+
+| ID                                   | Name            | Status | Networks                      | Image                    | Flavor          |
++--------------------------------------+-----------------+--------+-------------------------------+--------------------------+-----------------+
+| 53a5efd0-acc5-41ac-a683-be67559ca743 | metallic-server | ACTIVE | physnet2-network=10.27.187.66 | cirros-0.6.2-x86_64-disk | metallic-flavor |
++--------------------------------------+-----------------+--------+-------------------------------+--------------------------+-----------------+
+```
+
 ## Contents
 
 This feature will install the following services:
