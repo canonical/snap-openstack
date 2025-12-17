@@ -3,7 +3,7 @@ job_queue: openstack
 provision_data:
   distro: noble
 global_timeout: 14400  # 4 hours
-output_timeout: 5400  # 90 min
+output_timeout: 10800  # 180 min
 test_data:
   attachments:
     - local: repository.tar.gz
@@ -66,11 +66,12 @@ test_data:
         scp -r "ubuntu@${DEVICE_IP}:repository/artifacts/" artifacts/ || true
         find artifacts/
     else
-        ssh ubuntu@${DEVICE_IP} /home/ubuntu/repository/testing/collect-logs.sh
-        scp -r "ubuntu@${DEVICE_IP}:repository/artifacts/" artifacts/ || true
-        find artifacts/
         echo "blocking until file /tmp/.continue shows up in ${DEVICE_IP}"
         echo ssh ubuntu@${DEVICE_IP}
         ssh ubuntu@${DEVICE_IP} "until test -f /tmp/.continue; do sleep 10;done"
+
+        ssh ubuntu@${DEVICE_IP} /home/ubuntu/repository/testing/collect-logs.sh
+        scp -r "ubuntu@${DEVICE_IP}:repository/artifacts/" artifacts/ || true
+        find artifacts/
         exit 1
     fi
