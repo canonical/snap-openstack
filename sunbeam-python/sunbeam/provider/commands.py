@@ -26,10 +26,12 @@ from sunbeam.core.deployments import (
     list_deployments,
     store_deployment_as_yaml,
 )
+from sunbeam.core.juju import JujuHelper
 from sunbeam.provider.base import ProviderBase
 from sunbeam.provider.local.commands import LocalProvider
 from sunbeam.provider.local.deployment import LocalDeployment
 from sunbeam.provider.maas.commands import MaasProvider
+from sunbeam.provider.maas.steps import MaasSaveClusterdCredentialsStep
 from sunbeam.utils import CatchGroup, click_option_show_hints
 
 console = Console()
@@ -230,6 +232,20 @@ def show(name: str, format: str):
         console.print(table)
     elif format == FORMAT_YAML:
         console.print(yaml.dump(deployment), end="")
+
+
+@deployment_group.command("update-clusterd-credentials")
+@click_option_show_hints
+@click.pass_context
+def update_clusterd_credentials(ctx, show_hints: bool = False):
+    """Update sunbeam clusterd certificates locally."""
+    deployment: Deployment = ctx.obj
+    snap = Snap()
+    path = deployment_path(snap)
+    deployments = DeploymentsConfig.load(path)
+    jhelper = JujuHelper(deployment.juju_controller)
+    plan = [MaasSaveClusterdCredentialsStep(jhelper, deployment.name, deployments)]
+    run_plan(plan, console, show_hints)
 
 
 def register_cli(cli: click.Group, configure: click.Group, deployment: Deployment):
