@@ -108,7 +108,7 @@ func cmdStorageBackendPut(s state.State, r *http.Request) response.Response {
 		return response.InternalError(err)
 	}
 
-	err = sunbeam.UpdateStorageBackend(r.Context(), s, backendName, req.Type, req.Config, req.Principal, req.ModelUUID)
+	err = sunbeam.UpdateStorageBackend(r.Context(), s, backendName, req.Type, req.Principal, req.ModelUUID, req.Config)
 	if err != nil {
 		return response.InternalError(err)
 	}
