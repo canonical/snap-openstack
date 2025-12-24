@@ -22,7 +22,6 @@ IRONIC_NETWORK="$2"
 
 install_dependencies() {
     apt install -y pkg-config qemu-kvm libvirt-daemon-system libvirt-dev ipmitool virtualbmc
-    kvm-ok
 }
 
 create_machine() {
