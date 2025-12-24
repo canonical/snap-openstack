@@ -40,26 +40,26 @@ features:
         netconf:
           foo:
             configfile: |
-              ["nexus.example.net"]
-              driver = "netconf-openconfig"
-              device_params = "name:nexus"
-              switch_info = "nexus"
-              switch_id = "00:53:00:0a:0a:0a"
-              host = "nexus.example.net"
-              username = "user"
-              key_filename = "/etc/neutron/sshkeys/nexus-sshkey"
+              [nexus.example.net]
+              driver = netconf-openconfig
+              device_params = name:nexus
+              switch_info = nexus
+              switch_id = 00:53:00:0a:0a:0a
+              host = nexus.example.net
+              username = user
+              key_filename = /etc/neutron/sshkeys/nexus-sshkey
             additional-files:
               nexus-sshkey: |
                 some key here.
         generic:
           lish:
             configfile: |
-              ["genericswitch:arista-hostname"]
-              device_type = "netmiko_arista_eos"
-              ngs_mac_address = "00:53:00:0a:0a:0a"
-              ip = "10.20.30.40"
-              username = "admin"
-              key_file = "/etc/neutron/sshkeys/arista-key"
+              [genericswitch:arista-hostname]
+              device_type = netmiko_arista_eos
+              ngs_mac_address = 00:53:00:0a:0a:0a
+              ip = 10.20.30.40
+              username = admin
+              key_file = /etc/neutron/sshkeys/arista-key
             additional-files:
               arista-key: |
                 some key here.

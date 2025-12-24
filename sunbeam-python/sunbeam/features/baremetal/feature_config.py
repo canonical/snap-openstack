@@ -1,11 +1,11 @@
 # SPDX-FileCopyrightText: 2025 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
+import configparser
 import os
 import typing
 
 import pydantic
-import tomllib
 
 from sunbeam.core.manifest import (
     FeatureConfig,
@@ -157,13 +157,13 @@ def _validate_configs(configs: dict[str, _Config], config_type: str):
     sections = {}
     additional_files = []
     for config in configs.values():
-        toml = _validate_config(config, config_type)
-        for section_name, section in toml.items():
+        parser = _validate_config(config, config_type)
+        for section_name in parser.sections():
             if section_name in sections:
                 raise ValueError(
                     f"{config_type}: {section_name} section is duplicated."
                 )
-            sections[section_name] = section
+            sections[section_name] = parser[section_name]
 
         for additional_file in config.additional_files:
             if additional_file in additional_files:
@@ -180,13 +180,15 @@ def _validate_config(config: _Config, config_type: str):
         raise ValueError(f"{config_type}: configfile must be non-empty.")
 
     try:
-        toml = tomllib.loads(configfile)
-    except tomllib.TOMLDecodeError as ex:
-        raise ValueError(f"{config_type}: configfile must be a valid TOML: {ex}")
+        parser = configparser.ConfigParser()
+        parser.read_string(configfile)
+    except configparser.Error as ex:
+        raise ValueError(f"{config_type}: configfile must be a valid INI: {ex}")
 
     valid_opts = _CONF_OPTS[config_type]
     additional_file_opt = _ADDITIONAL_FILE_CONF_OPT[config_type]
-    for section in toml.values():
+    for section_name in parser.sections():
+        section = parser[section_name]
         for key in section.keys():
             if key not in valid_opts:
                 raise ValueError(f"{config_type}: unrecognised field: {key}")
@@ -207,4 +209,4 @@ def _validate_config(config: _Config, config_type: str):
                 "but no additional-file was found with that name."
             )
 
-    return toml
+    return parser
