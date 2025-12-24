@@ -103,6 +103,11 @@ class _SwitchConfigs(pydantic.BaseModel):
         """Validate generic."""
         sections = _validate_configs(v, "generic")
         for section_name, section in sections.items():
+            if not section_name.startswith("genericswitch:"):
+                raise ValueError(
+                    f"generic: section name '{section_name}' must start with "
+                    "'genericswitch:'."
+                )
             if "device_type" not in section:
                 raise ValueError(
                     f"generic: device_type missing from section {section_name}."

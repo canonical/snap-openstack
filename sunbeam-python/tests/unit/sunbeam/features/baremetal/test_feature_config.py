@@ -160,15 +160,21 @@ class TestBaremetalFeatureConfig:
         valid_generic.additional_files = additional_files
         feature_config._SwitchConfigs(generic={"foo": valid_generic})
 
+        # section must start with genericswitch:.
+        with pytest.raises(pydantic.ValidationError):
+            data = "[switch]\ndevice_type = some_type"
+            generic = feature_config._Config(configfile=data)
+            feature_config._SwitchConfigs(generic={"foo": generic})
+
         # missing device_type field.
         with pytest.raises(pydantic.ValidationError):
-            data = "[switch]\nfoo = lish"
+            data = "[genericswitch:switch]\nfoo = lish"
             generic = feature_config._Config(configfile=data)
             feature_config._SwitchConfigs(generic={"foo": generic})
 
         # unknown field.
         with pytest.raises(pydantic.ValidationError):
-            data = "[switch]\ndevice_type = some_type\nfoo = lish"
+            data = "[genericswitch:switch]\ndevice_type = some_type\nfoo = lish"
             generic = feature_config._Config(configfile=data)
             feature_config._SwitchConfigs(generic={"foo": generic})
 
