@@ -1,4 +1,4 @@
-<domain type='kvm' id='11'>
+<domain type='qemu' id='11'>
   <name>machine1</name>
   <uuid>5cf8554d-e9cf-4d8e-b9c6-592173da47da</uuid>
   <metadata>
@@ -6,8 +6,8 @@
       <libosinfo:os id="http://ubuntu.com/ubuntu/24.10"/>
     </libosinfo:libosinfo>
   </metadata>
-  <memory unit='KiB'>4194304</memory>
-  <currentMemory unit='KiB'>4194304</currentMemory>
+  <memory unit='KiB'>2097152</memory>
+  <currentMemory unit='KiB'>2097152</currentMemory>
   <vcpu placement='static'>2</vcpu>
   <iothreads>1</iothreads>
   <iothreadids>
@@ -23,7 +23,6 @@
     <acpi/>
     <apic/>
   </features>
-  <cpu mode='host-passthrough' check='none' migratable='on'/>
   <clock offset='utc'>
     <timer name='rtc' tickpolicy='catchup'/>
     <timer name='pit' tickpolicy='delay'/>
@@ -37,7 +36,6 @@
     <suspend-to-disk enabled='no'/>
   </pm>
   <devices>
-    <emulator>/usr/bin/qemu-system-x86_64</emulator>
     <disk type='file' device='disk'>
       <driver name='qemu' type='qcow2' cache='unsafe'/>
       <source file='/var/lib/libvirt/images/machine1.qcow2' index='2'/>
@@ -152,7 +150,7 @@
       <address type='pci' domain='0x0000' bus='0x01' slot='0x00' function='0x0'/>
     </controller>
     <interface type='bridge'>
-      <source bridge="br0"/>
+      <source bridge="virbr0"/>
       <mac address='08:00:27:9e:f5:3a'/>
       <target dev='vnet-mac-1'/>
       <model type='virtio'/>
