@@ -31,7 +31,7 @@ ifeq ($(shell command -v revive 2> /dev/null),)
 	go install github.com/mgechev/revive@latest
 endif
 	CGO_LDFLAGS_ALLOW="-Wl,-z,now" golangci-lint run --timeout 5m
-	revive -set_exit_status ./...
+	revive -config revive.toml -set_exit_status ./...
 
 # Update targets.
 .PHONY: update-gomod

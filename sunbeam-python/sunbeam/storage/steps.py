@@ -25,11 +25,12 @@ from sunbeam.core.common import (
     BaseStep,
     Result,
     ResultType,
+    Role,
     friendly_terraform_lock_retry_callback,
     read_config,
     update_config,
 )
-from sunbeam.core.deployment import Deployment
+from sunbeam.core.deployment import Deployment, Networks
 from sunbeam.core.juju import (
     ControllerNotFoundException,
     ControllerNotReachableException,
@@ -51,7 +52,13 @@ from sunbeam.core.terraform import (
     TerraformHelper,
     TerraformStateLockedException,
 )
+from sunbeam.steps.cinder_volume import (
+    APPLICATION,
+    CINDER_VOLUME_APP_TIMEOUT,
+    get_mandatory_control_plane_offers,
+)
 from sunbeam.storage.models import SecretDictField
+from sunbeam.versions import CINDER_VOLUME_CHARM
 
 if TYPE_CHECKING:
     from sunbeam.storage.base import StorageBackendBase
@@ -434,13 +441,18 @@ class BaseStorageBackendDeployStep(BaseStep):
             )
             return Result(ResultType.FAILED, str(e))
         # Let's save backend if not present
-        self.client.cluster.add_storage_backend(
-            self.backend_name,
-            self.backend_instance.backend_type,
-            validated_config.model_dump(exclude_none=True, by_alias=True),
-            self.backend_instance.principal_application,
-            model["model-uuid"],
-        )
+        data = {
+            "name": self.backend_name,
+            "backend_type": self.backend_instance.backend_type,
+            "config": validated_config.model_dump(exclude_none=True, by_alias=True),
+            "principal": self.backend_instance.principal_application,
+            "model_uuid": model["model-uuid"],
+        }
+        try:
+            self.client.cluster.get_storage_backend(self.backend_name)
+            self.client.cluster.update_storage_backend(**data)
+        except StorageBackendNotFoundException:
+            self.client.cluster.add_storage_backend(**data)
 
         try:
             self.jhelper.wait_application_ready(
@@ -594,3 +606,259 @@ class BaseStorageBackendDestroyStep(BaseStep):
     def get_application_timeout(self) -> int:
         """Return application timeout in seconds."""
         return 1200  # 20 minutes, same as cinder-volume
+
+
+class DeploySpecificCinderVolumeStep(BaseStep):
+    """Step to deploy the specific cinder-volume application.
+
+    This step will deploy an instance of the cinder-volume charm
+    in the given model.
+    """
+
+    def __init__(
+        self,
+        deployment: Deployment,
+        client: Client,
+        tfhelper: TerraformHelper,
+        jhelper: JujuHelper,
+        manifest: Manifest,
+        backend_name: str,
+        backend_instance: "StorageBackendBase",
+        model: str,
+    ):
+        super().__init__(
+            f"Deploy specific cinder-volume for backend {backend_name}",
+            f"Deploying specific cinder-volume for backend {backend_name}",
+        )
+        self.deployment = deployment
+        self.client = client
+        self.tfhelper = tfhelper
+        self.jhelper = jhelper
+        self.manifest = manifest
+        self.backend_name = backend_name
+        self.backend_instance = backend_instance
+        self.model = model
+        self._offers: dict[str, str | None] | None = None
+
+    def is_skip(self, status: Status | None = None) -> Result:
+        """Determine if the step should be skipped.
+
+        Returns:
+            Result indicating whether to skip the step.
+        """
+        nodes = self.client.cluster.list_nodes_by_role(Role.STORAGE.name.lower())
+        if not nodes:
+            return Result(ResultType.FAILED, "No storage nodes found in the cluster.")
+        # For faster checks, skip if currently deployed backend
+        # supports main cinder-volume
+        if self.backend_instance.principal_application == APPLICATION:
+            return Result(
+                ResultType.SKIPPED,
+                f"Backend {self.backend_name} supports main cinder-volume;"
+                " skipping specific cinder-volume deployment.",
+            )
+
+        return Result(ResultType.COMPLETED)
+
+    def _get_offers(self):
+        if not self._offers:
+            self._offers = get_mandatory_control_plane_offers(
+                self.deployment.get_tfhelper("openstack-plan")
+            )
+        return self._offers
+
+    def run(self, status: Status | None = None) -> Result:
+        """Deploy the specific cinder-volume application."""
+        try:
+            tfvars = read_config(self.client, self.backend_instance.tfvar_config_key)
+        except ConfigItemNotFoundException:
+            tfvars = {}
+
+        application_name = self.backend_instance.principal_application
+        machine_ids = (
+            tfvars.get("cinder-volumes", {})
+            .get(application_name, {})
+            .get("machine_ids")
+        )
+        if not machine_ids:
+            nodes = self.client.cluster.list_nodes_by_role(Role.STORAGE.name.lower())
+            machine_ids = sorted((node["machineid"] for node in nodes), key=int)
+            if not self.backend_instance.supports_ha:
+                machine_ids = machine_ids[:1]
+
+        if not tfvars.get("model"):
+            tfvars["model"] = self.jhelper.get_model(self.model)["model-uuid"]
+
+        cinder_volume = self.manifest.core.software.charms[CINDER_VOLUME_CHARM]
+        charm_config = cinder_volume.config
+        if charm_config is None:
+            charm_config = {}
+        charm_config["snap-name"] = self.backend_instance.snap_name
+        charm_revision = cinder_volume.revision
+        charm_channel = cinder_volume.channel
+
+        tfvars.setdefault("cinder-volumes", {})[application_name] = {
+            "application_name": application_name,
+            "charm_channel": charm_channel,
+            "charm_revision": charm_revision,
+            "charm_config": charm_config,
+            "machine_ids": machine_ids,
+            "endpoint_bindings": [
+                {
+                    "space": self.deployment.get_space(Networks.MANAGEMENT),
+                },
+                {
+                    "endpoint": "amqp",
+                    "space": self.deployment.get_space(Networks.INTERNAL),
+                },
+                {
+                    "endpoint": "database",
+                    "space": self.deployment.get_space(Networks.INTERNAL),
+                },
+                {
+                    "endpoint": "cinder-volume",
+                    "space": self.deployment.get_space(Networks.MANAGEMENT),
+                },
+                {
+                    "endpoint": "identity-credentials",
+                    "space": self.deployment.get_space(Networks.INTERNAL),
+                },
+                {
+                    # relation to cinder-api
+                    "endpoint": "storage-backend",
+                    "space": self.deployment.get_space(Networks.INTERNAL),
+                },
+            ],
+        }
+        tfvars["cinder-volumes"][application_name].update(self._get_offers())
+
+        try:
+            self.tfhelper.update_tfvars_and_apply_tf(
+                self.client,
+                self.manifest,
+                tfvar_config=self.backend_instance.tfvar_config_key,
+                override_tfvars=tfvars,
+            )
+        except Exception as e:
+            LOG.error(
+                f"Failed to deploy non-HA cinder-volume for backend "
+                f"{self.backend_name}: {e}"
+            )
+            return Result(ResultType.FAILED, str(e))
+
+        try:
+            self.jhelper.wait_application_ready(
+                application_name,
+                tfvars["model"],
+                accepted_status=self.get_accepted_application_status(),
+                timeout=self.get_application_timeout(),
+            )
+        except TimeoutError as e:
+            LOG.warning(str(e))
+            return Result(ResultType.FAILED, str(e))
+
+        return Result(ResultType.COMPLETED)
+
+    def get_accepted_application_status(self) -> list[str]:
+        """Return accepted application status."""
+        return ["active", "blocked"]
+
+    def get_application_timeout(self) -> int:
+        """Return application timeout in seconds."""
+        return CINDER_VOLUME_APP_TIMEOUT  # 20 minutes, same as cinder-volume
+
+
+class DestroySpecificCinderVolumeStep(BaseStep):
+    """Step to destroy the specific cinder-volume application.
+
+    This step will destroy an instance of the cinder-volume charm
+    in the given model.
+    """
+
+    def __init__(
+        self,
+        deployment: Deployment,
+        client: Client,
+        tfhelper: TerraformHelper,
+        jhelper: JujuHelper,
+        manifest: Manifest,
+        backend_name: str,
+        backend_instance: "StorageBackendBase",
+        model: str,
+    ):
+        super().__init__(
+            f"Destroy specific cinder-volume for backend {backend_name}",
+            f"Destroying specific cinder-volume for backend {backend_name}",
+        )
+        self.deployment = deployment
+        self.client = client
+        self.tfhelper = tfhelper
+        self.jhelper = jhelper
+        self.manifest = manifest
+        self.backend_name = backend_name
+        self.backend_instance = backend_instance
+        self.model = model
+
+    def is_skip(self, status: Status | None = None) -> Result:
+        """Determine if the step should be skipped.
+
+        Returns:
+            Result indicating whether to skip the step.
+        """
+        if self.backend_instance.principal_application == APPLICATION:
+            return Result(
+                ResultType.SKIPPED,
+                f"Backend {self.backend_name} does not use specific cinder-volume;"
+                " skipping specific cinder-volume destruction.",
+            )
+        backends = self.client.cluster.get_storage_backends()
+        for backend in backends.root:
+            if self.backend_instance.principal_application == backend.principal:
+                return Result(
+                    ResultType.SKIPPED,
+                    "Another backend is using the same cinder-volume instance;"
+                    " skipping specific cinder-volume destruction.",
+                )
+
+        return Result(ResultType.COMPLETED)
+
+    def run(self, status: Status | None = None) -> Result:
+        """Destroy the specific cinder-volume application."""
+        try:
+            tfvars = read_config(self.client, self.backend_instance.tfvar_config_key)
+        except ConfigItemNotFoundException:
+            tfvars = {}
+
+        tfvars.get("cinder-volumes", {}).pop(
+            self.backend_instance.principal_application, None
+        )
+
+        try:
+            self.tfhelper.update_tfvars_and_apply_tf(
+                self.client,
+                self.manifest,
+                tfvar_config=self.backend_instance.tfvar_config_key,
+                override_tfvars=tfvars,
+            )
+        except Exception as e:
+            LOG.error(
+                f"Failed to destroy non-HA cinder-volume for backend "
+                f"{self.backend_name}: {e}"
+            )
+            return Result(ResultType.FAILED, str(e))
+
+        try:
+            self.jhelper.wait_application_gone(
+                [self.backend_instance.principal_application],
+                self.model,
+                timeout=self.get_application_timeout(),
+            )
+        except TimeoutError as e:
+            LOG.warning(str(e))
+            return Result(ResultType.FAILED, str(e))
+
+        return Result(ResultType.COMPLETED)
+
+    def get_application_timeout(self) -> int:
+        """Return application timeout in seconds."""
+        return CINDER_VOLUME_APP_TIMEOUT  # 20 minutes, same as cinder-volume

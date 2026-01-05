@@ -1,0 +1,3 @@
+[rule.var-naming]
+# Allow api package naming
+arguments = [[], [], [{skip-package-name-checks=true}]]

@@ -65,10 +65,10 @@ class TestHitachiBackend(BaseBackendTests):
                 "san-ip": "192.168.1.1",
                 "san-username": "admin",
                 "san-password": "secret",
-                "protocol": "FC",
+                "protocol": "fc",
             }
         )
-        assert valid_config_fc.protocol == "FC"
+        assert valid_config_fc.protocol == "fc"
 
         # Test valid config with iSCSI
         valid_config_iscsi = config_class.model_validate(
@@ -78,10 +78,10 @@ class TestHitachiBackend(BaseBackendTests):
                 "san-ip": "192.168.1.1",
                 "san-username": "admin",
                 "san-password": "secret",
-                "protocol": "iSCSI",
+                "protocol": "iscsi",
             }
         )
-        assert valid_config_iscsi.protocol == "iSCSI"
+        assert valid_config_iscsi.protocol == "iscsi"
 
     def test_hitachi_san_credentials_are_secret(self, backend):
         """Test that SAN credentials are properly marked as secrets."""
@@ -139,7 +139,7 @@ class TestHitachiBackend(BaseBackendTests):
                 "san-ip": "192.168.1.1",
                 "san-username": "admin",
                 "san-password": "secret",
-                "protocol": "FC",
+                "protocol": "fc",
             }
         )
 
@@ -216,7 +216,7 @@ class TestHitachiConfigValidation:
                 "san-ip": "192.168.1.1",
                 "san-username": "admin",
                 "san-password": "secret",
-                "protocol": "FC",
+                "protocol": "fc",
                 "hitachi-copy-speed": 10,
             }
         )
@@ -233,12 +233,10 @@ class TestHitachiConfigValidation:
                 "san-ip": "192.168.1.1",
                 "san-username": "admin",
                 "san-password": "secret",
-                "protocol": "FC",
-                "use-chap-auth": True,
+                "protocol": "fc",
                 "hitachi-discard-zero-page": False,
                 "hitachi-group-create": True,
             }
         )
-        assert config.use_chap_auth is True
         assert config.hitachi_discard_zero_page is False
         assert config.hitachi_group_create is True

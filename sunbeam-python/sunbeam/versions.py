@@ -36,6 +36,7 @@ CONSUL_CHANNEL = "1.19/edge"
 K8S_CHANNEL = "1.32/stable"
 LXD_CHANNEL = "5.21/stable"
 SUNBEAM_EPA_ORCHESTRATOR_CHANNEL = "2024.1/edge"
+CINDER_VOLUME_CHARM = "cinder-volume"
 
 CLUSTER_API_VERSIONS = {
     "cluster-api": "v1.10.5",
@@ -80,7 +81,7 @@ MACHINE_CHARMS = {
     "sunbeam-machine": OPENSTACK_CHANNEL,
     "sunbeam-clusterd": OPENSTACK_CHANNEL,
     "self-signed-certificates": CERT_AUTH_CHANNEL,
-    "cinder-volume": OPENSTACK_CHANNEL,
+    CINDER_VOLUME_CHARM: OPENSTACK_CHANNEL,
     "cinder-volume-ceph": OPENSTACK_CHANNEL,
     "epa-orchestrator": SUNBEAM_EPA_ORCHESTRATOR_CHANNEL,
 }
@@ -268,7 +269,7 @@ DEPLOY_SUNBEAM_MACHINE_TFVAR_MAP: VarMap = {
 }
 DEPLOY_CINDER_VOLUME_TFVAR_MAP: VarMap = {
     "charms": {
-        "cinder-volume": {
+        CINDER_VOLUME_CHARM: {
             "channel": "charm_cinder_volume_channel",
             "revision": "charm_cinder_volume_revision",
             "config": "charm_cinder_volume_config",

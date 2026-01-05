@@ -173,6 +173,11 @@ class PureStorageBackend(StorageBackendBase):
         """Return the charm base for this backend."""
         return "ubuntu@24.04"
 
+    @property
+    def supports_ha(self) -> bool:
+        """Return whether this backend supports HA deployments."""
+        return True
+
     def config_type(self) -> type[StorageBackendConfig]:
         """Return the configuration class for Pure Storage backend."""
         return PureStorageConfig
