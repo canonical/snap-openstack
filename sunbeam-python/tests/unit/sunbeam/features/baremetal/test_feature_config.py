@@ -8,27 +8,27 @@ import pytest
 
 from sunbeam.features.baremetal import feature_config
 
-_NETCONF_SAMPLE_CONFIG = """["%(name)s"]
-driver = "netconf-openconfig"
-device_params = "name:nexus"
-switch_info = "nexus"
-switch_id = "00:53:00:0a:0a:0a"
-host = "nexus.example.net"
-username = "user"
+_NETCONF_SAMPLE_CONFIG = """[%(name)s]
+driver = netconf-openconfig
+device_params = name:nexus
+switch_info = nexus
+switch_id = 00:53:00:0a:0a:0a
+host = nexus.example.net
+username = user
 """
 
-_GENERIC_SAMPLE_CONFIG = """["genericswitch:%(name)s-hostname"]
-device_type = "%(device_type)s"
-ngs_mac_address = "00:53:00:0a:0a:0a"
-ip = "10.20.30.40"
-username = "admin"
+_GENERIC_SAMPLE_CONFIG = """[genericswitch:%(name)s-hostname]
+device_type = %(device_type)s
+ngs_mac_address = 00:53:00:0a:0a:0a
+ip = 10.20.30.40
+username = admin
 """
 
 
 def _get_netconf_sample_config(name: str, with_key=True) -> str:
     config = _NETCONF_SAMPLE_CONFIG % {"name": name}
     if with_key:
-        config = config + f'\nkey_filename = "/etc/neutron/sshkeys/{name}-key"'
+        config = config + f"\nkey_filename = /etc/neutron/sshkeys/{name}-key"
 
     return config
 
@@ -36,7 +36,7 @@ def _get_netconf_sample_config(name: str, with_key=True) -> str:
 def _get_generic_sample_config(name: str, device_type: str, with_key=True) -> str:
     config = _GENERIC_SAMPLE_CONFIG % {"name": name, "device_type": device_type}
     if with_key:
-        config = config + f'\nkey_file = "/etc/neutron/sshkeys/{name}-key"'
+        config = config + f"\nkey_file = /etc/neutron/sshkeys/{name}-key"
 
     return config
 
@@ -104,13 +104,13 @@ class TestBaremetalFeatureConfig:
 
         # unknown field.
         with pytest.raises(pydantic.ValidationError):
-            data = "['switch']\nfoo = 'lish'"
+            data = "[switch]\nfoo = lish"
             netconf = feature_config._Config(configfile=data)
             feature_config._SwitchConfigs(netconf={"foo": netconf})
 
         # invalid additional file path.
         with pytest.raises(pydantic.ValidationError):
-            data = "['switch']\nkey_filename = '/opt/data/foo-key'"
+            data = "[switch]\nkey_filename = /opt/data/foo-key"
             netconf = feature_config._Config(
                 configfile=data,
                 additional_files=additional_files,
@@ -136,7 +136,7 @@ class TestBaremetalFeatureConfig:
         # duplicate additional file.
         with pytest.raises(pydantic.ValidationError):
             data = _get_netconf_sample_config("lish", False)
-            data = data + '\nkey_file = "/etc/neutron/sshkeys/foo-key"'
+            data = data + "\nkey_file = /etc/neutron/sshkeys/foo-key"
             other_netconf = feature_config._Config(
                 configfile=data,
                 additional_files=additional_files,
@@ -162,13 +162,13 @@ class TestBaremetalFeatureConfig:
 
         # missing device_type field.
         with pytest.raises(pydantic.ValidationError):
-            data = "['switch']\nfoo = 'lish'"
+            data = "[switch]\nfoo = lish"
             generic = feature_config._Config(configfile=data)
             feature_config._SwitchConfigs(generic={"foo": generic})
 
         # unknown field.
         with pytest.raises(pydantic.ValidationError):
-            data = "['switch']\ndevice_type = 'some_type'\nfoo = 'lish'"
+            data = "[switch]\ndevice_type = some_type\nfoo = lish"
             generic = feature_config._Config(configfile=data)
             feature_config._SwitchConfigs(generic={"foo": generic})
 
