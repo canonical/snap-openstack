@@ -1,4 +1,4 @@
-# Terraform manifest for deployment of Grafana Agent
+# Terraform manifest for deployment of Observability Agent
 #
 # SPDX-FileCopyrightText: 2023 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
@@ -12,28 +12,33 @@ terraform {
   }
 }
 
-resource "juju_application" "grafana-agent" {
-  name  = "grafana-agent"
+# To ensure grafana-agent gets removed cleanly before we add opentelemetry-collector
+moved {
+  from = juju_application.grafana-agent
+  to   = juju_application.observability-agent
+}
+
+resource "juju_application" "observability-agent" {
+  name  = "opentelemetry-collector"
   trust = false
   model = var.principal-application-model
 
   charm {
-    name     = "grafana-agent"
-    channel  = var.grafana-agent-channel
-    revision = var.grafana-agent-revision
-    base     = var.grafana-agent-base
+    name     = "opentelemetry-collector"
+    channel  = var.opentelemetry-collector-channel
+    revision = var.opentelemetry-collector-revision
+    base     = var.opentelemetry-collector-base
   }
 
-  config = var.grafana-agent-config
+  config = var.opentelemetry-collector-config
 }
 
-# juju integrate <principal-application>:cos-agent grafana-agent:cos-agent
-resource "juju_integration" "grafana_agent_integrations" {
-  for_each = toset(var.grafana-agent-integration-apps)
+resource "juju_integration" "observability-agent-integrations" {
+  for_each = toset(var.observability-agent-integration-apps)
   model    = var.principal-application-model
 
   application {
-    name     = juju_application.grafana-agent.name
+    name     = juju_application.observability-agent.name
     endpoint = "cos-agent"
   }
 
@@ -43,13 +48,12 @@ resource "juju_integration" "grafana_agent_integrations" {
   }
 }
 
-# juju integrate grafana-agent cos.prometheus-receive-remote-write
-resource "juju_integration" "grafana-agent-to-cos-prometheus" {
+resource "juju_integration" "observability-agent-to-cos-prometheus" {
   count = var.receive-remote-write-offer-url != null ? 1 : 0
   model = var.principal-application-model
 
   application {
-    name = juju_application.grafana-agent.name
+    name = juju_application.observability-agent.name
   }
 
   application {
@@ -58,13 +62,12 @@ resource "juju_integration" "grafana-agent-to-cos-prometheus" {
   }
 }
 
-# juju integrate grafana-agent cos.loki-logging
-resource "juju_integration" "grafana-agent-to-cos-loki" {
+resource "juju_integration" "observability-agent-to-cos-loki" {
   count = var.logging-offer-url != null ? 1 : 0
   model = var.principal-application-model
 
   application {
-    name = juju_application.grafana-agent.name
+    name = juju_application.observability-agent.name
   }
 
   application {
@@ -72,13 +75,12 @@ resource "juju_integration" "grafana-agent-to-cos-loki" {
   }
 }
 
-# juju integrate grafana-agent cos.grafana-dashboards
-resource "juju_integration" "grafana-agent-to-cos-grafana" {
+resource "juju_integration" "observability-agent-to-cos-grafana" {
   count = var.grafana-dashboard-offer-url != null ? 1 : 0
   model = var.principal-application-model
 
   application {
-    name = juju_application.grafana-agent.name
+    name = juju_application.observability-agent.name
   }
 
   application {

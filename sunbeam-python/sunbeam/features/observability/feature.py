@@ -87,13 +87,15 @@ OBSERVABILITY_FEATURE_KEY = "ObservabilityProviderType"
 OBSERVABILITY_MODEL = "observability"
 OBSERVABILITY_DEPLOY_TIMEOUT = 1800  # 30 minutes
 COS_TFPLAN = "cos-plan"
-GRAFANA_AGENT_TFPLAN = "grafana-agent-plan"
+OBSERVABILITY_AGENT_TFPLAN = "grafana-agent-plan"
 COS_CONFIG_KEY = "TerraformVarsFeatureObservabilityPlanCos"
-GRAFANA_AGENT_CONFIG_KEY = "TerraformVarsFeatureObservabilityPlanGrafanaAgent"
+OBSERVABILITY_AGENT_CONFIG_KEY = (
+    "TerraformVarsFeatureObservabilityPlanObservabilityAgent"
+)
 
 COS_CHANNEL = "1/stable"
-GRAFANA_AGENT_CHANNEL = "1/stable"
-GRAFANA_AGENT_K8S_CHANNEL = "1/stable"
+OPENTELEMETRY_COLLECTOR_CHANNEL = "2/stable"
+OPENTELEMETRY_COLLECTOR_K8S_CHANNEL = "2/stable"
 OBSERVABILITY_OFFER_INTERFACES = [
     "grafana_dashboard",
     "prometheus_remote_write",
@@ -229,10 +231,10 @@ class UpdateObservabilityModelConfigStep(BaseStep, JujuStepHelper):
         return Result(ResultType.COMPLETED)
 
 
-class DeployGrafanaAgentStep(BaseStep, JujuStepHelper):
-    """Deploy Grafana Agent using Terraform."""
+class DeployObservabilityAgentStep(BaseStep, JujuStepHelper):
+    """Deploy Observability Agent using Terraform."""
 
-    _CONFIG = GRAFANA_AGENT_CONFIG_KEY
+    _CONFIG = OBSERVABILITY_AGENT_CONFIG_KEY
 
     def __init__(
         self,
@@ -243,7 +245,7 @@ class DeployGrafanaAgentStep(BaseStep, JujuStepHelper):
         jhelper: JujuHelper,
         accepted_app_status: list[str] = ["active"],
     ):
-        super().__init__("Deploy Grafana Agent", "Deploy Grafana Agent")
+        super().__init__("Deploy Observability Agent", "Deploy Observability Agent")
         self.deployment = deployment
         self.config = config
         self.feature = feature
@@ -259,7 +261,7 @@ class DeployGrafanaAgentStep(BaseStep, JujuStepHelper):
         integration_apps = ["openstack-hypervisor"]
         extra_tfvars = {
             "principal-application-model": self.model,
-            "grafana-agent-integration-apps": integration_apps,
+            "observability-agent-integration-apps": integration_apps,
         }
         # Offer URLs from COS are added from feature
         extra_tfvars.update(
@@ -275,10 +277,10 @@ class DeployGrafanaAgentStep(BaseStep, JujuStepHelper):
                 override_tfvars=extra_tfvars,
             )
         except (TerraformException, TerraformStateLockedException) as e:
-            LOG.exception("Error deploying grafana agent")
+            LOG.exception("Error deploying observability agent")
             return Result(ResultType.FAILED, str(e))
 
-        app = "grafana-agent"
+        app = "opentelemetry-collector"
         LOG.debug(f"Application monitored for readiness: {app}")
         try:
             self.jhelper.wait_application_ready(
@@ -288,7 +290,7 @@ class DeployGrafanaAgentStep(BaseStep, JujuStepHelper):
                 timeout=OBSERVABILITY_DEPLOY_TIMEOUT,
             )
         except (JujuWaitException, TimeoutError) as e:
-            LOG.debug("Failed to deploy grafana agent", exc_info=True)
+            LOG.debug("Failed to deploy observability agent", exc_info=True)
             return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.COMPLETED)
@@ -333,10 +335,10 @@ class RemoveObservabilityStackStep(BaseStep, JujuStepHelper):
         return Result(ResultType.COMPLETED)
 
 
-class RemoveGrafanaAgentStep(BaseStep, JujuStepHelper):
-    """Remove Grafana Agent using Terraform."""
+class RemoveObservabilityAgentStep(BaseStep, JujuStepHelper):
+    """Remove Observability Agent using Terraform."""
 
-    _CONFIG = GRAFANA_AGENT_CONFIG_KEY
+    _CONFIG = OBSERVABILITY_AGENT_CONFIG_KEY
 
     def __init__(
         self,
@@ -345,7 +347,7 @@ class RemoveGrafanaAgentStep(BaseStep, JujuStepHelper):
         tfhelper: TerraformHelper,
         jhelper: JujuHelper,
     ):
-        super().__init__("Remove Grafana Agent", "Removing Grafana Agent")
+        super().__init__("Remove Observability Agent", "Removing Observability Agent")
         self.deployment = deployment
         self.feature = feature
         self.tfhelper = tfhelper
@@ -359,10 +361,10 @@ class RemoveGrafanaAgentStep(BaseStep, JujuStepHelper):
         try:
             self.tfhelper.destroy()
         except TerraformException as e:
-            LOG.exception("Error destroying grafana agent")
+            LOG.exception("Error destroying observability agent")
             return Result(ResultType.FAILED, str(e))
 
-        apps = ["grafana-agent"]
+        apps = ["opentelemetry-collector"]
         try:
             self.jhelper.wait_application_gone(
                 apps,
@@ -370,7 +372,7 @@ class RemoveGrafanaAgentStep(BaseStep, JujuStepHelper):
                 timeout=OBSERVABILITY_DEPLOY_TIMEOUT,
             )
         except TimeoutError as e:
-            LOG.debug("Failed to destroy grafana agent", exc_info=True)
+            LOG.debug("Failed to destroy observability agent", exc_info=True)
             return Result(ResultType.FAILED, str(e))
 
         extra_tfvars = {
@@ -426,11 +428,14 @@ class IntegrateRemoteCosOffersStep(BaseStep, JujuStepHelper):
         self.model = OPENSTACK_MODEL
         self.relations = [
             (
-                "grafana-agent:grafana-dashboards-provider",
+                "opentelemetry-collector:grafana-dashboards-provider",
                 self.feature.grafana_offer_url,
             ),
-            ("grafana-agent:send-remote-write", self.feature.prometheus_offer_url),
-            ("grafana-agent:logging-consumer", self.feature.loki_offer_url),
+            (
+                "opentelemetry-collector:send-remote-write",
+                self.feature.prometheus_offer_url,
+            ),
+            ("opentelemetry-collector:logging-consumer", self.feature.loki_offer_url),
         ]
 
     def run(self, status: Status | None = None) -> Result:
@@ -451,7 +456,7 @@ class IntegrateRemoteCosOffersStep(BaseStep, JujuStepHelper):
             OPENSTACK_MODEL,
             self.deployment.openstack_machines_model,
         ]:
-            app = "grafana-agent"
+            app = "opentelemetry-collector"
             LOG.debug(f"Application monitored for readiness: {app}")
             try:
                 self.jhelper.wait_application_ready(
@@ -460,7 +465,7 @@ class IntegrateRemoteCosOffersStep(BaseStep, JujuStepHelper):
                     timeout=OBSERVABILITY_DEPLOY_TIMEOUT,
                 )
             except (JujuWaitException, TimeoutError) as e:
-                LOG.debug("Failed to deploy grafana agent", exc_info=True)
+                LOG.debug("Failed to deploy observability agent", exc_info=True)
                 return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.COMPLETED)
@@ -486,9 +491,9 @@ class RemoveRemoteCosOffersStep(BaseStep, JujuStepHelper):
         self.feature = feature
         self.jhelper = jhelper
         self.endpoints = [
-            "grafana-agent:grafana-dashboards-provider",
-            "grafana-agent:send-remote-write",
-            "grafana-agent:logging-consumer",
+            "opentelemetry-collector:grafana-dashboards-provider",
+            "opentelemetry-collector:send-remote-write",
+            "opentelemetry-collector:logging-consumer",
         ]
 
     def _get_relations(self, model: str, endpoints: list[str]) -> list[tuple]:
@@ -525,7 +530,7 @@ class RemoveRemoteCosOffersStep(BaseStep, JujuStepHelper):
             OPENSTACK_MODEL,
             self.deployment.openstack_machines_model,
         ]:
-            app = "grafana-agent"
+            app = "opentelemetry-collector"
             LOG.debug(f"Application monitored for readiness: {app}")
             try:
                 self.jhelper.wait_application_ready(
@@ -535,7 +540,7 @@ class RemoveRemoteCosOffersStep(BaseStep, JujuStepHelper):
                     timeout=OBSERVABILITY_DEPLOY_TIMEOUT,
                 )
             except (JujuWaitException, TimeoutError) as e:
-                LOG.debug("Failed to deploy grafana agent", exc_info=True)
+                LOG.debug("Failed to deploy observability agent", exc_info=True)
                 return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.COMPLETED)
@@ -567,9 +572,9 @@ class ObservabilityFeature(OpenStackControlPlaneFeature):
         super().__init__()
         self.tfplan_cos = COS_TFPLAN
         self.tfplan_cos_dir = "deploy-cos"
-        self.tfplan_grafana_agent = GRAFANA_AGENT_TFPLAN
-        self.tfplan_grafana_agent_dir = "deploy-grafana-agent"
-        self.tfplan_grafana_agent_k8s_dir = "deploy-grafana-agent-k8s"
+        self.tfplan_observability_agent = OBSERVABILITY_AGENT_TFPLAN
+        self.tfplan_observability_agent_dir = "deploy-grafana-agent"
+        self.tfplan_observability_agent_k8s_dir = "deploy-grafana-agent-k8s"
 
         self.prometheus_offer_url = ""
         self.grafana_offer_url = ""
@@ -596,15 +601,21 @@ class ObservabilityFeature(OpenStackControlPlaneFeature):
                 "catalogue-k8s": CharmManifest(channel=COS_CHANNEL),
                 "prometheus-k8s": CharmManifest(channel=COS_CHANNEL),
                 "loki-k8s": CharmManifest(channel=COS_CHANNEL),
-                "grafana-agent": CharmManifest(channel=GRAFANA_AGENT_CHANNEL),
-                "grafana-agent-k8s": CharmManifest(channel=GRAFANA_AGENT_K8S_CHANNEL),
+                "opentelemetry-collector": CharmManifest(
+                    channel=OPENTELEMETRY_COLLECTOR_CHANNEL
+                ),
+                "opentelemetry-collector-k8s": CharmManifest(
+                    channel=OPENTELEMETRY_COLLECTOR_K8S_CHANNEL
+                ),
             },
             terraform={
                 self.tfplan_cos: TerraformManifest(
                     source=Path(__file__).parent / "etc" / self.tfplan_cos_dir
                 ),
-                self.tfplan_grafana_agent: TerraformManifest(
-                    source=Path(__file__).parent / "etc" / self.tfplan_grafana_agent_dir
+                self.tfplan_observability_agent: TerraformManifest(
+                    source=Path(__file__).parent
+                    / "etc"
+                    / self.tfplan_observability_agent_dir
                 ),
             },
         )
@@ -646,21 +657,21 @@ class ObservabilityFeature(OpenStackControlPlaneFeature):
                     },
                 }
             },
-            self.tfplan_grafana_agent: {
+            self.tfplan_observability_agent: {
                 "charms": {
-                    "grafana-agent": {
-                        "channel": "grafana-agent-channel",
-                        "revision": "grafana-agent-revision",
-                        "config": "grafana-agent-config",
+                    "opentelemetry-collector": {
+                        "channel": "opentelemetry-collector-channel",
+                        "revision": "opentelemetry-collector-revision",
+                        "config": "opentelemetry-collector-config",
                     }
                 }
             },
             self.tfplan: {
                 "charms": {
-                    "grafana-agent-k8s": {
-                        "channel": "grafana-agent-channel",
-                        "revision": "grafana-agent-revision",
-                        "config": "grafana-agent-config",
+                    "opentelemetry-collector-k8s": {
+                        "channel": "opentelemetry-collector-channel",
+                        "revision": "opentelemetry-collector-revision",
+                        "config": "opentelemetry-collector-config",
                     }
                 }
             },
@@ -668,8 +679,9 @@ class ObservabilityFeature(OpenStackControlPlaneFeature):
 
     def set_application_names(self, deployment: Deployment) -> list:
         """Application names handled by the main terraform plan."""
-        # main plan only handles grafana-agent-k8s, named grafana-agent
-        return ["grafana-agent"]
+        # main plan only handles opentelemetry-collector-k8s,
+        # named opentelemetry-collector
+        return ["opentelemetry-collector"]
 
     def get_cos_offer_urls(self, deployment: Deployment) -> dict:
         """Get COS offer URLs."""
@@ -832,7 +844,9 @@ class EmbeddedObservabilityFeature(ObservabilityFeature):
 
         tfhelper = deployment.get_tfhelper(self.tfplan)
         tfhelper_cos = deployment.get_tfhelper(self.tfplan_cos)
-        tfhelper_grafana_agent = deployment.get_tfhelper(self.tfplan_grafana_agent)
+        tfhelper_observability_agent = deployment.get_tfhelper(
+            self.tfplan_observability_agent
+        )
 
         client = deployment.get_client()
         plan = []
@@ -849,22 +863,22 @@ class EmbeddedObservabilityFeature(ObservabilityFeature):
             )
         cos_plan.append(PatchCosLoadBalancerIPStep(client))
 
-        grafana_agent_k8s_plan = [
+        observability_agent_k8s_plan = [
             TerraformInitStep(tfhelper),
             EnableOpenStackApplicationStep(deployment, config, tfhelper, jhelper, self),
         ]
 
-        grafana_agent_plan = [
-            TerraformInitStep(tfhelper_grafana_agent),
-            DeployGrafanaAgentStep(
-                deployment, config, self, tfhelper_grafana_agent, jhelper
+        observability_agent_plan = [
+            TerraformInitStep(tfhelper_observability_agent),
+            DeployObservabilityAgentStep(
+                deployment, config, self, tfhelper_observability_agent, jhelper
             ),
         ]
 
         run_plan(plan, console, show_hints)
         run_plan(cos_plan, console, show_hints)
-        run_plan(grafana_agent_k8s_plan, console, show_hints)
-        run_plan(grafana_agent_plan, console, show_hints)
+        run_plan(observability_agent_k8s_plan, console, show_hints)
+        run_plan(observability_agent_plan, console, show_hints)
 
         click.echo("Observability enabled.")
 
@@ -873,9 +887,11 @@ class EmbeddedObservabilityFeature(ObservabilityFeature):
         jhelper = JujuHelper(deployment.juju_controller)
         tfhelper = deployment.get_tfhelper(self.tfplan)
         tfhelper_cos = deployment.get_tfhelper(self.tfplan_cos)
-        tfhelper_grafana_agent = deployment.get_tfhelper(self.tfplan_grafana_agent)
+        tfhelper_observability_agent = deployment.get_tfhelper(
+            self.tfplan_observability_agent
+        )
 
-        agent_grafana_k8s_plan = [
+        observability_agent_k8s_plan = [
             TerraformInitStep(tfhelper),
             DisableOpenStackApplicationStep(deployment, tfhelper, jhelper, self),
             RemoveSaasApplicationsStep(
@@ -883,9 +899,11 @@ class EmbeddedObservabilityFeature(ObservabilityFeature):
             ),
         ]
 
-        grafana_agent_plan = [
-            TerraformInitStep(tfhelper_grafana_agent),
-            RemoveGrafanaAgentStep(deployment, self, tfhelper_grafana_agent, jhelper),
+        observability_agent_plan = [
+            TerraformInitStep(tfhelper_observability_agent),
+            RemoveObservabilityAgentStep(
+                deployment, self, tfhelper_observability_agent, jhelper
+            ),
             RemoveSaasApplicationsStep(
                 jhelper,
                 deployment.openstack_machines_model,
@@ -898,8 +916,8 @@ class EmbeddedObservabilityFeature(ObservabilityFeature):
             RemoveObservabilityStackStep(deployment, self, tfhelper_cos, jhelper),
         ]
 
-        run_plan(agent_grafana_k8s_plan, console, show_hints)
-        run_plan(grafana_agent_plan, console, show_hints)
+        run_plan(observability_agent_k8s_plan, console, show_hints)
+        run_plan(observability_agent_plan, console, show_hints)
         run_plan(cos_plan, console, show_hints)
 
         click.echo("Observability disabled.")
@@ -986,14 +1004,16 @@ class ExternalObservabilityFeature(ObservabilityFeature):
         jhelper = JujuHelper(deployment.juju_controller)
 
         tfhelper = deployment.get_tfhelper(self.tfplan)
-        tfhelper_grafana_agent = deployment.get_tfhelper(self.tfplan_grafana_agent)
+        tfhelper_observability_agent = deployment.get_tfhelper(
+            self.tfplan_observability_agent
+        )
 
         client = deployment.get_client()
         plan = []
         if self.user_manifest:
             plan.append(AddManifestStep(client, self.user_manifest))
 
-        grafana_agent_k8s_plan = [
+        observability_agent_k8s_plan = [
             TerraformInitStep(tfhelper),
             EnableOpenStackApplicationStep(
                 deployment,
@@ -1005,13 +1025,13 @@ class ExternalObservabilityFeature(ObservabilityFeature):
             ),
         ]
 
-        grafana_agent_plan = [
-            TerraformInitStep(tfhelper_grafana_agent),
-            DeployGrafanaAgentStep(
+        observability_agent_plan = [
+            TerraformInitStep(tfhelper_observability_agent),
+            DeployObservabilityAgentStep(
                 deployment,
                 config,
                 self,
-                tfhelper_grafana_agent,
+                tfhelper_observability_agent,
                 jhelper,
                 accepted_app_status=["active", "blocked"],
             ),
@@ -1019,14 +1039,14 @@ class ExternalObservabilityFeature(ObservabilityFeature):
 
         # Workaround as integrations are not handled in terraform plan
         # https://github.com/juju/terraform-provider-juju/issues/119
-        grafana_integrations_plan = [
+        observability_integrations_plan = [
             IntegrateRemoteCosOffersStep(deployment, self, jhelper)
         ]
 
         run_plan(plan, console, show_hints)
-        run_plan(grafana_agent_k8s_plan, console, show_hints)
-        run_plan(grafana_agent_plan, console, show_hints)
-        run_plan(grafana_integrations_plan, console, show_hints)
+        run_plan(observability_agent_k8s_plan, console, show_hints)
+        run_plan(observability_agent_plan, console, show_hints)
+        run_plan(observability_integrations_plan, console, show_hints)
 
         click.echo("Observability enabled.")
 
@@ -1034,15 +1054,17 @@ class ExternalObservabilityFeature(ObservabilityFeature):
         """Run the disablement plans for external."""
         jhelper = JujuHelper(deployment.juju_controller)
         tfhelper = deployment.get_tfhelper(self.tfplan)
-        tfhelper_grafana_agent = deployment.get_tfhelper(self.tfplan_grafana_agent)
+        tfhelper_observability_agent = deployment.get_tfhelper(
+            self.tfplan_observability_agent
+        )
 
         # Workaround as integrations are not handled in terraform plan
         # https://github.com/juju/terraform-provider-juju/issues/119
-        grafana_remove_offers_plan = [
+        observability_remove_offers_plan = [
             RemoveRemoteCosOffersStep(deployment, self, jhelper)
         ]
 
-        agent_grafana_k8s_plan = [
+        observability_agent_k8s_plan = [
             TerraformInitStep(tfhelper),
             DisableOpenStackApplicationStep(deployment, tfhelper, jhelper, self),
             RemoveSaasApplicationsStep(
@@ -1053,8 +1075,10 @@ class ExternalObservabilityFeature(ObservabilityFeature):
         ]
 
         grafana_agent_plan = [
-            TerraformInitStep(tfhelper_grafana_agent),
-            RemoveGrafanaAgentStep(deployment, self, tfhelper_grafana_agent, jhelper),
+            TerraformInitStep(tfhelper_observability_agent),
+            RemoveObservabilityAgentStep(
+                deployment, self, tfhelper_observability_agent, jhelper
+            ),
             RemoveSaasApplicationsStep(
                 jhelper,
                 deployment.openstack_machines_model,
@@ -1062,8 +1086,8 @@ class ExternalObservabilityFeature(ObservabilityFeature):
             ),
         ]
 
-        run_plan(grafana_remove_offers_plan, console, show_hints)
-        run_plan(agent_grafana_k8s_plan, console, show_hints)
+        run_plan(observability_remove_offers_plan, console, show_hints)
+        run_plan(observability_agent_k8s_plan, console, show_hints)
         run_plan(grafana_agent_plan, console, show_hints)
 
         click.echo("Observability disabled.")
