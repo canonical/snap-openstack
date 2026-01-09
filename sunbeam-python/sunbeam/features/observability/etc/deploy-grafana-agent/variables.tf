@@ -1,10 +1,10 @@
-# Terraform manifest for deployment of Grafana Agent
+# Terraform manifest for deployment of Observability Agent
 #
 # SPDX-FileCopyrightText: 2023 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
-variable "grafana-agent-integration-apps" {
-  description = "List of the deployed principal applications that integrate with grafana-agent"
+variable "observability-agent-integration-apps" {
+  description = "List of the deployed principal applications that integrate with opentelemetry collector"
   type        = list(string)
   default     = []
 }
@@ -14,26 +14,26 @@ variable "principal-application-model" {
   default     = "controller"
 }
 
-variable "grafana-agent-channel" {
-  description = "Channel to use when deploying grafana agent machine charm"
+variable "opentelemetry-collector-channel" {
+  description = "Channel to use when deploying opentelemetry collector machine charm"
   type        = string
-  default     = "latest/stable"
+  default     = "2/stable"
 }
 
-variable "grafana-agent-revision" {
-  description = "Channel revision to use when deploying grafana agent machine charm"
+variable "opentelemetry-collector-revision" {
+  description = "Channel revision to use when deploying opentelemetry collector machine charm"
   type        = number
   default     = null
 }
 
-variable "grafana-agent-base" {
-  description = "Base to use when deploying grafana agent machine charm"
+variable "opentelemetry-collector-base" {
+  description = "Base to use when deploying opentelemetry collector machine charm"
   type        = string
   default     = "ubuntu@24.04"
 }
 
-variable "grafana-agent-config" {
-  description = "Config to use when deploying grafana agent machine charm"
+variable "opentelemetry-collector-config" {
+  description = "Config to use when deploying opentelemetry collector machine charm"
   type        = map(string)
   default     = {}
 }

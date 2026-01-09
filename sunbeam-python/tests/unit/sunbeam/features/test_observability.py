@@ -125,9 +125,9 @@ class TestRemoveObservabilityStackStep:
         assert result.message == "timed out"
 
 
-class TestDeployGrafanaAgentStep:
+class TestDeployObservabilityAgentStep:
     def test_run(self, deployment, tfhelper, jhelper, observabilityfeature):
-        step = observability_feature.DeployGrafanaAgentStep(
+        step = observability_feature.DeployObservabilityAgentStep(
             deployment, Mock(), observabilityfeature, tfhelper, jhelper
         )
         result = step.run()
@@ -143,7 +143,7 @@ class TestDeployGrafanaAgentStep:
             "apply failed..."
         )
 
-        step = observability_feature.DeployGrafanaAgentStep(
+        step = observability_feature.DeployObservabilityAgentStep(
             deployment, Mock(), observabilityfeature, tfhelper, jhelper
         )
         result = step.run()
@@ -158,7 +158,7 @@ class TestDeployGrafanaAgentStep:
     ):
         jhelper.wait_application_ready.side_effect = TimeoutError("timed out")
 
-        step = observability_feature.DeployGrafanaAgentStep(
+        step = observability_feature.DeployObservabilityAgentStep(
             deployment, Mock(), observabilityfeature, tfhelper, jhelper
         )
         result = step.run()
@@ -169,11 +169,11 @@ class TestDeployGrafanaAgentStep:
         assert result.message == "timed out"
 
 
-class TestRemoveGrafanaAgentStep:
+class TestRemoveObservabilityAgentStep:
     def test_run(
         self, deployment, tfhelper, jhelper, observabilityfeature, update_config
     ):
-        step = observability_feature.RemoveGrafanaAgentStep(
+        step = observability_feature.RemoveObservabilityAgentStep(
             deployment, observabilityfeature, tfhelper, jhelper
         )
         result = step.run()
@@ -187,7 +187,7 @@ class TestRemoveGrafanaAgentStep:
     ):
         tfhelper.destroy.side_effect = TerraformException("destroy failed...")
 
-        step = observability_feature.RemoveGrafanaAgentStep(
+        step = observability_feature.RemoveObservabilityAgentStep(
             deployment, observabilityfeature, tfhelper, jhelper
         )
         result = step.run()
@@ -202,7 +202,7 @@ class TestRemoveGrafanaAgentStep:
     ):
         jhelper.wait_application_gone.side_effect = TimeoutError("timed out")
 
-        step = observability_feature.RemoveGrafanaAgentStep(
+        step = observability_feature.RemoveObservabilityAgentStep(
             deployment, observabilityfeature, tfhelper, jhelper
         )
         result = step.run()
@@ -252,7 +252,7 @@ class TestRemoveRemoteCosOffersStep:
         jhelper.get_model_status.side_effect = [
             Mock(
                 apps={
-                    "grafana-agent": Mock(
+                    "opentelemetry-collector": Mock(
                         relations={"logging-consumer": "loki:loki_push_api"}
                     )
                 }
@@ -295,7 +295,7 @@ class TestRemoveRemoteCosOffersStep:
         jhelper.get_model_status.side_effect = [
             Mock(
                 apps={
-                    "grafana-agent": Mock(
+                    "opentelemetry-collector": Mock(
                         relations={"logging-consumer": "loki:loki_push_api"}
                     )
                 }
