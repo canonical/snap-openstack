@@ -32,6 +32,7 @@ from sunbeam.core.common import (
     BaseStep,
     Result,
     ResultType,
+    SunbeamException,
     convert_proxy_to_model_configs,
 )
 from sunbeam.core.deployment import Deployment
@@ -56,6 +57,10 @@ LOG = logging.getLogger(__name__)
 PEXPECT_TIMEOUT = 60
 BOOTSTRAP_CONFIG_KEY = "BootstrapAnswers"
 JUJU_CONTROLLER_CHARM = "juju-controller.charm"
+
+
+class JujuMigrationFailedError(SunbeamException):
+    """Juju model migration error class."""
 
 
 class AddCloudJujuStep(BaseStep, JujuStepHelper):
@@ -2133,29 +2138,109 @@ class MigrateModelStep(BaseStep, JujuStepHelper):
         process = subprocess.run(cmd, capture_output=True, text=True, check=True)
         LOG.debug(f"Command finished. stdout={process.stdout}, stderr={process.stderr}")
 
-    @tenacity.retry(
-        wait=tenacity.wait_fixed(10),
-        stop=tenacity.stop_after_delay(960),
-        retry=tenacity.retry_if_exception_type(ValueError),
-        reraise=True,
-    )
-    def _wait_for_model(self, model: str, owner: str):
-        try:
-            self._juju_cmd("status", "--model", f"{owner}/{model}")
-        except subprocess.CalledProcessError as e:
-            LOG.debug(f"No model {model} found. stdout: {e.stdout}, stderr: {e.stderr}")
-            raise ValueError(f"No model {model} found")
-
-    def _get_model_owner(self, model: str) -> str:
+    def _get_model_owner(self, model: str, controller: str) -> str:
         """Determine model owner."""
         try:
-            model_info = self._juju_cmd("show-model", model)
+            model_info = self._juju_cmd("show-model", f"{controller}:{model}")
         except subprocess.CalledProcessError:
             raise ValueError(f"Model {model} not found")
         LOG.debug(f"Model info: {model_info}")
         if owner := model_info.get(model, {}).get("owner"):
             return owner
         raise ValueError(f"Owner not found for model {model}")
+
+    @tenacity.retry(
+        wait=tenacity.wait_fixed(10),
+        stop=tenacity.stop_after_delay(480),
+        retry=tenacity.retry_if_exception_type(TimeoutError),
+        reraise=True,
+    )
+    def _wait_for_model(
+        self,
+        model: str,
+        owner: str,
+        from_controller: str,
+        to_controller: str,
+    ) -> bool:
+        """Check model migration status."""
+        try:
+            # Get migration status from model
+            model_info = self._juju_cmd(
+                "show-model", f"{from_controller}:{owner}/{model}"
+            )
+        except subprocess.CalledProcessError as e:
+            # Check if model exists in the new controller
+            try:
+                self._juju_cmd("status", "--model", f"{to_controller}:{owner}/{model}")
+
+                return True
+            except subprocess.CalledProcessError:
+                LOG.exception(
+                    f"Error in finding {model} model in {from_controller} controller"
+                )
+
+                raise JujuMigrationFailedError(
+                    f"Model {model} is not in either {to_controller} or"
+                    f" {from_controller} controllers"
+                ) from e
+
+        # Check if model migration is still ongoing
+        migration_status = (
+            model_info.get(model, {}).get("status", {}).get("migration", "")
+        )
+        LOG.debug(f"Migration status: {migration_status}")
+
+        if migration_status.startswith("aborted"):
+            return False
+
+        raise TimeoutError("Juju model migration is still in progress")
+
+    @tenacity.retry(
+        wait=tenacity.wait_fixed(10),
+        stop=tenacity.stop_after_attempt(3),
+        retry=tenacity.retry_if_exception_type(ValueError),
+        reraise=True,
+    )
+    def _migrate_model(
+        self,
+        model: str,
+        owner: str,
+        from_controller: str,
+        to_controller: str,
+    ):
+        """Migrate and monitor model migration status."""
+        cmd = [
+            self._get_juju_binary(),
+            "migrate",
+            f"{from_controller}:{owner}/{model}",
+            to_controller,
+        ]
+
+        LOG.debug(f"Running command {' '.join(cmd)}")
+
+        try:
+            process = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        except subprocess.CalledProcessError as e:
+            LOG.exception(
+                f"Error in migrating model {self.model}"
+                f" from {self.from_controller}"
+                f" to controller {self.to_controller}"
+            )
+
+            raise JujuMigrationFailedError("Juju migrate command failed") from e
+
+        LOG.debug(f"Command finished. stdout={process.stdout}, stderr={process.stderr}")
+
+        # Check migration status
+        is_model_migrated = self._wait_for_model(
+            model, owner, from_controller, to_controller
+        )
+
+        # Redo the migration if not migrated
+        if not is_model_migrated:
+            LOG.debug("Model migration was not completed, retrying migration")
+
+            raise ValueError("Model migration was aborted")
 
     def is_skip(self, status: Status | None = None) -> Result:
         """Determines if the step should be skipped or not."""
@@ -2166,9 +2251,9 @@ class MigrateModelStep(BaseStep, JujuStepHelper):
             return Result(ResultType.FAILED, str(e))
 
         models = self._juju_cmd("models")
-        LOG.debug(f"Models: {models}")
         models = models.get("models", [])
-        LOG.debug(f"models: {models} .. looking for {self.model}")
+        LOG.debug(f"Looking for {self.model} in models: {models}")
+
         for model_ in models:
             if model_.get("short-name") == self.model:
                 return Result(ResultType.SKIPPED)
@@ -2176,48 +2261,35 @@ class MigrateModelStep(BaseStep, JujuStepHelper):
         return Result(ResultType.COMPLETED)
 
     def run(self, status: Status | None = None) -> Result:
-        """Model mirgate and switch to new controller."""
+        """Migrate model and switch to new controller."""
+        # Get model owner
         try:
-            self._switch_controller(self.from_controller)
-        except subprocess.CalledProcessError as e:
-            LOG.exception(f"Error in switching to controller {self.from_controller}")
-            return Result(ResultType.FAILED, str(e))
-
-        try:
-            owner = self._get_model_owner(self.model)
+            owner = self._get_model_owner(self.model, self.from_controller)
         except ValueError:
-            msg = f"Failed to determine owner for model {self.model}"
-            LOG.debug(msg)
+            msg = f"Error in determining the owner for model {self.model}"
+            LOG.exception(msg)
             return Result(ResultType.FAILED, msg)
 
+        # Migrate model
         try:
-            cmd = [self._get_juju_binary(), "migrate", self.model, self.to_controller]
-            LOG.debug(f"Running command {' '.join(cmd)}")
-            process = subprocess.run(cmd, capture_output=True, text=True, check=True)
-            LOG.debug(
-                f"Command finished. stdout={process.stdout}, stderr={process.stderr}"
+            self._migrate_model(
+                self.model, owner, self.from_controller, self.to_controller
             )
-        except subprocess.CalledProcessError as e:
-            LOG.exception(
-                f"Error in migrating model {self.model}  from {self.from_controller}"
-                f"to controller {self.to_controller}"
-            )
+        except JujuMigrationFailedError as e:
             return Result(ResultType.FAILED, str(e))
+        except TimeoutError:
+            LOG.exception("Error in finding model after migration", exc_info=True)
+            return Result(
+                ResultType.FAILED,
+                f"Timed out waiting for model {self.model} to migrate",
+            )
 
+        # Switch to the destination controller
         try:
             self._switch_controller(self.to_controller)
         except subprocess.CalledProcessError as e:
             LOG.exception(f"Error in switching to controller {self.to_controller}")
             return Result(ResultType.FAILED, str(e))
-
-        try:
-            # If the model is visible in to_controller, consider migration is completed.
-            self._wait_for_model(self.model, owner)
-        except ValueError:
-            LOG.debug("Failed to find model after migration", exc_info=True)
-            return Result(
-                ResultType.FAILED, f"Timed out waiting for model {self.model} to appear"
-            )
 
         return Result(ResultType.COMPLETED)
 
