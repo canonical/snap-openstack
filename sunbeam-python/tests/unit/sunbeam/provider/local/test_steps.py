@@ -260,6 +260,80 @@ class TestLocalSetHypervisorUnitsOptionsStep(BaseTestSetHypervisorUnitsOptionsSt
         machine_name = self.get_machine_name()
         assert step.bridge_mappings[machine_name] == "br-physnet1:physnet1:eth2"
 
+    def test_prompt_with_deprecated_nic_field_in_manifest(self):
+        """Test that deprecated 'nic' field in manifest is used without prompting."""
+        from sunbeam.core.manifest import Manifest
+
+        # Load answers with remote access to trigger manifest reading
+        self.load_answers.return_value = {"user": {"remote_access_location": "remote"}}
+
+        # Create a manifest with deprecated nic field
+        manifest_dict = {
+            "core": {
+                "config": {
+                    "external-network": {
+                        "nic": "eth1",  # Deprecated field
+                        "cidr": "10.0.0.0/24",
+                    }
+                }
+            }
+        }
+        manifest = Manifest.model_validate(manifest_dict)
+
+        step = local_steps.LocalSetHypervisorUnitsOptionsStep(
+            self.cclient,
+            "maas0.local",
+            self.jhelper,
+            "test-model",
+            join_mode=False,
+            manifest=manifest,
+        )
+
+        # Call prompt - it should NOT prompt user since manifest has nic
+        step.prompt()
+
+        # Verify bridge_mappings is set from manifest
+        machine_name = self.get_machine_name()
+        assert step.bridge_mappings[machine_name] == "br-physnet1:physnet1:eth1"
+
+    def test_prompt_with_new_nics_field_in_manifest(self):
+        """Test that new 'nics' field in manifest is used without prompting."""
+        from sunbeam.core.manifest import Manifest
+
+        # Load answers with remote access to trigger manifest reading
+        self.load_answers.return_value = {"user": {"remote_access_location": "remote"}}
+
+        # Create a manifest with new nics field
+        manifest_dict = {
+            "core": {
+                "config": {
+                    "external-networks": {
+                        "physnet1": {
+                            "nics": {"maas0.local": "ens1f0"},
+                            "cidr": "10.0.0.0/24",
+                        }
+                    }
+                }
+            }
+        }
+        manifest = Manifest.model_validate(manifest_dict)
+
+        step = local_steps.LocalSetHypervisorUnitsOptionsStep(
+            self.cclient,
+            "maas0.local",
+            self.jhelper,
+            "test-model",
+            join_mode=False,
+            manifest=manifest,
+        )
+
+        # Call prompt - it should NOT prompt user since manifest has nics
+        step.prompt()
+
+        # Verify bridge_mappings is set from manifest
+        machine_name = self.get_machine_name()
+        assert step.bridge_mappings[machine_name] == "br-physnet1:physnet1:ens1f0"
+
 
 class TestLocalClusterStatusStep:
     def test_run(self, deployment, jhelper):
