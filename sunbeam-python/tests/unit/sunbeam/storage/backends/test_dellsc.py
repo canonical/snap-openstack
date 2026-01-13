@@ -150,6 +150,37 @@ class TestDellSCBackend(BaseBackendTests):
         assert config.backend_availability_zone is None
         assert config.dell_sc_api_port is None
 
+    def test_dellsc_build_terraform_vars_maps_credentials(
+        self, backend, mock_deployment, mock_manifest
+    ):
+        """Test Dell SC credentials map to secret-based charm config."""
+        config = backend.config_type().model_validate(
+            {
+                "san-ip": "192.168.1.1",
+                "san-username": "admin",
+                "san-password": "secret",
+                "secondary-san-username": "sec-admin",
+                "secondary-san-password": "sec-secret",
+            }
+        )
+
+        tfvars = backend.build_terraform_vars(
+            mock_deployment, mock_manifest, "compellent01", config
+        )
+
+        assert "san-credentials-secret" in tfvars["secrets"]
+        assert tfvars["secrets"]["san-credentials-secret"] == {
+            "username": "admin",
+            "password": "secret",
+        }
+        assert "secondary-san-credentials-secret" in tfvars["secrets"]
+        assert tfvars["secrets"]["secondary-san-credentials-secret"] == {
+            "username": "sec-admin",
+            "password": "sec-secret",
+        }
+        assert "san-username" not in tfvars["charm_config"]
+        assert "san-password" not in tfvars["charm_config"]
+
     def test_dellsc_dell_specific_fields_exist(self, backend):
         """Test that Dell SC-specific fields exist."""
         config_class = backend.config_type()

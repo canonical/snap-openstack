@@ -53,7 +53,7 @@ variable "charm_config" {
 }
 
 variable "secrets" {
-  description = "Map of secret names to create. The key is the config option name, the value is key to use in the secret dict for the value."
-  type        = map(string)
+  description = "Map of secret names to create. The key is the config option name, the value is a map of secret-key -> secret-value."
+  type        = map(map(string))
   default     = {}
 }

@@ -648,8 +648,8 @@ class StorageBackendBase(typing.Generic[BackendConfig]):
         config_dict = config.model_dump(exclude_none=True, by_alias=True)
 
         # Secret fields that will be translated to juju secrets
-        # K: config field name, V: field key in juju secret
-        secret_fields = {}
+        # K: config field name, V: dict of secret key -> secret value
+        secret_fields: dict[str, dict[str, Any]] = {}
         alias_generator = self.config_type().model_config.get("alias_generator")
         if alias_generator is None:
             raise RuntimeError(
@@ -663,10 +663,12 @@ class StorageBackendBase(typing.Generic[BackendConfig]):
             )
         for fname, finfo in self.config_type().model_fields.items():
             for constraint in finfo.metadata:
-                if isinstance(constraint, SecretDictField):
-                    secret_fields[alias_generator.generate_aliases(fname)[2]] = (  # type: ignore
-                        constraint.field
-                    )
+                if not isinstance(constraint, SecretDictField):
+                    continue
+                config_key = alias_generator.generate_aliases(fname)[2]  # type: ignore
+                if config_key not in config_dict:
+                    continue
+                secret_fields[config_key] = {constraint.field: config_dict.pop(config_key)}
 
         charm_channel = self.charm_channel
         charm_revision = None
