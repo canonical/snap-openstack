@@ -275,7 +275,7 @@ class LocalSetExternalNetworkUnitsOptionsStep(SetExternalNetworkUnitsOptionsStep
                 if nics and (nic := nics.get(host)):
                     physnet_mapping.append((physnet, nic))
 
-                if nic := preseed.get("nic"):
+                if nic := network.get("nic"):
                     LOG.warning(
                         "DEPRECATED: Using deprecated `nic` field for host %r", host
                     )
