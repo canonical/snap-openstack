@@ -32,7 +32,7 @@ variable "backends" {
     charm_revision        = number
     charm_config          = map(string)
     endpoint_bindings     = set(map(string))
-    secrets               = map(string)
+    secrets               = map(map(string))
   }))
   default = {}
 }
