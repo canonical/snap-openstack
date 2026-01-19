@@ -178,10 +178,12 @@ class LatestInChannelCoordinator(UpgradeCoordinator):
             LatestInChannel(self.deployment, self.jhelper, self.manifest),
             TerraformInitStep(self.deployment.get_tfhelper("openstack-plan")),
             ReapplyOpenStackTerraformPlanStep(
+                self.deployment,
                 self.client,
                 self.deployment.get_tfhelper("openstack-plan"),
                 self.jhelper,
                 self.manifest,
+                self.deployment.openstack_machines_model,
             ),
             TerraformInitStep(self.deployment.get_tfhelper("sunbeam-machine-plan")),
             DeploySunbeamMachineApplicationStep(
