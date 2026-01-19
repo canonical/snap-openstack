@@ -74,7 +74,9 @@ class LatestInChannel(BaseStep, JujuStepHelper):
 
         return False
 
-    def refresh_apps(self, apps: dict, model: str, status: Status | None = None) -> Result:
+    def refresh_apps(
+        self, apps: dict, model: str, status: Status | None = None
+    ) -> Result:
         """Refresh apps in the model.
 
         If the charm has no revision in manifest and channel mentioned in manifest
@@ -104,7 +106,9 @@ class LatestInChannel(BaseStep, JujuStepHelper):
             if model == OPENSTACK_MODEL:
                 # For k8s applications, use wait_until_active
                 status_queue: queue.Queue[str] = queue.Queue()
-                task = update_status_background(self, refreshed_apps, status_queue, status)
+                task = update_status_background(
+                    self, refreshed_apps, status_queue, status
+                )
                 try:
                     self.jhelper.wait_until_active(
                         model,
