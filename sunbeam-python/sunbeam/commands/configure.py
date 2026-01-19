@@ -163,7 +163,13 @@ def get_external_network_configs(client: Client) -> dict:
     ):
         # In local access, we only support a single external network
         # get the first one
-        ext_network = ext_network.get(next(iter(ext_network)))
+        # Check if ext_network is nested (dict of dict) or flat (single dict)
+        first_key = next(iter(ext_network)) if ext_network else None
+        if first_key and isinstance(ext_network.get(first_key), dict):
+            # Nested structure like {"asd": {"cidr": ""}}
+            ext_network = ext_network.get(first_key)
+        # else: already a flat dict like {"cidr": ""}
+
         external_network = ipaddress.ip_network(ext_network.get("cidr"))
         bridge_interface = f"{ext_network.get('gateway')}/{external_network.prefixlen}"
         charm_config["external-bridge-address"] = bridge_interface
