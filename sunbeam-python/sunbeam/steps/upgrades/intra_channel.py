@@ -2,13 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
+import queue
 
 from rich.console import Console
 from rich.status import Status
 
-from sunbeam.core.common import BaseStep, Result, ResultType
+from sunbeam.core.common import BaseStep, Result, ResultType, update_status_background
 from sunbeam.core.deployment import Deployment
-from sunbeam.core.juju import JujuHelper, JujuStepHelper
+from sunbeam.core.juju import JujuHelper, JujuStepHelper, JujuWaitException
 from sunbeam.core.manifest import Manifest
 from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.core.terraform import TerraformInitStep
@@ -73,13 +74,14 @@ class LatestInChannel(BaseStep, JujuStepHelper):
 
         return False
 
-    def refresh_apps(self, apps: dict, model: str) -> None:
+    def refresh_apps(self, apps: dict, model: str, status: Status | None = None) -> Result:
         """Refresh apps in the model.
 
         If the charm has no revision in manifest and channel mentioned in manifest
         and the deployed app is same, run juju refresh.
         Otherwise ignore so that terraform plan apply will take care of charm upgrade.
         """
+        refreshed_apps = []
         for app_name, (charm, channel, _) in apps.items():
             manifest_charm = self.manifest.core.software.charms.get(charm)
             if not manifest_charm:
@@ -94,6 +96,42 @@ class LatestInChannel(BaseStep, JujuStepHelper):
                 LOG.debug(f"Running refresh for app {app_name}")
                 # refresh() checks for any new revision and updates if available
                 self.jhelper.charm_refresh(app_name, model)
+                refreshed_apps.append(app_name)
+
+        # Wait until refreshed apps are in active state
+        if refreshed_apps:
+            LOG.debug(f"Waiting for apps {refreshed_apps} in model {model}")
+            if model == OPENSTACK_MODEL:
+                # For k8s applications, use wait_until_active
+                status_queue: queue.Queue[str] = queue.Queue()
+                task = update_status_background(self, refreshed_apps, status_queue, status)
+                try:
+                    self.jhelper.wait_until_active(
+                        model,
+                        refreshed_apps,
+                        timeout=3600,  # 60 minutes
+                        queue=status_queue,
+                    )
+                except (JujuWaitException, TimeoutError) as e:
+                    LOG.warning(str(e))
+                    return Result(ResultType.FAILED, str(e))
+                finally:
+                    task.stop()
+            else:
+                # For machine applications, use wait_application_ready
+                try:
+                    for app_name in refreshed_apps:
+                        self.jhelper.wait_application_ready(
+                            app_name,
+                            model,
+                            accepted_status=["active", "unknown"],
+                            timeout=1800,  # 30 minutes
+                        )
+                except TimeoutError as e:
+                    LOG.warning(str(e))
+                    return Result(ResultType.FAILED, str(e))
+
+        return Result(ResultType.COMPLETED)
 
     def run(self, status: Status | None = None) -> Result:
         """Refresh all charms identified as needing a refresh.
@@ -118,10 +156,16 @@ class LatestInChannel(BaseStep, JujuStepHelper):
             )
             return Result(ResultType.FAILED, error_msg)
 
-        self.refresh_apps(deployed_k8s_apps, OPENSTACK_MODEL)
-        self.refresh_apps(
-            deployed_machine_apps, self.deployment.openstack_machines_model
+        result = self.refresh_apps(deployed_k8s_apps, OPENSTACK_MODEL, status)
+        if result.result_type == ResultType.FAILED:
+            return result
+
+        result = self.refresh_apps(
+            deployed_machine_apps, self.deployment.openstack_machines_model, status
         )
+        if result.result_type == ResultType.FAILED:
+            return result
+
         return Result(ResultType.COMPLETED)
 
 
