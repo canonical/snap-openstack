@@ -668,7 +668,9 @@ class StorageBackendBase(typing.Generic[BackendConfig]):
                 config_key = alias_generator.generate_aliases(fname)[2]  # type: ignore
                 if config_key not in config_dict:
                     continue
-                secret_fields[config_key] = {constraint.field: config_dict.pop(config_key)}
+                secret_fields[config_key] = {
+                    constraint.field: config_dict.pop(config_key)
+                }
 
         charm_channel = self.charm_channel
         charm_revision = None
