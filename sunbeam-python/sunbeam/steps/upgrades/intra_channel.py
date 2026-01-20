@@ -187,6 +187,17 @@ class LatestInChannelCoordinator(UpgradeCoordinator):
         """Return the upgrade plan."""
         plan = [
             LatestInChannel(self.deployment, self.jhelper, self.manifest),
+            # Microceph introduces new offer urls for rgw and so microceph
+            # plan need to be applied before openstack plan
+            TerraformInitStep(self.deployment.get_tfhelper("microceph-plan")),
+            DeployMicrocephApplicationStep(
+                self.deployment,
+                self.client,
+                self.deployment.get_tfhelper("microceph-plan"),
+                self.jhelper,
+                self.manifest,
+                self.deployment.openstack_machines_model,
+            ),
             TerraformInitStep(self.deployment.get_tfhelper("openstack-plan")),
             ReapplyOpenStackTerraformPlanStep(
                 self.deployment,
