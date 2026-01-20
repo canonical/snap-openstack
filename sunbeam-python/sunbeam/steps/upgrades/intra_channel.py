@@ -7,7 +7,13 @@ import queue
 from rich.console import Console
 from rich.status import Status
 
-from sunbeam.core.common import BaseStep, Result, ResultType, update_status_background
+from sunbeam.core.common import (
+    BaseStep,
+    Result,
+    ResultType,
+    Role,
+    update_status_background,
+)
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import JujuHelper, JujuStepHelper, JujuWaitException
 from sunbeam.core.manifest import Manifest
@@ -245,17 +251,26 @@ class LatestInChannelCoordinator(UpgradeCoordinator):
 
         plan.extend([OpenStackPatchLoadBalancerServicesIPStep(self.client)])
 
+        network_nodes = self.client.cluster.list_nodes_by_role(
+            Role.NETWORK.name.lower()
+        )
+        if len(network_nodes):
+            plan.extend(
+                [
+                    TerraformInitStep(self.deployment.get_tfhelper("microovn-plan")),
+                    DeployMicroOVNApplicationStep(
+                        self.deployment,
+                        self.client,
+                        self.deployment.get_tfhelper("microovn-plan"),
+                        self.jhelper,
+                        self.manifest,
+                        self.deployment.openstack_machines_model,
+                    ),
+                ]
+            )
+
         plan.extend(
             [
-                TerraformInitStep(self.deployment.get_tfhelper("microovn-plan")),
-                DeployMicroOVNApplicationStep(
-                    self.deployment,
-                    self.client,
-                    self.deployment.get_tfhelper("microovn-plan"),
-                    self.jhelper,
-                    self.manifest,
-                    self.deployment.openstack_machines_model,
-                ),
                 TerraformInitStep(self.deployment.get_tfhelper("microceph-plan")),
                 DeployMicrocephApplicationStep(
                     self.deployment,
