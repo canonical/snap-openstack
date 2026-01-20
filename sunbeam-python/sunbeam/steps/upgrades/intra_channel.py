@@ -79,9 +79,8 @@ class LatestInChannel(BaseStep, JujuStepHelper):
     ) -> Result:
         """Refresh apps in the model.
 
-        If the charm has no revision in manifest and channel mentioned in manifest
-        and the deployed app is same, run juju refresh.
-        Otherwise ignore so that terraform plan apply will take care of charm upgrade.
+        If there is no manifest charm entry, refresh the charm to latest revision.
+        If manifest charm exists, refresh using channel and revision from manifest.
         """
         refreshed_apps = []
         for app_name, (charm, channel, _) in apps.items():
@@ -91,13 +90,21 @@ class LatestInChannel(BaseStep, JujuStepHelper):
                     manifest_charm = feature.software.charms.get(charm)
                     if manifest_charm:
                         break
-            if not manifest_charm:
-                continue
 
-            if not manifest_charm.revision and manifest_charm.channel == channel:
-                LOG.debug(f"Running refresh for app {app_name}")
-                # refresh() checks for any new revision and updates if available
+            if not manifest_charm:
+                # No manifest entry, refresh to latest revision in current channel
+                LOG.debug(f"Running refresh for app {app_name} (no manifest entry)")
                 self.jhelper.charm_refresh(app_name, model)
+                refreshed_apps.append(app_name)
+            else:
+                # Manifest entry exists, use channel and revision from manifest
+                LOG.debug(f"Running refresh for app {app_name} with manifest config")
+                self.jhelper.charm_refresh(
+                    app_name,
+                    model,
+                    channel=manifest_charm.channel,
+                    revision=manifest_charm.revision,
+                )
                 refreshed_apps.append(app_name)
 
         # Wait until refreshed apps are in active state
