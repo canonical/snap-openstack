@@ -9,7 +9,7 @@ from typing import Any
 
 import pydantic
 import yaml
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from snaphelpers import Snap
 
 from sunbeam import utils
@@ -289,6 +289,8 @@ class CoreConfig(pydantic.BaseModel):
     user: _User | None = None
     external_network: _ExternalNetwork | None = pydantic.Field(
         default=None,
+        validation_alias=AliasChoices("external-network", "external_network"),
+        serialization_alias="external-network",
         alias="external-network",
         description="Deprecated, use `external-networks` instead.",
     )
