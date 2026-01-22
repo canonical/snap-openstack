@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import abc
+import copy
 import hashlib
 import ipaddress
 import logging
@@ -249,10 +250,14 @@ class BaseUserQuestions(BaseStep):
         seen_physnet: list[str] = []
         known_physnet = sorted({*preseed.keys(), *variables["external_network"].keys()})
 
+        preseed_physnet_bank = copy.deepcopy(preseed)
+        if len(preseed):
+            preseed_physnet_bank["configure_more"] = False
+
         physnet_bank = sunbeam.core.questions.QuestionBank(
             questions=physical_network_question(),
             console=console,
-            preseed=preseed,
+            preseed=preseed_physnet_bank,
             previous_answers={},
             accept_defaults=accept_defaults,
             show_hint=show_hint,
@@ -268,7 +273,7 @@ class BaseUserQuestions(BaseStep):
                 if new not in seen_physnet:
                     candidate = new
             while not physnet or physnet in seen_physnet:
-                if physnet in preseed or self.accept_defaults:
+                if candidate in preseed or self.accept_defaults:
                     physnet = candidate
                 else:
                     physnet = physnet_bank.physnet_name.ask(new_default=candidate)
