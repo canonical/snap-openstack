@@ -650,8 +650,18 @@ class TestReapplyOpenStackTerraformPlanStep:
         manifest.core.config.pci = None
         return manifest
 
+    @pytest.fixture
+    def openstack_deployment(self):
+        """Deployment for openstack tests."""
+        deployment = Mock()
+        storage_manager = Mock()
+        storage_manager.list_principal_applications.return_value = []
+        deployment.get_storage_manager.return_value = storage_manager
+        return deployment
+
     def test_run(
         self,
+        openstack_deployment,
         openstack_client,
         openstack_tfhelper,
         openstack_jhelper,
@@ -663,7 +673,12 @@ class TestReapplyOpenStackTerraformPlanStep:
             "nova-compute",
         ]
         step = ReapplyOpenStackTerraformPlanStep(
-            openstack_client, openstack_tfhelper, openstack_jhelper, openstack_manifest
+            openstack_deployment,
+            openstack_client,
+            openstack_tfhelper,
+            openstack_jhelper,
+            openstack_manifest,
+            "test-machine-model",
         )
         result = step.run()
 
@@ -672,6 +687,7 @@ class TestReapplyOpenStackTerraformPlanStep:
 
     def test_run_tf_apply_failed(
         self,
+        openstack_deployment,
         openstack_client,
         openstack_tfhelper,
         openstack_jhelper,
@@ -683,7 +699,12 @@ class TestReapplyOpenStackTerraformPlanStep:
         )
 
         step = ReapplyOpenStackTerraformPlanStep(
-            openstack_client, openstack_tfhelper, openstack_jhelper, openstack_manifest
+            openstack_deployment,
+            openstack_client,
+            openstack_tfhelper,
+            openstack_jhelper,
+            openstack_manifest,
+            "test-machine-model",
         )
         result = step.run()
 
@@ -693,6 +714,7 @@ class TestReapplyOpenStackTerraformPlanStep:
 
     def test_run_waiting_timed_out(
         self,
+        openstack_deployment,
         openstack_client,
         openstack_tfhelper,
         openstack_jhelper,
@@ -706,7 +728,12 @@ class TestReapplyOpenStackTerraformPlanStep:
         openstack_jhelper.wait_until_active.side_effect = TimeoutError("timed out")
 
         step = ReapplyOpenStackTerraformPlanStep(
-            openstack_client, openstack_tfhelper, openstack_jhelper, openstack_manifest
+            openstack_deployment,
+            openstack_client,
+            openstack_tfhelper,
+            openstack_jhelper,
+            openstack_manifest,
+            "test-machine-model",
         )
         result = step.run()
 
@@ -716,6 +743,7 @@ class TestReapplyOpenStackTerraformPlanStep:
 
     def test_run_unit_in_error_state(
         self,
+        openstack_deployment,
         openstack_client,
         openstack_tfhelper,
         openstack_jhelper,
@@ -731,7 +759,12 @@ class TestReapplyOpenStackTerraformPlanStep:
         )
 
         step = ReapplyOpenStackTerraformPlanStep(
-            openstack_client, openstack_tfhelper, openstack_jhelper, openstack_manifest
+            openstack_deployment,
+            openstack_client,
+            openstack_tfhelper,
+            openstack_jhelper,
+            openstack_manifest,
+            "test-machine-model",
         )
         result = step.run()
 
