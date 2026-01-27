@@ -593,6 +593,39 @@ class JujuHelper:
         with self._model(model) as juju:
             juju.remove_unit(unit)
 
+    def show_unit(self, model: str, unit_name: str) -> dict:
+        """Show information about a unit.
+
+        :model: Name of the model
+        :unit_name: Name of the unit
+        """
+        with self._model(model) as juju:
+            try:
+                unit_data = juju.cli("show-unit", "--format", "json", unit_name)
+            except jubilant.CLIError as e:
+                if "not found" in e.stderr:
+                    raise UnitNotFoundException(f"Unit {unit_name!r} not found") from e
+                raise JujuException(
+                    f"Failed to get unit {unit_name!r} from model {model!r}"
+                ) from e
+        return json.loads(unit_data)[unit_name]
+
+    def scale_application(self, model: str, application: str, scale: int) -> None:
+        """Scale application to the desired number of k8s application units.
+
+        :model: Name of the model where the application is located
+        :application: Application name
+        :scale: Desired scale for the application
+        """
+        with self._model(model) as juju:
+            try:
+                juju.cli("scale-application", application, str(scale))
+            except jubilant.CLIError as e:
+                raise JujuException(
+                    f"Failed to scale app {application!r} in model {model!r} "
+                    f"to {scale}: {e.stderr}"
+                ) from e
+
     def _get_leader_unit(
         self, name: str, model: str
     ) -> tuple[str, "jubilant.statustypes.UnitStatus"]:

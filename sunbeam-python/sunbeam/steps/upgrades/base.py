@@ -46,6 +46,7 @@ class UpgradeCoordinator:
         client: Client,
         jhelper: JujuHelper,
         manifest: Manifest,
+        reset_mysql_upgrade_state: bool = False,
     ):
         """Upgrade coordinator.
 
@@ -54,11 +55,13 @@ class UpgradeCoordinator:
         :client: Helper for interacting with clusterd
         :jhelper: Helper for interacting with pylibjuju
         :manifest: Manifest object
+        :reset_mysql_upgrade_state: Whether to reset mysql upgrade state
         """
         self.deployment = deployment
         self.client = client
         self.jhelper = jhelper
         self.manifest = manifest
+        self.reset_mysql_upgrade_state = reset_mysql_upgrade_state
 
     def get_plan(self) -> list[BaseStep]:
         """Return the plan for this upgrade.
