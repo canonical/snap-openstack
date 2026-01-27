@@ -1,0 +1,64 @@
+# Sunbeam Feature Functional Tests
+
+Functional tests for Sunbeam feature enablement/disablement. These tests
+connect to an **existing Sunbeam deployment** and run the enable/verify/disable
+lifecycle for each feature, logging timing and basic behaviour checks.
+
+The suite is designed to be run via `tox` from the `sunbeam-python` tree.
+
+## Prerequisites
+
+- **Existing Sunbeam deployment** already bootstrapped and reachable
+- `sunbeam` CLI on `PATH` and configured to talk to that deployment
+  - e.g. `sunbeam deployment list` shows your deployment
+- `openstack` CLI configured for that cloud
+  - e.g. `openstack endpoint list` works
+- `juju` CLI installed and able to access the controller/model that backs the
+  Sunbeam deployment
+
+## Configuration
+
+Create a config file from the example:
+
+```bash
+cd sunbeam-python
+cp tests/functional/feature/test_config.yaml.example tests/functional/feature/test_config.yaml
+```
+
+Then edit `tests/functional/feature/test_config.yaml`:
+
+```yaml
+sunbeam:
+  deployment_name: "ps6"        # Name shown by `sunbeam deployment list`
+
+juju:
+  model: "openstack"            # Juju model backing the cloud
+  # controller: "my-controller" # Optional; auto-detected if omitted
+```
+
+### Run the full feature functional suite
+
+```bash
+tox -e functional-feature
+```
+
+### Run a single feature functional test
+
+You can pass standard `pytest` selectors through tox via `posargs`. For example:
+
+- **Instance Recovery**:
+
+  ```bash
+  tox -e functional-feature -- tests/functional/feature/test_features.py::test_instance_recovery
+  ```
+
+- **TLS CA**:
+
+  ```bash
+  tox -e functional-feature -- tests/functional/feature/test_features.py::test_tls_ca
+  ```
+
+## Notes
+
+- Disable failures are **logged and ignored** so that the suite continues
+  to the next feature, matching the behaviour of the original tests.
