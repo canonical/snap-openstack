@@ -18,6 +18,7 @@ from sunbeam.steps.hypervisor import ReapplyHypervisorTerraformPlanStep
 from sunbeam.steps.k8s import DeployK8SApplicationStep
 from sunbeam.steps.microceph import DeployMicrocephApplicationStep
 from sunbeam.steps.microovn import DeployMicroOVNApplicationStep
+from sunbeam.steps.mysql import MySQLCharmUpgradeStep
 from sunbeam.steps.openstack import (
     OpenStackPatchLoadBalancerServicesIPPoolStep,
     OpenStackPatchLoadBalancerServicesIPStep,
@@ -81,6 +82,9 @@ class LatestInChannel(BaseStep, JujuStepHelper):
         Otherwise ignore so that terraform plan apply will take care of charm upgrade.
         """
         for app_name, (charm, channel, _) in apps.items():
+            # Skip mysql-k8s here, it is refreshed in MySQLCharmUpgradeStep
+            if charm in ["mysql-k8s"]:
+                continue
             manifest_charm = self.manifest.core.software.charms.get(charm)
             if not manifest_charm:
                 for _, feature in self.manifest.get_features():
@@ -131,6 +135,11 @@ class LatestInChannelCoordinator(UpgradeCoordinator):
     def get_plan(self) -> list[BaseStep]:
         """Return the upgrade plan."""
         plan = [
+            MySQLCharmUpgradeStep(
+                self.deployment,
+                self.client,
+                self.jhelper,
+            ),
             LatestInChannel(self.deployment, self.jhelper, self.manifest),
             TerraformInitStep(self.deployment.get_tfhelper("openstack-plan")),
             ReapplyOpenStackTerraformPlanStep(
