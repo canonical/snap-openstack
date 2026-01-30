@@ -1,48 +1,65 @@
-# Using from a locally built snap
+# How to contribute
+
+## Reporting a bug
+
+Please report bugs to the [OpenStack Snap](https://bugs.launchpad.net/snap-openstack) project on Launchpad.
+
+## Deploying from a locally built snap
 
 For testing a local change, you may wish to build and deploy the snap yourself.
 There are some extra manual steps compared with installing from the snap store,
 so this document details these.
 
+### Build the snap
 
-## Build the snap
+Run `snapcraft pack` from the root of the repository to build the `openstack` snap and save it in the working directory. If you haven't run snapcraft before, please see the [Create a new snap](https://snapcraft.io/docs/create-a-new-snap) tutorial to get started.
 
-Run `snapcraft` from the root of the repository to build the `openstack` snap and save it in the working directory.  If you haven't run snapcraft before, please see the [Create a new snap](https://snapcraft.io/docs/create-a-new-snap) tutorial to get started.
-
-```
-$ snapcraft
-Generated snap metadata
-Created snap package openstack_2024.1_amd64.snap
+```bash
+snapcraft pack
 ```
 
-This snap file can be copied to the machine where you are going to deploy it.
+This will create a snap file `openstack_*.snap` that can be copied to the machine where you are going to deploy it.
 
-## Install and configure the snap
+### Install and configure the snap
 
-On the machine where you are going to deploy MicroStack.
+On the machine where you are going to deploy Sunbeam, you can either:
 
-Install in dangerous mode (this is required because it's an unsigned snap package):
+- Install in dangerous mode (this is required because it's an unsigned snap package):
 
-```
-sudo snap install --dangerous openstack_2024.1_amd64.snap
-```
+  ```bash
+  sudo snap install --dangerous openstack_2024.1_amd64.snap
+  ```
+
+- Use [`snap try`](https://snapcraft.io/docs/snap-try) to install from an unpacked directory, which is useful if you want to make further changes and test them without rebuilding the snap.
+
+  - Unsquash the snap:
+
+    ```bash
+    unsquashfs openstack_2024.1_amd64.snap
+    ```
+
+  - Run `snap try` to install from the unpacked directory:
+
+    ```bash
+    sudo snap try ./squashfs-root
+    ```
 
 Auto aliases are not configured in dangerous mode,
 so set up the sunbeam alias for convenience now:
 
-```
+```bash
 sudo snap alias openstack.sunbeam sunbeam
 ```
 
 Prepare the node:
 
-```
+```bash
 sunbeam prepare-node-script --bootstrap | bash -x && newgrp snap_daemon
 ```
 
-Because it's installed in dangerous mode, snap connections aren't added automatically.  This must be done after installing the Juju snap (Juju is installed by running the prepare node script above), and before we begin bootstrapping.  So add the connections now:
+Because it's installed in dangerous mode, snap connections aren't added automatically. This must be done after installing the Juju snap (Juju is installed by running the prepare node script above), and before we begin bootstrapping.  So add the connections now:
 
-```
+```bash
 sudo snap connections openstack
 sudo snap connect openstack:juju-bin juju:juju-bin
 sudo snap connect openstack:dot-local-share-juju
@@ -50,15 +67,15 @@ sudo snap connect openstack:dot-config-openstack
 sudo snap connect openstack:dot-local-share-openstack
 ```
 
-## Continue deployment
+### Continue deployment
 
 Now the snap is configured and ready to go as usual, the same as if it were deployed from the official snap.  From here, you can continue the deployment from the bootstrap step.  See the [Get started with OpenStack](https://canonical-openstack.readthedocs-hosted.com/en/latest/tutorial/get-started-with-openstack/) tutorial for an example.
 
-## Troubleshooting
+### Troubleshooting
 
-If you see permission errors relating to files under /snap/openstack/ during the bootstrap process - for example:
+If you see permission errors relating to files under `/snap/openstack/` during the bootstrap process - for example:
 
-```
+```bash
 $ openstack.sunbeam -v cluster bootstrap
 ...
                     PermissionError: [Errno 13] Permission denied: '/snap/openstack/x1/etc/deploy-sunbeam-machine'
