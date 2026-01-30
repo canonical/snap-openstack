@@ -25,7 +25,7 @@ See the full [MicroStack documentation][microstack-docs].
 
 ## Contributing / developer documentation
 
-Please see the [docs](./docs) directory in this repository.
+Please see the [document](docs/CONTRIBUTING.md) in this repository.
 
 ## Reporting a bug
 
