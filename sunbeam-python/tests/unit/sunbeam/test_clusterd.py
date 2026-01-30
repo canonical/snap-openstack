@@ -22,8 +22,10 @@ from sunbeam.steps.clusterd import (
     ClusterListNodeStep,
     ClusterRemoveNodeStep,
     ClusterUpdateJujuControllerStep,
+    ClusterUpdateJujuUserStep,
     ClusterUpdateNodeStep,
     DeploySunbeamClusterdApplicationStep,
+    PromptCheckNodeExistStep,
     SaveManagementCidrStep,
 )
 
@@ -123,6 +125,114 @@ class TestClusterdSteps:
             "node-2", "FAKETOKEN"
         )
 
+    def test_update_juju_user_is_skipped_when_token_matches(self, cclient):
+        cclient.cluster.get_juju_user.return_value = {"token": "TESTTOKEN"}
+        step = ClusterUpdateJujuUserStep(cclient, "juju-user", "TESTTOKEN")
+        result = step.is_skip()
+        assert result.result_type == ResultType.SKIPPED
+
+    def test_update_juju_user_updates_when_token_changed(self, cclient):
+        cclient.cluster.get_juju_user.return_value = {"token": "OLDTOKEN"}
+        step = ClusterUpdateJujuUserStep(cclient, "juju-user", "NEWTOKEN")
+        result = step.is_skip()
+        assert result.result_type == ResultType.COMPLETED
+        # ensure run calls update
+        step.client.cluster.update_juju_user = MagicMock()
+        result2 = step.run()
+        step.client.cluster.update_juju_user.assert_called_once_with(
+            "juju-user", "NEWTOKEN"
+        )
+        assert result2.result_type == ResultType.COMPLETED
+
+    def test_update_juju_user_user_not_found(self, cclient):
+        cclient.cluster.get_juju_user.side_effect = service.JujuUserNotFoundException()
+        step = ClusterUpdateJujuUserStep(cclient, "juju-user", "NEWTOKEN")
+        result = step.is_skip()
+        assert result.result_type == ResultType.FAILED
+        assert result.message == "Juju user juju-user not found."
+
+    def test_update_juju_user_handles_service_unavailable_in_is_skip(self, cclient):
+        cclient.cluster.get_juju_user.side_effect = (
+            service.ClusterServiceUnavailableException("Cluster down")
+        )
+        step = ClusterUpdateJujuUserStep(cclient, "juju-user", "NEWTOKEN")
+        result = step.is_skip()
+        assert result.result_type == ResultType.FAILED
+        assert "Cluster down" in result.message
+
+    def test_update_juju_user_handles_service_unavailable_in_run(self, cclient):
+        cclient.cluster.get_juju_user.return_value = {"token": "OLDTOKEN"}
+        cclient.cluster.update_juju_user.side_effect = (
+            service.ClusterServiceUnavailableException("Cluster down")
+        )
+        step = ClusterUpdateJujuUserStep(cclient, "juju-user", "NEWTOKEN")
+        assert step.is_skip().result_type == ResultType.COMPLETED
+        result = step.run()
+        assert result.result_type == ResultType.FAILED
+        assert "Cluster down" in result.message
+
+    def test_prompt_check_node_exists_when_node_present(self, cclient):
+        cclient.cluster.get_cluster_members.return_value = [{"name": "node-1"}]
+        step = PromptCheckNodeExistStep(cclient, "node-1")
+        with patch.object(sunbeam.core.questions, "QuestionBank") as qb:
+            step.prompt()
+            # QuestionBank should not be constructed when node exists
+            assert not qb.called
+        result = step.run()
+        assert result.result_type == ResultType.COMPLETED
+
+    def test_prompt_check_node_missing_with_token_user_confirms(self, cclient):
+        cclient.cluster.get_cluster_members.return_value = [{"name": "node-1"}]
+        cclient.cluster.list_tokens.return_value = [
+            {"name": "node-2", "token": "TESTTOKEN"}
+        ]
+        step = PromptCheckNodeExistStep(cclient, "node-2")
+        with patch.object(sunbeam.core.questions, "QuestionBank") as qb:
+            qb.return_value.continue_operation.ask.return_value = True
+            step.prompt()
+        assert step.continue_operation is True
+        result = step.run()
+        assert result.result_type == ResultType.COMPLETED
+
+    def test_prompt_check_node_missing_with_token_user_declines(self, cclient):
+        cclient.cluster.get_cluster_members.return_value = [{"name": "node-1"}]
+        cclient.cluster.list_tokens.return_value = [
+            {"name": "node-3", "token": "TESTTOKEN"}
+        ]
+        step = PromptCheckNodeExistStep(cclient, "node-3")
+        with patch.object(sunbeam.core.questions, "QuestionBank") as qb:
+            qb.return_value.continue_operation.ask.return_value = False
+            step.prompt()
+        assert step.continue_operation is False
+        result = step.run()
+        assert result.result_type == ResultType.FAILED
+        assert "Operation cancelled by user" in result.message
+
+    def test_prompt_check_node_missing_without_token(self, cclient):
+        cclient.cluster.get_cluster_members.return_value = [{"name": "node-1"}]
+        # tokens exist but not for the node
+        cclient.cluster.list_tokens.return_value = [
+            {"name": "node-2", "token": "TESTTOKEN"}
+        ]
+        step = PromptCheckNodeExistStep(cclient, "node-3")
+        step.prompt()
+        assert step.token_not_found is True
+        assert step.continue_operation is False
+        result = step.run()
+        assert result.result_type == ResultType.FAILED
+        assert "no token found" in result.message
+
+    def test_prompt_cluster_service_unavailable(self, cclient):
+        cclient.cluster.get_cluster_members.side_effect = (
+            service.ClusterServiceUnavailableException("Cluster service is unavailable")
+        )
+        step = PromptCheckNodeExistStep(cclient, "node-1")
+        step.prompt()
+        assert step.cluster_unavailable is True
+        result = step.run()
+        assert result.result_type == ResultType.FAILED
+        assert "Sunbeam Cluster service is unavailable" in result.message
+
 
 class TestClusterService:
     """Unit tests for ClusterService."""
@@ -210,6 +320,46 @@ class TestClusterService:
         cs = ClusterService(mock_session, "http+unix://mock")
         token = cs.generate_token("node-2")
         assert token == "TESTTOKEN"
+
+    def test_update_juju_user_success(self):
+        json_data = {
+            "type": "sync",
+            "status": "Success",
+            "status_code": 200,
+            "operation": "",
+            "error_code": 0,
+            "error": "",
+            "metadata": None,
+        }
+        mock_response = self._mock_response(status=200, json_data=json_data)
+
+        mock_session = MagicMock()
+        mock_session.request.return_value = mock_response
+
+        cs = ClusterService(mock_session, "http+unix://mock")
+        cs.update_juju_user("juju-user", "NEWTOKEN")
+
+    def test_update_juju_user_not_found(self):
+        json_data = {
+            "type": "error",
+            "status": "",
+            "status_code": 404,
+            "operation": "",
+            "error_code": 404,
+            "error": "JujuUser not found",
+            "metadata": None,
+        }
+        mock_response = self._mock_response(status=404, json_data=json_data)
+        mock_response.raise_for_status.side_effect = HTTPError(
+            "Not Found", response=mock_response
+        )
+
+        mock_session = MagicMock()
+        mock_session.request.return_value = mock_response
+
+        cs = ClusterService(mock_session, "http+unix://mock")
+        with pytest.raises(service.JujuUserNotFoundException):
+            cs.update_juju_user("missing-user", "NEWTOKEN")
 
     def test_generate_token_when_token_already_exists(self):
         json_data = {

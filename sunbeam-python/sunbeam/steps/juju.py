@@ -518,6 +518,67 @@ class CreateJujuUserStep(BaseStep, JujuStepHelper):
             return Result(ResultType.FAILED, str(e))
 
 
+class ResetJujuUserStep(BaseStep, JujuStepHelper):
+    """Reset user in juju."""
+
+    def __init__(self, name: str):
+        super().__init__("Reset User", f"Resetting user {name} in Juju")
+        self.username = name
+        self.reset_token_regex = r"juju register (.*?)\n"
+
+        home = os.environ.get("SNAP_REAL_HOME")
+        os.environ["JUJU_DATA"] = f"{home}/.local/share/juju"
+
+    def run(self, status: Status | None = None) -> Result:
+        """Run the step to completion.
+
+        Invoked when the step is run and returns a ResultType to indicate
+
+        :return:
+        """
+        try:
+            users = self._juju_cmd("list-users")
+            user_names = [user.get("user-name") for user in users]
+            if self.username not in user_names:
+                return Result(
+                    ResultType.FAILED, f"User {self.username} not found in Juju"
+                )
+        except subprocess.CalledProcessError as e:
+            LOG.exception("Error getting list of users from Juju.")
+            LOG.warning(e.stderr)
+            return Result(ResultType.FAILED, str(e))
+
+        try:
+            cmd = [
+                self._get_juju_binary(),
+                "change-user-password",
+                self.username,
+                "--reset",
+            ]
+            LOG.debug(f"Running command {' '.join(cmd)}")
+            process = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            LOG.debug(
+                f"Command finished. stdout={process.stdout}, stderr={process.stderr}"
+            )
+
+            re_groups = re.search(self.reset_token_regex, process.stderr, re.MULTILINE)
+            if re_groups is None:
+                return Result(
+                    ResultType.FAILED, "Not able to parse password reset token"
+                )
+            token = re_groups.group(1)
+            if not token:
+                return Result(
+                    ResultType.FAILED, "Not able to parse password reset token"
+                )
+
+            return Result(ResultType.COMPLETED, message=token)
+        except subprocess.CalledProcessError as e:
+            LOG.exception(f"Error resetting user {self.username} in Juju")
+            LOG.warning(e.stderr)
+            return Result(ResultType.FAILED, str(e))
+
+
 class JujuGrantModelAccessStep(BaseStep, JujuStepHelper):
     """Grant model access to user in juju."""
 
