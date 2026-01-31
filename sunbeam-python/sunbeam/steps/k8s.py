@@ -660,7 +660,8 @@ class UpdateK8SCloudStep(BaseStep, JujuStepHelper):
         LOG.debug(f"Clouds registered in the controller: {clouds}")
         if f"cloud-{self.cloud_name}" not in clouds.keys():
             return Result(
-                ResultType.FAILED, f"Cloud {self.cloud_name} not found in controller"
+                ResultType.SKIPPED,
+                f"Cloud {self.cloud_name} is not found in the controller",
             )
 
         return Result(ResultType.COMPLETED)
@@ -832,7 +833,10 @@ class _CommonK8SStepMixin:
         try:
             node_info = self.client.cluster.get_node_info(self.node)
         except NodeNotExistInClusterException:
-            return Result(ResultType.FAILED, f"Node {self.node} not found in cluster")
+            return Result(
+                ResultType.SKIPPED,
+                f"Node {self.node} not found in cluster",
+            )
 
         control = Role.CONTROL.name.lower()
         region_controller = Role.REGION_CONTROLLER.name.lower()
@@ -1474,7 +1478,14 @@ class EnsureL2AdvertisementByHostStep(BaseStep):
         """
         for node in self.to_update:
             name = node["name"]
-            interface = self._get_interface(node, self.network)
+            try:
+                interface = self._get_interface(node, self.network)
+            except MachineNotFoundException as e:
+                LOG.debug("Failed to get the machine for L2 advertisement")
+                return Result(
+                    ResultType.SKIPPED,
+                    f"Failed to get interface for L2 advertisement on {name}: {e}",
+                )
             try:
                 self._ensure_l2_advertisement(name, interface)
             except l_exceptions.ApiError:
