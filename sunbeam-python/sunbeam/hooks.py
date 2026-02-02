@@ -14,6 +14,7 @@ DEFAULT_CONFIG = {
     "daemon.group": "snap_daemon",
     "daemon.debug": False,
     "k8s.provider": "k8s",
+    "ovn.provider": "ovn-k8s",
     "deployment.risk": "stable",
     "deployment.version": "2024.1",
 }
