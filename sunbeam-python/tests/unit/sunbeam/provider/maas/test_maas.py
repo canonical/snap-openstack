@@ -1089,9 +1089,10 @@ class TestMaasConfigureMicrocephOSDStep:
     def step(self, jhelper):
         client = Mock()
         maas_client = Mock()
+        manifest = Mock()
         names = ["machine1", "machine2"]
         step = MaasConfigureMicrocephOSDStep(
-            client, maas_client, jhelper, names, "test-model"
+            client, maas_client, jhelper, names, manifest, "test-model"
         )
         return step
 
@@ -1268,6 +1269,7 @@ class TestMaasConfigureMicrocephOSDStep:
 
     def test_run_failed_run_action(self, step_with_disks, jhelper):
         step_with_disks.disks_to_configure = {"unit/1": ["/dev/sdd"]}
+        step_with_disks.unit_to_hostname = {"unit/1": "machine1"}
         jhelper.run_action = Mock(
             side_effect=ActionFailedException("Failed to run action")
         )
@@ -1277,10 +1279,71 @@ class TestMaasConfigureMicrocephOSDStep:
 
     def test_run_failed_unit_not_found(self, step_with_disks, jhelper):
         step_with_disks.disks_to_configure = {"unit/1": ["/dev/sdd"]}
+        step_with_disks.unit_to_hostname = {"unit/1": "machine1"}
         jhelper.run_action = Mock(side_effect=UnitNotFoundException("Unit not found"))
         result = step_with_disks.run()
         assert result.result_type == ResultType.FAILED
         assert result.message == "Unit not found"
+
+    def test_wipe_requested_true(self, step):
+        step.manifest.core.config.microceph_config = Mock()
+        machine_cfg = Mock()
+        machine_cfg.dangerous_i_acknowledge_i_will_lose_data_wipe_disks = True
+        step.manifest.core.config.microceph_config.root.get = Mock(
+            return_value=machine_cfg
+        )
+        assert step._wipe_requested("machine1") is True
+
+    def test_wipe_requested_false(self, step):
+        step.manifest.core.config.microceph_config = Mock()
+        machine_cfg = Mock()
+        machine_cfg.dangerous_i_acknowledge_i_will_lose_data_wipe_disks = False
+        step.manifest.core.config.microceph_config.root.get = Mock(
+            return_value=machine_cfg
+        )
+        assert step._wipe_requested("machine1") is False
+
+    def test_wipe_requested_no_machine_config(self, step):
+        step.manifest.core.config.microceph_config = Mock()
+        step.manifest.core.config.microceph_config.root.get = Mock(return_value=None)
+        assert step._wipe_requested("machine1") is False
+
+    def test_wipe_requested_no_microceph_config(self, step):
+        step.manifest.core.config.microceph_config = None
+        assert step._wipe_requested("machine1") is False
+
+    def test_run_with_wipe_disks_true(self, step_with_disks, jhelper):
+        step_with_disks.disks_to_configure = {"unit/1": ["/dev/sdd"]}
+        step_with_disks.unit_to_hostname = {"unit/1": "machine1"}
+        step_with_disks.manifest.core.config.microceph_config = Mock()
+        machine_cfg = Mock()
+        machine_cfg.dangerous_i_acknowledge_i_will_lose_data_wipe_disks = True
+        step_with_disks.manifest.core.config.microceph_config.root.get = Mock(
+            return_value=machine_cfg
+        )
+        jhelper.run_action = Mock(return_value={"status": "completed"})
+        result = step_with_disks.run()
+        assert result.result_type == ResultType.COMPLETED
+        jhelper.run_action.assert_called_once_with(
+            "unit/1",
+            "test-model",
+            "add-osd",
+            action_params={"device-id": "/dev/sdd", "wipe": True},
+        )
+
+    def test_run_with_wipe_disks_false(self, step_with_disks, jhelper):
+        step_with_disks.disks_to_configure = {"unit/1": ["/dev/sdd"]}
+        step_with_disks.unit_to_hostname = {"unit/1": "machine1"}
+        step_with_disks.manifest.core.config.microceph_config = None
+        jhelper.run_action = Mock(return_value={"status": "completed"})
+        result = step_with_disks.run()
+        assert result.result_type == ResultType.COMPLETED
+        jhelper.run_action.assert_called_once_with(
+            "unit/1",
+            "test-model",
+            "add-osd",
+            action_params={"device-id": "/dev/sdd", "wipe": False},
+        )
 
 
 @pytest.fixture()
