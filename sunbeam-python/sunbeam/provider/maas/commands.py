@@ -763,6 +763,7 @@ def deploy(
             maas_client,
             jhelper,
             storage,
+            manifest,
             deployment.openstack_machines_model,
         )
     )

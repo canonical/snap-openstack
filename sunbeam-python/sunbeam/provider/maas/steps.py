@@ -1610,6 +1610,7 @@ class MaasConfigureMicrocephOSDStep(BaseStep):
         maas_client: maas_client.MaasClient,
         jhelper: JujuHelper,
         names: list[str],
+        manifest: Manifest,
         model: str,
     ):
         super().__init__("Configure MicroCeph storage", "Configuring MicroCeph storage")
@@ -1617,8 +1618,10 @@ class MaasConfigureMicrocephOSDStep(BaseStep):
         self.maas_client = maas_client
         self.jhelper = jhelper
         self.names = names
+        self.manifest = manifest
         self.model = model
         self.disks_to_configure: dict[str, list[str]] = {}
+        self.unit_to_hostname: dict[str, str] = {}
 
     @tenacity.retry(
         stop=tenacity.stop_after_attempt(3),
@@ -1674,7 +1677,7 @@ class MaasConfigureMicrocephOSDStep(BaseStep):
                 uud["path"] for uud in unit_unpartitioned_disks
             )
             disks[name]["unit"] = unit
-
+            self.unit_to_hostname[unit] = name
         return disks
 
     def _get_maas_disks(self) -> dict:
@@ -1775,9 +1778,23 @@ class MaasConfigureMicrocephOSDStep(BaseStep):
         self.disks_to_configure = disks_to_configure
         return Result(ResultType.COMPLETED)
 
+    def _wipe_requested(self, hostname: str) -> bool:
+        """Check if disk wipe is requested for the machine."""
+        if mceph_cfg := self.manifest.core.config.microceph_config:
+            if machine_cfg := mceph_cfg.root.get(hostname):
+                return machine_cfg.dangerous_i_acknowledge_i_will_lose_data_wipe_disks
+        return False
+
     def run(self, status: Status | None = None) -> Result:
         """Configure local disks on microceph."""
         for unit, disks in self.disks_to_configure.items():
+            hostname = self.unit_to_hostname[unit]
+            wipe_disks = self._wipe_requested(hostname)
+            if wipe_disks:
+                LOG.debug(
+                    "User expressly accepted to wipe disks before adding OSDs for %s",
+                    hostname,
+                )
             try:
                 LOG.debug("Running action add-osd on %r", unit)
                 action_result = self.jhelper.run_action(
@@ -1786,6 +1803,7 @@ class MaasConfigureMicrocephOSDStep(BaseStep):
                     "add-osd",
                     action_params={
                         "device-id": ",".join(disks),
+                        "wipe": wipe_disks,
                     },
                 )
                 LOG.debug(

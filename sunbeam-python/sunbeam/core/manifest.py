@@ -229,6 +229,7 @@ class CoreConfig(pydantic.BaseModel):
 
     class _HostMicroCephConfig(pydantic.BaseModel):
         osd_devices: list[str] | None = None
+        dangerous_i_acknowledge_i_will_lose_data_wipe_disks: bool = False
 
         @pydantic.field_validator("osd_devices", mode="before")
         @classmethod
