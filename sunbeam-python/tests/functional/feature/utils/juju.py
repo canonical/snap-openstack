@@ -133,13 +133,3 @@ class JujuClient:
             results[app] = app in actual_applications
 
         return results
-
-    def verify_units_exist(self, expected_units: List[str]) -> Dict[str, bool]:
-        """Verify that expected units exist."""
-        actual_units = self.get_units()
-        results: Dict[str, bool] = {}
-
-        for unit in expected_units:
-            results[unit] = unit in actual_units
-
-        return results

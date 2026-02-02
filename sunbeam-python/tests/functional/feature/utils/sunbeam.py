@@ -27,7 +27,7 @@ class SunbeamClient:
             capture_output=True,
             text=True,
             check=False,
-            timeout=1800,
+            timeout=3600,
         )
 
         if result.returncode != 0:

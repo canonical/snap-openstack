@@ -19,7 +19,6 @@ class ResourceOptimizationTest(BaseFeatureTest):
     """Test resource-optimization feature enablement/disablement."""
 
     feature_name = "resource-optimization"
-    expected_units: list[str] = []
     expected_applications: list[str] = []
     timeout_seconds = 600
 

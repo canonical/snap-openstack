@@ -1,19 +1,12 @@
 # SPDX-FileCopyrightText: 2024 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for tls feature (CA mode).
-
-TLS enablement has multiple methods in Sunbeam, but this functional test
-suite only exercises the TLS CA path:
-
-- TLS CA: `sunbeam enable tls ca` (requires CA certificates)
-"""
+"""Tests for tls feature (CA mode)."""
 
 import base64
 import logging
 import subprocess
 import tempfile
-import time
 from pathlib import Path
 from typing import Tuple
 
@@ -95,9 +88,6 @@ class TlsCaTest(BaseFeatureTest):
     expected_applications = [
         "manual-tls-certificates",
     ]
-    expected_units = [
-        "manual-tls-certificates/0",
-    ]
     timeout_seconds = 600
 
     def __init__(self, *args, **kwargs):
@@ -133,28 +123,3 @@ class TlsCaTest(BaseFeatureTest):
                 exc,
             )
             return False
-
-    def _ensure_tls_ca_disabled(self) -> bool:
-        """Ensure TLS CA is disabled before enabling (cleanup from previous runs)."""
-        if self.juju.has_application("manual-tls-certificates"):
-            logger.info("TLS CA is already enabled, disabling first...")
-            try:
-                self.disable()
-                # Wait a bit for cleanup
-                time.sleep(5)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("Failed to disable existing TLS CA: %s", exc)
-                return False
-        return True
-
-    def run_full_lifecycle(self) -> bool:
-        """Enable TLS CA, perform basic test, then disable it."""
-        if not self._ensure_tls_ca_disabled():
-            logger.warning("Could not ensure TLS CA is disabled, continuing anyway...")
-
-        self.enable()
-        disable_success = self.disable()
-        if not disable_success:
-            logger.warning("TLS CA disable failed, but continuing test sequence")
-
-        return True

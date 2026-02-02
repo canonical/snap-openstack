@@ -18,7 +18,6 @@ class VaultTest(BaseFeatureTest):
     """Test vault feature enablement/disablement."""
 
     feature_name = "vault"
-    expected_units: list[str] = []
     expected_applications: list[str] = []
     timeout_seconds = 600
 

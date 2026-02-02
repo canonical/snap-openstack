@@ -30,7 +30,12 @@ def test_config(request):
     config_file = Path(__file__).parent / config_path
 
     if not config_file.exists():
-        pytest.skip(f"Configuration file not found: {config_file}")
+        msg = (
+            f"Configuration file not found: {config_file}. "
+            "Copy tests/functional/feature/test_config.yaml.example to "
+            "tests/functional/feature/test_config.yaml and set sunbeam.deployment_name, juju.model."
+        )
+        pytest.skip(msg)
 
     with open(config_file, "r") as f:
         config = yaml.safe_load(f)

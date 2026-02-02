@@ -20,7 +20,6 @@ class OrchestrationTest(BaseFeatureTest):
 
     feature_name = "orchestration"
     expected_applications: list[str] = ["heat"]
-    expected_units: list[str] = []
     timeout_seconds = 600
 
     def verify_validate_feature_behavior(self) -> None:
@@ -41,16 +40,3 @@ class OrchestrationTest(BaseFeatureTest):
         except Exception as e:
             logger.warning("Error checking orchestration service: %s", e)
             raise AssertionError(f"Orchestration service verification failed: {e}")
-
-    def run_full_lifecycle(self) -> bool:
-        """Enable orchestration, perform basic test, then disable it."""
-        logger.info("Starting lifecycle test for feature: '%s'", self.feature_name)
-
-        self.enable()
-        self.verify_validate_feature_behavior()
-
-        disable_success = self.disable()
-        if not disable_success:
-            logger.warning("Orchestration disable failed, but continuing test sequence")
-
-        return True

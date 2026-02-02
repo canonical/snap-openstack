@@ -11,17 +11,23 @@ import logging
 
 import pytest
 
+from .features.baremetal import BaremetalTest
 from .features.caas import CaaSTest
 from .features.dns import DnsTest
 from .features.images_sync import ImagesSyncTest
 from .features.instance_recovery import InstanceRecoveryTest
+from .features.ldap import LdapTest
 from .features.loadbalancer import LoadbalancerTest
+from .features.maintenance import MaintenanceTest
 from .features.observability import ObservabilityTest
 from .features.orchestration import OrchestrationTest
+from .features.pro import ProTest
 from .features.resource_optimization import ResourceOptimizationTest
+from .features.secrets import SecretsTest
 from .features.shared_filesystem import SharedFilesystemTest
 from .features.telemetry import TelemetryTest
 from .features.tls import TlsCaTest
+from .features.validation import ValidationTest
 from .features.vault import VaultTest
 
 logging.basicConfig(level=logging.INFO)
@@ -33,6 +39,19 @@ def test_instance_recovery(sunbeam_client, juju_client, test_config):
     """Test instance-recovery feature lifecycle (enable/disable with verification)."""
     feature_test = InstanceRecoveryTest(sunbeam_client, juju_client, test_config)
     assert feature_test.run_full_lifecycle(), "Instance recovery feature test failed"
+
+
+@pytest.mark.functional
+@pytest.mark.skip(
+    reason=(
+        "Baremetal feature test is present but intentionally disabled in the "
+        "current feature flow (enable later when ready)."
+    )
+)
+def test_baremetal(sunbeam_client, juju_client, test_config):
+    """Test baremetal feature lifecycle (enable/disable only)."""
+    feature_test = BaremetalTest(sunbeam_client, juju_client, test_config)
+    assert feature_test.run_full_lifecycle(), "Baremetal feature test failed"
 
 
 @pytest.mark.functional
@@ -54,6 +73,19 @@ def test_images_sync(sunbeam_client, juju_client, test_config):
     """Test images-sync feature lifecycle (enable/disable only)."""
     feature_test = ImagesSyncTest(sunbeam_client, juju_client, test_config)
     assert feature_test.run_full_lifecycle(), "Images-sync feature test failed"
+
+
+@pytest.mark.functional
+@pytest.mark.skip(
+    reason=(
+        "LDAP feature test is present but intentionally disabled in the "
+        "current feature flow (enable later when ready)."
+    )
+)
+def test_ldap(sunbeam_client, juju_client, test_config):
+    """Test ldap feature lifecycle (enable/disable only)."""
+    feature_test = LdapTest(sunbeam_client, juju_client, test_config)
+    assert feature_test.run_full_lifecycle(), "LDAP feature test failed"
 
 
 @pytest.mark.functional
@@ -87,6 +119,13 @@ def test_shared_filesystem(sunbeam_client, juju_client, test_config):
 
 
 @pytest.mark.functional
+def test_secrets(sunbeam_client, juju_client, test_config):
+    """Test secrets feature lifecycle (enable/disable only)."""
+    feature_test = SecretsTest(sunbeam_client, juju_client, test_config)
+    assert feature_test.run_full_lifecycle(), "Secrets feature test failed"
+
+
+@pytest.mark.functional
 def test_telemetry(sunbeam_client, juju_client, test_config):
     """Test telemetry feature lifecycle (enable/disable only)."""
     feature_test = TelemetryTest(sunbeam_client, juju_client, test_config)
@@ -101,15 +140,29 @@ def test_observability(sunbeam_client, juju_client, test_config):
 
 
 @pytest.mark.functional
+@pytest.mark.skip(
+    reason=(
+        "Maintenance feature test is present but intentionally disabled in the "
+        "current feature flow (enable later when ready)."
+    )
+)
 def test_maintenance(sunbeam_client, juju_client, test_config):
-    """Placeholder for maintenance feature test (not yet enabled)."""
-    pytest.skip("maintenance feature test not yet enabled in CI")
+    """Test maintenance feature lifecycle (enable/disable only)."""
+    feature_test = MaintenanceTest(sunbeam_client, juju_client, test_config)
+    assert feature_test.run_full_lifecycle(), "Maintenance feature test failed"
 
 
 @pytest.mark.functional
+@pytest.mark.skip(
+    reason=(
+        "Pro feature test is present but intentionally disabled in the "
+        "current feature flow (enable later when ready)."
+    )
+)
 def test_pro(sunbeam_client, juju_client, test_config):
-    """Placeholder for pro feature test (not yet enabled)."""
-    pytest.skip("pro feature test not yet enabled in CI")
+    """Test pro feature lifecycle (enable/disable only)."""
+    feature_test = ProTest(sunbeam_client, juju_client, test_config)
+    assert feature_test.run_full_lifecycle(), "Pro feature test failed"
 
 
 @pytest.mark.functional
@@ -124,3 +177,10 @@ def test_vault(sunbeam_client, juju_client, test_config):
     """Test vault feature lifecycle (enable/disable only)."""
     feature_test = VaultTest(sunbeam_client, juju_client, test_config)
     assert feature_test.run_full_lifecycle(), "Vault feature test failed"
+
+
+@pytest.mark.functional
+def test_validation(sunbeam_client, juju_client, test_config):
+    """Test validation feature lifecycle (enable/disable only)."""
+    feature_test = ValidationTest(sunbeam_client, juju_client, test_config)
+    assert feature_test.run_full_lifecycle(), "Validation feature test failed"

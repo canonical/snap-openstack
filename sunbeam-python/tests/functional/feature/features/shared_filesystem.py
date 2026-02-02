@@ -19,7 +19,6 @@ class SharedFilesystemTest(BaseFeatureTest):
     """Test shared-filesystem feature enablement/disablement."""
 
     feature_name = "shared-filesystem"
-    expected_units: list[str] = []
     expected_applications: list[str] = []
     timeout_seconds = 600
 

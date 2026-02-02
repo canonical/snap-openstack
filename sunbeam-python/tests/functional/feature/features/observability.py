@@ -26,7 +26,6 @@ class ObservabilityTest(BaseFeatureTest):
     feature_name = "observability"
     enable_args: list[str] = ["embedded"]
     disable_args: list[str] = ["embedded"]
-    expected_units: list[str] = []
     expected_applications: list[str] = []
     timeout_seconds = 900
 

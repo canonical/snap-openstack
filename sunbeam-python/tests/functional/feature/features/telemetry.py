@@ -20,7 +20,6 @@ class TelemetryTest(BaseFeatureTest):
 
     feature_name = "telemetry"
     expected_applications: list[str] = ["ceilometer", "gnocchi", "aodh"]
-    expected_units: list[str] = []
     timeout_seconds = 600
 
     def verify_validate_feature_behavior(self) -> None:
@@ -42,16 +41,3 @@ class TelemetryTest(BaseFeatureTest):
         except Exception as e:
             logger.warning("Error checking telemetry services: %s", e)
             raise AssertionError(f"Telemetry service verification failed: {e}")
-
-    def run_full_lifecycle(self) -> bool:
-        """Enable telemetry, perform basic test, then disable it."""
-        logger.info("Starting lifecycle test for feature: '%s'", self.feature_name)
-
-        self.enable()
-        self.verify_validate_feature_behavior()
-
-        disable_success = self.disable()
-        if not disable_success:
-            logger.warning("Telemetry disable failed, but continuing test sequence")
-
-        return True

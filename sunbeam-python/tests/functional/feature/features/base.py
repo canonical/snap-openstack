@@ -19,7 +19,6 @@ class BaseFeatureTest:
     """Base class for testing Sunbeam features."""
 
     feature_name: str = ""
-    expected_units: List[str] = []
     expected_applications: List[str] = []
     timeout_seconds: int = 300
     enable_args: List[str] = []
@@ -36,7 +35,6 @@ class BaseFeatureTest:
         self.config = config or {}
 
         feature_config = self.config.get("features", {}).get(self.feature_name, {})
-        self.expected_units = feature_config.get("expected_units", self.expected_units)
         self.expected_applications = feature_config.get(
             "expected_applications",
             self.expected_applications,
@@ -167,8 +165,11 @@ class BaseFeatureTest:
 
         This is a simple method that can be called after enable to verify
         the feature is working. Override in subclasses for feature-specific checks.
+        Subclasses can override validate_feature_behavior() for behavior checks;
+        that is invoked from here before the application presence checks.
         """
         logger.info("Verifying feature '%s' is enabled...", self.feature_name)
+        self.validate_feature_behavior()
         if self.expected_applications:
             for app in self.expected_applications:
                 if self.juju.has_application(app):

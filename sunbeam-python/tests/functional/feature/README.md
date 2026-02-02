@@ -58,6 +58,48 @@ You can pass standard `pytest` selectors through tox via `posargs`. For example:
   tox -e functional-feature -- tests/functional/feature/test_features.py::test_tls_ca
   ```
 
+## Feature coverage and dependencies
+
+### Features in this suite
+
+- **Enabled in current flow**
+  - `instance-recovery`
+  - `caas` (Containers as a Service)
+  - `dns`
+  - `images-sync`
+  - `loadbalancer`
+  - `resource-optimization`
+  - `shared-filesystem`
+  - `telemetry`
+  - `observability`
+  - `tls` (CA mode)
+  - `vault`
+  - `validation`
+  - `secrets`
+
+- **Present but intentionally disabled for now**
+  - `baremetal`
+  - `ldap`
+  - `maintenance`
+  - `pro`
+
+### Feature dependencies
+
+Some features have explicit dependencies:
+
+- **CaaS (`caas`)**
+  - Depends on: **`secrets`**, **`loadbalancer`**
+  - The CaaS test ensures these dependencies are enabled before running.
+
+- **Secrets as a Service (`secrets`)**
+  - Depends on: **`vault`**
+  - The Secrets test ensures the Vault feature is enabled before running.
+
+- **TLS (Vault-backed)**
+  - TLS can also be deployed in a Vault-backed mode which implicitly depends on
+    the **`vault`** feature. This suite currently exercises only the TLS CA
+    mode (`test_tls_ca`).
+
 ## Notes
 
 - Disable failures are **logged and ignored** so that the suite continues

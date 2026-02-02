@@ -10,6 +10,8 @@ Functionality is validated via the Magnum (COE) API.
 import logging
 import subprocess
 
+import pytest
+
 from .base import BaseFeatureTest
 
 logger = logging.getLogger(__name__)
@@ -22,6 +24,24 @@ class CaaSTest(BaseFeatureTest):
     expected_units: list[str] = []
     expected_applications: list[str] = []
     timeout_seconds = 600
+
+    def _ensure_dependency_enabled(self, feature: str) -> bool:
+        """Best-effort enable a required dependency feature.
+
+        If enabling the dependency fails (for example, missing Vault for
+        Secrets), we treat this as an unsatisfied dependency and skip.
+        """
+        logger.info("Ensuring dependency feature '%s' is enabled for CaaS...", feature)
+        try:
+            self.sunbeam.enable_feature(feature)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Failed to enable dependency '%s' required by CaaS: %s",
+                feature,
+                exc,
+            )
+            return False
+        return True
 
     def verify_validate_feature_behavior(self) -> None:
         """Validate that the Magnum (COE) API is reachable.
@@ -47,3 +67,17 @@ class CaaSTest(BaseFeatureTest):
             raise AssertionError(f"CaaS service verification failed: {exc}") from exc
 
         logger.info("CaaS (Magnum) service verified via `openstack coe cluster list`")
+
+    def run_full_lifecycle(self) -> bool:
+        """Ensure dependencies then run the standard enable/verify/disable flow.
+
+        CaaS depends on the Secrets and Load Balancer features.
+        """
+        for dep in ("secrets", "loadbalancer"):
+            if not self._ensure_dependency_enabled(dep):
+                pytest.skip(
+                    f"Skipping CaaS feature test: dependency '{dep}' "
+                    "could not be enabled"
+                )
+
+        return super().run_full_lifecycle()

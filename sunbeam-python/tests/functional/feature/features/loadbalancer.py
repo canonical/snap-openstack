@@ -20,7 +20,6 @@ class LoadbalancerTest(BaseFeatureTest):
 
     feature_name = "loadbalancer"
     expected_applications: list[str] = ["octavia"]
-    expected_units: list[str] = []
     timeout_seconds = 600
 
     def verify_validate_feature_behavior(self) -> None:
@@ -41,16 +40,3 @@ class LoadbalancerTest(BaseFeatureTest):
         except Exception as e:
             logger.warning("Error checking loadbalancer service: %s", e)
             raise AssertionError(f"Loadbalancer service verification failed: {e}")
-
-    def run_full_lifecycle(self) -> bool:
-        """Enable loadbalancer, perform basic test, then disable it."""
-        logger.info("Starting lifecycle test for feature: '%s'", self.feature_name)
-
-        self.enable()
-        self.verify_validate_feature_behavior()
-
-        disable_success = self.disable()
-        if not disable_success:
-            logger.warning("Loadbalancer disable failed, but continuing test sequence")
-
-        return True

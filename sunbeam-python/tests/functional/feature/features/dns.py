@@ -21,7 +21,6 @@ class DnsTest(BaseFeatureTest):
     feature_name = "dns"
     # DNS requires nameservers argument - using dummy values for testing
     enable_args: list[str] = ["ns1.example.com.", "ns2.example.com."]
-    expected_units: list[str] = []
     expected_applications: list[str] = []
     timeout_seconds = 600
 
@@ -39,16 +38,3 @@ class DnsTest(BaseFeatureTest):
             raise AssertionError(f"DNS service verification failed: {exc}") from exc
 
         logger.info("DNS service endpoints verified via `sunbeam dns address`")
-
-    def run_full_lifecycle(self) -> bool:
-        """Enable dns, perform basic test, then disable it."""
-        logger.info("Starting lifecycle test for feature: '%s'", self.feature_name)
-
-        self.enable()
-        self.verify_validate_feature_behavior()
-
-        disable_success = self.disable()
-        if not disable_success:
-            logger.warning("DNS disable failed, but continuing test sequence")
-
-        return True

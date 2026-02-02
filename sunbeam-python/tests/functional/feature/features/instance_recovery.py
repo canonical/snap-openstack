@@ -20,13 +20,6 @@ class InstanceRecoveryTest(BaseFeatureTest):
         "consul-storage",
         "consul-tenant",
     ]
-    expected_units = [
-        "masakari/0",
-        "masakari-mysql-router/0",
-        "consul-management/0",
-        "consul-storage/0",
-        "consul-tenant/0",
-    ]
     timeout_seconds = 900
 
     def validate_feature_behavior(self) -> None:
@@ -47,10 +40,3 @@ class InstanceRecoveryTest(BaseFeatureTest):
         result = subprocess.run(cmd, check=True, capture_output=True, text=True)
         if not result.stdout.strip():
             raise AssertionError("openstack segment list returned no data")
-
-    def run_full_lifecycle(self) -> bool:
-        """Enable instance-recovery, verify resources and behavior, then disable it."""
-        self.enable()
-        self.validate_feature_behavior()
-        self.disable()
-        return True

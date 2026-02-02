@@ -19,7 +19,6 @@ class ImagesSyncTest(BaseFeatureTest):
     """Test images-sync feature enablement/disablement."""
 
     feature_name = "images-sync"
-    expected_units: list[str] = []
     expected_applications: list[str] = []
     timeout_seconds = 600
 
@@ -42,16 +41,3 @@ class ImagesSyncTest(BaseFeatureTest):
             raise AssertionError(f"Image service verification failed: {exc}") from exc
 
         logger.info("Image service verified via `openstack image list`")
-
-    def run_full_lifecycle(self) -> bool:
-        """Enable images-sync, perform basic test, then disable it."""
-        logger.info("Starting lifecycle test for feature: '%s'", self.feature_name)
-
-        self.enable()
-        self.verify_validate_feature_behavior()
-
-        disable_success = self.disable()
-        if not disable_success:
-            logger.warning("Images-sync disable failed, but continuing test sequence")
-
-        return True
