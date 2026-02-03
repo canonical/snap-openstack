@@ -6,7 +6,7 @@
 import logging
 from typing import Annotated, Any, Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from rich.console import Console
 
 from sunbeam.core.manifest import Manifest, StorageBackendConfig
@@ -32,12 +32,12 @@ class DellSCConfig(StorageBackendConfig):
     san_username: Annotated[
         str,
         Field(description="SAN management username"),
-        SecretDictField(field="username"),
+        SecretDictField(field="primary-username"),
     ]
     san_password: Annotated[
         str,
         Field(description="SAN management password"),
-        SecretDictField(field="password"),
+        SecretDictField(field="primary-password"),
     ]
     dell_sc_ssn: Annotated[
         int | None, Field(description="Storage Center System Serial Number")
@@ -93,12 +93,12 @@ class DellSCConfig(StorageBackendConfig):
     secondary_san_username: Annotated[
         str | None,
         Field(description="Secondary SAN management username"),
-        SecretDictField(field="username"),
+        SecretDictField(field="secondary-username"),
     ] = None
     secondary_san_password: Annotated[
         str | None,
         Field(description="Secondary SAN management password"),
-        SecretDictField(field="password"),
+        SecretDictField(field="secondary-password"),
     ] = None
     secondary_sc_api_port: Annotated[
         int | None, Field(description="Secondary Dell Storage Center API port")
@@ -122,6 +122,17 @@ class DellSCConfig(StorageBackendConfig):
     ssh_min_pool_conn: Annotated[
         int | None, Field(description="Minimum SSH pool connections")
     ] = None
+
+    @model_validator(mode="after")
+    def _validate_secondary_credentials(self) -> "DellSCConfig":
+        if self.secondary_san_ip and (
+            not self.secondary_san_username or not self.secondary_san_password
+        ):
+            raise ValueError(
+                "secondary-san-username and secondary-san-password are required "
+                "when secondary-san-ip is set"
+            )
+        return self
 
 
 class DellSCBackend(StorageBackendBase):
@@ -168,23 +179,25 @@ class DellSCBackend(StorageBackendBase):
 
         primary_username = config_dict.pop("san-username", None)
         primary_password = config_dict.pop("san-password", None)
-        if primary_username is not None or primary_password is not None:
-            secret: dict[str, Any] = {}
-            if primary_username is not None:
-                secret["username"] = primary_username
-            if primary_password is not None:
-                secret["password"] = primary_password
-            secrets["san-credentials-secret"] = secret
-
         secondary_username = config_dict.pop("secondary-san-username", None)
         secondary_password = config_dict.pop("secondary-san-password", None)
-        if secondary_username is not None or secondary_password is not None:
-            secret = {}
+
+        if (
+            primary_username is not None
+            or primary_password is not None
+            or secondary_username is not None
+            or secondary_password is not None
+        ):
+            secret: dict[str, Any] = {}
+            if primary_username is not None:
+                secret["primary-username"] = primary_username
+            if primary_password is not None:
+                secret["primary-password"] = primary_password
             if secondary_username is not None:
-                secret["username"] = secondary_username
+                secret["secondary-username"] = secondary_username
             if secondary_password is not None:
-                secret["password"] = secondary_password
-            secrets["secondary-san-credentials-secret"] = secret
+                secret["secondary-password"] = secondary_password
+            secrets["dellsc-config-secret"] = secret
 
         charm_channel = self.charm_channel
         charm_revision = None
