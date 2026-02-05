@@ -587,7 +587,7 @@ class AddK8SCloudStep(BaseStep, JujuStepHelper):
         clouds = self.jhelper.get_clouds()
         LOG.debug(f"Clouds registered in the controller: {clouds}")
         # TODO(hemanth): Need to check if cloud credentials are also created?
-        if f"cloud-{self.cloud_name}" in clouds.keys():
+        if self.cloud_name in clouds.keys():
             return Result(ResultType.SKIPPED)
 
         return Result(ResultType.COMPLETED)
@@ -658,7 +658,7 @@ class UpdateK8SCloudStep(BaseStep, JujuStepHelper):
         """
         clouds = self.jhelper.get_clouds()
         LOG.debug(f"Clouds registered in the controller: {clouds}")
-        if f"cloud-{self.cloud_name}" not in clouds.keys():
+        if self.cloud_name not in clouds.keys():
             return Result(
                 ResultType.FAILED, f"Cloud {self.cloud_name} not found in controller"
             )
