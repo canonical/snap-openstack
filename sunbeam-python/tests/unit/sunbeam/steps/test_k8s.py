@@ -135,7 +135,7 @@ class TestAddK8SCloudStep:
     def test_is_skip_cloud_already_deployed(
         self, setup_deployment, jhelper, cloud_name
     ):
-        clouds = {f"cloud-{cloud_name}": {"endpoint": "10.0.10.1"}}
+        clouds = {cloud_name: {"endpoint": "10.0.10.1"}}
         jhelper.get_clouds.return_value = clouds
 
         step = AddK8SCloudStep(setup_deployment, jhelper)
