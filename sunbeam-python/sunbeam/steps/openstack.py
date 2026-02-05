@@ -822,20 +822,59 @@ class ReapplyOpenStackTerraformPlanStep(BaseStep, JujuStepHelper):
 
     def __init__(
         self,
+        deployment: Deployment,
         client: Client,
         tfhelper: TerraformHelper,
         jhelper: JujuHelper,
         manifest: Manifest,
+        machine_model: str,
     ):
         super().__init__(
             "Applying Control plane Terraform plan",
             "Applying Control plane Terraform plan (this may take a while)",
         )
+        self.deployment = deployment
         self.client = client
+        self.storage_manager = deployment.get_storage_manager()
         self.tfhelper = tfhelper
         self.jhelper = jhelper
         self.manifest = manifest
         self.model = OPENSTACK_MODEL
+        self.machine_model = machine_model
+
+    def get_storage_tfvars(self, storage_nodes: list[dict]) -> dict:
+        """Create terraform variables related to storage."""
+        tfvars: dict[str, str | bool | int | list[str]] = {}
+        if storage_nodes:
+            model_with_owner = self.get_model_name_with_owner(self.machine_model)
+            tfvars["enable-ceph"] = True
+            tfvars["ceph-offer-url"] = f"{model_with_owner}.{microceph.APPLICATION}"
+            tfvars["ceph-nfs-offer-url"] = (
+                f"{model_with_owner}.{microceph.NFS_OFFER_NAME}"
+            )
+            tfvars["ceph-rgw-offer-url"] = (
+                f"{model_with_owner}.{microceph.RGW_OFFER_NAME}"
+            )
+            tfvars["ceph-osd-replication-count"] = microceph.ceph_replica_scale(
+                len(storage_nodes)
+            )
+            tfvars["enable-cinder-volume"] = True
+            urls = [f"{model_with_owner}.cinder-volume"]
+            principal_apps = self.storage_manager.list_principal_applications(
+                self.deployment
+            )
+            for model, app in principal_apps:
+                model_with_owner = self.get_model_name_with_owner(model)
+                url = f"{model_with_owner}.{app}"
+                if url not in urls:
+                    urls.append(url)
+
+            tfvars["cinder-volume-offer-urls"] = urls
+        else:
+            tfvars["enable-ceph"] = False
+            tfvars["enable-cinder-volume"] = False
+
+        return tfvars
 
     def _get_extra_tfvars_from_manifest(self) -> dict:
         updates: dict = {}
@@ -854,6 +893,11 @@ class ReapplyOpenStackTerraformPlanStep(BaseStep, JujuStepHelper):
         try:
             self.update_status(status, "deploying services")
             override_tfvars = self._get_extra_tfvars_from_manifest()
+
+            # Add storage tfvars for backward compatiblity
+            storage_nodes = self.client.cluster.list_nodes_by_role("storage")
+            override_tfvars.update(self.get_storage_tfvars(storage_nodes))
+
             self.tfhelper.update_tfvars_and_apply_tf(
                 self.client,
                 self.manifest,

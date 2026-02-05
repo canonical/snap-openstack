@@ -1387,14 +1387,22 @@ class JujuHelper:
                 timeout=timeout,
             )
 
-    def charm_refresh(self, application_name: str, model: str):
+    def charm_refresh(
+        self,
+        application_name: str,
+        model: str,
+        channel: str | None = None,
+        revision: int | None = None,
+    ):
         """Update application to latest charm revision in current channel.
 
-        :param application_list: Name of application
+        :param application_name: Name of application
         :param model: Model object
+        :param channel: Channel to refresh to, if None uses current channel
+        :param revision: Revision to refresh to, if None uses latest revision
         """
         with self._model(model) as juju:
-            juju.refresh(application_name)
+            juju.refresh(application_name, channel=channel, revision=revision)
 
     def get_available_charm_revision(
         self, charm_name: str, channel: str, base: str = JUJU_BASE
