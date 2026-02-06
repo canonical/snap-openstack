@@ -17,7 +17,7 @@ LOG = logging.getLogger(__name__)
 console = Console()
 
 
-class DellpowerstoreConfig(StorageBackendConfig):
+class DellPwerstoreConfig(StorageBackendConfig):
     """Static configuration model for Dell PowerStore storage backend.
 
     This model includes all configuration options supported by the
@@ -25,11 +25,9 @@ class DellpowerstoreConfig(StorageBackendConfig):
     """
 
     # Mandatory connection parameters
-
-    # Mandatory connection parameters
     san_ip: Annotated[
         str,
-        Field(description="Dell PwerStore management IP"),
+        Field(description="Dell PowerStore management IP"),
         SecretDictField(field="san-ip"),
     ]]
     san_username: Annotated[
@@ -70,7 +68,7 @@ class DellpowerstoreConfig(StorageBackendConfig):
     ] = None
 
 
-class DellpowertoreBackend(StorageBackendBase):
+class DellPowertoreBackend(StorageBackendBase):
     """Dell PowerStore storage backend implementation."""
 
     backend_type = "dellpowerstore"
@@ -84,7 +82,7 @@ class DellpowertoreBackend(StorageBackendBase):
     @property
     def charm_channel(self) -> str:
         """Return the charm channel for this backend."""
-        return "2025.1/edge"
+        return "latest/edge"
 
     @property
     def charm_revision(self) -> str | None:
@@ -98,4 +96,4 @@ class DellpowertoreBackend(StorageBackendBase):
 
     def config_type(self) -> type[StorageBackendConfig]:
         """Return the configuration class for Dell PowerStore backend."""
-        return DellpowerstoreConfig
+        return DellPowerstoreConfig
