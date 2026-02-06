@@ -773,3 +773,33 @@ class TestBoostrapJujuStep:
 
         result = step.run()
         assert result.result_type == ResultType.FAILED
+
+
+class TestResetJujuUserStep:
+    @patch("subprocess.run")
+    def test_parses_token_success(self, mock_run):
+        step = juju.ResetJujuUserStep("test-user")
+        step._juju_cmd = Mock(return_value=[{"user-name": "test-user"}])
+        step._get_juju_binary = Mock(return_value="/juju")
+        mock_run.return_value = Mock(stdout="", stderr="juju register new-user\n")
+        result = step.run()
+        assert result.result_type == ResultType.COMPLETED
+        assert result.message == "new-user"
+
+    @patch(
+        "subprocess.run",
+        side_effect=subprocess.CalledProcessError(1, "command", stderr="error"),
+    )
+    def test_called_process_error(self, mock_run):
+        step = juju.ResetJujuUserStep("test-user")
+        step._juju_cmd = Mock(return_value=[{"user-name": "test-user"}])
+        result = step.run()
+        assert result.result_type == ResultType.FAILED
+        assert mock_run.call_count == 1
+
+    def test_user_not_found(self):
+        step = juju.ResetJujuUserStep("missing-user")
+        step._juju_cmd = Mock(return_value=[{"user-name": "test-user"}])
+        result = step.run()
+        assert result.result_type == ResultType.FAILED
+        assert "User missing-user not found in Juju" in result.message

@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/url"
 
@@ -29,6 +30,7 @@ var jujuuserCmd = rest.Endpoint{
 	Path: "jujuusers/{name}",
 
 	Get:    access.ClusterCATrustedEndpoint(cmdJujuUsersGet, true),
+	Put:    access.ClusterCATrustedEndpoint(cmdJujuUsersPut, true),
 	Delete: access.ClusterCATrustedEndpoint(cmdJujuUsersDelete, true),
 }
 
@@ -49,8 +51,10 @@ func cmdJujuUsersGet(s state.State, r *http.Request) response.Response {
 	}
 	jujuUser, err := sunbeam.GetJujuUser(r.Context(), s, name)
 	if err != nil {
-		if err, ok := err.(api.StatusError); ok {
-			if err.Status() == http.StatusNotFound {
+		// Return the appropriate error if juju user is not found
+		var statusErr api.StatusError
+		if errors.As(err, &statusErr) {
+			if statusErr.Status() == http.StatusNotFound {
 				return response.NotFound(err)
 			}
 		}
@@ -70,6 +74,34 @@ func cmdJujuUsersPost(s state.State, r *http.Request) response.Response {
 
 	err = sunbeam.AddJujuUser(r.Context(), s, req.Username, req.Token)
 	if err != nil {
+		return response.InternalError(err)
+	}
+
+	return response.EmptySyncResponse
+}
+
+func cmdJujuUsersPut(s state.State, r *http.Request) response.Response {
+	var req apitypes.JujuUser
+
+	name, err := url.PathUnescape(mux.Vars(r)["name"])
+	if err != nil {
+		return response.SmartError(err)
+	}
+
+	err = json.NewDecoder(r.Body).Decode(&req)
+	if err != nil {
+		return response.InternalError(err)
+	}
+
+	err = sunbeam.UpdateJujuUser(r.Context(), s, name, req.Token)
+	if err != nil {
+		// Return the appropriate error if juju user is not found
+		var statusErr api.StatusError
+		if errors.As(err, &statusErr) {
+			if statusErr.Status() == http.StatusNotFound {
+				return response.NotFound(err)
+			}
+		}
 		return response.InternalError(err)
 	}
 
