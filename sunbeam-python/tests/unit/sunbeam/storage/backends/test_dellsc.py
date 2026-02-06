@@ -150,6 +150,34 @@ class TestDellSCBackend(BaseBackendTests):
         assert config.backend_availability_zone is None
         assert config.dell_sc_api_port is None
 
+    def test_dellsc_build_terraform_vars_maps_credentials(
+        self, backend, mock_deployment, mock_manifest
+    ):
+        """Test Dell SC credentials map to dellsc-config-secret."""
+        config = backend.config_type().model_validate(
+            {
+                "san-ip": "192.168.1.1",
+                "san-username": "admin",
+                "san-password": "secret",
+                "secondary-san-username": "sec-admin",
+                "secondary-san-password": "sec-secret",
+            }
+        )
+
+        tfvars = backend.build_terraform_vars(
+            mock_deployment, mock_manifest, "compellent01", config
+        )
+
+        assert "dellsc-config-secret" in tfvars["secrets"]
+        assert tfvars["secrets"]["dellsc-config-secret"] == {
+            "primary-username": "admin",
+            "primary-password": "secret",
+            "secondary-username": "sec-admin",
+            "secondary-password": "sec-secret",
+        }
+        assert "san-username" not in tfvars["charm_config"]
+        assert "san-password" not in tfvars["charm_config"]
+
     def test_dellsc_dell_specific_fields_exist(self, backend):
         """Test that Dell SC-specific fields exist."""
         config_class = backend.config_type()
@@ -239,6 +267,24 @@ class TestDellSCConfigValidation:
             )
 
         assert "protocol" in str(exc_info.value).lower()
+
+    def test_secondary_san_ip_requires_credentials(self, dellsc_backend):
+        """Test that secondary SAN IP requires credentials."""
+        from pydantic import ValidationError
+
+        config_class = dellsc_backend.config_type()
+
+        with pytest.raises(ValidationError) as exc_info:
+            config_class.model_validate(
+                {
+                    "san-ip": "192.168.1.1",
+                    "san-username": "admin",
+                    "san-password": "secret",
+                    "secondary-san-ip": "192.168.1.2",
+                }
+            )
+
+        assert "secondary-san-username" in str(exc_info.value)
 
     def test_boolean_fields_accept_boolean_values(self, dellsc_backend):
         """Test that boolean fields accept boolean values."""

@@ -19,17 +19,18 @@ data "juju_application" "cinder-volume" {
 }
 
 resource "juju_secret" "secret" {
+  for_each = var.secrets
+
   model = data.juju_model.model.name
-  name  = "${var.name}-config-secret"
-  value = {
-    # Only template secrets that have a corresponding charm config value
-    for k, v in var.secrets : v => var.charm_config[k] if can(var.charm_config[k])
-  }
+  name  = "${var.name}-${each.key}-config-secret"
+  value = each.value
 }
 
 resource "juju_access_secret" "secret-access" {
-  model        = juju_secret.secret.model
-  secret_id    = juju_secret.secret.secret_id
+  for_each = juju_secret.secret
+
+  model        = each.value.model
+  secret_id    = each.value.secret_id
   applications = [juju_application.storage-backend.name]
 }
 
@@ -38,7 +39,7 @@ locals {
     { volume-backend-name = var.name },
     var.charm_config,
     # Only template secrets uris in charm config if they have a value
-    { for k, v in var.secrets : k => juju_secret.secret.secret_uri if can(var.charm_config[k]) }
+    { for k, v in juju_secret.secret : k => v.secret_uri }
   )
 }
 
