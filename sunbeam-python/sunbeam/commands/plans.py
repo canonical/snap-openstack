@@ -3,6 +3,8 @@
 
 import datetime
 import logging
+import os
+import sys
 
 import click
 import yaml
@@ -11,11 +13,14 @@ from rich.table import Table
 from snaphelpers import Snap
 
 from sunbeam.clusterd.service import ConfigItemNotFoundException
+from sunbeam.commands.configure import retrieve_admin_credentials
 from sunbeam.core.common import (
     FORMAT_TABLE,
     FORMAT_YAML,
 )
 from sunbeam.core.deployment import Deployment
+from sunbeam.core.openstack import OPENSTACK_MODEL
+from sunbeam.errors import SunbeamException
 
 LOG = logging.getLogger(__name__)
 console = Console()
@@ -90,3 +95,43 @@ def unlock_plan(ctx: click.Context, plan: str, force: bool):
     except ConfigItemNotFoundException as e:
         raise click.ClickException(f"Lock for {plan!r} not found") from e
     console.print(f"Unlocked plan {plan!r}")
+
+
+@plans.command("shell")
+@click.argument("plan", type=str, required=False)
+@click.pass_context
+def shell_plan(ctx: click.Context, plan: str | None = None):
+    """Allows debugging terraform plans.
+
+    Debugging tool dropping the user into a shell
+    with the environment variables set for the specified plan.
+    """
+    deployment: Deployment = ctx.obj
+    jhelper_keystone = deployment.get_juju_helper(keystone=True)
+
+    with console.status("Fetching OS admin credentials..."):
+        if deployment.get_client().cluster.check_sunbeam_bootstrapped():
+            try:
+                admin_credentials = retrieve_admin_credentials(
+                    jhelper_keystone, OPENSTACK_MODEL
+                )
+                os.environ.update(admin_credentials)
+            except SunbeamException:
+                LOG.warning(
+                    "Failed to retrieve admin credentials, proceeding without them."
+                )
+
+    with console.status("Fetching terraform plan information..."):
+        effective_plan = plan or "sunbeam-machine-plan"
+        try:
+            tfhelper = deployment.get_tfhelper(effective_plan)
+        except ValueError as e:
+            raise click.ClickException(str(e)) from e
+        if env := tfhelper.env:
+            os.environ.update(env)
+    # drop in tf plans root if no plan selected
+    pwd = tfhelper.path if plan else tfhelper.path.parent
+    os.chdir(pwd)
+    console.print("You can now run `terraform` commands in this shell.")
+    console.print("Type `exit` to return to the normal shell.")
+    sys.exit(os.system("bash"))
