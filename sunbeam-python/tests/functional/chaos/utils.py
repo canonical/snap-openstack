@@ -17,10 +17,9 @@ from __future__ import annotations
 import logging
 import subprocess
 import time
-from typing import List, Tuple
+from typing import List, Sequence, Tuple
 
 import jubilant
-import pytest
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +43,7 @@ def get_leader_and_non_leaders(
             non_leaders.append(unit_name)
 
     if leader_unit is None:
-        pytest.skip(
+        raise AssertionError(
             f"No leader unit found for application '{app_name}' in Juju status."
         )
 
@@ -111,6 +110,34 @@ def app_has_error(status: jubilant.Status, app_name: str) -> bool:
     return jubilant.any_error(status, app_name)
 
 
+def assert_apps_healthy(juju_client, app_names: List[str]) -> None:
+    """Assert that the given applications have no units in error.
+
+    If none of the applications are present in the model, this function logs
+    a warning and returns without failing the test. This allows the same test
+    suite to run against deployments that may not include all optional apps.
+    """
+    status: jubilant.Status = juju_client.juju.status()
+    present_apps = [name for name in app_names if name in status.apps]
+
+    if not present_apps:
+        logger.warning(
+            "None of the apps %s found in Juju model; "
+            "skipping health assertion for them.",
+            app_names,
+        )
+        return
+
+    for app_name in present_apps:
+        if jubilant.any_error(status, app_name):
+            raise AssertionError(
+                f"Application '{app_name}' has units in error state during chaos."
+            )
+        logger.info(
+            "Application '%s' is healthy during chaos (no units in error).", app_name
+        )
+
+
 def unit_name_to_pod_name(unit_name: str) -> str:
     """Map a Juju unit name (e.g. 'keystone/1') to a pod name (e.g. 'keystone-1').
 
@@ -122,6 +149,28 @@ def unit_name_to_pod_name(unit_name: str) -> str:
 def pod_chaos_name_for_pod(app_name: str, pod_name: str) -> str:
     """Return a deterministic PodChaos name for a given pod."""
     return f"{app_name}-{pod_name}-pod-kill"
+
+
+def _kubectl_command(args: List[str]) -> List[str]:
+    """Build a kubectl command suitable for the environment.
+
+    ``juju exec --unit <unit> -m <model> -- sudo k8s kubectl ...``
+    """
+    k8s_unit = "k8s/0"
+    k8s_model = "openstack-machines"
+    return [
+        "juju",
+        "exec",
+        "--unit",
+        k8s_unit,
+        "-m",
+        k8s_model,
+        "--",
+        "sudo",
+        "k8s",
+        "kubectl",
+        *args,
+    ]
 
 
 def apply_pod_chaos_for_pod(
@@ -159,7 +208,7 @@ spec:
         chaos_name,
     )
     subprocess.run(
-        ["kubectl", "apply", "-f", "-"],
+        _kubectl_command(["apply", "-f", "-"]),
         input=manifest,
         check=True,
         capture_output=True,
@@ -174,16 +223,111 @@ def delete_pod_chaos(chaos_name: str, chaos_namespace: str = "chaos-mesh") -> No
         "Deleting PodChaos resource: %s (namespace: %s)", chaos_name, chaos_namespace
     )
     subprocess.run(
-        [
-            "kubectl",
-            "delete",
-            "podchaos",
-            chaos_name,
-            "-n",
-            chaos_namespace,
-            "--ignore-not-found=true",
-        ],
+        _kubectl_command(
+            [
+                "delete",
+                "podchaos",
+                chaos_name,
+                "-n",
+                chaos_namespace,
+                "--ignore-not-found=true",
+            ]
+        ),
         check=False,
         capture_output=True,
         text=True,
     )
+
+
+def run_validation_with_pod_chaos(
+    juju_client,
+    targets: Sequence[tuple[str, List[str]]],
+    *,
+    suite_name: str,
+    openstack_namespace: str = "openstack",
+    chaos_namespace: str = "chaos-mesh",
+    validation_timeout: int = 3600,
+) -> None:
+    """Run 'sunbeam validation run smoke' while injecting PodChaos for targets.
+
+    Each entry in ``targets`` is (application_name, dependent_applications).
+    For each target application, all non-leader units are killed one by one
+    using PodChaos, and we wait for them to return to active status while
+    asserting that dependent applications remain healthy.
+    """
+    logger.info(
+        "Starting 'sunbeam validation run smoke' for %s chaos suite...",
+        suite_name,
+    )
+    validation_proc = subprocess.Popen(
+        ["sunbeam", "validation", "run", "smoke"],
+        text=True,
+    )
+
+    chaos_resources: List[str] = []
+    try:
+        for app_name, dependent_apps in targets:
+            leader_unit, non_leader_units = get_leader_and_non_leaders(
+                juju_client,
+                app_name,
+            )
+
+            if not non_leader_units:
+                logger.info(
+                    "Application '%s' has no non-leader units; skipping chaos.",
+                    app_name,
+                )
+                continue
+
+            logger.info(
+                "%s leader unit: %s; non-leaders: %s",
+                app_name,
+                leader_unit,
+                non_leader_units,
+            )
+
+            for unit_name in non_leader_units:
+                pod_name = unit_name_to_pod_name(unit_name)
+                chaos_name = apply_pod_chaos_for_pod(
+                    openstack_namespace,
+                    pod_name,
+                    chaos_namespace=chaos_namespace,
+                    duration="30s",
+                )
+                chaos_resources.append(chaos_name)
+
+                wait_for_unit_active(
+                    juju_client,
+                    app_name,
+                    unit_name,
+                    timeout=600,
+                )
+
+                if dependent_apps:
+                    assert_apps_healthy(juju_client, dependent_apps)
+
+        logger.info(
+            "Waiting for validation smoke run to complete after %s chaos suite...",
+            suite_name,
+        )
+        try:
+            return_code = validation_proc.wait(timeout=validation_timeout)
+        except subprocess.TimeoutExpired:
+            validation_proc.kill()
+            raise AssertionError(
+                "sunbeam validation run smoke did not complete within the timeout."
+            )
+
+        assert return_code == 0, (
+            "sunbeam validation run smoke failed with exit code "
+            f"{return_code} during {suite_name} chaos suite."
+        )
+    finally:
+        for chaos_name in chaos_resources:
+            try:
+                delete_pod_chaos(chaos_name, chaos_namespace=chaos_namespace)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Failed to clean up PodChaos %s: %s", chaos_name, exc)
+
+        if validation_proc.poll() is None:
+            validation_proc.terminate()
