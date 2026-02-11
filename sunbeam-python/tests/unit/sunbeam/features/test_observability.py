@@ -32,7 +32,7 @@ class TestDeployObservabilityStackStep:
     def test_run(self, deployment, tfhelper, jhelper, observabilityfeature, ssnap):
         ssnap().config.get.return_value = "k8s"
         observabilityfeature.deployment.proxy_settings.return_value = {}
-        jhelper.get_application_names.return_value = [1, 2, 3]
+        jhelper.get_application_names.return_value = ["app1", "app2", "app3"]
         step = observability_feature.DeployObservabilityStackStep(
             deployment, observabilityfeature, tfhelper, jhelper
         )
@@ -66,7 +66,7 @@ class TestDeployObservabilityStackStep:
     ):
         ssnap().config.get.return_value = "k8s"
         observabilityfeature.deployment.proxy_settings.return_value = {}
-        jhelper.get_application_names.return_value = [1, 2, 3]
+        jhelper.get_application_names.return_value = ["app1", "app2", "app3"]
         jhelper.wait_until_active.side_effect = TimeoutError("timed out")
 
         step = observability_feature.DeployObservabilityStackStep(

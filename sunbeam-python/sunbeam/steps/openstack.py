@@ -32,6 +32,7 @@ from sunbeam.core.common import (
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import (
     ApplicationNotFoundException,
+    ApplicationStatusOverlay,
     JujuHelper,
     JujuStepHelper,
     JujuWaitException,
@@ -111,6 +112,31 @@ DEFAULT_STORAGE_SINGLE_DATABASE = "20G"
 # This dict holds default storage values for multi mysql mode
 # If a service not specified, defaults to 1G
 DEFAULT_STORAGE_MULTI_DATABASE = {"nova": "10G"}
+
+# wait_until_desired_status overlays
+# Traefik is very chatty on every update status hooks, making
+# the wait_until_desired_status very hard to settle.
+TRAEFIK_OVERLAY: ApplicationStatusOverlay = {
+    "status": ["active", "maintenance"],
+    "agent_status": ["idle", "executing"],
+}
+# Same for MySQL, but MySQL only changes agent_status, not
+# status, making it more likely to be active.
+MYSQL_OVERLAY: ApplicationStatusOverlay = {
+    "status": ["active"],
+    "agent_status": ["idle", "executing"],
+}
+
+
+def build_overlay_dict(apps: list[str]) -> dict[str, ApplicationStatusOverlay]:
+    """Build the overlay dict for wait_until_desired_status."""
+    overlay: dict[str, ApplicationStatusOverlay] = {}
+    for app in apps:
+        if app.startswith("traefik"):
+            overlay[app] = TRAEFIK_OVERLAY
+        elif app.endswith("mysql"):
+            overlay[app] = MYSQL_OVERLAY
+    return overlay
 
 
 def endpoints_questions():
@@ -763,6 +789,7 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
                 apps,
                 timeout=OPENSTACK_DEPLOY_TIMEOUT,
                 queue=status_queue,
+                overlay=build_overlay_dict(apps),
             )
         except (JujuWaitException, TimeoutError) as e:
             LOG.warning(str(e))

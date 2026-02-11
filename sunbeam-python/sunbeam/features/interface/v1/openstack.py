@@ -45,6 +45,7 @@ from sunbeam.steps.openstack import (
     DATABASE_MAX_POOL_SIZE,
     DATABASE_STORAGE_KEY,
     TOPOLOGY_KEY,
+    build_overlay_dict,
     check_database_size_modifications_in_manifest,
     compute_resources_for_service,
     get_database_default_storage_dict,
@@ -485,6 +486,7 @@ class UpgradeOpenStackApplicationStep(BaseStep, JujuStepHelper):
                 status=expected_wls,
                 timeout=timeout,
                 queue=status_queue,
+                overlay=build_overlay_dict(apps),
             )
         except (JujuWaitException, TimeoutError) as e:
             LOG.debug(str(e))
@@ -579,6 +581,7 @@ class EnableOpenStackApplicationStep(
                 status=self.app_desired_status,
                 timeout=self.feature.set_application_timeout_on_enable(),
                 queue=status_queue,
+                overlay=build_overlay_dict(apps),
             )
         except (JujuWaitException, TimeoutError) as e:
             LOG.warning(str(e))
