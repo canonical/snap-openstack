@@ -29,6 +29,7 @@ from sunbeam.steps.openstack import (
     OpenStackPatchLoadBalancerServicesIPPoolStep,
     OpenStackPatchLoadBalancerServicesIPStep,
     ReapplyOpenStackTerraformPlanStep,
+    build_overlay_dict,
 )
 from sunbeam.steps.sunbeam_machine import DeploySunbeamMachineApplicationStep
 from sunbeam.steps.upgrades.base import UpgradeCoordinator, UpgradeFeatures
@@ -128,6 +129,7 @@ class LatestInChannel(BaseStep, JujuStepHelper):
                         refreshed_apps,
                         timeout=3600,  # 60 minutes
                         queue=status_queue,
+                        overlay=build_overlay_dict(refreshed_apps),
                     )
                 except (JujuWaitException, TimeoutError) as e:
                     LOG.warning(str(e))

@@ -75,6 +75,7 @@ from sunbeam.features.interface.v1.openstack import (
     OpenStackControlPlaneFeature,
     TerraformPlanLocation,
 )
+from sunbeam.steps import openstack
 from sunbeam.steps.juju import RemoveSaasApplicationsStep
 from sunbeam.steps.k8s import CREDENTIAL_SUFFIX
 from sunbeam.utils import click_option_show_hints, pass_method_obj
@@ -172,6 +173,7 @@ class DeployObservabilityStackStep(BaseStep, JujuStepHelper):
                 apps,
                 timeout=OBSERVABILITY_DEPLOY_TIMEOUT,
                 queue=status_queue,
+                overlay=openstack.build_overlay_dict(apps),
             )
         except (JujuWaitException, TimeoutError) as e:
             LOG.debug("Failed to deploy Observability Stack", exc_info=True)

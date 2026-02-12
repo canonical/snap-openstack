@@ -916,6 +916,155 @@ def test_is_desired_status_achieved(
     assert result == expected_result
 
 
+def test_wait_until_desired_status_overlay_overrides_status(
+    jhelper: jujulib.JujuHelper, juju, status
+):
+    """Test overlay overrides status for a specific app."""
+    status.apps["app1"] = Mock(
+        units={
+            "app1/0": Mock(
+                workload_status=Mock(current="blocked"),
+                juju_status=Mock(current="idle"),
+            ),
+        },
+        subordinate_to=[],
+        scale=1,
+    )
+    status.apps["app2"] = Mock(
+        units={
+            "app2/0": Mock(
+                workload_status=Mock(current="active"),
+                juju_status=Mock(current="idle"),
+            ),
+        },
+        subordinate_to=[],
+        scale=1,
+    )
+
+    # app1 is blocked, but overlay allows it; app2 must be active (global default)
+    jhelper.wait_until_desired_status(
+        "test-model",
+        ["app1", "app2"],
+        status=["active"],
+        overlay={"app1": {"status": ["active", "blocked"]}},
+    )
+
+    juju.wait.assert_called_once()
+
+
+def test_wait_until_desired_status_overlay_none_falls_back(
+    jhelper: jujulib.JujuHelper, juju, status
+):
+    """Test overlay with None status falls back to global defaults."""
+    status.apps["app1"] = Mock(
+        units={
+            "app1/0": Mock(
+                workload_status=Mock(current="active"),
+                juju_status=Mock(current="idle"),
+            ),
+        },
+        subordinate_to=[],
+        scale=1,
+    )
+
+    # overlay has status=None, so global default {"active"} should be used
+    jhelper.wait_until_desired_status(
+        "test-model",
+        ["app1"],
+        status=["active"],
+        overlay={"app1": {"status": None}},
+    )
+
+    juju.wait.assert_called_once()
+
+
+def test_wait_until_desired_status_no_overlay_uses_global(
+    jhelper: jujulib.JujuHelper, juju, status
+):
+    """Test apps without overlay entries use global defaults."""
+    status.apps["app1"] = Mock(
+        units={
+            "app1/0": Mock(
+                workload_status=Mock(current="active"),
+                juju_status=Mock(current="idle"),
+            ),
+        },
+        subordinate_to=[],
+        scale=1,
+    )
+
+    # overlay is provided but doesn't contain app1
+    jhelper.wait_until_desired_status(
+        "test-model",
+        ["app1"],
+        status=["active"],
+        overlay={"other_app": {"status": ["blocked"]}},
+    )
+
+    juju.wait.assert_called_once()
+
+
+def test_wait_until_desired_status_overlay_ignored_for_unknown_app(
+    jhelper: jujulib.JujuHelper, juju, status, caplog
+):
+    """Test overlay keys not in apps list are ignored with a debug message."""
+    status.apps["app1"] = Mock(
+        units={
+            "app1/0": Mock(
+                workload_status=Mock(current="active"),
+                juju_status=Mock(current="idle"),
+            ),
+        },
+        subordinate_to=[],
+        scale=1,
+    )
+
+    with caplog.at_level("DEBUG", logger="sunbeam.core.juju"):
+        jhelper.wait_until_desired_status(
+            "test-model",
+            ["app1"],
+            status=["active"],
+            overlay={
+                "app1": {"status": ["active"]},
+                "unknown_app": {"status": ["blocked"]},
+            },
+        )
+
+    assert "unknown_app" in caplog.text
+    assert "will be ignored" in caplog.text
+    juju.wait.assert_called_once()
+
+
+def test_wait_until_desired_status_overlay_units(
+    jhelper: jujulib.JujuHelper, juju, status
+):
+    """Test overlay with units override."""
+    status.apps["app1"] = Mock(
+        units={
+            "app1/0": Mock(
+                workload_status=Mock(current="active"),
+                juju_status=Mock(current="idle"),
+            ),
+            "app1/1": Mock(
+                workload_status=Mock(current="blocked"),
+                juju_status=Mock(current="idle"),
+            ),
+        },
+        subordinate_to=[],
+        scale=2,
+    )
+
+    # Only check app1/0 via overlay units override; app1/1 is blocked but ignored
+    jhelper.wait_until_desired_status(
+        "test-model",
+        ["app1"],
+        status=["active"],
+        overlay={"app1": {"units": ["app1/0"]}},
+    )
+
+    juju.wait.assert_called_once()
+
+
 def test_get_relation_map(jhelper, status, juju):
     status.apps["app"] = Mock(units={"app/0": Mock(leader=True)})
     juju.exec = Mock(
