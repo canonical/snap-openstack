@@ -605,6 +605,22 @@ class JujuHelper:
         with self._model(model) as juju:
             juju.remove_unit(unit)
 
+    def scale_application(self, model: str, application: str, scale: int) -> None:
+        """Scale application to the desired number of k8s application units.
+
+        :model: Name of the model where the application is located
+        :application: Application name
+        :scale: Desired scale for the application
+        """
+        with self._model(model) as juju:
+            try:
+                juju.cli("scale-application", application, str(scale))
+            except jubilant.CLIError as e:
+                raise JujuException(
+                    f"Failed to scale app {application!r} in model {model!r} "
+                    f"to {scale}: {e.stderr}"
+                ) from e
+
     def _get_leader_unit(
         self, name: str, model: str
     ) -> tuple[str, "jubilant.statustypes.UnitStatus"]:
