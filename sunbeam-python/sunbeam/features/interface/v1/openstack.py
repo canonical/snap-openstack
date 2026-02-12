@@ -317,7 +317,7 @@ class OpenStackControlPlaneFeature(EnableDisableFeature, typing.Generic[ConfigTy
         )
         return database_tfvars
 
-    def set_application_timeout_on_enable(self) -> int:
+    def set_application_timeout_on_enable(self, deployment: Deployment) -> int:
         """Set Application Timeout on enabling the feature.
 
         The feature plan will timeout if the applications
@@ -325,7 +325,7 @@ class OpenStackControlPlaneFeature(EnableDisableFeature, typing.Generic[ConfigTy
         """
         return APPLICATION_DEPLOY_TIMEOUT
 
-    def set_application_timeout_on_disable(self) -> int:
+    def set_application_timeout_on_disable(self, deployment: Deployment) -> int:
         """Set Application Timeout on disabling the feature.
 
         The feature plan will timeout if the applications
@@ -464,7 +464,7 @@ class UpgradeOpenStackApplicationStep(BaseStep, JujuStepHelper):
         charms = list(tfvar_map.get(self.feature.tfplan, {}).get("charms", {}).keys())
         apps = self.get_apps_filter_by_charms(self.model, charms)
         config = self.feature.get_tfvar_config_key()
-        timeout = self.feature.set_application_timeout_on_enable()
+        timeout = self.feature.set_application_timeout_on_enable(self.deployment)
 
         try:
             self.tfhelper.update_partial_tfvars_and_apply_tf(
@@ -508,6 +508,7 @@ class EnableOpenStackApplicationStep(
         jhelper: JujuHelper,
         feature: OpenStackControlPlaneFeature,
         app_desired_status: list[str] = ["active"],
+        agent_desired_status: list[str] | None = None,
     ) -> None:
         """Constructor for the generic plan.
 
@@ -525,6 +526,7 @@ class EnableOpenStackApplicationStep(
         self.jhelper = jhelper
         self.feature = feature
         self.app_desired_status = app_desired_status
+        self.agent_desired_status = agent_desired_status
         self.model = OPENSTACK_MODEL
 
     def is_skip(self, status: Status | None = None) -> Result:
@@ -577,7 +579,8 @@ class EnableOpenStackApplicationStep(
                 self.model,
                 apps,
                 status=self.app_desired_status,
-                timeout=self.feature.set_application_timeout_on_enable(),
+                agent_status=self.agent_desired_status,
+                timeout=self.feature.set_application_timeout_on_enable(self.deployment),
                 queue=status_queue,
             )
         except (JujuWaitException, TimeoutError) as e:
@@ -670,7 +673,9 @@ class DisableOpenStackApplicationStep(
             self.jhelper.wait_application_gone(
                 apps,
                 self.model,
-                timeout=self.feature.set_application_timeout_on_disable(),
+                timeout=self.feature.set_application_timeout_on_disable(
+                    self.deployment
+                ),
             )
         except TimeoutError as e:
             LOG.debug(f"Failed to destroy {apps}", exc_info=True)

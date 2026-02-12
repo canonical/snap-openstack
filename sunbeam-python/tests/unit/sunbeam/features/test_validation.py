@@ -146,3 +146,21 @@ class TestValidatorFunction:
         ]
         roles = validation_feature.get_enabled_roles(deployment)
         assert set(roles.split(",")) == {"compute", "control"}
+
+
+class TestValidationFeatureTimeouts:
+    """Test timeout methods for ValidationFeature."""
+
+    def test_set_application_timeout_on_enable(self):
+        """Test timeout on enable accepts deployment parameter."""
+        deployment = MagicMock()
+        feature = validation_feature.ValidationFeature()
+        timeout = feature.set_application_timeout_on_enable(deployment)
+        assert timeout == validation_feature.VALIDATION_FEATURE_DEPLOY_TIMEOUT
+
+    def test_set_application_timeout_on_disable(self):
+        """Test timeout on disable accepts deployment parameter."""
+        deployment = MagicMock()
+        feature = validation_feature.ValidationFeature()
+        timeout = feature.set_application_timeout_on_disable(deployment)
+        assert timeout == validation_feature.VALIDATION_FEATURE_DEPLOY_TIMEOUT
