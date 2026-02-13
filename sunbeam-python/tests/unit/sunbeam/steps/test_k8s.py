@@ -19,6 +19,7 @@ from sunbeam.core.juju import (
     ApplicationNotFoundException,
     JujuException,
     LeaderNotFoundException,
+    MachineNotFoundException,
 )
 from sunbeam.steps.k8s import (
     CREDENTIAL_SUFFIX,
@@ -423,6 +424,21 @@ class TestEnsureL2AdvertisementByHostStep:
 
         step.kube.apply.assert_called_once()
         assert result.result_type == ResultType.FAILED
+
+    def test_run_missing_machine_skips(self, step):
+        step.to_update = [{"name": "node1", "machineid": "1"}]
+        step.to_delete = []
+        step._get_interface = Mock(
+            side_effect=MachineNotFoundException("Machine not found")
+        )
+
+        result = step.run(None)
+
+        assert result.result_type == ResultType.SKIPPED
+        assert (
+            "Failed to get machines for L2 advertisement on nodes: node1"
+            in result.message
+        )
 
     def test_run_delete_failure(self, step):
         step.to_update = []
