@@ -4,12 +4,13 @@
 """Dell Storage Center storage backend implementation using base step classes."""
 
 import logging
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from rich.console import Console
 
-from sunbeam.core.manifest import StorageBackendConfig
+from sunbeam.core.manifest import Manifest, StorageBackendConfig
+from sunbeam.core.deployment import Deployment
 from sunbeam.storage.base import StorageBackendBase
 from sunbeam.storage.models import SecretDictField
 
@@ -122,6 +123,17 @@ class DellSCConfig(StorageBackendConfig):
         int | None, Field(description="Minimum SSH pool connections")
     ] = None
 
+    @model_validator(mode="after")
+    def _validate_secondary_credentials(self) -> "DellSCConfig":
+        if self.secondary_san_ip and (
+            not self.secondary_san_username or not self.secondary_san_password
+        ):
+            raise ValueError(
+                "secondary-san-username and secondary-san-password are required "
+                "when secondary-san-ip is set"
+            )
+        return self
+
 
 class DellSCBackend(StorageBackendBase):
     """Dell Storage Center storage backend implementation."""
@@ -152,3 +164,58 @@ class DellSCBackend(StorageBackendBase):
     def config_type(self) -> type[StorageBackendConfig]:
         """Return the configuration class for Dell Storage Center backend."""
         return DellSCConfig
+
+    def build_terraform_vars(
+        self,
+        deployment: Deployment,
+        manifest: Manifest,
+        backend_name: str,
+        config: StorageBackendConfig,
+    ) -> dict[str, Any]:
+        """Generate Terraform variables for Dell SC backend deployment."""
+        config_dict = config.model_dump(exclude_none=True, by_alias=True)
+
+        secrets: dict[str, dict[str, Any]] = {}
+
+        primary_username = config_dict.pop("san-username", None)
+        primary_password = config_dict.pop("san-password", None)
+        secondary_username = config_dict.pop("secondary-san-username", None)
+        secondary_password = config_dict.pop("secondary-san-password", None)
+
+        if (
+            primary_username is not None
+            or primary_password is not None
+            or secondary_username is not None
+            or secondary_password is not None
+        ):
+            secret: dict[str, Any] = {}
+            if primary_username is not None:
+                secret["primary-username"] = primary_username
+            if primary_password is not None:
+                secret["primary-password"] = primary_password
+            if secondary_username is not None:
+                secret["secondary-username"] = secondary_username
+            if secondary_password is not None:
+                secret["secondary-password"] = secondary_password
+            secrets["dellsc-config-secret"] = secret
+
+        charm_channel = self.charm_channel
+        charm_revision = None
+        if backends_cfg := manifest.storage.root.get(self.backend_type):
+            if backend_cfg := backends_cfg.root.get(backend_name):
+                if charm_cfg := backend_cfg.software.charms.get(self.charm_name):
+                    if channel := charm_cfg.channel:
+                        charm_channel = channel
+                    if revision := charm_cfg.revision:
+                        charm_revision = revision
+
+        return {
+            "principal_application": self.principal_application,
+            "charm_name": self.charm_name,
+            "charm_base": self.charm_base,
+            "charm_channel": charm_channel,
+            "charm_revision": charm_revision,
+            "endpoint_bindings": self.get_endpoint_bindings(deployment),
+            "charm_config": config_dict,
+            "secrets": secrets,
+        }
