@@ -692,7 +692,7 @@ class CaasFeature(OpenStackControlPlaneFeature):
                     tfhelper,
                     jhelper,
                     self,
-                    app_desired_status=["active", "blocked"],
+                    app_desired_status=["active", "blocked", "waiting"],
                 ),
                 CreateKubeConfigSecretStep(deployment, jhelper, kc_dict),
             ]
