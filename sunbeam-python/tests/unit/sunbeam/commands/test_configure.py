@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -75,6 +75,30 @@ export OS_PROJECT_NAME={creds["OS_PROJECT_NAME"]}
 export OS_AUTH_VERSION={auth_version}
 export OS_IDENTITY_API_VERSION={auth_version}"""
         assert contents == expect
+
+
+class TestRetrieveAdminCredentials:
+    def test_retrieve_admin_credentials_includes_region(self, load_answers):
+        load_answers.return_value = {"region": "RegionOne"}
+
+        helper = Mock()
+        helper.get_leader_unit.return_value = "keystone/0"
+        helper.run_action.side_effect = [
+            {
+                "username": "admin",
+                "password": "secret",
+                "public-endpoint": "http://keystone:5000/v3",
+                "user-domain-name": "Default",
+                "project-domain-name": "Default",
+                "project-name": "admin",
+                "api-version": "3",
+            },
+            {},
+        ]
+
+        client = Mock()
+        creds = configure.retrieve_admin_credentials(helper, model="openstack", client=client)
+        assert creds["OS_REGION_NAME"] == "RegionOne"
 
 
 class TestDemoSetup:

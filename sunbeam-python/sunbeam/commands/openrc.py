@@ -28,7 +28,7 @@ def openrc(ctx: click.Context) -> None:
     jhelper = deployment.get_juju_helper(keystone=True)
 
     with console.status("Retrieving openrc from Keystone service ... "):
-        creds = retrieve_admin_credentials(jhelper, OPENSTACK_MODEL)
+        creds = retrieve_admin_credentials(jhelper, OPENSTACK_MODEL, client=client)
         console.print("# openrc for access to OpenStack")
         for param, value in creds.items():
             console.print(f"export {param}={value}")
