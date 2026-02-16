@@ -6,7 +6,7 @@ import typing
 
 from sunbeam.commands.configure import retrieve_admin_credentials
 from sunbeam.core.juju import JujuHelper
-from sunbeam.core.openstack import OPENSTACK_MODEL
+from sunbeam.core.openstack import DEFAULT_REGION, OPENSTACK_MODEL
 from sunbeam.lazy import LazyImport
 
 if typing.TYPE_CHECKING:
@@ -23,7 +23,9 @@ def get_admin_connection(jhelper: JujuHelper) -> "openstack.connection.Connectio
     :param jhelper: Juju helpers for retrieving admin credentials
     :raises: openstack.exceptions.SDKException
     """
-    admin_auth_info = retrieve_admin_credentials(jhelper, OPENSTACK_MODEL)
+    admin_auth_info = retrieve_admin_credentials(
+        jhelper, OPENSTACK_MODEL, region_name=DEFAULT_REGION
+    )
     conn = openstack.connect(
         auth_url=admin_auth_info.get("OS_AUTH_URL"),
         username=admin_auth_info.get("OS_USERNAME"),

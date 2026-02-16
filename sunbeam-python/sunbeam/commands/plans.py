@@ -113,7 +113,7 @@ def shell_plan(ctx: click.Context, plan: str | None = None):
         if deployment.get_client().cluster.check_sunbeam_bootstrapped():
             try:
                 admin_credentials = retrieve_admin_credentials(
-                    jhelper_keystone, OPENSTACK_MODEL
+                    jhelper_keystone, OPENSTACK_MODEL, deployment=deployment
                 )
                 os.environ.update(admin_credentials)
             except SunbeamException:

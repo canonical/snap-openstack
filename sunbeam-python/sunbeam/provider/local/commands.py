@@ -992,7 +992,9 @@ def configure_sriov(
     jhelper = deployment.get_juju_helper()
     jhelper_keystone = deployment.get_juju_helper(keystone=True)
 
-    admin_credentials = retrieve_admin_credentials(jhelper_keystone, OPENSTACK_MODEL)
+    admin_credentials = retrieve_admin_credentials(
+        jhelper_keystone, OPENSTACK_MODEL, deployment=deployment
+    )
     admin_credentials["OS_INSECURE"] = "true"
 
     tfhelper_hypervisor = deployment.get_tfhelper("hypervisor-plan")
@@ -1061,7 +1063,9 @@ def configure_dpdk(
     jhelper = deployment.get_juju_helper()
     jhelper_keystone = deployment.get_juju_helper(keystone=True)
 
-    admin_credentials = retrieve_admin_credentials(jhelper_keystone, OPENSTACK_MODEL)
+    admin_credentials = retrieve_admin_credentials(
+        jhelper_keystone, OPENSTACK_MODEL, deployment=deployment
+    )
     admin_credentials["OS_INSECURE"] = "true"
 
     tfhelper_hypervisor = deployment.get_tfhelper("hypervisor-plan")
