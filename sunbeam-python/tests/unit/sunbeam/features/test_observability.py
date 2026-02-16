@@ -32,7 +32,7 @@ class TestDeployObservabilityStackStep:
     def test_run(self, deployment, tfhelper, jhelper, observabilityfeature, ssnap):
         ssnap().config.get.return_value = "k8s"
         observabilityfeature.deployment.proxy_settings.return_value = {}
-        jhelper.get_application_names.return_value = [1, 2, 3]
+        jhelper.get_application_names.return_value = ["app1", "app2", "app3"]
         step = observability_feature.DeployObservabilityStackStep(
             deployment, observabilityfeature, tfhelper, jhelper
         )
@@ -66,7 +66,7 @@ class TestDeployObservabilityStackStep:
     ):
         ssnap().config.get.return_value = "k8s"
         observabilityfeature.deployment.proxy_settings.return_value = {}
-        jhelper.get_application_names.return_value = [1, 2, 3]
+        jhelper.get_application_names.return_value = ["app1", "app2", "app3"]
         jhelper.wait_until_active.side_effect = TimeoutError("timed out")
 
         step = observability_feature.DeployObservabilityStackStep(
@@ -318,3 +318,37 @@ class TestRemoveRemoteCosOffersStep:
         jhelper.wait_application_ready.assert_called()
         assert result.result_type == ResultType.FAILED
         assert result.message == "timed out"
+
+
+class TestObservabilityFeatureTimeouts:
+    """Test timeout calculation for ObservabilityFeature."""
+
+    def test_set_application_timeout_on_enable_single_control(self, deployment):
+        """Test timeout calculation with 1 control node."""
+        deployment.get_client().cluster.list_nodes_by_role.return_value = ["node1"]
+        feature = observability_feature.EmbeddedObservabilityFeature()
+
+        timeout = feature.set_application_timeout_on_enable(deployment)
+
+        deployment.get_client().cluster.list_nodes_by_role.assert_called_once_with(
+            "control"
+        )
+        assert timeout == observability_feature.OBSERVABILITY_AGENT_K8S_DEPLOY_TIMEOUT
+
+    def test_set_application_timeout_on_enable_multiple_control(self, deployment):
+        """Test timeout calculation with multiple control nodes."""
+        deployment.get_client().cluster.list_nodes_by_role.return_value = [
+            "node1",
+            "node2",
+            "node3",
+        ]
+        feature = observability_feature.EmbeddedObservabilityFeature()
+
+        timeout = feature.set_application_timeout_on_enable(deployment)
+
+        deployment.get_client().cluster.list_nodes_by_role.assert_called_once_with(
+            "control"
+        )
+        assert (
+            timeout == observability_feature.OBSERVABILITY_AGENT_K8S_DEPLOY_TIMEOUT * 3
+        )

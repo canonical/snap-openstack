@@ -150,6 +150,18 @@ class ChannelUpdate(TypedDict):
     expected_status: dict[str, list[str]]
 
 
+class ApplicationStatusOverlay(TypedDict, total=False):
+    """Per-application status override for wait_until_desired_status.
+
+    All keys are optional. Only provided keys override the global defaults.
+    """
+
+    status: list[str] | None
+    agent_status: list[str] | None
+    units: list[str] | None
+    workload_status_message: list[str] | None
+
+
 class JujuAccount(pydantic.BaseModel):
     user: str
     password: str
@@ -1227,6 +1239,7 @@ class JujuHelper:
         apps: list[str] | None = None,
         timeout: int = 10 * 60,
         queue: queue.Queue | None = None,
+        overlay: dict[str, ApplicationStatusOverlay] | None = None,
     ) -> None:
         """Wait for all agents in model to reach idle status.
 
@@ -1235,12 +1248,18 @@ class JujuHelper:
         :timeout: Waiting timeout in seconds
         :queue: Queue to put application names in when they are ready, optional, must
             be sized for the number of applications
+        :overlay: Per-application status overrides.
         """
         with self._model(model) as juju:
             if apps is None:
                 apps = list(juju.status().apps.keys())
             self.wait_until_desired_status(
-                model, apps, status=["active"], timeout=timeout, queue=queue
+                model,
+                apps,
+                status=["active"],
+                timeout=timeout,
+                queue=queue,
+                overlay=overlay,
             )
 
     @staticmethod
@@ -1317,6 +1336,7 @@ class JujuHelper:
         workload_status_message: list[str] | None = None,
         timeout: int = 10 * 60,
         queue: queue.Queue | None = None,
+        overlay: dict[str, ApplicationStatusOverlay] | None = None,
     ) -> None:
         """Wait for all workloads in the specified model to reach the desired status.
 
@@ -1329,30 +1349,68 @@ class JujuHelper:
         :workload_status_message: List of desired workload status messages.
         :timeout: Waiting timeout in seconds.
         :queue: An queue to use for status updates.
+        :overlay: Per-application status overrides.
         """
         if status is None:
             wl_status = {"active"}
         else:
             wl_status = set(status)
         LOG.debug("Waiting for apps %r to be %r", apps, wl_status)
+
+        if overlay is None:
+            overlay = {}
+
+        unused_overlay_keys = set(overlay.keys()) - set(apps)
+        if unused_overlay_keys:
+            LOG.debug(
+                "Overlay keys %r are not in apps list and will be ignored",
+                unused_overlay_keys,
+            )
+
         app_params = {}
         for app in apps:
-            unit_list = (
-                None if units is None else [unit for unit in units if app in unit]
+            app_overlay = overlay.get(app, {})
+            unit_list: list[str] | None = None
+            # Resolve units: overlay takes precedence
+            if "units" in app_overlay:
+                overlay_units = app_overlay["units"]
+                unit_list = (
+                    []
+                    if overlay_units is None
+                    else [u for u in overlay_units if app in u]
+                )
+            else:
+                unit_list = (
+                    None if units is None else [unit for unit in units if app in unit]
+                )
+
+            # Resolve status
+            if "status" in app_overlay and app_overlay["status"] is not None:
+                app_wl_status = set(app_overlay["status"])
+            else:
+                app_wl_status = wl_status
+
+            # Resolve agent_status
+            app_agent_status = app_overlay.get("agent_status", agent_status)
+
+            # Resolve workload_status_message
+            app_wl_msg = app_overlay.get(
+                "workload_status_message", workload_status_message
             )
+
             if unit_list:
                 LOG.debug(
                     "Waiting for units %r of app %r to be %r",
                     unit_list,
                     app,
-                    wl_status,
+                    app_wl_status,
                 )
 
             app_params[app] = (
                 unit_list or [],
-                wl_status,
-                agent_status,
-                workload_status_message,
+                app_wl_status,
+                app_agent_status,
+                app_wl_msg,
             )
 
         def _wait_until_status(status: "jubilant.statustypes.Status"):
@@ -1387,14 +1445,22 @@ class JujuHelper:
                 timeout=timeout,
             )
 
-    def charm_refresh(self, application_name: str, model: str):
+    def charm_refresh(
+        self,
+        application_name: str,
+        model: str,
+        channel: str | None = None,
+        revision: int | None = None,
+    ):
         """Update application to latest charm revision in current channel.
 
-        :param application_list: Name of application
+        :param application_name: Name of application
         :param model: Model object
+        :param channel: Channel to refresh to, if None uses current channel
+        :param revision: Revision to refresh to, if None uses latest revision
         """
         with self._model(model) as juju:
-            juju.refresh(application_name)
+            juju.refresh(application_name, channel=channel, revision=revision)
 
     def get_available_charm_revision(
         self, charm_name: str, channel: str, base: str = JUJU_BASE
