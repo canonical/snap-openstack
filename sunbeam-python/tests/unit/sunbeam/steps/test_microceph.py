@@ -19,6 +19,7 @@ class TestConfigureMicrocephOSDStep:
     def test_run(self, cclient, jhelper):
         step = ConfigureMicrocephOSDStep(cclient, "test-0", jhelper, "test-model")
         step.disks = "/dev/sdb,/dev/sdc"
+        step.wipe = False
         result = step.run()
 
         jhelper.run_action.assert_called_once()
@@ -48,9 +49,42 @@ class TestConfigureMicrocephOSDStep:
 
         step = ConfigureMicrocephOSDStep(cclient, "test-0", jhelper, "test-model")
         step.disks = "/dev/sdb"
+        step.wipe = False
         result = step.run()
 
         jhelper.run_action.assert_called_once()
+        assert result.result_type == ResultType.COMPLETED
+
+    def test_run_with_wipe_true(self, cclient, jhelper):
+        step = ConfigureMicrocephOSDStep(cclient, "test-0", jhelper, "test-model")
+        step.disks = "/dev/sdb,/dev/sdc"
+        step.wipe = True
+        jhelper.get_unit_from_machine = Mock(return_value="unit/0")
+        jhelper.run_action = Mock(return_value={"status": "completed"})
+        result = step.run()
+
+        jhelper.run_action.assert_called_once_with(
+            "unit/0",
+            "test-model",
+            "add-osd",
+            action_params={"device-id": "/dev/sdb,/dev/sdc", "wipe": True},
+        )
+        assert result.result_type == ResultType.COMPLETED
+
+    def test_run_with_wipe_false(self, cclient, jhelper):
+        step = ConfigureMicrocephOSDStep(cclient, "test-0", jhelper, "test-model")
+        step.disks = "/dev/sdb,/dev/sdc"
+        step.wipe = False
+        jhelper.get_unit_from_machine = Mock(return_value="unit/0")
+        jhelper.run_action = Mock(return_value={"status": "completed"})
+        result = step.run()
+
+        jhelper.run_action.assert_called_once_with(
+            "unit/0",
+            "test-model",
+            "add-osd",
+            action_params={"device-id": "/dev/sdb,/dev/sdc", "wipe": False},
+        )
         assert result.result_type == ResultType.COMPLETED
 
 
