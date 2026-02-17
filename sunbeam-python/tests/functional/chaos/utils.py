@@ -14,9 +14,13 @@ can reuse the same logic for:
 
 from __future__ import annotations
 
+import base64
+import json
 import logging
 import subprocess
 import time
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import List, Sequence, Tuple
 
 import jubilant
@@ -32,7 +36,14 @@ def get_leader_and_non_leaders(
     logger.info("Querying Juju status for application '%s' units...", app_name)
 
     status: jubilant.Status = juju_client.juju.status()
-    app = status.apps[app_name]
+    try:
+        app = status.apps[app_name]
+    except KeyError as exc:
+        available_apps = ", ".join(sorted(status.apps.keys()))
+        raise RuntimeError(
+            f"Application '{app_name}' not found in Juju status. "
+            f"Available applications: {available_apps}"
+        ) from exc
 
     leader_unit: str | None = None
     non_leaders: List[str] = []
@@ -72,8 +83,8 @@ def wait_for_unit_active(
         juju_client.juju.wait(
             lambda status: is_unit_active(status, app_name, unit_name),
             error=lambda status: app_has_error(status, app_name),
-            _timeout=timeout,
-            _delay=5.0,
+            timeout=timeout,
+            delay=5.0,
         )
     except jubilant.WaitError as exc:
         raise AssertionError(
@@ -91,23 +102,118 @@ def wait_for_unit_active(
     return elapsed
 
 
+def run_validation_command(
+    cmd: List[str],
+    timeout: int = 600,
+) -> Tuple[float, str, bool]:
+    """Run a validation command (e.g. sunbeam validation run quick).
+
+    Returns (duration_seconds, output, success).
+    """
+    start = time.time()
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+    duration = time.time() - start
+    output = (result.stdout or "") + (result.stderr or "")
+    return (round(duration, 1), output, result.returncode == 0)
+
+
+def wait_for_unit_active_with_tracking(
+    juju_client,
+    app_name: str,
+    unit_name: str,
+    timeout: int = 600,
+    poll_interval: int = 10,
+) -> Tuple[float | None, List[dict]]:
+    """Poll until unit is active or timeout.
+
+    Returns time_to_return_active_seconds (or None) and state_sequence.
+
+    state_sequence: list of {timestamp_iso, state, message} when not active.
+    """
+    state_sequence: List[dict] = []
+    poll_start = time.time()
+    left_active_at: float | None = None
+
+    while (time.time() - poll_start) < timeout:
+        status = juju_client.juju.status()
+        current, message = get_unit_workload_status(status, app_name, unit_name)
+        now = time.time()
+        ts_iso = datetime.fromtimestamp(now, tz=timezone.utc).isoformat()
+
+        if current != "active":
+            if left_active_at is None:
+                left_active_at = now
+            state_sequence.append(
+                {
+                    "timestamp": ts_iso,
+                    "state": current,
+                    "message": message,
+                }
+            )
+        else:
+            if left_active_at is not None:
+                return (round(now - left_active_at, 1), state_sequence)
+            return (0.0, state_sequence)
+
+        time.sleep(poll_interval)
+
+    return (None, state_sequence)
+
+
+def get_unit_workload_status(
+    status: jubilant.Status,
+    app_name: str,
+    unit_name: str,
+) -> Tuple[str, str]:
+    """Return (workload_status.current, workload_status.message) for the unit.
+
+    Returns ("unknown", "") if the unit or workload_status is missing.
+    """
+    units = status.get_units(app_name)
+    unit = units.get(unit_name)
+    if not unit:
+        return ("unknown", "")
+    workload = getattr(unit, "workload_status", None)
+    current = getattr(workload, "current", None) or "unknown"
+    message = getattr(workload, "message", None) or ""
+    return (str(current), str(message))
+
+
 def is_unit_active(
     status: jubilant.Status,
     app_name: str,
     unit_name: str,
 ) -> bool:
     """Return True if the given unit's workload status is 'active'."""
-    units = status.get_units(app_name)
-    unit = units.get(unit_name)
-    if not unit:
-        return False
-    workload = getattr(getattr(unit, "workload_status", None), "current", None)
-    return workload == "active"
+    current, _ = get_unit_workload_status(status, app_name, unit_name)
+    return current == "active"
 
 
 def app_has_error(status: jubilant.Status, app_name: str) -> bool:
     """Return True if any unit in the given app is in error."""
     return jubilant.any_error(status, app_name)
+
+
+def get_status_json_for_apps(juju_client, app_names: List[str]) -> dict:
+    """Return juju status as a dict restricted to the given application names.
+
+    Runs ``juju status --format json`` and returns a structure with only
+    the requested applications (for use in report snapshots).
+    """
+    try:
+        raw = juju_client.juju.cli("status", "--format", "json")
+        full = json.loads(raw) if isinstance(raw, str) else json.loads(raw.decode())
+    except (json.JSONDecodeError, TypeError) as exc:
+        logger.warning("Could not get juju status JSON: %s", exc)
+        return {"_error": str(exc)}
+
+    apps = full.get("applications") or {}
+    return {"applications": {name: apps[name] for name in app_names if name in apps}}
 
 
 def assert_apps_healthy(juju_client, app_names: List[str]) -> None:
@@ -154,7 +260,7 @@ def pod_chaos_name_for_pod(app_name: str, pod_name: str) -> str:
 def _kubectl_command(args: List[str]) -> List[str]:
     """Build a kubectl command suitable for the environment.
 
-    ``juju exec --unit <unit> -m <model> -- sudo k8s kubectl ...``
+    ``juju exec --unit <unit> -m <model> --stdin -- sudo k8s kubectl ...``
     """
     k8s_unit = "k8s/0"
     k8s_model = "openstack-machines"
@@ -169,6 +275,27 @@ def _kubectl_command(args: List[str]) -> List[str]:
         "sudo",
         "k8s",
         "kubectl",
+        *args,
+    ]
+
+
+def _helm_command(args: List[str]) -> List[str]:
+    """Build a helm command targeting the Sunbeam K8s cluster.
+
+    ``juju exec --unit <unit> -m <model> -- sudo helm ...``
+    """
+    k8s_unit = "k8s/0"
+    k8s_model = "openstack-machines"
+    return [
+        "juju",
+        "exec",
+        "--unit",
+        k8s_unit,
+        "-m",
+        k8s_model,
+        "--",
+        "sudo",
+        "helm",
         *args,
     ]
 
@@ -207,13 +334,40 @@ spec:
         app_namespace,
         chaos_name,
     )
-    subprocess.run(
-        _kubectl_command(["apply", "-f", "-"]),
-        input=manifest,
-        check=True,
+
+    manifest_b64 = base64.b64encode(manifest.encode("utf-8")).decode("ascii")
+    cmd = [
+        "juju",
+        "exec",
+        "--unit",
+        "k8s/0",
+        "-m",
+        "openstack-machines",
+        "--",
+        "bash",
+        "-c",
+        'echo "$1" | base64 -d | sudo k8s kubectl apply -f -',
+        "_",
+        manifest_b64,
+    ]
+    result = subprocess.run(
+        cmd,
+        check=False,
         capture_output=True,
         text=True,
     )
+    if result.returncode != 0:
+        logger.error(
+            "Failed to apply PodChaos %s (exit code %s).\nstdout:\n%s\nstderr:\n%s",
+            chaos_name,
+            result.returncode,
+            result.stdout,
+            result.stderr,
+        )
+        raise RuntimeError(
+            f"kubectl apply for PodChaos '{chaos_name}' failed with exit code "
+            f"{result.returncode}: {result.stderr.strip()}"
+        )
     return chaos_name
 
 
@@ -239,21 +393,35 @@ def delete_pod_chaos(chaos_name: str, chaos_namespace: str = "chaos-mesh") -> No
     )
 
 
-def run_validation_with_pod_chaos(
+def _write_chaos_json_report(report_name: str, data: dict) -> Path:
+    """Write a single JSON report file; name includes timestamp. Returns path."""
+    reports_dir = Path(__file__).parent / "reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
+    path = reports_dir / f"{report_name}_{timestamp}.json"
+    with path.open("w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, sort_keys=True)
+    return path
+
+
+def run_validation_with_pod_chaos(  # noqa: C901
     juju_client,
     targets: Sequence[tuple[str, List[str]]],
     *,
     suite_name: str,
+    report_name: str | None = None,
     openstack_namespace: str = "openstack",
     chaos_namespace: str = "chaos-mesh",
     validation_timeout: int = 3600,
+    initial_delay: int = 60,
+    recovery_timeout: int = 600,
+    poll_interval: int = 10,
+    quick_test_timeout: int = 600,
 ) -> None:
-    """Run 'sunbeam validation run smoke' while injecting PodChaos for targets.
+    """Run validation with PodChaos and optional JSON reporting.
 
-    Each entry in ``targets`` is (application_name, dependent_applications).
-    For each target application, all non-leader units are killed one by one
-    using PodChaos, and we wait for them to return to active status while
-    asserting that dependent applications remain healthy.
+    Smoke runs in parallel with chaos; quick run and JSON report
+    are executed after chaos when report_name is provided.
     """
     logger.info(
         "Starting 'sunbeam validation run smoke' for %s chaos suite...",
@@ -262,23 +430,35 @@ def run_validation_with_pod_chaos(
     validation_proc = subprocess.Popen(
         ["sunbeam", "validation", "run", "smoke"],
         text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
     )
 
+    run_start_monotonic = time.time()
+    failed_recoveries: List[dict] = []
+    apps_in_error: List[dict] = []
+    recovery_per_unit: List[dict] = []
+    validation_return_code: int | None = None
+    error_summary: str | None = None
+    validation_output: str | None = None
+    smoke_duration: float | None = None
+
     chaos_resources: List[str] = []
+
     try:
+        if initial_delay > 0:
+            logger.info(
+                "Sleeping %s seconds before starting PodChaos injections to allow "
+                "Tempest discover-tempest-config/bootstrap to complete.",
+                initial_delay,
+            )
+            time.sleep(initial_delay)
+
         for app_name, dependent_apps in targets:
             leader_unit, non_leader_units = get_leader_and_non_leaders(
                 juju_client,
                 app_name,
             )
-
-            if not non_leader_units:
-                logger.info(
-                    "Application '%s' has no non-leader units; skipping chaos.",
-                    app_name,
-                )
-                continue
-
             logger.info(
                 "%s leader unit: %s; non-leaders: %s",
                 app_name,
@@ -296,13 +476,40 @@ def run_validation_with_pod_chaos(
                 )
                 chaos_resources.append(chaos_name)
 
-                wait_for_unit_active(
-                    juju_client,
-                    app_name,
-                    unit_name,
-                    timeout=600,
+                time_to_return_active_seconds, state_sequence = (
+                    wait_for_unit_active_with_tracking(
+                        juju_client,
+                        app_name,
+                        unit_name,
+                        timeout=recovery_timeout,
+                        poll_interval=poll_interval,
+                    )
                 )
-
+                recovery_per_unit.append(
+                    {
+                        "app": app_name,
+                        "unit": unit_name,
+                        "time_to_return_active_seconds": time_to_return_active_seconds,
+                    }
+                )
+                if state_sequence:
+                    apps_in_error.append(
+                        {
+                            "app": app_name,
+                            "unit": unit_name,
+                            "state_sequence": state_sequence,
+                        }
+                    )
+                if time_to_return_active_seconds is None:
+                    failed_recoveries.append(
+                        {
+                            "app": app_name,
+                            "unit": unit_name,
+                            "pod": pod_name,
+                            "error": "timeout",
+                        }
+                    )
+                    break
                 if dependent_apps:
                     assert_apps_healthy(juju_client, dependent_apps)
 
@@ -311,17 +518,69 @@ def run_validation_with_pod_chaos(
             suite_name,
         )
         try:
-            return_code = validation_proc.wait(timeout=validation_timeout)
+            stdout_data, _ = validation_proc.communicate(timeout=validation_timeout)
+            validation_output = stdout_data or ""
+            validation_return_code = validation_proc.returncode
+            smoke_duration = time.time() - run_start_monotonic
         except subprocess.TimeoutExpired:
             validation_proc.kill()
-            raise AssertionError(
+            stdout_data, _ = validation_proc.communicate()
+            validation_output = stdout_data or ""
+            smoke_duration = time.time() - run_start_monotonic
+            validation_return_code = None
+            error_summary = (
                 "sunbeam validation run smoke did not complete within the timeout."
             )
 
-        assert return_code == 0, (
-            "sunbeam validation run smoke failed with exit code "
-            f"{return_code} during {suite_name} chaos suite."
-        )
+        if report_name:
+            quick_duration, quick_output, quick_success = run_validation_command(
+                ["sunbeam", "validation", "run", "quick"],
+                timeout=quick_test_timeout,
+            )
+            test_duration = time.time() - run_start_monotonic
+            final_status = "SUCCESS"
+            if failed_recoveries or not quick_success:
+                final_status = "FAIL"
+            report_data = {
+                "status": final_status,
+                "test_duration_seconds": round(test_duration, 1),
+                "smoke_test": {
+                    "duration_seconds": round(smoke_duration or 0, 1),
+                    "output": (validation_output or "")[:10000],
+                    "success": validation_return_code == 0,
+                },
+                "apps_in_error": apps_in_error,
+                "recovery_per_unit": recovery_per_unit,
+                "quick_test": {
+                    "duration_seconds": quick_duration,
+                    "output": (quick_output or "")[:10000],
+                    "success": quick_success,
+                },
+            }
+            report_path = _write_chaos_json_report(
+                f"{final_status}_{report_name}",
+                report_data,
+            )
+            logger.info("Chaos report written to %s", report_path)
+
+            if not quick_success:
+                # Quick validation failure makes the chaos run a FAIL.
+                raise AssertionError(
+                    "Quick validation test failed after chaos. See reports/."
+                )
+
+        if failed_recoveries and error_summary is None:
+            failed_labels = ", ".join(
+                f"{fr['app']}/{fr['unit']}" for fr in failed_recoveries
+            )
+            error_summary = (
+                f"One or more chaos targets did not recover cleanly: {failed_labels}"
+            )
+            raise AssertionError(error_summary)
+    except Exception as exc:  # noqa: BLE001
+        if error_summary is None:
+            error_summary = repr(exc)
+        raise
     finally:
         for chaos_name in chaos_resources:
             try:

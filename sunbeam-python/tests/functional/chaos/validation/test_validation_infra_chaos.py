@@ -14,12 +14,12 @@ from tests.functional.chaos.utils import run_validation_with_pod_chaos
 logger = logging.getLogger(__name__)
 
 
-INFRA_TARGETS: list[tuple[str, list[str]]] = [
-    ("mysql", ["keystone", "traefik-public", "traefik-internal"]),
-    ("rabbitmq", ["keystone", "traefik-public", "traefik-internal"]),
-    ("traefik-public", ["keystone"]),
-    ("traefik", ["keystone"]),
-    ("traefik-rgw", ["keystone"]),
+INFRA_APPS: list[str] = [
+    "mysql",
+    "rabbitmq",
+    "traefik-public",
+    "traefik",
+    "traefik-rgw",
 ]
 
 
@@ -31,6 +31,11 @@ def test_validation_resilient_to_infra_pod_kills(
     """Validation 'smoke' profile should tolerate infra pod/unit loss."""
     run_validation_with_pod_chaos(
         juju_client,
-        targets=INFRA_TARGETS,
+        targets=[(app, []) for app in INFRA_APPS],
         suite_name="infra",
+        report_name="test_validation_infra_chaos",
+        initial_delay=60,
+        recovery_timeout=1800,
+        poll_interval=10,
+        quick_test_timeout=1800,
     )

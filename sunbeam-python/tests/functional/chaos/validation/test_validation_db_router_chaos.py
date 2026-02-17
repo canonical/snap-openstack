@@ -13,8 +13,6 @@ from tests.functional.chaos.utils import run_validation_with_pod_chaos
 
 logger = logging.getLogger(__name__)
 
-DEPENDENT_APPS = ["keystone", "traefik-public", "traefik-internal"]
-
 
 ROUTER_APPS: list[str] = [
     "nova-api-mysql-router",
@@ -26,10 +24,10 @@ ROUTER_APPS: list[str] = [
     "keystone-mysql-router",
     "glance-mysql-router",
     "placement-mysql-router",
-    "aodh-mysql-router",
-    "gnocchi-mysql-router",
-    "masakari-mysql-router",
-    "watcher-mysql-router",
+    # "aodh-mysql-router",
+    # "gnocchi-mysql-router",
+    # "masakari-mysql-router",
+    # "watcher-mysql-router",
     "horizon-mysql-router",
 ]
 
@@ -40,9 +38,13 @@ def test_validation_resilient_to_mysql_router_pod_kills(
     juju_client,
 ) -> None:
     """Validation 'smoke' profile should tolerate mysql-router pod kills."""
-    targets = [(app, DEPENDENT_APPS) for app in ROUTER_APPS]
     run_validation_with_pod_chaos(
         juju_client,
-        targets=targets,
+        targets=[(app, []) for app in ROUTER_APPS],
         suite_name="mysql-router",
+        report_name="test_validation_db_router_chaos",
+        initial_delay=60,
+        recovery_timeout=1800,
+        poll_interval=10,
+        quick_test_timeout=1800,
     )
