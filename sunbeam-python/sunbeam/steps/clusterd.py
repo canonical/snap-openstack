@@ -258,6 +258,7 @@ class ClusterAddNodeStep(BaseStep):
             tokens = self.client.cluster.list_tokens()
             token_d = {token.get("name"): token.get("token") for token in tokens}
             if self.node_name in token_d:
+                LOG.warning("Reusing existing token for %s", self.node_name)
                 return Result(ResultType.SKIPPED, token_d.get(self.node_name))
         except ClusterServiceUnavailableException as e:
             LOG.debug(e)
@@ -269,7 +270,7 @@ class ClusterAddNodeStep(BaseStep):
         """Add node to sunbeam cluster."""
         try:
             token = self.client.cluster.add_node(name=self.node_name)
-            LOG.info(token)
+            LOG.debug("Generated token for node %s", self.node_name)
             return Result(result_type=ResultType.COMPLETED, message=token)
         except TokenAlreadyGeneratedException as e:
             LOG.warning(e)
@@ -415,6 +416,96 @@ class ClusterRemoveNodeStep(BaseStep):
             return Result(ResultType.FAILED, str(e))
 
 
+class PromptCheckNodeExistStep(BaseStep):
+    """Prompt user to continue if node doesn't exist in the sunbeam cluster."""
+
+    node_name: str
+    client: Client
+    continue_operation: bool = True
+    cluster_unavailable: bool = False
+    token_not_found: bool = False
+
+    def __init__(self, client: Client, name: str):
+        super().__init__("Check node in Cluster", "Checking node in Sunbeam cluster")
+        self.node_name = name
+        self.client = client
+
+    def has_prompts(self) -> bool:
+        """Returns true if the step has prompts that it can ask the user.
+
+        :return: True if the step can ask the user for prompts,
+                 False otherwise
+        """
+        return True
+
+    def prompt(
+        self,
+        console: Console | None = None,
+        show_hint: bool = False,
+    ) -> None:
+        """Check if node exists and prompt user if it does not."""
+        try:
+            members = self.client.cluster.get_cluster_members()
+            member_names = [member.get("name") for member in members]
+            LOG.debug("Cluster members: %s", member_names)
+            if self.node_name not in member_names:
+                # Check if token already generated
+                token_d = {
+                    token.get("name"): token.get("token")
+                    for token in self.client.cluster.list_tokens()
+                }
+                LOG.debug("Existing tokens: %s", token_d)
+                if self.node_name not in token_d:
+                    LOG.debug("No token found for node %s", self.node_name)
+                    self.continue_operation = False
+                    self.token_not_found = True
+                    return
+
+                question_bank = questions.QuestionBank(
+                    questions={
+                        "continue_operation": questions.ConfirmQuestion(
+                            f"Node {self.node_name} is not found in the"
+                            " cluster. Continue?",
+                            default_value=True,
+                            description=(
+                                "The node might not have been added to the"
+                                " cluster yet or it is currently unavailable."
+                            ),
+                        ),
+                    },
+                    console=console,  # type: ignore
+                    show_hint=show_hint,
+                )
+
+                continue_operation = question_bank.continue_operation.ask()
+                while continue_operation is None:
+                    continue_operation = question_bank.continue_operation.ask()
+                self.continue_operation = continue_operation
+        except ClusterServiceUnavailableException as e:
+            LOG.debug(e)
+            self.cluster_unavailable = True
+
+    def run(self, status: Status | None = None) -> Result:
+        """Continue operation if user agrees."""
+        if self.cluster_unavailable:
+            return Result(ResultType.FAILED, "Sunbeam Cluster service is unavailable.")
+        elif not self.continue_operation:
+            if self.token_not_found:
+                return Result(
+                    ResultType.FAILED,
+                    f"Node {self.node_name} not found in cluster and no"
+                    " token found for the node.",
+                )
+
+            return Result(
+                ResultType.FAILED,
+                f"Node {self.node_name} not found in cluster. "
+                "Operation cancelled by user.",
+            )
+
+        return Result(ResultType.COMPLETED)
+
+
 class ClusterAddJujuUserStep(BaseStep):
     """Add Juju user in cluster database."""
 
@@ -449,6 +540,52 @@ class ClusterAddJujuUserStep(BaseStep):
         """Add node to sunbeam cluster."""
         try:
             self.client.cluster.add_juju_user(self.username, self.token)
+            return Result(result_type=ResultType.COMPLETED)
+        except ClusterServiceUnavailableException as e:
+            LOG.debug(e)
+            return Result(ResultType.FAILED, str(e))
+
+
+class ClusterUpdateJujuUserStep(BaseStep):
+    """Update Juju user in cluster database."""
+
+    def __init__(self, client: Client, name: str, token: str):
+        super().__init__(
+            "Update Juju user in cluster DB",
+            "Updating Juju user in cluster database",
+        )
+
+        self.username = name
+        self.token = token
+        self.client = client
+
+    def is_skip(self, status: Status | None = None) -> Result:
+        """Determines if the step should be skipped or not.
+
+        :return: ResultType.SKIPPED if the Step should be skipped,
+                 ResultType.COMPLETED or ResultType.FAILED otherwise
+        """
+        try:
+            user = self.client.cluster.get_juju_user(self.username)
+            LOG.debug("Juju user %s is found in database.", user)
+            if user.get("token") == self.token:
+                LOG.debug("Juju user token is up to date, skipping update.")
+                return Result(ResultType.SKIPPED)
+        except ClusterServiceUnavailableException as e:
+            LOG.debug(e)
+            return Result(ResultType.FAILED, str(e))
+        except JujuUserNotFoundException:
+            LOG.debug("Juju user is not found in database, cannot update.")
+            return Result(
+                ResultType.FAILED, message=f"Juju user {self.username} not found."
+            )
+
+        return Result(ResultType.COMPLETED)
+
+    def run(self, status: Status | None = None) -> Result:
+        """Update juju user in sunbeam cluster."""
+        try:
+            self.client.cluster.update_juju_user(self.username, self.token)
             return Result(result_type=ResultType.COMPLETED)
         except ClusterServiceUnavailableException as e:
             LOG.debug(e)

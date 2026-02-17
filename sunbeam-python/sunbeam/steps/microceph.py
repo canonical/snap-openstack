@@ -515,7 +515,10 @@ class CheckMicrocephDistributionStep(BaseStep):
         try:
             node_info = self.client.cluster.get_node_info(self.node)
         except NodeNotExistInClusterException:
-            return Result(ResultType.FAILED, f"Node {self.node} not found in cluster")
+            return Result(
+                ResultType.SKIPPED, f"Node {self.node} is not found in the cluster"
+            )
+
         if Role.STORAGE.name.lower() not in node_info.get("role", ""):
             LOG.debug("Node %s is not a storage node", self.node)
             return Result(ResultType.SKIPPED)

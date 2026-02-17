@@ -137,6 +137,16 @@ class ExtendedAPIService(service.BaseService):
         data = {"username": name, "token": token}
         self._post("/1.0/jujuusers", data=json.dumps(data))
 
+    def update_juju_user(self, name: str, token: str) -> None:
+        """Update juju user in cluster database."""
+        data = {"username": name, "token": token}
+        try:
+            self._put(f"/1.0/jujuusers/{name}", data=json.dumps(data))
+        except HTTPError as e:
+            if e.response is not None and e.response.status_code == codes.not_found:
+                raise service.JujuUserNotFoundException(f"{name} not found") from e
+            raise e
+
     def list_juju_users(self) -> list:
         """List all juju users."""
         users = self._get("/1.0/jujuusers")
@@ -329,7 +339,8 @@ class ClusterService(MicroClusterService, ExtendedAPIService):
 
         # If node is part of cluster, remove node from cluster
         if name in member_names:
-            self.remove_juju_user(name)
+            # Cannot remove user as the same user name cannot be reused
+            # self.remove_juju_user(name)
             self.remove_node_info(name)
             self.remove(name)
         else:
