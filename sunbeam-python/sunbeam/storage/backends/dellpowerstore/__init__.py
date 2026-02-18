@@ -2,4 +2,3 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Dell PowerStore backend for Sunbeam storage."""
-

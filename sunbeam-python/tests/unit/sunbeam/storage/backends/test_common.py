@@ -160,7 +160,12 @@ def test_all_backends_have_unique_types(
     hitachi_backend, purestorage_backend, dellsc_backend, dellpowerstore_backend
 ):
     """Test that all backends have unique type identifiers."""
-    backends = [hitachi_backend, purestorage_backend, dellsc_backend, dellpowerstore_backend]
+    backends = [
+        hitachi_backend,
+        purestorage_backend,
+        dellsc_backend,
+        dellpowerstore_backend,
+    ]
     types = [b.backend_type for b in backends]
 
     # Check no duplicates
@@ -171,7 +176,12 @@ def test_all_backends_have_unique_charm_names(
     hitachi_backend, purestorage_backend, dellsc_backend, dellpowerstore_backend
 ):
     """Test that all backends have unique charm names."""
-    backends = [hitachi_backend, purestorage_backend, dellsc_backend, dellpowerstore_backend]
+    backends = [
+        hitachi_backend,
+        purestorage_backend,
+        dellsc_backend,
+        dellpowerstore_backend,
+    ]
     charm_names = [b.charm_name for b in backends]
 
     # Check no duplicates

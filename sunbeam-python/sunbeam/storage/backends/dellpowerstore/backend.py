@@ -4,7 +4,7 @@
 """Dell PowerStore storage backend implementation using base step classes."""
 
 import logging
-from typing import Annotated, Literal
+from typing import Annotated, Literal, Optional
 
 from pydantic import Field
 from rich.console import Console
@@ -17,7 +17,7 @@ LOG = logging.getLogger(__name__)
 console = Console()
 
 
-class DellPwerstoreConfig(StorageBackendConfig):
+class DellPowerstoreConfig(StorageBackendConfig):
     """Static configuration model for Dell PowerStore storage backend.
 
     This model includes all configuration options supported by the
@@ -29,7 +29,7 @@ class DellPwerstoreConfig(StorageBackendConfig):
         str,
         Field(description="Dell PowerStore management IP"),
         SecretDictField(field="san-ip"),
-    ]]
+    ]
     san_username: Annotated[
         str,
         Field(description="Dell PowerStore management username"),
@@ -41,8 +41,9 @@ class DellPwerstoreConfig(StorageBackendConfig):
         SecretDictField(field="san-password"),
     ]
     protocol: Annotated[
-        Literal["fc", "iscsi"], Field(description="Storage protocol (fc or iscsi)")
-    ]
+        Optional[Literal["fc", "iscsi"]],
+        Field(description="Storage protocol (fc or iscsi)"),
+    ] = "fc"
 
     # Backend configuration
     volume_backend_name: Annotated[
@@ -56,19 +57,21 @@ class DellPwerstoreConfig(StorageBackendConfig):
         str | None, Field(description="SSL certificate content in PEM format")
     ] = None
 
-    # Optional 
+    # Optional
     powerstore_nvme: Annotated[
-        str | None, Field(description="Enables the connection to use NVMe based protocol")
-    ] = None
+        bool | None,
+        Field(description="Enables the connection to use NVMe based protocol"),
+    ] = False
     powerstore_ports: Annotated[
-        str | None, Field(description="Comma separated list of PowerStore iSCSI IPs or FC WWNs")
+        str | None,
+        Field(description="Comma separated list of PowerStore iSCSI IPs or FC WWNs"),
     ] = None
     replication_device: Annotated[
         str | None, Field(description="Specific replication configuration settings")
     ] = None
 
 
-class DellPowertoreBackend(StorageBackendBase):
+class DellPowerstoreBackend(StorageBackendBase):
     """Dell PowerStore storage backend implementation."""
 
     backend_type = "dellpowerstore"

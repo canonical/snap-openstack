@@ -62,7 +62,7 @@ class TestDellpowerstoreBackend(BaseBackendTests):
                 "san-password": "secret",
             }
         )
-        assert config_no_protocol.protocol is None
+        assert config_no_protocol.protocol == "fc"
 
         # Test valid config with fc
         valid_config_fc = config_class.model_validate(
@@ -113,7 +113,7 @@ class TestDellpowerstoreBackend(BaseBackendTests):
         from sunbeam.storage.models import SecretDictField
 
         config_class = backend.config_type()
-        ip_field = config_class.model_fields.get("san-ip")
+        ip_field = config_class.model_fields.get("san_ip")
         assert ip_field is not None
         has_secret_marker = any(
             isinstance(m, SecretDictField) for m in ip_field.metadata
@@ -134,10 +134,10 @@ class TestDellpowerstoreBackend(BaseBackendTests):
         )
 
         # Verify optional fields default to None
-        assert config.protocol is None
-        assert powerstore_nvme is None
-        assert powerstore_ports is None
-        assert replication_device is None
+        assert config.protocol == "fc"
+        assert config.powerstore_nvme is False
+        assert config.powerstore_ports is None
+        assert config.replication_device is None
         assert config.volume_backend_name is None
         assert config.backend_availability_zone is None
 
@@ -173,7 +173,7 @@ class TestDellpowerstoreConfigValidation:
                 "san-ip": "192.168.1.1",
                 "san-username": "admin",
                 "san-password": "secret",
-                "powerstore_nvme": True,
+                "powerstore-nvme": True,
             }
         )
         assert config.powerstore_nvme is True
