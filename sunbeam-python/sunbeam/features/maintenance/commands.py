@@ -138,16 +138,10 @@ class EnableMaintenance(MaintenanceCommand):
             preflight_checks += [
                 checks.WatcherApplicationExistsCheck(self.jhelper),
                 checks.InstancesStatusCheck(
-                    jhelper=self.jhelper,
-                    deployment=self.deployment,
-                    node=self.node,
-                    force=self.force,
+                    jhelper=self.jhelper, node=self.node, force=self.force
                 ),
                 checks.NoEphemeralDiskCheck(
-                    jhelper=self.jhelper,
-                    deployment=self.deployment,
-                    node=self.node,
-                    force=self.force,
+                    jhelper=self.jhelper, node=self.node, force=self.force
                 ),
             ]
 
@@ -264,16 +258,10 @@ class EnableMaintenance(MaintenanceCommand):
         if "compute" in node_status:
             post_checks += [
                 checks.NovaInDisableStatusCheck(
-                    jhelper=self.jhelper,
-                    deployment=self.deployment,
-                    node=self.node,
-                    force=self.force,
+                    jhelper=self.jhelper, node=self.node, force=self.force
                 ),
                 checks.NoInstancesOnNodeCheck(
-                    jhelper=self.jhelper,
-                    deployment=self.deployment,
-                    node=self.node,
-                    force=self.force,
+                    jhelper=self.jhelper, node=self.node, force=self.force
                 ),
             ]
 

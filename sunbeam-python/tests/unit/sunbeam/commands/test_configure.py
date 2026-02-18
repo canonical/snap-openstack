@@ -2,14 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 import pytest
 
 import sunbeam.commands.configure as configure
 import sunbeam.core
 from sunbeam.core.common import ResultType
-from sunbeam.core.deployment import Deployment
 from sunbeam.core.terraform import TerraformException
 
 
@@ -76,27 +75,6 @@ export OS_PROJECT_NAME={creds["OS_PROJECT_NAME"]}
 export OS_AUTH_VERSION={auth_version}
 export OS_IDENTITY_API_VERSION={auth_version}"""
         assert contents == expect
-
-
-class TestRetrieveAdminCredentials:
-    def test_retrieve_admin_credentials_includes_region(self, deployment: Deployment):
-        helper = Mock()
-        helper.get_leader_unit.return_value = "keystone/0"
-        helper.run_action.side_effect = [
-            {
-                "username": "admin",
-                "password": "secret",
-                "public-endpoint": "http://keystone:5000/v3",
-                "user-domain-name": "Default",
-                "project-domain-name": "Default",
-                "project-name": "admin",
-                "api-version": "3",
-            },
-            {},
-        ]
-
-        creds = configure.retrieve_admin_credentials(helper, deployment, "openstack")
-        assert creds["OS_REGION_NAME"] == deployment.get_region_name()
 
 
 class TestDemoSetup:

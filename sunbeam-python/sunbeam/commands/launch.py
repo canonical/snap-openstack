@@ -72,9 +72,7 @@ def launch(
                 f"Cannot find {OPENSTACK_MODEL}. Please destroy and re-bootstrap."
             )
 
-        admin_auth_info = retrieve_admin_credentials(
-            jhelper_keystone, deployment, OPENSTACK_MODEL
-        )
+        admin_auth_info = retrieve_admin_credentials(jhelper_keystone, OPENSTACK_MODEL)
 
         tfplan = "demo-setup"
         tfhelper = deployment.get_tfhelper(tfplan)

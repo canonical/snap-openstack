@@ -15,14 +15,12 @@ import sunbeam.core.questions
 from sunbeam import utils
 from sunbeam.clusterd.client import Client
 from sunbeam.core.common import BaseStep, Result, ResultType, Status
-from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import (
     ActionFailedException,
     JujuHelper,
     LeaderNotFoundException,
 )
 from sunbeam.core.manifest import Manifest
-from sunbeam.core.openstack import DEFAULT_REGION
 from sunbeam.core.terraform import (
     TerraformException,
     TerraformHelper,
@@ -85,9 +83,7 @@ def dpdk_questions():
     }
 
 
-def retrieve_admin_credentials(
-    jhelper: JujuHelper, deployment: Deployment, model: str
-) -> dict:
+def retrieve_admin_credentials(jhelper: JujuHelper, model: str) -> dict:
     """Retrieve cloud admin credentials.
 
     Retrieve cloud admin credentials from keystone and
@@ -108,8 +104,6 @@ def retrieve_admin_credentials(
         LOG.debug(f"Running action {action_cmd} on {unit} failed: {str(e)}")
         raise click.ClickException("Unable to retrieve openrc from Keystone service")
 
-    region_name = deployment.get_region_name() or DEFAULT_REGION
-
     params = {
         "OS_USERNAME": action_result.get("username"),
         "OS_PASSWORD": action_result.get("password"),
@@ -119,7 +113,6 @@ def retrieve_admin_credentials(
         "OS_PROJECT_NAME": action_result.get("project-name"),
         "OS_AUTH_VERSION": action_result.get("api-version"),
         "OS_IDENTITY_API_VERSION": action_result.get("api-version"),
-        "OS_REGION_NAME": region_name,
     }
 
     action_cmd = "list-ca-certs"

@@ -28,7 +28,7 @@ def test_get_watcher_client(
     client = watcher_helper.get_watcher_client(mock_deployment)
 
     mock_get_admin_connection.assert_called_once_with(
-        mock_deployment.get_juju_helper.return_value, mock_deployment
+        jhelper=mock_deployment.get_juju_helper.return_value
     )
 
     mock_conn.session.get_endpoint.assert_called_once_with(
