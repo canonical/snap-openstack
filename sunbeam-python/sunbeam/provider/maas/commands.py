@@ -763,6 +763,7 @@ def deploy(
             maas_client,
             jhelper,
             storage,
+            manifest,
             deployment.openstack_machines_model,
         )
     )
@@ -913,10 +914,12 @@ def deploy(
         if manifest and manifest.core.config.pci and manifest.core.config.pci.aliases:
             plan2.append(
                 ReapplyOpenStackTerraformPlanStep(
+                    deployment,
                     client,
                     tfhelper_openstack_deploy,
                     jhelper,
                     manifest,
+                    deployment.openstack_machines_model,
                 )
             )
 
@@ -1839,10 +1842,12 @@ def configure_sriov(
     if manifest and manifest.core.config.pci and manifest.core.config.pci.aliases:
         plan.append(
             ReapplyOpenStackTerraformPlanStep(
+                deployment,
                 client,
                 tfhelper_openstack,
                 jhelper,
                 manifest,
+                deployment.openstack_machines_model,
             )
         )
     run_plan(plan, console, show_hints)

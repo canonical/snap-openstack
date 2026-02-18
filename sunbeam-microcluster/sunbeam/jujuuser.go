@@ -91,3 +91,22 @@ func DeleteJujuUser(ctx context.Context, s state.State, name string) error {
 
 	return nil
 }
+
+// UpdateJujuUser updates the juju user's token in the database
+func UpdateJujuUser(ctx context.Context, s state.State, name string, token string) error {
+	// Update juju user in the database.
+	err := s.Database().Transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		jujuUser := database.JujuUser{Username: name, Token: token}
+		err := database.UpdateJujuUser(ctx, tx, name, jujuUser)
+		if err != nil {
+			return err
+		}
+
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+
+	return nil
+}

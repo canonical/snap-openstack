@@ -75,6 +75,7 @@ from sunbeam.features.interface.v1.openstack import (
     OpenStackControlPlaneFeature,
     TerraformPlanLocation,
 )
+from sunbeam.steps import openstack
 from sunbeam.steps.juju import RemoveSaasApplicationsStep
 from sunbeam.steps.k8s import CREDENTIAL_SUFFIX
 from sunbeam.utils import click_option_show_hints, pass_method_obj
@@ -86,6 +87,7 @@ console = Console()
 OBSERVABILITY_FEATURE_KEY = "ObservabilityProviderType"
 OBSERVABILITY_MODEL = "observability"
 OBSERVABILITY_DEPLOY_TIMEOUT = 1800  # 30 minutes
+OBSERVABILITY_AGENT_K8S_DEPLOY_TIMEOUT = 1200  # 20 minutes
 COS_TFPLAN = "cos-plan"
 OBSERVABILITY_AGENT_TFPLAN = "grafana-agent-plan"
 COS_CONFIG_KEY = "TerraformVarsFeatureObservabilityPlanCos"
@@ -171,6 +173,7 @@ class DeployObservabilityStackStep(BaseStep, JujuStepHelper):
                 apps,
                 timeout=OBSERVABILITY_DEPLOY_TIMEOUT,
                 queue=status_queue,
+                overlay=openstack.build_overlay_dict(apps),
             )
         except (JujuWaitException, TimeoutError) as e:
             LOG.debug("Failed to deploy Observability Stack", exc_info=True)
@@ -683,6 +686,13 @@ class ObservabilityFeature(OpenStackControlPlaneFeature):
         # named opentelemetry-collector
         return ["opentelemetry-collector"]
 
+    def set_application_timeout_on_enable(self, deployment: Deployment) -> int:
+        """Set application timeout on enable."""
+        # Opentelemetry collector k8s is slow depending on scale of
+        # deployment and number of application deployed on the control plane.
+        n_control = len(deployment.get_client().cluster.list_nodes_by_role("control"))
+        return OBSERVABILITY_AGENT_K8S_DEPLOY_TIMEOUT * n_control
+
     def get_cos_offer_urls(self, deployment: Deployment) -> dict:
         """Get COS offer URLs."""
         raise NotImplementedError
@@ -865,7 +875,15 @@ class EmbeddedObservabilityFeature(ObservabilityFeature):
 
         observability_agent_k8s_plan = [
             TerraformInitStep(tfhelper),
-            EnableOpenStackApplicationStep(deployment, config, tfhelper, jhelper, self),
+            EnableOpenStackApplicationStep(
+                deployment,
+                config,
+                tfhelper,
+                jhelper,
+                self,
+                app_desired_status=["active"],
+                agent_desired_status=["idle"],
+            ),
         ]
 
         observability_agent_plan = [

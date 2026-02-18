@@ -291,7 +291,7 @@ class ValidationFeature(OpenStackControlPlaneFeature):
         """Set terraform variables to disable the application."""
         return {"enable-validation": False}
 
-    def set_application_timeout_on_enable(self) -> int:
+    def set_application_timeout_on_enable(self, deployment: Deployment) -> int:
         """Set Application Timeout on enabling the feature.
 
         The feature plan will timeout if the applications
@@ -299,7 +299,7 @@ class ValidationFeature(OpenStackControlPlaneFeature):
         """
         return VALIDATION_FEATURE_DEPLOY_TIMEOUT
 
-    def set_application_timeout_on_disable(self) -> int:
+    def set_application_timeout_on_disable(self, deployment: Deployment) -> int:
         """Set Application Timeout on disabling the feature.
 
         The feature plan will timeout if the applications
