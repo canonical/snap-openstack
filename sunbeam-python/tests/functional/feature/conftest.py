@@ -20,6 +20,16 @@ def pytest_addoption(parser):
         default="test_config.yaml",
         help="Path to test configuration file",
     )
+    parser.addoption(
+        "--features-disable-after",
+        action="store",
+        choices=["true", "false"],
+        default=None,
+        help=(
+            "Override features.disable_after (true/false) from test_config.yaml "
+            "without editing the file."
+        ),
+    )
 
 
 @pytest.fixture(scope="session")
@@ -39,6 +49,12 @@ def test_config(request):
 
     with open(config_file, "r") as f:
         config = yaml.safe_load(f)
+
+    # Optional CLI override for disable-after behaviour.
+    cli_disable_after = request.config.getoption("--features-disable-after")
+    if cli_disable_after is not None:
+        features_cfg = config.setdefault("features", {})
+        features_cfg["disable_after"] = cli_disable_after == "true"
 
     return config
 

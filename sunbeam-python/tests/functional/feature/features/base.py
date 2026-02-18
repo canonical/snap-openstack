@@ -23,6 +23,8 @@ class BaseFeatureTest:
     timeout_seconds: int = 300
     enable_args: List[str] = []
     disable_args: List[str] = []
+    # If True, run full enable+disable lifecycle. If False, leave feature enabled.
+    disable_after: bool = False
 
     def __init__(
         self,
@@ -34,7 +36,8 @@ class BaseFeatureTest:
         self.juju = juju_client
         self.config = config or {}
 
-        feature_config = self.config.get("features", {}).get(self.feature_name, {})
+        features_cfg = self.config.get("features", {})
+        feature_config = features_cfg.get(self.feature_name, {})
         self.expected_applications = feature_config.get(
             "expected_applications",
             self.expected_applications,
@@ -45,6 +48,12 @@ class BaseFeatureTest:
         )
         self.enable_args = feature_config.get("enable_args", self.enable_args)
         self.disable_args = feature_config.get("disable_args", self.disable_args)
+        # Global default can be overridden per-feature.
+        global_disable_after = features_cfg.get("disable_after", self.disable_after)
+        self.disable_after = feature_config.get(
+            "disable_after",
+            global_disable_after,
+        )
 
         self._ensure_openstack_env()
 
@@ -76,9 +85,12 @@ class BaseFeatureTest:
             return False
 
     def run_full_lifecycle(self) -> bool:
-        """Run enable/disable lifecycle with timing.
+        """Run feature lifecycle: enable, validate, optionally disable.
 
-        Disable failures are logged but do not fail the overall test.
+        By default, features are left enabled after validation. If
+        ``disable_after`` is set (globally or per-feature via config),
+        a best-effort disable phase is run. Disable failures are logged
+        but do not fail the overall test.
         """
         logger.info("Starting lifecycle test for feature: '%s'", self.feature_name)
 
@@ -115,6 +127,21 @@ class BaseFeatureTest:
                     self.feature_name,
                 )
             return False
+
+        if not self.disable_after:
+            logger.info(
+                "Leaving feature '%s' enabled (disable_after is False)",
+                self.feature_name,
+            )
+            total_duration = time.time() - enable_start
+            logger.info(
+                "[SUMMARY] Feature '%s' - Enable: %.2fs, Disable: skipped, "
+                "Total: %.2fs",
+                self.feature_name,
+                enable_duration,
+                total_duration,
+            )
+            return True
 
         disable_start = time.time()
         logger.info("[DISABLE] Starting disable for '%s'...", self.feature_name)

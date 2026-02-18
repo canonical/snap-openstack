@@ -1,8 +1,9 @@
 # Sunbeam Feature Functional Tests
 
 Functional tests for Sunbeam feature enablement/disablement. These tests
-connect to an **existing Sunbeam deployment** and run the enable/verify/disable
-lifecycle for each feature, logging timing and basic behaviour checks.
+connect to an **existing Sunbeam deployment** and run the enable/verify
+lifecycle for each feature, with an optional disable phase controlled by
+configuration.
 
 The suite is designed to be run via `tox` from the `sunbeam-python` tree.
 
@@ -58,6 +59,98 @@ You can pass standard `pytest` selectors through tox via `posargs`. For example:
   tox -e functional-feature -- tests/functional/feature/test_features.py::test_tls_ca
   ```
 
+- **Vault**:
+
+  ```bash
+  tox -e functional-feature -- tests/functional/feature/test_features.py::test_vault
+  ```
+
+You can also run any single feature test **directly with the virtualenv Python**,
+which is handy when you are iterating locally:
+
+```bash
+../.venv/bin/python -m pytest \
+  tests/functional/feature/test_features.py::test_<feature_name> \
+  --config tests/functional/feature/test_config.yaml
+```
+
+For example:
+
+- TLS CA:
+
+  ```bash
+  ../.venv/bin/python -m pytest \
+    tests/functional/feature/test_features.py::test_tls_ca \
+    --config tests/functional/feature/test_config.yaml
+  ```
+
+- Vault:
+
+  ```bash
+  ../.venv/bin/python -m pytest \
+    tests/functional/feature/test_features.py::test_vault \
+    --config tests/functional/feature/test_config.yaml
+  ```
+
+### Control whether features are disabled after tests
+
+By default, features are **left enabled** after their tests complete. You can
+enable the legacy "enable then disable" behaviour via `test_config.yaml`:
+
+```yaml
+features:
+  disable_after: true          # disable every feature after its test
+```
+
+You can also override this per feature:
+
+```yaml
+features:
+  disable_after: false         # default for all features
+
+  tls:
+    disable_after: true        # only TLS is disabled after test
+
+  vault:
+    disable_after: false       # explicitly keep Vault enabled
+
+You can also override this behaviour **from the command line** without editing
+the config file, using the `--features-disable-after` pytest option. When
+running via `tox`:
+
+```bash
+tox -e functional-feature -- --features-disable-after true   # force disable
+tox -e functional-feature -- --features-disable-after false  # force keep enabled
+```
+
+Or directly with the virtualenv Python:
+
+```bash
+../.venv/bin/python -m pytest \
+  tests/functional/feature/test_features.py::test_<feature_name> \
+  --config tests/functional/feature/test_config.yaml \
+  --features-disable-after true    # or false
+
+Concrete examples:
+
+- **Run TLS CA test and disable TLS after it completes**:
+
+  ```bash
+  tox -e functional-feature -- \
+    tests/functional/feature/test_features.py::test_tls_ca \
+    --features-disable-after true
+  ```
+
+- **Run Vault test and keep Vault enabled afterwards** (even if config sets
+  `disable_after: true`):
+
+  ```bash
+  tox -e functional-feature -- \
+    tests/functional/feature/test_features.py::test_vault \
+    --features-disable-after false
+  ```
+```
+
 ## Feature coverage and dependencies
 
 ### Features in this suite
@@ -102,5 +195,5 @@ Some features have explicit dependencies:
 
 ## Notes
 
-- Disable failures are **logged and ignored** so that the suite continues
-  to the next feature, matching the behaviour of the original tests.
+- When `disable_after` is enabled (globally or per-feature), disable failures
+  are **logged and ignored** so that the suite continues to the next feature.

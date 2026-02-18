@@ -26,7 +26,7 @@ from .features.resource_optimization import ResourceOptimizationTest
 from .features.secrets import SecretsTest
 from .features.shared_filesystem import SharedFilesystemTest
 from .features.telemetry import TelemetryTest
-from .features.tls import TlsCaTest
+from .features.tls import TlsCaTest, TlsVaultTest
 from .features.validation import ValidationTest
 from .features.vault import VaultTest
 
@@ -170,6 +170,13 @@ def test_tls_ca(sunbeam_client, juju_client, test_config):
     """Test TLS CA mode lifecycle (enable/disable with verification)."""
     feature_test = TlsCaTest(sunbeam_client, juju_client, test_config)
     assert feature_test.run_full_lifecycle(), "TLS CA feature test failed"
+
+
+@pytest.mark.functional
+def test_tls_vault(sunbeam_client, juju_client, test_config):
+    """Test TLS Vault mode lifecycle (enable/disable with minimal verification)."""
+    feature_test = TlsVaultTest(sunbeam_client, juju_client, test_config)
+    assert feature_test.run_full_lifecycle(), "TLS Vault feature test failed"
 
 
 @pytest.mark.functional
