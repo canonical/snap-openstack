@@ -1879,7 +1879,12 @@ def remove(ctx: click.Context, name: str, force: bool, show_hints: bool) -> None
             ),
             UpdateK8SCloudStep(deployment, jhelper),
             RemoveHypervisorUnitStep(
-                client, name, jhelper, deployment.openstack_machines_model, force
+                client,
+                jhelper,
+                deployment,
+                name,
+                deployment.openstack_machines_model,
+                force,
             ),
             RemoveCinderVolumeUnitsStep(
                 client, name, jhelper, deployment.openstack_machines_model
@@ -1998,7 +2003,9 @@ def configure_cmd(
             ),
         )
 
-    admin_credentials = retrieve_admin_credentials(jhelper_keystone, OPENSTACK_MODEL)
+    admin_credentials = retrieve_admin_credentials(
+        jhelper_keystone, deployment, OPENSTACK_MODEL
+    )
 
     # Add OS_INSECURE as https not working with terraform openstack provider.
     admin_credentials["OS_INSECURE"] = "true"
