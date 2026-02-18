@@ -37,7 +37,7 @@ class TestInstancesStatusCheck:
         instances = [[], [], []]
         mock_guests_on_hypervisor.side_effect = instances
 
-        check = checks.InstancesStatusCheck(Mock(), node, False)
+        check = checks.InstancesStatusCheck(Mock(), Mock(), node, False)
         assert check.run()
 
     def test_run_failed(
@@ -54,7 +54,7 @@ class TestInstancesStatusCheck:
 
         mock_guests_on_hypervisor.side_effect = instances
 
-        check = checks.InstancesStatusCheck(Mock(), node, False)
+        check = checks.InstancesStatusCheck(Mock(), Mock(), node, False)
         assert not check.run()
         assert check.message == (
             "Instances not in expected status: {}".format(
@@ -78,7 +78,7 @@ class TestInstancesStatusCheck:
 
         mock_guests_on_hypervisor.side_effect = instances
 
-        check = checks.InstancesStatusCheck(Mock(), nodes, True)
+        check = checks.InstancesStatusCheck(Mock(), Mock(), nodes, True)
 
         assert check.run()
 
@@ -97,7 +97,7 @@ class TestNoEphemeralDiskCheck:
         mock_flavor.ephemeral = 0
         mock_conn.compute.find_flavor.return_value = mock_flavor
 
-        check = checks.NoEphemeralDiskCheck(Mock(), node, False)
+        check = checks.NoEphemeralDiskCheck(Mock(), Mock(), node, False)
         assert check.run()
         mock_guests_on_hypervisor.assert_has_calls(
             [
@@ -126,7 +126,7 @@ class TestNoEphemeralDiskCheck:
         flavors[-2].ephemeral = 100
         mock_conn.compute.find_flavor.side_effect = flavors
 
-        check = checks.NoEphemeralDiskCheck(Mock(), node, False)
+        check = checks.NoEphemeralDiskCheck(Mock(), Mock(), node, False)
         assert not check.run()
         assert check.message == "Instances have ephemeral disk: {}".format(
             ["target-inst-b", "target-inst-a"]
@@ -155,7 +155,7 @@ class TestNoEphemeralDiskCheck:
         flavors[-1].ephemeral = 100
         mock_conn.compute.find_flavor.side_effect = flavors
 
-        check = checks.NoEphemeralDiskCheck(Mock(), node, True)
+        check = checks.NoEphemeralDiskCheck(Mock(), Mock(), node, True)
         assert check.run()
         mock_guests_on_hypervisor.assert_has_calls(
             [
@@ -173,7 +173,7 @@ class TestNoInstanceOnNodeCheck:
         instances = []
         mock_guests_on_hypervisor.return_value = instances
 
-        check = checks.NoInstancesOnNodeCheck(Mock(), node, False)
+        check = checks.NoInstancesOnNodeCheck(Mock(), Mock(), node, False)
         assert check.run()
         mock_guests_on_hypervisor.assert_called_once_with(
             hypervisor_name=node,
@@ -189,7 +189,7 @@ class TestNoInstanceOnNodeCheck:
         instances[1].id = "inst-1"
         mock_guests_on_hypervisor.return_value = instances
 
-        check = checks.NoInstancesOnNodeCheck(Mock(), node, False)
+        check = checks.NoInstancesOnNodeCheck(Mock(), Mock(), node, False)
         assert not check.run()
         mock_guests_on_hypervisor.assert_called_once_with(
             hypervisor_name=node,
@@ -206,7 +206,7 @@ class TestNoInstanceOnNodeCheck:
         instances[1].id = "inst-1"
         mock_guests_on_hypervisor.return_value = instances
 
-        check = checks.NoInstancesOnNodeCheck(Mock(), node, True)
+        check = checks.NoInstancesOnNodeCheck(Mock(), Mock(), node, True)
         assert check.run()
         mock_guests_on_hypervisor.assert_called_once_with(
             hypervisor_name="node1",
@@ -219,14 +219,14 @@ class TestNovaInDisableStatusCheck:
         services = [Mock()]
         mock_conn.compute.services.return_value = services
 
-        check = checks.NovaInDisableStatusCheck(Mock(), "node1", False)
+        check = checks.NovaInDisableStatusCheck(Mock(), Mock(), "node1", False)
         assert check.run()
 
     def test_run_failed(self, mock_conn, mock_get_admin_connection):
         services = []
         mock_conn.compute.services.return_value = services
 
-        check = checks.NovaInDisableStatusCheck(Mock(), "node1", False)
+        check = checks.NovaInDisableStatusCheck(Mock(), Mock(), "node1", False)
         assert not check.run()
         assert check.message == "Nova compute still not disabled on node node1"
 
@@ -234,7 +234,7 @@ class TestNovaInDisableStatusCheck:
         services = []
         mock_conn.compute.services.return_value = services
 
-        check = checks.NovaInDisableStatusCheck(Mock(), "node1", True)
+        check = checks.NovaInDisableStatusCheck(Mock(), Mock(), "node1", True)
         assert check.run()
 
 

@@ -255,6 +255,7 @@ class ConfigureMicrocephOSDStep(BaseStep):
         self.disks = ""
         self.unpartitioned_disks: list[str] = []
         self.osd_disks: list[str] = []
+        self.wipe = False
 
     def microceph_config_questions(self):
         """Return questions for configuring microceph."""
@@ -318,6 +319,9 @@ class ConfigureMicrocephOSDStep(BaseStep):
 
         # Preseed can have osd_devices as list. If so, change to comma separated str
         osd_devices = microceph_config.get(self.node_name, {}).get("osd_devices")
+        wipe_disks = microceph_config.get(self.node_name, {}).get(
+            "dangerous_i_acknowledge_i_will_lose_data_wipe_disks", False
+        )
         if isinstance(osd_devices, list):
             osd_devices_str = ",".join(osd_devices)
             microceph_config[self.node_name]["osd_devices"] = osd_devices_str
@@ -334,7 +338,10 @@ class ConfigureMicrocephOSDStep(BaseStep):
         )
         # Microceph configuration
         self.disks = microceph_config_bank.osd_devices.ask()
+        self.wipe = wipe_disks
         self.variables["microceph_config"][self.node_name]["osd_devices"] = self.disks
+        # note(gboutry): wipe disks option is never saved in clusterd, always
+        # read when needed in the manifest.
 
         LOG.debug(self.variables)
         questions.write_answers(self.client, self._CONFIG, self.variables)
@@ -371,6 +378,8 @@ class ConfigureMicrocephOSDStep(BaseStep):
     def run(self, status: Status | None = None) -> Result:
         """Configure local disks on microceph."""
         failed = False
+        if self.wipe:
+            LOG.debug("User expressly accepted to wipe disks before adding OSDs")
         try:
             unit = self.jhelper.get_unit_from_machine(
                 APPLICATION, self.machine_id, self.model
@@ -382,6 +391,7 @@ class ConfigureMicrocephOSDStep(BaseStep):
                 "add-osd",
                 action_params={
                     "device-id": self.disks,
+                    "wipe": self.wipe,
                 },
             )
             LOG.debug(f"Result after running action add-osd: {action_result}")
@@ -505,7 +515,10 @@ class CheckMicrocephDistributionStep(BaseStep):
         try:
             node_info = self.client.cluster.get_node_info(self.node)
         except NodeNotExistInClusterException:
-            return Result(ResultType.FAILED, f"Node {self.node} not found in cluster")
+            return Result(
+                ResultType.SKIPPED, f"Node {self.node} is not found in the cluster"
+            )
+
         if Role.STORAGE.name.lower() not in node_info.get("role", ""):
             LOG.debug("Node %s is not a storage node", self.node)
             return Result(ResultType.SKIPPED)

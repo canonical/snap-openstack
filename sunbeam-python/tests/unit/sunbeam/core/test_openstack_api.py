@@ -52,7 +52,9 @@ def remove_network_service():
 
 class TestOpenStackAPI:
     def test_get_admin_connection(self, retrieve_admin_credentials, os_connect):
-        sunbeam.core.openstack_api.get_admin_connection(None)
+        jhelper = Mock()
+        deployment = Mock()
+        sunbeam.core.openstack_api.get_admin_connection(jhelper, deployment)
         os_connect.assert_called_once_with(
             auth_url=FAKE_CREDS.get("OS_AUTH_URL"),
             username=FAKE_CREDS.get("OS_USERNAME"),
@@ -90,8 +92,10 @@ class TestOpenStackAPI:
         self, get_admin_connection, remove_compute_service, remove_network_service
     ):
         conn = Mock()
+        jhelper = Mock()
+        deployment = Mock()
         get_admin_connection.return_value = conn
-        sunbeam.core.openstack_api.remove_hypervisor("hyper1", None)
-        get_admin_connection.assert_called_once_with(None)
+        sunbeam.core.openstack_api.remove_hypervisor(jhelper, deployment, "hyper1")
+        get_admin_connection.assert_called_once_with(jhelper, deployment)
         remove_compute_service.assert_called_once_with("hyper1", conn)
         remove_network_service.assert_called_once_with("hyper1", conn)

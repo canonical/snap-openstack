@@ -101,7 +101,9 @@ from sunbeam.steps.clusterd import (
     ClusterJoinNodeStep,
     ClusterRemoveNodeStep,
     ClusterUpdateJujuControllerStep,
+    ClusterUpdateJujuUserStep,
     ClusterUpdateNodeStep,
+    PromptCheckNodeExistStep,
     SaveManagementCidrStep,
 )
 from sunbeam.steps.hypervisor import (
@@ -125,6 +127,7 @@ from sunbeam.steps.juju import (
     MigrateModelStep,
     RegisterJujuUserStep,
     RemoveJujuMachineStep,
+    ResetJujuUserStep,
     SaveControllerStep,
     SaveJujuAdminUserLocallyStep,
     SaveJujuRemoteUserLocallyStep,
@@ -992,7 +995,9 @@ def configure_sriov(
     jhelper = deployment.get_juju_helper()
     jhelper_keystone = deployment.get_juju_helper(keystone=True)
 
-    admin_credentials = retrieve_admin_credentials(jhelper_keystone, OPENSTACK_MODEL)
+    admin_credentials = retrieve_admin_credentials(
+        jhelper_keystone, deployment, OPENSTACK_MODEL
+    )
     admin_credentials["OS_INSECURE"] = "true"
 
     tfhelper_hypervisor = deployment.get_tfhelper("hypervisor-plan")
@@ -1063,7 +1068,11 @@ def configure_dpdk(
     jhelper = deployment.get_juju_helper()
     jhelper_keystone = deployment.get_juju_helper(keystone=True)
 
-    admin_credentials = retrieve_admin_credentials(jhelper_keystone, OPENSTACK_MODEL)
+    admin_credentials = retrieve_admin_credentials(
+        jhelper_keystone,
+        deployment,
+        OPENSTACK_MODEL,
+    )
     admin_credentials["OS_INSECURE"] = "true"
 
     tfhelper_hypervisor = deployment.get_tfhelper("hypervisor-plan")
@@ -1157,15 +1166,37 @@ def add(
         JujuGrantModelAccessStep(jhelper, name, deployment.openstack_machines_model),
         JujuGrantModelAccessStep(jhelper, name, OPENSTACK_MODEL),
     ]
-
     plan1_results = run_plan(plan1, console, show_hints)
 
-    user_token = get_step_message(plan1_results, CreateJujuUserStep)
-
-    plan2 = [ClusterAddJujuUserStep(client, name, user_token)]
-    run_plan(plan2, console, show_hints)
-
     add_node_step_result = get_step_result(plan1_results, ClusterAddNodeStep)
+    create_juju_user_step_result = get_step_result(plan1_results, CreateJujuUserStep)
+
+    # If the node was re-added, the CreateJujuUserStep would have been skipped
+    plan_juju_user: list[BaseStep]
+    if (
+        add_node_step_result.result_type == ResultType.COMPLETED
+        and create_juju_user_step_result.result_type == ResultType.SKIPPED
+    ):
+        LOG.warning(
+            "Node %s is re-added to the cluster. Generating a new Juju user token.",
+            name,
+        )
+
+        plan_rtoken = [
+            ResetJujuUserStep(name),
+        ]
+        plan_rtoken_results = run_plan(plan_rtoken, console, show_hints)
+        user_token = get_step_message(plan_rtoken_results, ResetJujuUserStep)
+
+        plan_juju_user = [
+            ClusterUpdateJujuUserStep(client, name, user_token),
+        ]
+    else:
+        user_token = get_step_message(plan1_results, CreateJujuUserStep)
+        plan_juju_user = [ClusterAddJujuUserStep(client, name, user_token)]
+
+    run_plan(plan_juju_user, console, show_hints)
+
     if add_node_step_result.result_type == ResultType.COMPLETED:
         token = str(add_node_step_result.message)
         if output:
@@ -1180,7 +1211,7 @@ def add(
             else:
                 _print_output(token, format, name)
         else:
-            console.print("Node already a member of the Sunbeam cluster")
+            console.print("Node is already a member of the Sunbeam cluster")
 
 
 @click.command()
@@ -1720,7 +1751,7 @@ def remove(ctx: click.Context, name: str, force: bool, show_hints: bool) -> None
     preflight_checks = [DaemonGroupCheck()]
     run_preflight_checks(preflight_checks, console)
 
-    plan = [
+    plan: list[BaseStep] = [
         JujuLoginStep(deployment.juju_account),
         CheckCinderVolumeDistributionStep(
             client,
@@ -1762,7 +1793,12 @@ def remove(ctx: click.Context, name: str, force: bool, show_hints: bool) -> None
         ),
         UpdateK8SCloudStep(deployment, jhelper),
         RemoveHypervisorUnitStep(
-            client, name, jhelper, deployment.openstack_machines_model, force
+            client,
+            jhelper,
+            deployment,
+            name,
+            deployment.openstack_machines_model,
+            force,
         ),
         RemoveCinderVolumeUnitsStep(
             client, name, jhelper, deployment.openstack_machines_model
@@ -1798,6 +1834,101 @@ def remove(ctx: click.Context, name: str, force: bool, show_hints: bool) -> None
         ClusterRemoveNodeStep(client, name),
     ]
 
+    if not force:
+        plan.append(PromptCheckNodeExistStep(client, name))
+
+    plan.extend(
+        [
+            CheckCinderVolumeDistributionStep(
+                client,
+                name,
+                jhelper,
+                deployment.openstack_machines_model,
+                force=force,
+            ),
+            CheckMicrocephDistributionStep(
+                client,
+                name,
+                jhelper,
+                deployment.openstack_machines_model,
+                force=force,
+            ),
+            CheckMysqlK8SDistributionStep(
+                client,
+                name,
+                jhelper,
+                deployment.openstack_machines_model,
+                force=force,
+            ),
+            CheckOvnK8SDistributionStep(
+                client,
+                name,
+                jhelper,
+                deployment.openstack_machines_model,
+                force=force,
+            ),
+            CheckRabbitmqK8SDistributionStep(
+                client,
+                name,
+                jhelper,
+                deployment.openstack_machines_model,
+                force=force,
+            ),
+            MigrateK8SKubeconfigStep(
+                client, name, jhelper, deployment.openstack_machines_model
+            ),
+            UpdateK8SCloudStep(deployment, jhelper),
+            RemoveHypervisorUnitStep(
+                client,
+                jhelper,
+                deployment,
+                name,
+                deployment.openstack_machines_model,
+                force,
+            ),
+            RemoveCinderVolumeUnitsStep(
+                client, name, jhelper, deployment.openstack_machines_model
+            ),
+            RemoveMicrocephUnitsStep(
+                client, name, jhelper, deployment.openstack_machines_model
+            ),
+            RemoveMicroOVNUnitsStep(
+                client, name, jhelper, deployment.openstack_machines_model
+            ),
+            CordonK8SUnitStep(
+                client, name, jhelper, deployment.openstack_machines_model
+            ),
+            DrainK8SUnitStep(
+                client,
+                name,
+                jhelper,
+                deployment.openstack_machines_model,
+                remove_pvc=True,
+            ),
+            RemoveK8SUnitsStep(
+                client, name, jhelper, deployment.openstack_machines_model
+            ),
+            EnsureL2AdvertisementByHostStep(
+                deployment,
+                client,
+                jhelper,
+                deployment.openstack_machines_model,
+                Networks.MANAGEMENT,
+                deployment.internal_ip_pool,
+            ),
+            RemoveSunbeamMachineUnitsStep(
+                client, name, jhelper, deployment.openstack_machines_model
+            ),
+            RemoveJujuMachineStep(
+                client, name, jhelper, deployment.openstack_machines_model
+            ),
+            # Cannot remove user as the same user name cannot be resued,
+            # so commenting the RemoveJujuUserStep
+            # RemoveJujuUserStep(name),
+            ClusterRemoveNodeStep(client, name),
+        ]
+    )
+
     run_plan(plan, console, show_hints)
     click.echo(f"Removed node {name} from the cluster")
     # Removing machine does not clean up all deployed juju components. This is
@@ -1805,10 +1936,13 @@ def remove(ctx: click.Context, name: str, force: bool, show_hints: bool) -> None
     # Without the workaround mentioned in LP#1851489, it is not possible to
     # reprovision the machine back.
     click.echo(
-        f"Run command `sudo /sbin/remove-juju-services` on node {name} "
-        "to reuse the machine."
+        "To reuse the machine run the following command on the node:\n\n"
+        "    sudo /sbin/remove-juju-services\n"
     )
-    click.echo("Run `sunbeam cluster resize` to scale down the cluster")
+    click.echo(
+        "To scale down the cluster run the following command:\n\n"
+        "    sunbeam cluster resize\n"
+    )
 
 
 @click.command("deployment")
@@ -1869,7 +2003,9 @@ def configure_cmd(
             ),
         )
 
-    admin_credentials = retrieve_admin_credentials(jhelper_keystone, OPENSTACK_MODEL)
+    admin_credentials = retrieve_admin_credentials(
+        jhelper_keystone, deployment, OPENSTACK_MODEL
+    )
 
     # Add OS_INSECURE as https not working with terraform openstack provider.
     admin_credentials["OS_INSECURE"] = "true"

@@ -45,7 +45,8 @@ class WatcherActionFailedException(Exception):
 
 
 def get_watcher_client(deployment: Deployment) -> "watcher_client.Client":
-    conn = get_admin_connection(jhelper=deployment.get_juju_helper(keystone=True))
+    jhelper = deployment.get_juju_helper(keystone=True)
+    conn = get_admin_connection(jhelper, deployment)
 
     watcher_endpoint = conn.session.get_endpoint(
         service_type="infra-optim",
