@@ -30,8 +30,8 @@ def openrc(ctx: click.Context) -> None:
     with console.status("Retrieving openrc from Keystone service ... "):
         creds = retrieve_admin_credentials(
             jhelper,
+            deployment,
             OPENSTACK_MODEL,
-            deployment=deployment,
         )
         console.print("# openrc for access to OpenStack")
         for param, value in creds.items():

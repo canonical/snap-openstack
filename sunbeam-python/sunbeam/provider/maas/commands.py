@@ -972,9 +972,7 @@ def configure_cmd(
     if not jhelper.model_exists(OPENSTACK_MODEL):
         LOG.error(f"Expected model {OPENSTACK_MODEL} missing")
         raise click.ClickException("Please run `sunbeam cluster bootstrap` first")
-    admin_credentials = retrieve_admin_credentials(
-        jhelper, OPENSTACK_MODEL, deployment=deployment
-    )
+    admin_credentials = retrieve_admin_credentials(jhelper, deployment, OPENSTACK_MODEL)
     # Add OS_INSECURE as https not working with terraform openstack provider.
     admin_credentials["OS_INSECURE"] = "true"
 
@@ -1596,7 +1594,12 @@ def remove_node(ctx: click.Context, name: str, force: bool, show_hints: bool) ->
         ),
         UpdateK8SCloudStep(deployment, jhelper),
         RemoveHypervisorUnitStep(
-            client, name, jhelper, deployment.openstack_machines_model, force
+            client,
+            jhelper,
+            deployment,
+            name,
+            deployment.openstack_machines_model,
+            force,
         ),
         RemoveCinderVolumeUnitsStep(
             client, name, jhelper, deployment.openstack_machines_model
@@ -1810,9 +1813,7 @@ def configure_sriov(
     manifest = deployment.get_manifest(manifest_path)
     jhelper = JujuHelper(deployment.juju_controller)
 
-    admin_credentials = retrieve_admin_credentials(
-        jhelper, OPENSTACK_MODEL, deployment=deployment
-    )
+    admin_credentials = retrieve_admin_credentials(jhelper, deployment, OPENSTACK_MODEL)
     admin_credentials["OS_INSECURE"] = "true"
 
     tfhelper_hypervisor = deployment.get_tfhelper("hypervisor-plan")
@@ -1870,9 +1871,7 @@ def configure_dpdk(
     manifest = deployment.get_manifest(manifest_path)
     jhelper = JujuHelper(deployment.juju_controller)
 
-    admin_credentials = retrieve_admin_credentials(
-        jhelper, OPENSTACK_MODEL, deployment=deployment
-    )
+    admin_credentials = retrieve_admin_credentials(jhelper, deployment, OPENSTACK_MODEL)
     admin_credentials["OS_INSECURE"] = "true"
 
     tfhelper_hypervisor = deployment.get_tfhelper("hypervisor-plan")

@@ -212,8 +212,9 @@ class RemoveHypervisorUnitStep(BaseStep, JujuStepHelper):
     def __init__(
         self,
         client: Client,
-        name: str,
         jhelper: JujuHelper,
+        deployment: "Deployment | None",
+        name: str,
         model: str,
         force: bool = False,
     ):
@@ -226,6 +227,7 @@ class RemoveHypervisorUnitStep(BaseStep, JujuStepHelper):
         self.jhelper = jhelper
         self.model = model
         self.force = force
+        self.deployment = deployment
         self.unit: str | None = None
         self.machine_id = ""
 
@@ -314,7 +316,8 @@ class RemoveHypervisorUnitStep(BaseStep, JujuStepHelper):
             LOG.warning(str(e))
             return Result(ResultType.FAILED, str(e))
         try:
-            remove_hypervisor(self.node_name, self.jhelper)
+            if self.deployment:
+                remove_hypervisor(self.jhelper, self.deployment, self.node_name)
         except openstack.exceptions.SDKException as e:
             LOG.error(
                 "Encountered error removing hypervisor references from control plane."

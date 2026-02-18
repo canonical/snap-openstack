@@ -258,7 +258,7 @@ def cloud_config(
         LOG.error(f"Expected model {OPENSTACK_MODEL} missing")
         raise click.ClickException("Please run `sunbeam cluster bootstrap` first")
     admin_credentials = retrieve_admin_credentials(
-        jhelper_keystone, OPENSTACK_MODEL, deployment=deployment
+        jhelper_keystone, deployment, OPENSTACK_MODEL
     )
     tfplan = "demo-setup"
     tfhelper = deployment.get_tfhelper(tfplan)

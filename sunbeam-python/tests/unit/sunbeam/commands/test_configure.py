@@ -9,7 +9,7 @@ import pytest
 import sunbeam.commands.configure as configure
 import sunbeam.core
 from sunbeam.core.common import ResultType
-from sunbeam.core.openstack import DEFAULT_REGION
+from sunbeam.core.deployment import Deployment
 from sunbeam.core.terraform import TerraformException
 
 
@@ -79,7 +79,7 @@ export OS_IDENTITY_API_VERSION={auth_version}"""
 
 
 class TestRetrieveAdminCredentials:
-    def test_retrieve_admin_credentials_includes_region(self):
+    def test_retrieve_admin_credentials_includes_region(self, deployment: Deployment):
         helper = Mock()
         helper.get_leader_unit.return_value = "keystone/0"
         helper.run_action.side_effect = [
@@ -95,10 +95,8 @@ class TestRetrieveAdminCredentials:
             {},
         ]
 
-        creds = configure.retrieve_admin_credentials(
-            helper, model="openstack", region_name=DEFAULT_REGION
-        )
-        assert creds["OS_REGION_NAME"] == DEFAULT_REGION
+        creds = configure.retrieve_admin_credentials(helper, deployment, "openstack")
+        assert creds["OS_REGION_NAME"] == deployment.get_region_name()
 
 
 class TestDemoSetup:

@@ -993,7 +993,7 @@ def configure_sriov(
     jhelper_keystone = deployment.get_juju_helper(keystone=True)
 
     admin_credentials = retrieve_admin_credentials(
-        jhelper_keystone, OPENSTACK_MODEL, deployment=deployment
+        jhelper_keystone, deployment, OPENSTACK_MODEL
     )
     admin_credentials["OS_INSECURE"] = "true"
 
@@ -1064,7 +1064,9 @@ def configure_dpdk(
     jhelper_keystone = deployment.get_juju_helper(keystone=True)
 
     admin_credentials = retrieve_admin_credentials(
-        jhelper_keystone, OPENSTACK_MODEL, deployment=deployment
+        jhelper_keystone,
+        deployment,
+        OPENSTACK_MODEL,
     )
     admin_credentials["OS_INSECURE"] = "true"
 
@@ -1762,7 +1764,12 @@ def remove(ctx: click.Context, name: str, force: bool, show_hints: bool) -> None
         ),
         UpdateK8SCloudStep(deployment, jhelper),
         RemoveHypervisorUnitStep(
-            client, name, jhelper, deployment.openstack_machines_model, force
+            client,
+            jhelper,
+            deployment,
+            name,
+            deployment.openstack_machines_model,
+            force,
         ),
         RemoveCinderVolumeUnitsStep(
             client, name, jhelper, deployment.openstack_machines_model

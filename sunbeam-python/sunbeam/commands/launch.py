@@ -73,7 +73,7 @@ def launch(
             )
 
         admin_auth_info = retrieve_admin_credentials(
-            jhelper_keystone, OPENSTACK_MODEL, deployment=deployment
+            jhelper_keystone, deployment, OPENSTACK_MODEL
         )
 
         tfplan = "demo-setup"

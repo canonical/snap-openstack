@@ -86,10 +86,7 @@ def dpdk_questions():
 
 
 def retrieve_admin_credentials(
-    jhelper: JujuHelper,
-    model: str,
-    deployment: Deployment | None = None,
-    region_name: str | None = None,
+    jhelper: JujuHelper, deployment: Deployment, model: str
 ) -> dict:
     """Retrieve cloud admin credentials.
 
@@ -111,10 +108,8 @@ def retrieve_admin_credentials(
         LOG.debug(f"Running action {action_cmd} on {unit} failed: {str(e)}")
         raise click.ClickException("Unable to retrieve openrc from Keystone service")
 
-    if deployment is not None:
-        region_name = deployment.get_region_name()
-    elif region_name is None:
-        region_name = DEFAULT_REGION
+    region_name = deployment.get_region_name() or DEFAULT_REGION
+
     params = {
         "OS_USERNAME": action_result.get("username"),
         "OS_PASSWORD": action_result.get("password"),
