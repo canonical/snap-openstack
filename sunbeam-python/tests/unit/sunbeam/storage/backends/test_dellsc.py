@@ -238,14 +238,14 @@ class TestDellSCConfigValidation:
         # Should reject invalid protocol
         with pytest.raises(ValidationError) as exc_info:
             config_class.model_validate(
-            {
-                "san-ip": "192.168.1.1",
-                "san-login": "admin",
-                "san-password": "secret",
-                "dell-sc-ssn": 12345,
-                "protocol": "INVALID",
-            }
-        )
+                {
+                    "san-ip": "192.168.1.1",
+                    "san-login": "admin",
+                    "san-password": "secret",
+                    "dell-sc-ssn": 12345,
+                    "protocol": "INVALID",
+                }
+            )
 
         assert "protocol" in str(exc_info.value).lower()
 

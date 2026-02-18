@@ -38,7 +38,9 @@ class DellSCConfig(StorageBackendConfig):
         Field(description="SAN management password"),
         SecretDictField(field="san-password"),
     ]
-    dell_sc_ssn: Annotated[int, Field(description="Storage Center System Serial Number")]
+    dell_sc_ssn: Annotated[
+        int, Field(description="Storage Center System Serial Number")
+    ]
     protocol: Annotated[
         Literal["fc", "iscsi"],
         Field(description="Front-end protocol (fc or iscsi)"),
