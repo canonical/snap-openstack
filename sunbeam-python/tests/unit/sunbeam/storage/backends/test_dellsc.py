@@ -285,7 +285,9 @@ class TestDellSCConfigValidation:
                 }
             )
 
-        assert "enable_unsupported_driver" in str(exc_info.value)
+        errors = exc_info.value.errors()
+        assert errors
+        assert errors[0]["loc"] == ("enable-unsupported-driver",)
 
     def test_integer_fields_accept_integer_values(self, dellsc_backend):
         """Test that integer fields accept integer values."""
