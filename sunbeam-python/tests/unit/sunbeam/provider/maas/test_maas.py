@@ -937,10 +937,12 @@ class TestMaasAddMachinesToClusterdStep:
 class TestMaasDeployMachinesStep:
     @pytest.fixture
     def maas_deploy_machines_step(self):
+        deployment = Mock()
+        deployment.resource_tag = "test-tag"
         client = Mock()
         jhelper = Mock()
         model = "test_model"
-        return MaasDeployMachinesStep(client, jhelper, model)
+        return MaasDeployMachinesStep(deployment, client, jhelper, model)
 
     def test_is_skip_with_no_clusterd_nodes(self, maas_deploy_machines_step):
         maas_deploy_machines_step.client.cluster.list_nodes.return_value = []
@@ -1012,9 +1014,11 @@ class TestMaasDeployInfraMachinesStep:
     @pytest.fixture
     def maas_deploy_machines_step(self):
         maas_client = Mock()
+        deployment = Mock()
+        deployment.resource_tag = "test-tag"
         jhelper = Mock()
         model = "test_model"
-        return MaasDeployInfraMachinesStep(maas_client, jhelper, model)
+        return MaasDeployInfraMachinesStep(maas_client, deployment, jhelper, model)
 
     def test_is_skip(self, mocker, maas_deploy_machines_step):
         mocker.patch(

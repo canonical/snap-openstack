@@ -454,7 +454,9 @@ def bootstrap(
         )
     )
     plan2.append(
-        MaasDeployInfraMachinesStep(maas_client, jhelper, deployment.infra_model)
+        MaasDeployInfraMachinesStep(
+            maas_client, deployment, jhelper, deployment.infra_model
+        )
     )
     plan2.append(
         DeployCertificatesProviderApplicationStep(
@@ -630,7 +632,9 @@ def deploy(
     )
     plan.append(MaasAddMachinesToClusterdStep(client, maas_client))
     plan.append(
-        MaasDeployMachinesStep(client, jhelper, deployment.openstack_machines_model)
+        MaasDeployMachinesStep(
+            deployment, client, jhelper, deployment.openstack_machines_model
+        )
     )
     run_plan(plan, console, show_hints)
 
