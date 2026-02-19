@@ -488,13 +488,23 @@ class JujuHelper:
         with self._model(model) as juju:
             juju.remove_application(*name, destroy_storage=destroy_storage, force=force)
 
-    def add_machine(self, name: str, model: str, base: str = JUJU_BASE) -> str:
+    def add_machine(
+        self,
+        name: str,
+        model: str,
+        base: str = JUJU_BASE,
+        constraints: list[str] | None = None,
+    ) -> str:
         """Add machine to model.
 
         Workaround for https://github.com/juju/python-libjuju/issues/1229
         """
         with self._model(model) as juju:
-            output, stderr = juju._cli("add-machine", "--base", base, name)
+            cmd = ["add-machine", "--base", base]
+            if constraints:
+                cmd.extend(["--constraints", " ".join(constraints)])
+            cmd.append(name)
+            output, stderr = juju._cli(*cmd)
             machine_id = stderr.strip().split(" ")[-1]
             LOG.debug("Added new machine %s", machine_id)
             return machine_id
