@@ -112,10 +112,10 @@ class GenerateCloudConfigStep(BaseStep):
                             "OS_PROJECT_DOMAIN_NAME"
                         ],
                         "project_name": self.admin_credentials["OS_PROJECT_NAME"],
-                        "region_name": self.admin_credentials.get(
-                            "OS_REGION_NAME", DEFAULT_REGION
-                        ),
                     },
+                    "region_name": self.admin_credentials.get(
+                        "OS_REGION_NAME", DEFAULT_REGION
+                    ),
                 },
             }
         else:
@@ -128,10 +128,10 @@ class GenerateCloudConfigStep(BaseStep):
                         "user_domain_name": tf_output["OS_USER_DOMAIN_NAME"],
                         "project_domain_name": tf_output["OS_PROJECT_DOMAIN_NAME"],
                         "project_name": tf_output["OS_PROJECT_NAME"],
-                        "region_name": self.admin_credentials.get(
-                            "OS_REGION_NAME", DEFAULT_REGION
-                        ),
                     },
+                    "region_name": self.admin_credentials.get(
+                        "OS_REGION_NAME", DEFAULT_REGION
+                    ),
                 },
             }
 
