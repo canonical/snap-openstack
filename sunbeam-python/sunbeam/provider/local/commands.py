@@ -995,7 +995,9 @@ def configure_sriov(
     jhelper = deployment.get_juju_helper()
     jhelper_keystone = deployment.get_juju_helper(keystone=True)
 
-    admin_credentials = retrieve_admin_credentials(jhelper_keystone, OPENSTACK_MODEL)
+    admin_credentials = retrieve_admin_credentials(
+        jhelper_keystone, deployment, OPENSTACK_MODEL
+    )
     admin_credentials["OS_INSECURE"] = "true"
 
     tfhelper_hypervisor = deployment.get_tfhelper("hypervisor-plan")
@@ -1066,7 +1068,11 @@ def configure_dpdk(
     jhelper = deployment.get_juju_helper()
     jhelper_keystone = deployment.get_juju_helper(keystone=True)
 
-    admin_credentials = retrieve_admin_credentials(jhelper_keystone, OPENSTACK_MODEL)
+    admin_credentials = retrieve_admin_credentials(
+        jhelper_keystone,
+        deployment,
+        OPENSTACK_MODEL,
+    )
     admin_credentials["OS_INSECURE"] = "true"
 
     tfhelper_hypervisor = deployment.get_tfhelper("hypervisor-plan")
@@ -1794,7 +1800,12 @@ def remove(ctx: click.Context, name: str, force: bool, show_hints: bool) -> None
             ),
             UpdateK8SCloudStep(deployment, jhelper),
             RemoveHypervisorUnitStep(
-                client, name, jhelper, deployment.openstack_machines_model, force
+                client,
+                jhelper,
+                deployment,
+                name,
+                deployment.openstack_machines_model,
+                force,
             ),
             RemoveCinderVolumeUnitsStep(
                 client, name, jhelper, deployment.openstack_machines_model
@@ -1913,7 +1924,9 @@ def configure_cmd(
             ),
         )
 
-    admin_credentials = retrieve_admin_credentials(jhelper_keystone, OPENSTACK_MODEL)
+    admin_credentials = retrieve_admin_credentials(
+        jhelper_keystone, deployment, OPENSTACK_MODEL
+    )
 
     # Add OS_INSECURE as https not working with terraform openstack provider.
     admin_credentials["OS_INSECURE"] = "true"
