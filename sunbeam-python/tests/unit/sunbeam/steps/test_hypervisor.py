@@ -31,11 +31,21 @@ def read_config_patch():
 class TestRemoveHypervisorUnitStep:
     @pytest.fixture
     def remove_hypervisor_step(
-        self, basic_client, test_name, basic_jhelper, test_model, read_config_patch
+        self,
+        basic_client,
+        test_name,
+        basic_jhelper,
+        test_model,
+        basic_deployment,
+        read_config_patch,
     ):
         """Create RemoveHypervisorUnitStep instance for testing."""
         return RemoveHypervisorUnitStep(
-            basic_client, test_name, basic_jhelper, test_model
+            basic_client,
+            basic_jhelper,
+            basic_deployment,
+            test_name,
+            test_model,
         )
 
     def test_is_skip(
@@ -55,14 +65,24 @@ class TestRemoveHypervisorUnitStep:
         assert result.result_type == ResultType.COMPLETED
 
     def test_is_skip_node_missing(
-        self, basic_client, test_name, basic_jhelper, test_model, read_config_patch
+        self,
+        basic_client,
+        test_name,
+        basic_jhelper,
+        test_model,
+        basic_deployment,
+        read_config_patch,
     ):
         basic_client.cluster.get_node_info.side_effect = NodeNotExistInClusterException(
             "Node missing..."
         )
 
         step = RemoveHypervisorUnitStep(
-            basic_client, test_name, basic_jhelper, test_model
+            basic_client,
+            basic_jhelper,
+            basic_deployment,
+            test_name,
+            test_model,
         )
         result = step.is_skip()
 
@@ -70,14 +90,24 @@ class TestRemoveHypervisorUnitStep:
         assert result.result_type == ResultType.SKIPPED
 
     def test_is_skip_application_missing(
-        self, basic_client, test_name, basic_jhelper, test_model, read_config_patch
+        self,
+        basic_client,
+        test_name,
+        basic_jhelper,
+        test_model,
+        basic_deployment,
+        read_config_patch,
     ):
         basic_jhelper.get_application.side_effect = ApplicationNotFoundException(
             "Application missing..."
         )
 
         step = RemoveHypervisorUnitStep(
-            basic_client, test_name, basic_jhelper, test_model
+            basic_client,
+            basic_jhelper,
+            basic_deployment,
+            test_name,
+            test_model,
         )
         result = step.is_skip()
 
@@ -85,13 +115,23 @@ class TestRemoveHypervisorUnitStep:
         assert result.result_type == ResultType.SKIPPED
 
     def test_is_skip_unit_missing(
-        self, basic_client, test_name, basic_jhelper, test_model, read_config_patch
+        self,
+        basic_client,
+        test_name,
+        basic_jhelper,
+        test_model,
+        basic_deployment,
+        read_config_patch,
     ):
         basic_client.cluster.get_node_info.return_value = {}
         basic_jhelper.get_application.return_value = Mock(units={})
 
         step = RemoveHypervisorUnitStep(
-            basic_client, test_name, basic_jhelper, test_model
+            basic_client,
+            basic_jhelper,
+            basic_deployment,
+            test_name,
+            test_model,
         )
         result = step.is_skip()
 
@@ -100,7 +140,13 @@ class TestRemoveHypervisorUnitStep:
         assert result.result_type == ResultType.SKIPPED
 
     def test_is_skip_running_guests(
-        self, basic_client, test_name, basic_jhelper, test_model, read_config_patch
+        self,
+        basic_client,
+        test_name,
+        basic_jhelper,
+        test_model,
+        basic_deployment,
+        read_config_patch,
     ):
         basic_client.cluster.get_node_info.return_value = {"machineid": "1"}
         basic_jhelper.get_application.return_value = Mock(
@@ -108,7 +154,11 @@ class TestRemoveHypervisorUnitStep:
         )
         basic_jhelper.run_action.return_value = {"result": json.dumps(["1", "2"])}
         step = RemoveHypervisorUnitStep(
-            basic_client, test_name, basic_jhelper, test_model
+            basic_client,
+            basic_jhelper,
+            basic_deployment,
+            test_name,
+            test_model,
         )
         result = step.is_skip()
         assert result.result_type == ResultType.FAILED
@@ -121,15 +171,22 @@ class TestRemoveHypervisorUnitStep:
         test_name,
         basic_jhelper,
         test_model,
+        basic_deployment,
         read_config_patch,
     ):
         step = RemoveHypervisorUnitStep(
-            basic_client, test_name, basic_jhelper, test_model
+            basic_client,
+            basic_jhelper,
+            basic_deployment,
+            test_name,
+            test_model,
         )
         step.unit = "unit/1"
         result = step.run()
         assert result.result_type == ResultType.COMPLETED
-        remove_hypervisor.assert_called_once_with("test-0", basic_jhelper)
+        remove_hypervisor.assert_called_once_with(
+            basic_jhelper, basic_deployment, "test-0"
+        )
 
     @patch("sunbeam.steps.hypervisor.remove_hypervisor")
     def test_run_guests(
@@ -139,10 +196,15 @@ class TestRemoveHypervisorUnitStep:
         test_name,
         basic_jhelper,
         test_model,
+        basic_deployment,
         read_config_patch,
     ):
         step = RemoveHypervisorUnitStep(
-            basic_client, test_name, basic_jhelper, test_model
+            basic_client,
+            basic_jhelper,
+            basic_deployment,
+            test_name,
+            test_model,
         )
         result = step.run()
         assert result.result_type == ResultType.FAILED
@@ -156,16 +218,24 @@ class TestRemoveHypervisorUnitStep:
         test_name,
         basic_jhelper,
         test_model,
+        basic_deployment,
         read_config_patch,
     ):
         basic_jhelper.run_action.return_value = {"result": json.dumps(["1", "2"])}
         step = RemoveHypervisorUnitStep(
-            basic_client, test_name, basic_jhelper, test_model, True
+            basic_client,
+            basic_jhelper,
+            basic_deployment,
+            test_name,
+            test_model,
+            True,
         )
         step.unit = "unit/1"
         result = step.run()
         assert result.result_type == ResultType.COMPLETED
-        remove_hypervisor.assert_called_once_with("test-0", basic_jhelper)
+        remove_hypervisor.assert_called_once_with(
+            basic_jhelper, basic_deployment, "test-0"
+        )
 
     @patch("sunbeam.steps.hypervisor.remove_hypervisor")
     def test_run_application_not_found(
@@ -175,6 +245,7 @@ class TestRemoveHypervisorUnitStep:
         test_name,
         basic_jhelper,
         test_model,
+        basic_deployment,
         read_config_patch,
     ):
         basic_jhelper.run_action.return_value = {"result": "[]"}
@@ -183,7 +254,11 @@ class TestRemoveHypervisorUnitStep:
         )
 
         step = RemoveHypervisorUnitStep(
-            basic_client, test_name, basic_jhelper, test_model
+            basic_client,
+            basic_jhelper,
+            basic_deployment,
+            test_name,
+            test_model,
         )
         step.unit = "unit/1"
         result = step.run()
@@ -200,13 +275,18 @@ class TestRemoveHypervisorUnitStep:
         test_name,
         basic_jhelper,
         test_model,
+        basic_deployment,
         read_config_patch,
     ):
         basic_jhelper.run_action.return_value = {"result": "[]"}
         basic_jhelper.wait_application_ready.side_effect = TimeoutError("timed out")
 
         step = RemoveHypervisorUnitStep(
-            basic_client, test_name, basic_jhelper, test_model
+            basic_client,
+            basic_jhelper,
+            basic_deployment,
+            test_name,
+            test_model,
         )
         step.unit = "unit/1"
         result = step.run()
