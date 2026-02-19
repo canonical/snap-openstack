@@ -30,10 +30,10 @@ class DellPowerstoreConfig(StorageBackendConfig):
         Field(description="Dell PowerStore management IP"),
         SecretDictField(field="san-ip"),
     ]
-    san_username: Annotated[
+    san_login: Annotated[
         str,
         Field(description="Dell PowerStore management username"),
-        SecretDictField(field="san-username"),
+        SecretDictField(field="san-login"),
     ]
     san_password: Annotated[
         str,
