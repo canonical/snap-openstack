@@ -27,6 +27,8 @@ from sunbeam.features.interface.v1.openstack import (
 from sunbeam.steps.cinder_volume import DeployCinderVolumeApplicationStep
 from sunbeam.steps.hypervisor import ReapplyHypervisorTerraformPlanStep
 from sunbeam.steps.juju import RemoveSaasApplicationsStep
+from sunbeam.storage.manager import StorageBackendManager
+from sunbeam.storage.steps import DeploySpecificCinderVolumeStep
 from sunbeam.utils import click_option_show_hints, pass_method_obj
 from sunbeam.versions import OPENSTACK_CHANNEL
 
@@ -134,6 +136,63 @@ class TelemetryFeature(OpenStackControlPlaneFeature):
         )
 
         run_plan(plan2, console, show_hints)
+
+        # Deploy specific cinder-volume applications for each storage backend
+        client = deployment.get_client()
+        storage_backends = client.cluster.get_storage_backends()
+
+        if storage_backends.root:
+            storage_manager = StorageBackendManager()
+            tfhelper_storage = deployment.get_tfhelper("storage-plan")
+
+            plan3: list[BaseStep] = []
+            plan3.append(TerraformInitStep(tfhelper_storage))
+
+            # Track principal applications to avoid duplicates
+            processed_principals = set()
+
+            for backend_metadata in storage_backends.root:
+                # Get the backend instance from the manager
+                backend_type = backend_metadata.type
+                backend_name = backend_metadata.name
+
+                try:
+                    backend_instance = storage_manager.backends().get(backend_type)
+                    if backend_instance:
+                        # Skip if we've already processed this principal application
+                        principal_app = backend_instance.principal_application
+                        if principal_app in processed_principals:
+                            LOG.debug(
+                                f"Skipping {backend_name}: principal application "
+                                f"{principal_app} already processed"
+                            )
+                            continue
+
+                        processed_principals.add(principal_app)
+
+                        # Add step to deploy specific cinder-volume for this backend
+                        plan3.append(
+                            DeploySpecificCinderVolumeStep(
+                                deployment,
+                                client,
+                                tfhelper_storage,
+                                jhelper,
+                                self.manifest,
+                                backend_name,
+                                backend_instance,
+                                deployment.openstack_machines_model,
+                                extra_tfvars=extra_tfvars_cinder_volume,
+                            )
+                        )
+                except Exception as e:
+                    LOG.warning(
+                        f"Failed to add specific cinder-volume step for backend "
+                        f"{backend_name}: {e}"
+                    )
+
+            if len(plan3) > 1:  # More than just TerraformInitStep
+                run_plan(plan3, console, show_hints)
+
         click.echo(f"OpenStack {self.display_name} application enabled.")
 
     def run_disable_plans(self, deployment: Deployment, show_hints: bool) -> None:
@@ -175,6 +234,64 @@ class TelemetryFeature(OpenStackControlPlaneFeature):
         ]
 
         run_plan(plan, console, show_hints)
+
+        # Update specific cinder-volume applications for each storage backend
+        client = deployment.get_client()
+        storage_backends = client.cluster.get_storage_backends()
+
+        if storage_backends.root:
+            storage_manager = StorageBackendManager()
+            tfhelper_storage = deployment.get_tfhelper("storage-plan")
+
+            plan2: list[BaseStep] = []
+            plan2.append(TerraformInitStep(tfhelper_storage))
+
+            # Track principal applications to avoid duplicates
+            processed_principals = set()
+
+            for backend_metadata in storage_backends.root:
+                # Get the backend instance from the manager
+                backend_type = backend_metadata.type
+                backend_name = backend_metadata.name
+
+                try:
+                    backend_instance = storage_manager.backends().get(backend_type)
+                    if backend_instance:
+                        # Skip if we've already processed this principal application
+                        principal_app = backend_instance.principal_application
+                        if principal_app in processed_principals:
+                            LOG.debug(
+                                f"Skipping {backend_name}: principal application "
+                                f"{principal_app} already processed"
+                            )
+                            continue
+
+                        processed_principals.add(principal_app)
+
+                        # Add step to update specific cinder-volume for this backend
+                        # (this will reapply with enable-telemetry-notifications=False)
+                        plan2.append(
+                            DeploySpecificCinderVolumeStep(
+                                deployment,
+                                client,
+                                tfhelper_storage,
+                                jhelper,
+                                self.manifest,
+                                backend_name,
+                                backend_instance,
+                                deployment.openstack_machines_model,
+                                extra_tfvars=extra_tfvars_cinder_volume,
+                            )
+                        )
+                except Exception as e:
+                    LOG.warning(
+                        f"Failed to add specific cinder-volume step for backend "
+                        f"{backend_name}: {e}"
+                    )
+
+            if len(plan2) > 1:  # More than just TerraformInitStep
+                run_plan(plan2, console, show_hints)
+
         click.echo(f"OpenStack {self.display_name} application disabled.")
 
     def set_application_names(self, deployment: Deployment) -> list:
