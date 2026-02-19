@@ -98,6 +98,21 @@ class FeatureManager:
         LOG.debug("Enabled features: %s", ",".join(f.name for f in enabled_features))
         return enabled_features
 
+    def is_feature_enabled(self, deployment: Deployment, name: str) -> bool:
+        """Returns true if feature is enabled otherwise false.
+
+        :param deployment: Deployment instance.
+        :param name: Name of the feature.
+        :returns: Boolean
+        """
+        feature = self.features().get(name)
+        if feature is None:
+            raise SunbeamException(f"Feature {name} does not exist")
+        if not isinstance(feature, EnableDisableFeature):
+            raise SunbeamException(f"Feature {name} is not of type EnableDisable")
+
+        return feature.is_enabled(deployment.get_client())
+
     def get_all_feature_manifests(
         self,
     ) -> dict[str, FeatureManifest | FeatureGroupManifest]:

@@ -552,3 +552,60 @@ class TestEnableDisableFeature:
             Mock(return_value={klass.name: klass}),
         )
         feature.check_enablement_requirements(deployment, "disable")
+
+
+class TestFeatureManager:
+    """Test FeatureManager methods."""
+
+    def test_is_feature_enabled_when_feature_is_enabled(self, deployment):
+        """Test is_feature_enabled returns True when feature is enabled."""
+        manager = FeatureManager()
+        feature = Mock(spec=EnableDisableFeature)
+        feature.is_enabled.return_value = True
+
+        with patch.object(manager, "features", return_value={"test_feature": feature}):
+            result = manager.is_feature_enabled(deployment, "test_feature")
+            assert result is True
+            feature.is_enabled.assert_called_once_with(deployment.get_client())
+
+    def test_is_feature_enabled_when_feature_is_disabled(self, deployment):
+        """Test is_feature_enabled returns False when feature is disabled."""
+        manager = FeatureManager()
+        feature = Mock(spec=EnableDisableFeature)
+        feature.is_enabled.return_value = False
+
+        with patch.object(manager, "features", return_value={"test_feature": feature}):
+            result = manager.is_feature_enabled(deployment, "test_feature")
+            assert result is False
+            feature.is_enabled.assert_called_once_with(deployment.get_client())
+
+    def test_is_feature_enabled_when_feature_does_not_exist(self, deployment):
+        """Test is_feature_enabled raises exception when feature doesn't exist."""
+        from sunbeam.errors import SunbeamException
+
+        manager = FeatureManager()
+
+        with patch.object(manager, "features", return_value={}):
+            with pytest.raises(
+                SunbeamException, match="Feature test_feature does not exist"
+            ):
+                manager.is_feature_enabled(deployment, "test_feature")
+
+    def test_is_feature_enabled_when_feature_is_not_enable_disable_type(
+        self, deployment
+    ):
+        """Test is_feature_enabled raises exception.
+
+        When feature is not EnableDisableFeature type.
+        """
+        from sunbeam.errors import SunbeamException
+
+        manager = FeatureManager()
+        feature = Mock(spec=BaseFeature)
+
+        with patch.object(manager, "features", return_value={"test_feature": feature}):
+            with pytest.raises(
+                SunbeamException,
+                match="Feature test_feature is not of type EnableDisable",
+            ):
+                manager.is_feature_enabled(deployment, "test_feature")

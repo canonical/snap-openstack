@@ -24,6 +24,7 @@ from sunbeam.features.interface.v1.openstack import (
     OpenStackControlPlaneFeature,
     TerraformPlanLocation,
 )
+from sunbeam.steps.cinder_volume import DeployCinderVolumeApplicationStep
 from sunbeam.steps.hypervisor import ReapplyHypervisorTerraformPlanStep
 from sunbeam.steps.juju import RemoveSaasApplicationsStep
 from sunbeam.utils import click_option_show_hints, pass_method_obj
@@ -86,6 +87,7 @@ class TelemetryFeature(OpenStackControlPlaneFeature):
         tfhelper = deployment.get_tfhelper(self.tfplan)
         tfhelper_openstack = deployment.get_tfhelper("openstack-plan")
         tfhelper_hypervisor = deployment.get_tfhelper("hypervisor-plan")
+        tfhelper_cinder_volume = deployment.get_tfhelper("cinder-volume-plan")
         jhelper = JujuHelper(deployment.juju_controller)
         plan1: list[BaseStep] = []
         if self.user_manifest:
@@ -104,6 +106,7 @@ class TelemetryFeature(OpenStackControlPlaneFeature):
         extra_tfvars = {
             "ceilometer-offer-url": openstack_tf_output.get("ceilometer-offer-url")
         }
+        extra_tfvars_cinder_volume = {"enable-telemetry-notifications": True}
         plan2: list[BaseStep] = []
         plan2.extend(
             [
@@ -117,8 +120,19 @@ class TelemetryFeature(OpenStackControlPlaneFeature):
                     deployment.openstack_machines_model,
                     extra_tfvars=extra_tfvars,
                 ),
+                TerraformInitStep(tfhelper_cinder_volume),
+                DeployCinderVolumeApplicationStep(
+                    deployment,
+                    deployment.get_client(),
+                    tfhelper_cinder_volume,
+                    jhelper,
+                    self.manifest,
+                    deployment.openstack_machines_model,
+                    extra_tfvars=extra_tfvars_cinder_volume,
+                ),
             ]
         )
+
         run_plan(plan2, console, show_hints)
         click.echo(f"OpenStack {self.display_name} application enabled.")
 
@@ -126,8 +140,10 @@ class TelemetryFeature(OpenStackControlPlaneFeature):
         """Run plans to disable the feature."""
         tfhelper = deployment.get_tfhelper(self.tfplan)
         tfhelper_hypervisor = deployment.get_tfhelper("hypervisor-plan")
+        tfhelper_cinder_volume = deployment.get_tfhelper("cinder-volume-plan")
         jhelper = JujuHelper(deployment.juju_controller)
         extra_tfvars = {"ceilometer-offer-url": None}
+        extra_tfvars_cinder_volume = {"enable-telemetry-notifications": False}
         plan = [
             TerraformInitStep(tfhelper_hypervisor),
             ReapplyHypervisorTerraformPlanStep(
@@ -137,6 +153,16 @@ class TelemetryFeature(OpenStackControlPlaneFeature):
                 self.manifest,
                 deployment.openstack_machines_model,
                 extra_tfvars=extra_tfvars,
+            ),
+            TerraformInitStep(tfhelper_cinder_volume),
+            DeployCinderVolumeApplicationStep(
+                deployment,
+                deployment.get_client(),
+                tfhelper_cinder_volume,
+                jhelper,
+                self.manifest,
+                deployment.openstack_machines_model,
+                extra_tfvars=extra_tfvars_cinder_volume,
             ),
             RemoveSaasApplicationsStep(
                 jhelper,
