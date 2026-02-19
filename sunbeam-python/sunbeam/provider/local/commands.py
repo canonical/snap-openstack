@@ -995,9 +995,7 @@ def configure_sriov(
     jhelper = deployment.get_juju_helper()
     jhelper_keystone = deployment.get_juju_helper(keystone=True)
 
-    admin_credentials = retrieve_admin_credentials(
-        jhelper_keystone, deployment, OPENSTACK_MODEL
-    )
+    admin_credentials = retrieve_admin_credentials(jhelper_keystone, OPENSTACK_MODEL)
     admin_credentials["OS_INSECURE"] = "true"
 
     tfhelper_hypervisor = deployment.get_tfhelper("hypervisor-plan")
@@ -1068,11 +1066,7 @@ def configure_dpdk(
     jhelper = deployment.get_juju_helper()
     jhelper_keystone = deployment.get_juju_helper(keystone=True)
 
-    admin_credentials = retrieve_admin_credentials(
-        jhelper_keystone,
-        deployment,
-        OPENSTACK_MODEL,
-    )
+    admin_credentials = retrieve_admin_credentials(jhelper_keystone, OPENSTACK_MODEL)
     admin_credentials["OS_INSECURE"] = "true"
 
     tfhelper_hypervisor = deployment.get_tfhelper("hypervisor-plan")
@@ -1753,85 +1747,6 @@ def remove(ctx: click.Context, name: str, force: bool, show_hints: bool) -> None
 
     plan: list[BaseStep] = [
         JujuLoginStep(deployment.juju_account),
-        CheckCinderVolumeDistributionStep(
-            client,
-            name,
-            jhelper,
-            deployment.openstack_machines_model,
-            force=force,
-        ),
-        CheckMicrocephDistributionStep(
-            client,
-            name,
-            jhelper,
-            deployment.openstack_machines_model,
-            force=force,
-        ),
-        CheckMysqlK8SDistributionStep(
-            client,
-            name,
-            jhelper,
-            deployment.openstack_machines_model,
-            force=force,
-        ),
-        CheckOvnK8SDistributionStep(
-            client,
-            name,
-            jhelper,
-            deployment.openstack_machines_model,
-            force=force,
-        ),
-        CheckRabbitmqK8SDistributionStep(
-            client,
-            name,
-            jhelper,
-            deployment.openstack_machines_model,
-            force=force,
-        ),
-        MigrateK8SKubeconfigStep(
-            client, name, jhelper, deployment.openstack_machines_model
-        ),
-        UpdateK8SCloudStep(deployment, jhelper),
-        RemoveHypervisorUnitStep(
-            client,
-            jhelper,
-            deployment,
-            name,
-            deployment.openstack_machines_model,
-            force,
-        ),
-        RemoveCinderVolumeUnitsStep(
-            client, name, jhelper, deployment.openstack_machines_model
-        ),
-        RemoveMicrocephUnitsStep(
-            client, name, jhelper, deployment.openstack_machines_model
-        ),
-        RemoveMicroOVNUnitsStep(
-            client, name, jhelper, deployment.openstack_machines_model
-        ),
-        CordonK8SUnitStep(client, name, jhelper, deployment.openstack_machines_model),
-        DrainK8SUnitStep(
-            client, name, jhelper, deployment.openstack_machines_model, remove_pvc=True
-        ),
-        RemoveK8SUnitsStep(client, name, jhelper, deployment.openstack_machines_model),
-        EnsureL2AdvertisementByHostStep(
-            deployment,
-            client,
-            jhelper,
-            deployment.openstack_machines_model,
-            Networks.MANAGEMENT,
-            deployment.internal_ip_pool,
-        ),
-        RemoveSunbeamMachineUnitsStep(
-            client, name, jhelper, deployment.openstack_machines_model
-        ),
-        RemoveJujuMachineStep(
-            client, name, jhelper, deployment.openstack_machines_model
-        ),
-        # Cannot remove user as the same user name cannot be resued,
-        # so commenting the RemoveJujuUserStep
-        # RemoveJujuUserStep(name),
-        ClusterRemoveNodeStep(client, name),
     ]
 
     if not force:
@@ -1879,12 +1794,7 @@ def remove(ctx: click.Context, name: str, force: bool, show_hints: bool) -> None
             ),
             UpdateK8SCloudStep(deployment, jhelper),
             RemoveHypervisorUnitStep(
-                client,
-                jhelper,
-                deployment,
-                name,
-                deployment.openstack_machines_model,
-                force,
+                client, name, jhelper, deployment.openstack_machines_model, force
             ),
             RemoveCinderVolumeUnitsStep(
                 client, name, jhelper, deployment.openstack_machines_model
@@ -2003,9 +1913,7 @@ def configure_cmd(
             ),
         )
 
-    admin_credentials = retrieve_admin_credentials(
-        jhelper_keystone, deployment, OPENSTACK_MODEL
-    )
+    admin_credentials = retrieve_admin_credentials(jhelper_keystone, OPENSTACK_MODEL)
 
     # Add OS_INSECURE as https not working with terraform openstack provider.
     admin_credentials["OS_INSECURE"] = "true"

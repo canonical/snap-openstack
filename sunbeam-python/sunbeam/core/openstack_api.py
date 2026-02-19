@@ -5,7 +5,6 @@ import logging
 import typing
 
 from sunbeam.commands.configure import retrieve_admin_credentials
-from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import JujuHelper
 from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.lazy import LazyImport
@@ -18,15 +17,13 @@ else:
 LOG = logging.getLogger(__name__)
 
 
-def get_admin_connection(
-    jhelper: JujuHelper, deployment: Deployment
-) -> "openstack.connection.Connection":
+def get_admin_connection(jhelper: JujuHelper) -> "openstack.connection.Connection":
     """Return a connection to keystone using admin credentials.
 
     :param jhelper: Juju helpers for retrieving admin credentials
     :raises: openstack.exceptions.SDKException
     """
-    admin_auth_info = retrieve_admin_credentials(jhelper, deployment, OPENSTACK_MODEL)
+    admin_auth_info = retrieve_admin_credentials(jhelper, OPENSTACK_MODEL)
     conn = openstack.connect(
         auth_url=admin_auth_info.get("OS_AUTH_URL"),
         username=admin_auth_info.get("OS_USERNAME"),
@@ -84,15 +81,12 @@ def remove_network_service(
         conn.network.delete_agent(service)
 
 
-def remove_hypervisor(
-    jhelper: JujuHelper, deployment: Deployment, hypervisor_name: str
-) -> None:
+def remove_hypervisor(hypervisor_name: str, jhelper: JujuHelper) -> None:
     """Remove services associated with hypervisor from OpenStack.
 
-    :param jhelper: Juju helpers for retrieving admin credentials
-    :param deployment: Deployment to obtain region and model from
     :param hypervisor_name: Name of hypervisor
+    :param jhelper: Juju helpers for retrieving admin credentials
     """
-    conn = get_admin_connection(jhelper, deployment)
+    conn = get_admin_connection(jhelper)
     remove_compute_service(hypervisor_name, conn)
     remove_network_service(hypervisor_name, conn)

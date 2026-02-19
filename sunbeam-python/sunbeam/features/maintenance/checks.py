@@ -71,9 +71,7 @@ class InstancesStatusCheck(Check):
         https://review.opendev.org/c/openstack/watcher-specs/+/943873
     """
 
-    def __init__(
-        self, jhelper: JujuHelper, deployment: Deployment, node: str, force: bool
-    ):
+    def __init__(self, jhelper: JujuHelper, node: str, force: bool):
         super().__init__(
             "Check no instance in ERROR/MIGRATING/SHUTOFF status on nodes",
             (
@@ -82,7 +80,6 @@ class InstancesStatusCheck(Check):
             ),
         )
         self.jhelper = jhelper
-        self.deployment = deployment
         self.node = node
         self.force = force
 
@@ -92,7 +89,7 @@ class InstancesStatusCheck(Check):
         Return True if check is Ok.
         Otherwise update self.message and return False.
         """
-        conn = get_admin_connection(self.jhelper, self.deployment)
+        conn = get_admin_connection(jhelper=self.jhelper)
 
         not_expected_status_instances: dict[str, str] = {}
 
@@ -115,15 +112,12 @@ class InstancesStatusCheck(Check):
 
 
 class NoEphemeralDiskCheck(Check):
-    def __init__(
-        self, jhelper: JujuHelper, deployment: Deployment, node: str, force: bool
-    ):
+    def __init__(self, jhelper: JujuHelper, node: str, force: bool):
         super().__init__(
             "Check no instance using ephemeral disk",
             "Checking if there are any instance is using ephemeral disk",
         )
         self.jhelper = jhelper
-        self.deployment = deployment
         self.node = node
         self.force = force
 
@@ -133,7 +127,7 @@ class NoEphemeralDiskCheck(Check):
         Return True if check is Ok.
         Otherwise update self.message and return False.
         """
-        conn = get_admin_connection(self.jhelper, self.deployment)
+        conn = get_admin_connection(jhelper=self.jhelper)
 
         unexpected_instances = []
 
@@ -155,15 +149,12 @@ class NoEphemeralDiskCheck(Check):
 
 
 class NoInstancesOnNodeCheck(Check):
-    def __init__(
-        self, jhelper: JujuHelper, deployment: Deployment, node: str, force: bool
-    ):
+    def __init__(self, jhelper: JujuHelper, node: str, force: bool):
         super().__init__(
             "Check no instance on the node",
             "Check no instance on the node",
         )
         self.jhelper = jhelper
-        self.deployment = deployment
         self.node = node
         self.force = force
 
@@ -173,7 +164,7 @@ class NoInstancesOnNodeCheck(Check):
         Return True if check is Ok.
         Otherwise update self.message and return False.
         """
-        conn = get_admin_connection(self.jhelper, self.deployment)
+        conn = get_admin_connection(jhelper=self.jhelper)
 
         instances = guests_on_hypervisor(hypervisor_name=self.node, conn=conn)
 
@@ -189,15 +180,12 @@ class NoInstancesOnNodeCheck(Check):
 
 
 class NovaInDisableStatusCheck(Check):
-    def __init__(
-        self, jhelper: JujuHelper, deployment: Deployment, node: str, force: bool
-    ):
+    def __init__(self, jhelper: JujuHelper, node: str, force: bool):
         super().__init__(
             "Check nova compute is disable on the node",
             "Check nova compute is disable on the node",
         )
         self.jhelper = jhelper
-        self.deployment = deployment
         self.node = node
         self.force = force
 
@@ -207,7 +195,7 @@ class NovaInDisableStatusCheck(Check):
         Return True if check is Ok.
         Otherwise update self.message and return False.
         """
-        conn = get_admin_connection(self.jhelper, self.deployment)
+        conn = get_admin_connection(jhelper=self.jhelper)
 
         expected_services = []
         for svc in conn.compute.services(

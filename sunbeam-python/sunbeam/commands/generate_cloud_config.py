@@ -25,7 +25,7 @@ from sunbeam.core.common import (
     run_plan,
 )
 from sunbeam.core.deployment import Deployment
-from sunbeam.core.openstack import DEFAULT_REGION, OPENSTACK_MODEL
+from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.core.terraform import TerraformHelper
 from sunbeam.steps.configure import CLOUD_CONFIG_SECTION
 from sunbeam.utils import click_option_show_hints
@@ -112,9 +112,6 @@ class GenerateCloudConfigStep(BaseStep):
                             "OS_PROJECT_DOMAIN_NAME"
                         ],
                         "project_name": self.admin_credentials["OS_PROJECT_NAME"],
-                        "region_name": self.admin_credentials.get(
-                            "OS_REGION_NAME", DEFAULT_REGION
-                        ),
                     },
                 },
             }
@@ -128,9 +125,6 @@ class GenerateCloudConfigStep(BaseStep):
                         "user_domain_name": tf_output["OS_USER_DOMAIN_NAME"],
                         "project_domain_name": tf_output["OS_PROJECT_DOMAIN_NAME"],
                         "project_name": tf_output["OS_PROJECT_NAME"],
-                        "region_name": self.admin_credentials.get(
-                            "OS_REGION_NAME", DEFAULT_REGION
-                        ),
                     },
                 },
             }
@@ -257,9 +251,7 @@ def cloud_config(
     if not jhelper_keystone.model_exists(OPENSTACK_MODEL):
         LOG.error(f"Expected model {OPENSTACK_MODEL} missing")
         raise click.ClickException("Please run `sunbeam cluster bootstrap` first")
-    admin_credentials = retrieve_admin_credentials(
-        jhelper_keystone, deployment, OPENSTACK_MODEL
-    )
+    admin_credentials = retrieve_admin_credentials(jhelper_keystone, OPENSTACK_MODEL)
     tfplan = "demo-setup"
     tfhelper = deployment.get_tfhelper(tfplan)
     tfhelper.env = (tfhelper.env or {}) | admin_credentials
