@@ -378,8 +378,10 @@ class ConfigureMicrocephOSDStep(BaseStep):
     def run(self, status: Status | None = None) -> Result:
         """Configure local disks on microceph."""
         failed = False
+        action_params: dict[str, Any] = {"device-id": self.disks}
         if self.wipe:
             LOG.debug("User expressly accepted to wipe disks before adding OSDs")
+            action_params["wipe"] = True
         try:
             unit = self.jhelper.get_unit_from_machine(
                 APPLICATION, self.machine_id, self.model
@@ -389,10 +391,7 @@ class ConfigureMicrocephOSDStep(BaseStep):
                 unit,
                 self.model,
                 "add-osd",
-                action_params={
-                    "device-id": self.disks,
-                    "wipe": self.wipe,
-                },
+                action_params=action_params,
             )
             LOG.debug(f"Result after running action add-osd: {action_result}")
         except UnitNotFoundException as e:

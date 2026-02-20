@@ -1346,7 +1346,7 @@ class TestMaasConfigureMicrocephOSDStep:
             "unit/1",
             "test-model",
             "add-osd",
-            action_params={"device-id": "/dev/sdd", "wipe": False},
+            action_params={"device-id": "/dev/sdd"},
         )
 
 

@@ -1812,21 +1812,22 @@ class MaasConfigureMicrocephOSDStep(BaseStep):
         for unit, disks in self.disks_to_configure.items():
             hostname = self.unit_to_hostname[unit]
             wipe_disks = self._wipe_requested(hostname)
+            action_params: dict[str, typing.Any] = {
+                "device-id": ",".join(disks),
+            }
             if wipe_disks:
                 LOG.debug(
                     "User expressly accepted to wipe disks before adding OSDs for %s",
                     hostname,
                 )
+                action_params["wipe"] = True
             try:
                 LOG.debug("Running action add-osd on %r", unit)
                 action_result = self.jhelper.run_action(
                     unit,
                     self.model,
                     "add-osd",
-                    action_params={
-                        "device-id": ",".join(disks),
-                        "wipe": wipe_disks,
-                    },
+                    action_params=action_params,
                 )
                 LOG.debug(
                     "Result after running action add-osd on %r: %r", unit, action_result
