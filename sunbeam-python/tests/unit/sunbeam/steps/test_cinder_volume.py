@@ -157,6 +157,173 @@ class TestDeployCinderVolumeApplicationStep:
         assert "ceph-application-name" not in tfvars
         assert "keystone-offer-url" not in tfvars
 
+    def test_init_with_extra_tfvars(
+        self,
+        deployment_with_tfhelpers,
+        basic_client,
+        tfhelper,
+        basic_jhelper,
+        basic_manifest,
+        test_model,
+    ):
+        """Test that extra_tfvars parameter is stored as override_tfvars."""
+        extra_tfvars = {"enable-telemetry-notifications": True, "custom-key": "value"}
+        step = DeployCinderVolumeApplicationStep(
+            deployment_with_tfhelpers,
+            basic_client,
+            tfhelper,
+            basic_jhelper,
+            basic_manifest,
+            test_model,
+            extra_tfvars=extra_tfvars,
+        )
+        assert step.override_tfvars == extra_tfvars
+
+    def test_init_without_extra_tfvars(
+        self,
+        deployment_with_tfhelpers,
+        basic_client,
+        tfhelper,
+        basic_jhelper,
+        basic_manifest,
+        test_model,
+    ):
+        """Test that override_tfvars defaults to empty dict.
+
+        When extra_tfvars is not provided.
+        """
+        step = DeployCinderVolumeApplicationStep(
+            deployment_with_tfhelpers,
+            basic_client,
+            tfhelper,
+            basic_jhelper,
+            basic_manifest,
+            test_model,
+        )
+        assert step.override_tfvars == {}
+
+    @patch("sunbeam.steps.cinder_volume.microceph.ceph_replica_scale", return_value=3)
+    def test_extra_tfvars_override_precedence(
+        self,
+        mock_ceph_replica_scale,
+        deployment_with_tfhelpers,
+        basic_client,
+        tfhelper,
+        basic_jhelper,
+        basic_manifest,
+        test_model,
+        mceph_tfhelper,
+    ):
+        """Test that override_tfvars values take precedence over computed tfvars."""
+        basic_client.cluster.list_nodes_by_role.return_value = ["node1"]
+        mceph_tfhelper.output.return_value = {"ceph-application-name": "ceph-app"}
+
+        # Create step with override_tfvars
+        override_tfvars = {
+            "enable-telemetry-notifications": True,
+            "ceph-application-name": "override-ceph-app",
+        }
+        step = DeployCinderVolumeApplicationStep(
+            deployment_with_tfhelpers,
+            basic_client,
+            tfhelper,
+            basic_jhelper,
+            basic_manifest,
+            test_model,
+            extra_tfvars=override_tfvars,
+        )
+
+        # Mock the feature manager to return disabled telemetry
+        feature_manager = Mock()
+        feature_manager.is_feature_enabled.return_value = False
+        deployment_with_tfhelpers.get_feature_manager.return_value = feature_manager
+
+        tfvars = step.extra_tfvars()
+
+        # Verify override_tfvars values take precedence
+        assert tfvars["enable-telemetry-notifications"] is True  # overridden
+        assert tfvars["ceph-application-name"] == "override-ceph-app"  # overridden
+
+    @patch("sunbeam.steps.cinder_volume.microceph.ceph_replica_scale", return_value=3)
+    def test_extra_tfvars_telemetry_feature_enabled(
+        self,
+        mock_ceph_replica_scale,
+        deployment_with_tfhelpers,
+        basic_client,
+        tfhelper,
+        basic_jhelper,
+        basic_manifest,
+        test_model,
+        mceph_tfhelper,
+    ):
+        """Test telemetry notifications are enabled.
+
+        When telemetry feature is enabled.
+        """
+        basic_client.cluster.list_nodes_by_role.return_value = []
+
+        step = DeployCinderVolumeApplicationStep(
+            deployment_with_tfhelpers,
+            basic_client,
+            tfhelper,
+            basic_jhelper,
+            basic_manifest,
+            test_model,
+        )
+
+        # Mock the feature manager to return enabled telemetry
+        feature_manager = Mock()
+        feature_manager.is_feature_enabled.return_value = True
+        deployment_with_tfhelpers.get_feature_manager.return_value = feature_manager
+
+        tfvars = step.extra_tfvars()
+
+        # Verify telemetry notifications are enabled
+        assert tfvars["enable-telemetry-notifications"] is True
+        feature_manager.is_feature_enabled.assert_called_once_with(
+            deployment_with_tfhelpers, "telemetry"
+        )
+
+    @patch("sunbeam.steps.cinder_volume.microceph.ceph_replica_scale", return_value=3)
+    def test_extra_tfvars_telemetry_feature_disabled(
+        self,
+        mock_ceph_replica_scale,
+        deployment_with_tfhelpers,
+        basic_client,
+        tfhelper,
+        basic_jhelper,
+        basic_manifest,
+        test_model,
+        mceph_tfhelper,
+    ):
+        """Test telemetry notifications are disabled.
+
+        When telemetry feature is disabled.
+        """
+        basic_client.cluster.list_nodes_by_role.return_value = []
+
+        step = DeployCinderVolumeApplicationStep(
+            deployment_with_tfhelpers,
+            basic_client,
+            tfhelper,
+            basic_jhelper,
+            basic_manifest,
+            test_model,
+        )
+
+        # Mock the feature manager to return disabled telemetry
+        feature_manager = Mock()
+        feature_manager.is_feature_enabled.return_value = False
+        deployment_with_tfhelpers.get_feature_manager.return_value = feature_manager
+
+        tfvars = step.extra_tfvars()
+
+        # Verify telemetry notifications are disabled
+        assert tfvars["enable-telemetry-notifications"] is False
+        feature_manager.is_feature_enabled.assert_called_once_with(
+            deployment_with_tfhelpers, "telemetry"
+        )
+
 
 class TestRemoveCinderVolumeUnitsStep:
     @pytest.fixture

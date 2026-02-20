@@ -63,3 +63,9 @@ variable "database-offer-url" {
   type        = string
   default     = null
 }
+
+variable "enable-telemetry-notifications" {
+  description = "Enable telemetry notifications on cinder-volume"
+  type        = bool
+  default     = false
+}

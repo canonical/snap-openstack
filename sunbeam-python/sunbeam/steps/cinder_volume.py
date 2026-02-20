@@ -61,6 +61,7 @@ class DeployCinderVolumeApplicationStep(DeployMachineApplicationStep):
         jhelper: JujuHelper,
         manifest: Manifest,
         model: str,
+        extra_tfvars: dict | None = None,
     ):
         super().__init__(
             deployment,
@@ -76,6 +77,7 @@ class DeployCinderVolumeApplicationStep(DeployMachineApplicationStep):
             "Deploying Cinder Volume",
         )
         self._offers: dict[str, str | None] = {}
+        self.override_tfvars: dict[str, Any] = extra_tfvars or {}
 
     def get_application_timeout(self) -> int:
         """Return application timeout in seconds."""
@@ -149,6 +151,14 @@ class DeployCinderVolumeApplicationStep(DeployMachineApplicationStep):
             },
         }
 
+        # This may not be required ideally as Cinder volume is deployed always
+        # before user can enable or disable telemetry.
+        feature_manager = self.deployment.get_feature_manager()
+        if feature_manager.is_feature_enabled(self.deployment, "telemetry"):
+            tfvars["enable-telemetry-notifications"] = True
+        else:
+            tfvars["enable-telemetry-notifications"] = False
+
         if len(storage_nodes):
             microceph_tfhelper = self.deployment.get_tfhelper("microceph-plan")
             microceph_tf_output = microceph_tfhelper.output()
@@ -158,6 +168,11 @@ class DeployCinderVolumeApplicationStep(DeployMachineApplicationStep):
             if ceph_application_name:
                 tfvars["ceph-application-name"] = ceph_application_name
             tfvars.update(self._get_offers())
+
+        # Any tfvars that needs override will take precedence from self.override_tfvars
+        # Example usage: When telemetry is enabled/disabled, telemetry feature can set
+        # enable-telemetry-notifications using override_tfvars
+        tfvars.update(self.override_tfvars)
 
         return tfvars
 

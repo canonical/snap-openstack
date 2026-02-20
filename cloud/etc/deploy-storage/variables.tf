@@ -9,15 +9,16 @@ variable "model" {
 variable "cinder-volumes" {
   description = "Cinder Volume application configuration"
   type = map(object({
-    application_name   = string
-    charm_channel      = string
-    charm_revision     = number
-    charm_config       = map(string)
-    machine_ids        = list(string)
-    endpoint_bindings  = set(map(string))
-    keystone-offer-url = string
-    amqp-offer-url     = string
-    database-offer-url = string
+    application_name               = string
+    charm_channel                  = string
+    charm_revision                 = number
+    charm_config                   = map(string)
+    machine_ids                    = list(string)
+    endpoint_bindings              = set(map(string))
+    keystone-offer-url             = string
+    amqp-offer-url                 = string
+    database-offer-url             = string
+    enable-telemetry-notifications = bool
   }))
   default = {}
 }
