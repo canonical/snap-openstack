@@ -45,6 +45,13 @@ console = Console()
     hidden=True,
     help="Upgrade OpenStack release.",
 )
+@click.option(
+    "--reset-mysql-upgrade-state",
+    is_flag=True,
+    default=False,
+    help=("Reset the mysql-k8s charm's upgrade state and start a fresh upgrade."),
+    type=bool,
+)
 @click_option_show_hints
 @click.pass_context
 def refresh(
@@ -52,6 +59,7 @@ def refresh(
     upgrade_release: bool,
     manifest_path: Path | None = None,
     clear_manifest: bool = False,
+    reset_mysql_upgrade_state: bool = False,
     show_hints: bool = False,
 ) -> None:
     """Refresh deployment.
@@ -81,6 +89,16 @@ def refresh(
     LOG.debug(f"Manifest used for deployment - core: {manifest.core}")
     jhelper = JujuHelper(deployment.juju_controller)
     upgrade_coordinator: UpgradeCoordinator
+    if reset_mysql_upgrade_state:
+        msg = (
+            "This will reset the mysql-k8s upgrade workflow state and restart the "
+            "upgrade process from the beginning.\n\n"
+            "Do you want to continue?"
+        )
+        reset_mysql_upgrade_state = click.confirm(
+            msg,
+            default=False,
+        )
     if upgrade_release:
         upgrade_coordinator = ChannelUpgradeCoordinator(
             deployment, client, jhelper, manifest
@@ -88,7 +106,7 @@ def refresh(
         upgrade_coordinator.run_plan(show_hints)
     else:
         upgrade_coordinator = LatestInChannelCoordinator(
-            deployment, client, jhelper, manifest
+            deployment, client, jhelper, manifest, reset_mysql_upgrade_state
         )
         upgrade_coordinator.run_plan(show_hints)
     click.echo("Refresh complete.")
