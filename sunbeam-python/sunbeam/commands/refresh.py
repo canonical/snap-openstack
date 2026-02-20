@@ -64,6 +64,15 @@ def refresh(
             "Options manifest and clear_manifest are mutually exclusive"
         )
 
+    if not manifest_path and not clear_manifest:
+        click.confirm(
+            "Performing a whole-cluster refresh is risky. It is recommended to"
+            " target specific charms for refresh via a manifest file with"
+            " `sunbeam cluster refresh -m`.\nContinue anyway?",
+            default=False,
+            abort=True,
+        )
+
     deployment: Deployment = ctx.obj
     client = deployment.get_client()
     # Validate manifest file
