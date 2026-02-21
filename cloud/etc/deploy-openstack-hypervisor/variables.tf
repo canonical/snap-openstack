@@ -75,6 +75,7 @@ variable "ca-offer-url" {
 variable "ovn-relay-offer-url" {
   description = "Offer URL for ovn relay service"
   type        = string
+  default     = null
 }
 
 variable "ceilometer-offer-url" {

@@ -11,7 +11,6 @@ from sunbeam.core.common import (
     BaseStep,
     Result,
     ResultType,
-    Role,
     update_status_background,
 )
 from sunbeam.core.deployment import Deployment
@@ -251,11 +250,18 @@ class LatestInChannelCoordinator(UpgradeCoordinator):
                 ]
             )
 
-        plan.extend([OpenStackPatchLoadBalancerServicesIPStep(self.client)])
-
-        network_nodes = self.client.cluster.list_nodes_by_role(
-            Role.NETWORK.name.lower()
+        ovn_manager = self.deployment.get_ovn_manager()
+        plan.extend(
+            [OpenStackPatchLoadBalancerServicesIPStep(self.client, ovn_manager)]
         )
+
+        network_nodes = []
+        microovn_roles = ovn_manager.get_roles_for_microovn()
+        for role in microovn_roles:
+            network_nodes.extend(
+                self.client.cluster.list_nodes_by_role(role.name.lower())
+            )
+
         if len(network_nodes):
             plan.extend(
                 [
@@ -267,6 +273,7 @@ class LatestInChannelCoordinator(UpgradeCoordinator):
                         self.jhelper,
                         self.manifest,
                         self.deployment.openstack_machines_model,
+                        ovn_manager,
                     ),
                 ]
             )

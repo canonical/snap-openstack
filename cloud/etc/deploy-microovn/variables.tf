@@ -54,6 +54,24 @@ variable "charm_microcluster_token_distributor_config" {
   default     = {}
 }
 
+variable "charm_sunbeam_ovn_proxy_channel" {
+  description = "Operator channel for sunbeam-ovn-proxy deployment"
+  type        = string
+  default     = "latest/edge"
+}
+
+variable "charm_sunbeam_ovn_proxy_revision" {
+  description = "Operator channel revision for sunbeam-ovn-proxy deployment"
+  type        = number
+  default     = null
+}
+
+variable "charm_sunbeam_ovn_proxy_config" {
+  description = "Operator config for sunbeam-ovn-proxy deployment"
+  type        = map(string)
+  default     = {}
+}
+
 variable "microovn_machine_ids" {
   description = "List of machine ids to include"
   type        = list(string)
