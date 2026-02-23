@@ -7,13 +7,20 @@ import base64
 import logging
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 from typing import Tuple
 
 import yaml
 
+from sunbeam.features.interface.utils import get_subject_from_csr
+
 from .base import BaseFeatureTest
 from .vault import ensure_vault_prerequisites
+
+# TLS Vault root+intermediate CA: (ca_cert_b64, ca_chain_b64, inter_pem,
+# inter_key_pem, vault_ca_conf, certindex, certserial)
+VaultCaMaterial = Tuple[str, str, str, str, str, str, str]
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +30,16 @@ def generate_self_signed_ca_certificate() -> Tuple[str, str]:
 
     Returns a tuple of (ca_cert_base64, ca_chain_base64). For a simple self-signed CA,
     the chain is the same as the cert. TLS CA currently only uses the CA certificate.
+    """
+    cert_b64, chain_b64, _, _ = generate_self_signed_ca_certificate_with_key()
+    return (cert_b64, chain_b64)
+
+
+def generate_self_signed_ca_certificate_with_key() -> Tuple[str, str, str, str]:
+    """Generate a self-signed CA certificate and private key.
+
+    Returns (ca_cert_base64, ca_chain_base64, ca_cert_pem, ca_key_pem).
+    Used when the test must sign CSRs (e.g. full TLS CA flow).
     """
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp_path = Path(tmpdir)
@@ -67,22 +84,200 @@ authorityKeyIdentifier = keyid:always,issuer
             capture_output=True,
         )
 
-        ca_cert = cert_path.read_text()
-        ca_cert_base64 = base64.b64encode(ca_cert.encode()).decode()
-
+        ca_cert_pem = cert_path.read_text()
+        ca_key_pem = key_path.read_text()
+        ca_cert_base64 = base64.b64encode(ca_cert_pem.encode()).decode()
         ca_chain_base64 = ca_cert_base64
 
-        return (ca_cert_base64, ca_chain_base64)
+        return (ca_cert_base64, ca_chain_base64, ca_cert_pem, ca_key_pem)
+
+
+def generate_root_and_intermediate_ca_for_vault() -> VaultCaMaterial:
+    """Generate root CA and intermediate CA for TLS Vault.
+
+    Follows the canonical doc:
+    - Root CA: 8192-bit key, sha256, 3650 days, CA config with certindex/serial.
+    - Intermediate CA: 8192-bit key, CSR signed by root via openssl ca -config
+      ca.conf.
+    - CA chain: intermediate then root (interca1.crt + rootca.crt).
+    - Returns material so Vault CSR can be signed via openssl ca -config
+      vault-ca.conf.
+
+    Returns:
+        (ca_cert_base64, ca_chain_base64, inter_cert_pem, inter_key_pem,
+         vault_ca_conf_content, certindex_content, certserial_content).
+        For enable use --ca=intermediate cert, --ca-chain=chain (inter+root).
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir)
+
+        # CA database and serial (per doc)
+        (tmp_path / "certindex").touch()
+        (tmp_path / "certserial").write_text("1000\n")
+        (tmp_path / "crlnumber").write_text("1000\n")
+
+        # Root CA config (per doc)
+        ca_conf = """[ ca ]
+default_ca = CA_default
+
+[ CA_default ]
+dir = .
+database = certindex
+new_certs_dir = .
+certificate = rootca.crt
+private_key = rootca.key
+serial = certserial
+default_days      = 375
+default_crl_days  =  30
+default_md        = sha256
+policy = policy_anything
+x509_extensions = v3_ca
+
+[ v3_ca ]
+basicConstraints = critical,CA:true
+
+[ policy_anything ]
+countryName = optional
+stateOrProvinceName = optional
+organizationName = optional
+organizationalUnitName = optional
+commonName = supplied
+"""
+        (tmp_path / "ca.conf").write_text(ca_conf)
+
+        # Root CA key and cert (8192-bit, sha256, 3650 days)
+        subprocess.run(
+            ["openssl", "genrsa", "-out", "rootca.key", "8192"],
+            check=True,
+            capture_output=True,
+            cwd=tmp_path,
+        )
+        subprocess.run(
+            [
+                "openssl",
+                "req",
+                "-sha256",
+                "-new",
+                "-x509",
+                "-days",
+                "3650",
+                "-key",
+                "rootca.key",
+                "-out",
+                "rootca.crt",
+                "-subj",
+                "/C=US/ST=State/L=City/O=TestOrg/CN=TestRootCA",
+            ],
+            check=True,
+            capture_output=True,
+            cwd=tmp_path,
+        )
+
+        # Intermediate CA key and CSR
+        subprocess.run(
+            ["openssl", "genrsa", "-out", "interca1.key", "8192"],
+            check=True,
+            capture_output=True,
+            cwd=tmp_path,
+        )
+        subprocess.run(
+            [
+                "openssl",
+                "req",
+                "-sha256",
+                "-new",
+                "-key",
+                "interca1.key",
+                "-out",
+                "interca1.csr",
+                "-subj",
+                "/C=US/ST=State/L=City/O=TestOrg/CN=TestInterCA",
+            ],
+            check=True,
+            capture_output=True,
+            cwd=tmp_path,
+        )
+
+        # Sign intermediate with root (openssl ca -batch -config ca.conf)
+        subprocess.run(
+            [
+                "openssl",
+                "ca",
+                "-batch",
+                "-config",
+                "ca.conf",
+                "-notext",
+                "-in",
+                "interca1.csr",
+                "-out",
+                "interca1.crt",
+            ],
+            check=True,
+            capture_output=True,
+            cwd=tmp_path,
+        )
+
+        # Chain: intermediate then root (per doc)
+        inter_pem = (tmp_path / "interca1.crt").read_text()
+        root_pem = (tmp_path / "rootca.crt").read_text()
+        chain_pem = inter_pem + root_pem
+
+        inter_key_pem = (tmp_path / "interca1.key").read_text()
+
+        # vault-ca.conf uses intermediate as the signing CA (per doc)
+        vault_ca_conf = """[ ca ]
+default_ca = CA_default
+
+[ CA_default ]
+dir = .
+database = certindex
+new_certs_dir = .
+certificate = interca1.crt
+private_key = interca1.key
+serial = certserial
+default_days      = 375
+default_crl_days  =  30
+default_md        = sha256
+policy = policy_anything
+x509_extensions = v3_ca
+
+[ v3_ca ]
+basicConstraints = critical,CA:true
+
+[ policy_anything ]
+countryName = optional
+stateOrProvinceName = optional
+organizationName = optional
+organizationalUnitName = optional
+commonName = supplied
+"""
+        certindex_content = (tmp_path / "certindex").read_text()
+        certserial_content = (tmp_path / "certserial").read_text()
+
+        ca_cert_b64 = base64.b64encode(inter_pem.encode()).decode()
+        ca_chain_b64 = base64.b64encode(chain_pem.encode()).decode()
+
+        return (
+            ca_cert_b64,
+            ca_chain_b64,
+            inter_pem,
+            inter_key_pem,
+            vault_ca_conf,
+            certindex_content,
+            certserial_content,
+        )
 
 
 class TlsCaTest(BaseFeatureTest):
-    """Test TLS CA mode enablement/disablement.
+    """Test TLS CA mode enablement/disablement (full flow).
 
     TLS CA mode uses Certificate Authority certificates for TLS.
-    This test verifies that:
-    - TLS CA can be enabled (with self-signed CA certificates)
-    - Endpoints are exposed over HTTPS (both public and internal)
-    - Basic OpenStack operations work (e.g., listing images)
+    This test runs the complete flow:
+    - Enable TLS CA with --ca and --endpoint public/internal
+    - List outstanding CSRs (with retry/backoff)
+    - Sign CSRs and update manifest
+    - Push certs via sunbeam tls ca unit_certs -m manifest
+    - Verify endpoints are HTTPS and basic OpenStack operations work.
     """
 
     feature_name = "tls"
@@ -94,13 +289,22 @@ class TlsCaTest(BaseFeatureTest):
     timeout_seconds = 600
 
     def __init__(self, *args, **kwargs):
-        """Initialize and generate CA certificates."""
+        """Initialize and generate CA certificate and key (for signing CSRs)."""
         super().__init__(*args, **kwargs)
-        self.ca_cert_base64, _ = generate_self_signed_ca_certificate()
+        (
+            self.ca_cert_base64,
+            _,
+            self._ca_cert_pem,
+            self._ca_key_pem,
+        ) = generate_self_signed_ca_certificate_with_key()
         self.enable_args = [
             "ca",
             "--ca",
             self.ca_cert_base64,
+            "--endpoint",
+            "public",
+            "--endpoint",
+            "internal",
         ]
 
     def enable(self) -> bool:
@@ -127,21 +331,254 @@ class TlsCaTest(BaseFeatureTest):
             )
             return False
 
+    def _sign_ca_csrs_and_install(self) -> None:
+        """List TLS CA CSRs (retry), sign with test CA, write manifest, unit_certs.
+
+        Mirrors SQA enable_tls: list_outstanding_csrs -> sign -> manifest ->
+        unit_certs. Certificate dict keyed by subject (X500 id from CSR).
+        """
+        sunbeam_cmd = getattr(self.sunbeam, "_sunbeam_cmd", "sunbeam")
+        max_attempts = 10
+        backoff_seconds = 15
+        csrs_list: list = []
+        for attempt in range(1, max_attempts + 1):
+            logger.info(
+                "Listing outstanding TLS CA CSRs (attempt %d/%d)...",
+                attempt,
+                max_attempts,
+            )
+            result = subprocess.run(
+                [
+                    sunbeam_cmd,
+                    "tls",
+                    "ca",
+                    "list_outstanding_csrs",
+                    "--format",
+                    "yaml",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            raw = yaml.safe_load(result.stdout or "") or []
+            csrs_list = raw if isinstance(raw, list) else []
+            if csrs_list:
+                break
+            if attempt < max_attempts:
+                logger.info(
+                    "No CSRs yet (Traefik may still be coming up); retrying in %ds...",
+                    backoff_seconds,
+                )
+                time.sleep(backoff_seconds)
+
+        if not csrs_list:
+            logger.info(
+                "No outstanding TLS CA CSRs after %d attempts; skipping unit_certs.",
+                max_attempts,
+            )
+            return
+
+        certificates: dict[str, dict[str, str]] = {}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            ca_cert_path = tmp_path / "ca.crt"
+            ca_key_path = tmp_path / "ca.key"
+            ca_cert_path.write_text(self._ca_cert_pem)
+            ca_key_path.write_text(self._ca_key_pem)
+
+            for record in csrs_list:
+                if not isinstance(record, dict):
+                    continue
+                csr_pem = record.get("csr")
+                if not csr_pem:
+                    continue
+                subject = get_subject_from_csr(str(csr_pem).strip())
+                if not subject:
+                    logger.warning("Could not get subject from CSR; skipping record")
+                    continue
+                csr_path = tmp_path / f"req_{subject[:8]}.csr"
+                csr_path.write_text(str(csr_pem).strip() + "\n")
+                cert_path = tmp_path / f"out_{subject[:8]}.crt"
+                subprocess.run(
+                    [
+                        "openssl",
+                        "x509",
+                        "-req",
+                        "-in",
+                        str(csr_path),
+                        "-CA",
+                        str(ca_cert_path),
+                        "-CAkey",
+                        str(ca_key_path),
+                        "-CAcreateserial",
+                        "-out",
+                        str(cert_path),
+                        "-days",
+                        "365",
+                    ],
+                    check=True,
+                    capture_output=True,
+                )
+                cert_pem = cert_path.read_text()
+                cert_b64 = base64.b64encode(cert_pem.encode()).decode()
+                certificates[subject] = {"certificate": cert_b64}
+
+        if not certificates:
+            logger.warning("No certificates signed; skipping unit_certs")
+            return
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            manifest_data = {
+                "features": {
+                    "tls": {
+                        "ca": {
+                            "config": {"certificates": certificates},
+                        },
+                    },
+                },
+            }
+            yaml.dump(manifest_data, f, default_flow_style=False, sort_keys=False)
+            manifest_path = f.name
+
+        try:
+            logger.info(
+                "Pushing signed certificates via 'sunbeam tls ca unit_certs -m %s'...",
+                manifest_path,
+            )
+            subprocess.run(
+                [sunbeam_cmd, "tls", "ca", "unit_certs", "-m", manifest_path],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        finally:
+            Path(manifest_path).unlink(missing_ok=True)
+
+    def validate_feature_behavior(self) -> None:
+        """Check public/internal endpoints use HTTPS and image list works.
+
+        This mirrors the verification logic used in the TLS Vault lifecycle
+        tests and the upstream documentation:
+        - Public endpoints must use HTTPS.
+        - Internal endpoints (when present) must use HTTPS.
+        - A basic OpenStack operation (image list) must succeed.
+        """
+        logger.info("Verifying public endpoints use HTTPS (TLS CA mode)...")
+        result = subprocess.run(
+            [
+                "openstack",
+                "endpoint",
+                "list",
+                "--interface",
+                "public",
+                "-c",
+                "URL",
+                "-f",
+                "value",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        public_urls = [
+            u.strip() for u in (result.stdout or "").splitlines() if u.strip()
+        ]
+        if not public_urls:
+            raise AssertionError(
+                "openstack endpoint list --interface public returned no URLs "
+                "(TLS CA mode)"
+            )
+        public_https = [u for u in public_urls if u.startswith("https://")]
+        if not public_https:
+            raise AssertionError(
+                "TLS CA feature appears inactive: no HTTPS endpoints found in "
+                "public interface. Sample URLs: " + ", ".join(public_urls[:5])
+            )
+        logger.info("Found %d HTTPS public endpoints (TLS CA mode)", len(public_https))
+
+        logger.info("Verifying internal endpoints use HTTPS (TLS CA mode)...")
+        result = subprocess.run(
+            [
+                "openstack",
+                "endpoint",
+                "list",
+                "--interface",
+                "internal",
+                "-c",
+                "URL",
+                "-f",
+                "value",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        internal_urls = [
+            u.strip() for u in (result.stdout or "").splitlines() if u.strip()
+        ]
+        if internal_urls:
+            internal_https = [u for u in internal_urls if u.startswith("https://")]
+            if not internal_https:
+                raise AssertionError(
+                    "TLS CA feature appears inactive: no HTTPS endpoints found in "
+                    "internal interface. Sample URLs: " + ", ".join(internal_urls[:5])
+                )
+            logger.info(
+                "Found %d HTTPS internal endpoints (TLS CA mode)",
+                len(internal_https),
+            )
+        else:
+            logger.warning(
+                "No internal endpoints found; this may be normal for some deployments"
+            )
+
+        logger.info(
+            "Verifying basic OpenStack operations work over TLS (TLS CA mode)..."
+        )
+        result = subprocess.run(
+            ["openstack", "image", "list"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    def run_full_lifecycle(self) -> bool:
+        """Enable, sign CSRs, unit_certs, validate, optional disable."""
+        logger.info("Starting full lifecycle test for TLS CA")
+        if not self.enable():
+            return False
+        self._sign_ca_csrs_and_install()
+        try:
+            self.verify_validate_feature_behavior()
+        except Exception:  # noqa: BLE001
+            logger.exception("TLS CA validation failed")
+            try:
+                self.disable()
+            except Exception:  # noqa: BLE001
+                pass
+            return False
+        if not self.disable_after:
+            logger.info("Leaving TLS CA enabled (disable_after is False)")
+            return True
+        self.disable()
+        return True
+
 
 class TlsVaultTest(BaseFeatureTest):
     """Test TLS Vault mode enablement/disablement.
 
-    TLS Vault mode uses Vault for certificate management.
+    TLS Vault mode uses Vault for certificate management. CA material is generated
+    per generate-a-ca-certificate.rst: root CA + intermediate CA, chain (intermediate
+    then root), and the Vault CSR is signed with the intermediate via
+    ``openssl ca -config vault-ca.conf``.
+
     Prerequisites (per docs):
     - Traefik hostnames must be configured.
     - Vault feature must be enabled.
     - Vault charm must be initialised, unsealed and authorised.
 
-    This test focuses on the enable/disable flow and a couple of
-    high-level functional checks:
-    - TLS Vault can be enabled (after Vault is ready).
-    - Public and internal endpoints use HTTPS.
-    - A basic OpenStack operation succeeds (image list).
+    run_full_lifecycle() does: enable with --ca/--ca-chain (intermediate + chain),
+    list CSRs, sign Vault CSR with intermediate, unit_certs, then validate and disable.
     """
 
     feature_name = "tls"
@@ -271,128 +708,112 @@ class TlsVaultTest(BaseFeatureTest):
             )
         logger.info("Basic OpenStack operations verified (TLS Vault mode)")
 
-    def _generate_vault_ca_material(self) -> Tuple[str, str, str, str]:
-        """Generate CA key and certificate for TLS Vault workflow.
+    def _generate_vault_ca_material(self) -> VaultCaMaterial:
+        """Generate root + intermediate CA for TLS Vault.
 
-        Returns (ca_cert_base64, ca_chain_base64, ca_cert_pem, ca_key_pem).
+        See generate-a-ca-certificate.rst. Returns (ca_cert_base64, ca_chain_base64,
+        inter_cert_pem, inter_key_pem,
+                 vault_ca_conf, certindex_content, certserial_content).
         """
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tmp_path = Path(tmpdir)
-
-            key_path = tmp_path / "vault-ca.key"
-            cert_path = tmp_path / "vault-ca.crt"
-
-            subprocess.run(
-                ["openssl", "genrsa", "-out", str(key_path), "4096"],
-                check=True,
-                capture_output=True,
-            )
-            subprocess.run(
-                [
-                    "openssl",
-                    "req",
-                    "-new",
-                    "-x509",
-                    "-days",
-                    "365",
-                    "-key",
-                    str(key_path),
-                    "-out",
-                    str(cert_path),
-                    "-subj",
-                    "/C=US/ST=State/L=City/O=TestOrg/CN=TestVaultCA",
-                    "-extensions",
-                    "v3_ca",
-                    "-config",
-                    "/dev/stdin",
-                ],
-                input=b"""[req]
-distinguished_name = req_distinguished_name
-[req_distinguished_name]
-[v3_ca]
-basicConstraints = critical,CA:TRUE
-keyUsage = critical,keyCertSign,cRLSign
-subjectKeyIdentifier = hash
-authorityKeyIdentifier = keyid:always,issuer
-""",
-                check=True,
-                capture_output=True,
-            )
-
-            ca_cert_pem = cert_path.read_text()
-            ca_key_pem = key_path.read_text()
-            ca_cert_base64 = base64.b64encode(ca_cert_pem.encode()).decode()
-            ca_chain_base64 = ca_cert_base64
-
-        return ca_cert_base64, ca_chain_base64, ca_cert_pem, ca_key_pem
+        return generate_root_and_intermediate_ca_for_vault()
 
     def _sign_vault_csrs_and_install(self) -> None:
-        """Automate CSR signing and certificate injection for TLS Vault.
+        """Sign Vault CSR with intermediate CA, inject via sunbeam tls vault unit_certs.
 
-        This follows the docs flow:
-        - List outstanding Vault CSRs.
-        - Act as the external CA and sign them with our test CA.
-        - Provide the signed certificate to ``sunbeam tls vault unit_certs``.
+        Per generate-a-ca-certificate.rst: sign Vault CSR with intermediate CA
+        via: openssl ca -batch -config vault-ca.conf -notext -in vault.csr
+        -out vault.crt
         """
         sunbeam_cmd = getattr(self.sunbeam, "_sunbeam_cmd", "sunbeam")
 
-        logger.info("Listing outstanding TLS Vault CSRs...")
-        result = subprocess.run(
-            [sunbeam_cmd, "tls", "vault", "list_outstanding_csrs", "--format", "yaml"],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-
-        data = yaml.safe_load(result.stdout or "") or {}
-        if not isinstance(data, dict) or not data:
+        max_attempts = 10
+        backoff_seconds = 15
+        records: list = []
+        for attempt in range(1, max_attempts + 1):
             logger.info(
-                "No outstanding TLS Vault CSRs found; skipping unit_certs step."
+                "Listing outstanding TLS Vault CSRs (attempt %d/%d)...",
+                attempt,
+                max_attempts,
+            )
+            result = subprocess.run(
+                [
+                    sunbeam_cmd,
+                    "tls",
+                    "vault",
+                    "list_outstanding_csrs",
+                    "--format",
+                    "yaml",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            raw = yaml.safe_load(result.stdout or "") or []
+            records = raw if isinstance(raw, list) else []
+            if records:
+                break
+            if attempt < max_attempts:
+                logger.info(
+                    "No CSRs yet (Traefik may still be coming up); retrying in %ds...",
+                    backoff_seconds,
+                )
+                time.sleep(backoff_seconds)
+
+        if not records:
+            logger.info(
+                "No outstanding TLS Vault CSRs found after %d attempts; "
+                "skipping unit_certs step.",
+                max_attempts,
             )
             return
 
-        # For now, we handle the common case of a single Vault unit.
-        if len(data) > 1:
+        first = records[0] if isinstance(records[0], dict) else {}
+        csr_pem = first.get("csr")
+        unit_name = first.get("unit_name") or first.get("app_name") or "vault/0"
+        if not csr_pem:
             logger.warning(
-                "Multiple Vault CSRs found; signing the first one only for this test."
+                "First TLS Vault CSR record had no 'csr'; skipping unit_certs"
             )
-
-        unit_name, csr_pem = next(iter(data.items()))
-        logger.info("Signing CSR for Vault unit %s", unit_name)
+            return
+        if len(records) > 1:
+            logger.warning(
+                "Multiple TLS Vault CSRs found; signing the first only for this test."
+            )
+        logger.info(
+            "Signing Vault CSR for unit %s with intermediate CA (openssl ca -config vault-ca.conf)",
+            unit_name,
+        )
 
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)
-            ca_cert_path = tmp_path / "ca.crt"
-            ca_key_path = tmp_path / "ca.key"
-            csr_path = tmp_path / "vault.csr"
-            cert_path = tmp_path / "vault.crt"
-
-            ca_cert_path.write_text(self._vault_ca_cert_pem)
-            ca_key_path.write_text(self._vault_ca_key_pem)
-            csr_path.write_text(str(csr_pem).strip() + "\n")
+            # Recreate CA dir state for intermediate to sign the Vault CSR.
+            (tmp_path / "vault-ca.conf").write_text(self._vault_ca_conf)
+            (tmp_path / "interca1.crt").write_text(self._vault_ca_cert_pem)
+            (tmp_path / "interca1.key").write_text(self._vault_ca_key_pem)
+            (tmp_path / "certindex").write_text(self._vault_certindex)
+            (tmp_path / "certserial").write_text(self._vault_certserial)
+            (tmp_path / "crlnumber").write_text("1000\n")
+            (tmp_path / "vault.csr").write_text(str(csr_pem).strip() + "\n")
 
             subprocess.run(
                 [
                     "openssl",
-                    "x509",
-                    "-req",
+                    "ca",
+                    "-batch",
+                    "-config",
+                    "vault-ca.conf",
+                    "-notext",
                     "-in",
-                    str(csr_path),
-                    "-CA",
-                    str(ca_cert_path),
-                    "-CAkey",
-                    str(ca_key_path),
-                    "-CAcreateserial",
+                    "vault.csr",
                     "-out",
-                    str(cert_path),
-                    "-days",
-                    "365",
+                    "vault.crt",
                 ],
                 check=True,
                 capture_output=True,
+                cwd=tmp_path,
             )
 
-            vault_cert_pem = cert_path.read_text()
+            vault_cert_pem = (tmp_path / "vault.crt").read_text()
 
         vault_cert_b64 = base64.b64encode(vault_cert_pem.encode()).decode()
 
@@ -420,12 +841,15 @@ authorityKeyIdentifier = keyid:always,issuer
             logger.error("Failed to set up Vault prerequisites for TLS Vault")
             return False
 
-        # Generate dedicated CA material for TLS Vault and wire enable args.
+        # Generate root + intermediate CA.
         (
             self.ca_cert_base64,
             self.ca_chain_base64,
             self._vault_ca_cert_pem,
             self._vault_ca_key_pem,
+            self._vault_ca_conf,
+            self._vault_certindex,
+            self._vault_certserial,
         ) = self._generate_vault_ca_material()
         self.enable_args = [
             "vault",

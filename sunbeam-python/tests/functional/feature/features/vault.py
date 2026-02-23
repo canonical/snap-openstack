@@ -167,18 +167,25 @@ def _disable_vault_and_wait(sunbeam, juju, timeout: int = 300) -> bool:
 
 
 def ensure_vault_prerequisites(sunbeam, juju) -> bool:
-    """Ensure Vault is ready (active) per docs: enable, init, unseal, authorize.
+    """Ensure Vault is ready (active).
 
-    - Enable the Vault feature (units blocked until init/unseal/authorize).
-    - Initialise: sunbeam vault init KEY_SHARES KEY_THRESHOLD (we use 1, 1).
-    - Unseal: run unseal KEY_THRESHOLD times for leader, then for non-leaders.
-    - Authorise: cat token | sunbeam vault authorize-charm -.
-    - Wait for Vault units to become active (docs: update-status-interval, e.g. 5 min).
-    If init returns no keys (Vault already initialised), disable and re-enable once,
-    then retry init so the test can succeed without manual steps.
+    If Vault is already enabled (app exists), init/unseal/authorize were done
+    when it was first enabled, so we only wait for the app to be ready.
+    If Vault is not yet enabled, we enable it then run init, unseal, authorize,
+    and wait for active. If init fails (Vault already initialised), we try
+    disable/re-enable/retry once (only when no other feature depends on vault).
     """
+    already_enabled = juju.has_application("vault")
     if not _ensure_vault_enabled(sunbeam, juju):
         return False
+
+    if already_enabled:
+        logger.info(
+            "Vault was already enabled; skipping init/unseal/authorize and "
+            "waiting for application ready."
+        )
+        juju.wait_for_application_ready("vault", timeout=360)
+        return True
 
     success, unseal_key, root_token = _initialize_vault(sunbeam)
     if not success and juju.has_application("vault"):
