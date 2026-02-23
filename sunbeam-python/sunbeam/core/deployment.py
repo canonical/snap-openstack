@@ -54,6 +54,7 @@ else:
 
 LOG = logging.getLogger(__name__)
 PROXY_CONFIG_KEY = "ProxySettings"
+DEPLOYMENT_TYPE_CONFIG_KEY = "deployment.type"
 
 _cls_registry: dict[str, Type["Deployment"]] = {}
 

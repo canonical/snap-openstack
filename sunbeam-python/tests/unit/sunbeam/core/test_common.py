@@ -148,7 +148,7 @@ def test_validate_roles():
     assert not set(result) ^ all_roles
 
     # Test invalid role
-    invalid_role = "invalid"
+    invalid_role = ("invalid",)
     with pytest.raises(click.BadParameter):
         validate_roles(Mock(), Mock(), invalid_role)
 
@@ -171,3 +171,27 @@ def test_validate_roles():
     multiple_comma_separated_roles = ("control,compute", "storage,compute")
     result = validate_roles(Mock(), Mock(), multiple_comma_separated_roles)
     assert not set(result) ^ all_roles
+
+
+def test_validate_roles_gated():
+    """Test that gated roles require feature gate to be enabled."""
+    # region_controller role requires feature.multi-region gate
+    with patch("sunbeam.core.common._is_role_enabled") as mock_is_enabled:
+        # Mock: region_controller is NOT enabled
+        def is_enabled_side_effect(role):
+            return role != Role.REGION_CONTROLLER
+
+        mock_is_enabled.side_effect = is_enabled_side_effect
+
+        # Should raise error for gated role
+        with pytest.raises(click.BadParameter, match="not enabled"):
+            validate_roles(Mock(), Mock(), ("region_controller",))
+
+        # Should work for non-gated roles
+        result = validate_roles(Mock(), Mock(), ("control", "compute"))
+        assert set(result) == {Role.CONTROL, Role.COMPUTE}
+
+    # Test with gate enabled
+    with patch("sunbeam.core.common._is_role_enabled", return_value=True):
+        result = validate_roles(Mock(), Mock(), ("region_controller",))
+        assert result == [Role.REGION_CONTROLLER]

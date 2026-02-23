@@ -31,6 +31,8 @@ var Servers = map[string]rest.Server{
 					statusCmd,
 					storageBackendsCmd,
 					storageBackendCmd,
+					featureGatesCmd,
+					featureGateCmd,
 				},
 			},
 			{

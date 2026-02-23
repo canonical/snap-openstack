@@ -64,7 +64,11 @@ from sunbeam.core.common import (
     update_config,
     validate_roles,
 )
-from sunbeam.core.deployment import Deployment, Networks
+from sunbeam.core.deployment import (
+    DEPLOYMENT_TYPE_CONFIG_KEY,
+    Deployment,
+    Networks,
+)
 from sunbeam.core.deployments import DeploymentsConfig, deployment_path
 from sunbeam.core.juju import (
     JujuHelper,
@@ -185,6 +189,7 @@ from sunbeam.steps.sunbeam_machine import (
     DeploySunbeamMachineApplicationStep,
     RemoveSunbeamMachineUnitsStep,
 )
+from sunbeam.steps.sync_feature_gates import SyncFeatureGatesToCluster
 from sunbeam.utils import (
     CatchGroup,
     click_option_show_hints,
@@ -731,6 +736,7 @@ def bootstrap(  # noqa: C901
     plan.append(JujuLoginStep(deployment.juju_account))
     # bootstrapped node is always machine 0 in controller model
     plan.append(ClusterInitStep(client, roles_to_str_list(roles), 0, management_cidr))
+    plan.append(SyncFeatureGatesToCluster(client))
     plan.append(SaveManagementCidrStep(client, management_cidr))
     plan.append(SetOvnProviderStep(client, snap))
     plan.append(AddManifestStep(client, manifest_path))
@@ -754,6 +760,8 @@ def bootstrap(  # noqa: C901
         deployments.update_deployment(deployment)
 
     update_config(client, DEPLOYMENTS_CONFIG_KEY, deployments.get_minimal_info())
+    # Store deployment type for feature gate sync behavior
+    client.cluster.update_config(DEPLOYMENT_TYPE_CONFIG_KEY, deployment.type)
     proxy_settings = deployment.get_proxy_settings()
     LOG.debug(f"Proxy settings: {proxy_settings}")
 
