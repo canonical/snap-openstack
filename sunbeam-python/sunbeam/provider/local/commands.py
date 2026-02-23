@@ -79,6 +79,10 @@ from sunbeam.core.manifest import AddManifestStep, Manifest
 from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.core.questions import get_stdin_reopen_tty
 from sunbeam.core.terraform import TerraformInitStep
+from sunbeam.feature_gates import (
+    feature_gate_command,
+    feature_gate_option,
+)
 from sunbeam.provider.base import ProviderBase
 from sunbeam.provider.common.multiregion import connect_to_region_controller
 from sunbeam.provider.local.deployment import LOCAL_TYPE, LocalDeployment
@@ -590,6 +594,10 @@ def deploy_and_migrate_juju_controller(
     "roles",
     multiple=True,
     default=["control", "compute"],
+    type=click.Choice(
+        Role.enabled_values(),
+        case_sensitive=False,
+    ),
     callback=validate_roles,
     help="Specify additional roles for the bootstrap node. "
     "Possible values: compute, storage, network, region_controller. "
@@ -604,9 +612,10 @@ def deploy_and_migrate_juju_controller(
     type=str,
     help="Juju controller name",
 )
-@click.option(
+@feature_gate_option(
     "--region-controller-token",
     "region_controller_token",
+    gate_key="feature.multi-region",
     help="Token obtained from the region controller.",
     type=str,
 )
@@ -1233,6 +1242,7 @@ def add(
             console.print("Node is already a member of the Sunbeam cluster")
 
 
+@feature_gate_command(gate_key="feature.multi-region")
 @click.command()
 @click.argument("name", type=str)
 @click.option(
@@ -1317,16 +1327,21 @@ def add_secondary_region_node(
     "roles",
     multiple=True,
     default=["control", "compute"],
+    type=click.Choice(
+        Role.enabled_values(),
+        case_sensitive=False,
+    ),
     callback=validate_roles,
     help=(
-        f"Specify which roles ({', '.join(role.lower() for role in Role.__members__)})"
+        f"Specify which roles ({', '.join(Role.enabled_values())})"
         " the node will be assigned in the cluster."
         " Can be repeated and comma separated."
     ),
 )
-@click.option(
+@feature_gate_option(
     "--region-controller-token",
     "region_controller_token",
+    gate_key="feature.multi-region",
     help="Token obtained from the region controller.",
     type=str,
 )

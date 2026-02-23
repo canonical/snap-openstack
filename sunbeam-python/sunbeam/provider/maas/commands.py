@@ -67,6 +67,7 @@ from sunbeam.core.juju import (
 from sunbeam.core.manifest import AddManifestStep
 from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.core.terraform import TerraformInitStep
+from sunbeam.feature_gates import feature_gate_option
 from sunbeam.provider.base import ProviderBase
 from sunbeam.provider.common.multiregion import connect_to_region_controller
 from sunbeam.provider.maas.client import (
@@ -300,9 +301,10 @@ class MaasProvider(ProviderBase):
     type=str,
     help="Juju controller name",
 )
-@click.option(
+@feature_gate_option(
     "--region-controller-token",
     "region_controller_token",
+    gate_key="feature.multi-region",
     help="Token obtained from the region controller.",
     type=str,
 )
