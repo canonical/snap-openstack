@@ -18,19 +18,17 @@ import pydantic
 from packaging.version import Version
 from rich.console import Console
 from rich.table import Table
-from snaphelpers import Snap, UnknownConfigKey
+from snaphelpers import Snap
 
 from sunbeam import utils
 from sunbeam.clusterd.client import Client
-from sunbeam.clusterd.service import (
-    ClusterServiceUnavailableException,
-    ConfigItemNotFoundException,
-)
+from sunbeam.clusterd.service import ConfigItemNotFoundException
 from sunbeam.core.common import BaseStep, run_plan
 from sunbeam.core.deployment import Deployment, Networks
 from sunbeam.core.juju import JujuHelper
 from sunbeam.core.manifest import Manifest, StorageBackendConfig
 from sunbeam.core.terraform import TerraformHelper, TerraformInitStep
+from sunbeam.feature_gates import FeatureGateMixin
 from sunbeam.steps.openstack import DeployControlPlaneStep
 from sunbeam.storage.cli_base import StorageBackendCLIBase
 from sunbeam.storage.models import (
@@ -100,8 +98,13 @@ BackendConfig = typing.TypeVar("BackendConfig", bound=StorageBackendConfig)
 ENABLED_BACKENDS_CONFIG_KEY = "StorageBackendsEnabled"
 
 
-class StorageBackendBase(typing.Generic[BackendConfig]):
-    """Base class for storage backends with integrated Terraform functionality."""
+class StorageBackendBase(FeatureGateMixin, typing.Generic[BackendConfig]):
+    """Base class for storage backends with integrated Terraform functionality.
+
+    Inherits from FeatureGateMixin to provide feature gating capabilities.
+    Storage backends can be gated by setting generally_available=False and requiring
+    users to enable them via: snap set openstack storage.<backend-type>=true
+    """
 
     backend_type: str = "base"
     display_name: str = "Base Storage Backend"
@@ -116,7 +119,7 @@ class StorageBackendBase(typing.Generic[BackendConfig]):
         self.tfplan_dir = "deploy-storage-backend"
         self._manifest: Manifest | None = None
 
-    def is_enabled(self, client: Client | None, snap: Snap) -> bool:
+    def check_enabled(self, client: Client | None, snap: Snap) -> bool:
         """Check if the backend is enabled in the deployment.
 
         This function checks if the backend is available based on:
@@ -130,23 +133,10 @@ class StorageBackendBase(typing.Generic[BackendConfig]):
         Returns:
             True if enabled, False otherwise
         """
-        if self.generally_available:
-            return True
-        if client is not None:
-            try:
-                enabled_backends = client.cluster.get_config(
-                    ENABLED_BACKENDS_CONFIG_KEY
-                )
-                if self.backend_type in json.loads(enabled_backends):
-                    return True
-            except (ConfigItemNotFoundException, ClusterServiceUnavailableException):
-                pass
-        try:
-            return snap.config.get(self._feature_key)
-        except UnknownConfigKey:
-            pass
-
-        return False
+        # Check if feature gate allows this backend to be visible
+        return not self.check_gated(
+            client=client, snap=snap, enabled_config_key=ENABLED_BACKENDS_CONFIG_KEY
+        )
 
     def enable_backend(self, client: Client) -> None:
         """Enable the backend in the deployment.
@@ -169,8 +159,12 @@ class StorageBackendBase(typing.Generic[BackendConfig]):
 
     @property
     def _feature_key(self) -> str:
-        """Return the feature key for this backend."""
-        return "storage." + self.backend_type
+        """Return the feature key for this backend.
+
+        Uses the FeatureGateMixin gate_key property for consistency.
+        This property is kept for backwards compatibility.
+        """
+        return self.gate_key
 
     # Common CLI registration pattern (Abstraction 3: CLI registration)
     def register_add_cli(self, add: click.Group) -> None:  # noqa: F811

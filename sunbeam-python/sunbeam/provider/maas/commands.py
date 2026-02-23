@@ -52,7 +52,12 @@ from sunbeam.core.common import (
     run_plan,
     str_presenter,
 )
-from sunbeam.core.deployment import PROXY_CONFIG_KEY, Deployment, Networks
+from sunbeam.core.deployment import (
+    DEPLOYMENT_TYPE_CONFIG_KEY,
+    PROXY_CONFIG_KEY,
+    Deployment,
+    Networks,
+)
 from sunbeam.core.deployments import DeploymentsConfig, deployment_path
 from sunbeam.core.juju import (
     CONTROLLER_APPLICATION,
@@ -527,6 +532,10 @@ def bootstrap(
     if proxy_from_user and isinstance(proxy_from_user, dict):
         LOG.debug(f"Writing proxy information to clusterdb: {proxy_from_user}")
         client.cluster.update_config(PROXY_CONFIG_KEY, json.dumps(proxy_from_user))
+
+    # Store deployment type for feature gate sync behavior
+    LOG.debug(f"Writing deployment type to clusterdb: {deployment.type}")
+    client.cluster.update_config(DEPLOYMENT_TYPE_CONFIG_KEY, deployment.type)
 
     console.print("Bootstrap controller components complete.")
 

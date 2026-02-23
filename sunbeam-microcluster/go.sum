@@ -6,6 +6,8 @@ github.com/bmatcuk/doublestar/v4 v4.9.0 h1:DBvuZxjdKkRP/dr4GVV4w2fnmrk5Hxc90T51L
 github.com/bmatcuk/doublestar/v4 v4.9.0/go.mod h1:xBQ8jztBU6kakFMg+8WGxn0c6z1fTSPVIjEY1Wr7jzc=
 github.com/canonical/go-dqlite/v2 v2.0.1 h1:C5A+MioYkjew5rG8apjVYwGYIpKKkkC1FlnL4cBLGaE=
 github.com/canonical/go-dqlite/v2 v2.0.1/go.mod h1:IaIC8u4Z1UmPjuAqPzA2r83YMaMHRLoKZdHKI5uHCJI=
+github.com/canonical/go-snapctl v0.0.0-20260224231552-bd101c543677 h1:2u4rHxFFABk6bkMn0K9Yo+wRe+7/unUBQ4rUwft0ylg=
+github.com/canonical/go-snapctl v0.0.0-20260224231552-bd101c543677/go.mod h1:ufaV5pvWELQLf+SyUIRGlVFxE+XLVCOU8tgUbXj2o58=
 github.com/canonical/lxd v0.0.0-20250624133916-8079534cf291 h1:pjAvVXNMqYxV0FulodnT5HL0NdUxJvhhxvvcLVlSpHY=
 github.com/canonical/lxd v0.0.0-20250624133916-8079534cf291/go.mod h1:RJUPpezQbDX5APLrGSXotQXcQNshv8s4ZiElxf4zrn4=
 github.com/canonical/microcluster/v2 v2.2.0 h1:JxTnohcJjLLrF8qzTimxvmeCLEgYSSqEu/1giMAWZcA=
