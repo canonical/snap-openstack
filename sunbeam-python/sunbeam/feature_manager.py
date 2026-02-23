@@ -7,6 +7,8 @@ import pathlib
 import typing
 
 import click
+from rich.console import Console
+from rich.table import Table
 from snaphelpers import Snap
 
 import sunbeam.features
@@ -29,8 +31,39 @@ from sunbeam.features.interface.v1.base import (
 from sunbeam.versions import VarMap
 
 LOG = logging.getLogger(__name__)
+console = Console()
 
 _FEATURES: dict[str, BaseFeature] = {}
+
+
+@click.command("list")
+@click.pass_context
+def list_features(ctx: click.Context) -> None:
+    """List all features and show whether each is enabled or not."""
+    deployment: Deployment = ctx.obj
+    try:
+        client = deployment.get_client()
+        feature_manager = deployment.get_feature_manager()
+    except ClusterServiceUnavailableException as e:
+        raise click.ClickException(
+            "Cannot list features: cluster service is not available. "
+            "Ensure the node is part of a bootstrapped cluster."
+        ) from e
+
+    table = Table()
+    table.add_column("Feature", justify="left")
+    table.add_column("Enabled", justify="center")
+    for name, feature in feature_manager.features().items():
+        if not isinstance(feature, EnableDisableFeature):
+            continue
+        try:
+            enabled = feature.is_enabled(client)
+        except Exception as e:
+            LOG.debug("Failed to get status for feature %r: %r", name, e)
+            enabled = False
+        table.add_row(name, "X" if enabled else "")
+
+    console.print(table)
 
 
 class FeatureManager:
