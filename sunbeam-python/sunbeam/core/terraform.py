@@ -424,27 +424,25 @@ class TerraformHelper:
         tfvar_config: str | None = None,
         tf_apply_extra_args: list | None = None,
     ) -> None:
-        """Updates tfvars for specific charms and apply the plan."""
-        current_tfvars = {}
-        updated_tfvars = {}
-        if tfvar_config:
-            try:
-                current_tfvars = read_config(client, tfvar_config)
-                # Exclude all default tfvar keys from the previous terraform
-                # vars applied to the plan. Ignore the keys that should
-                # be preserved.
-                _tfvar_names = set(self._get_tfvar_names(charms)).difference(
-                    self.tfvar_map.get("preserve", [])
-                )
-                updated_tfvars = {
-                    k: v for k, v in current_tfvars.items() if k not in _tfvar_names
-                }
-            except ConfigItemNotFoundException:
-                pass
+        """Updates tfvars for specific charms and apply the plan.
 
-        updated_tfvars.update(self._get_tfvars(manifest, charms))
+        Uses source tracking to preserve computed values while updating
+        only the tfvars related to specified charms from manifest.
+        """
+        # Step 1: Load and filter DB values (only refresh charm-specific values)
+        computed_keys, updated_tfvars = self._load_and_filter_db_tfvars_for_charms(
+            client, tfvar_config, charms
+        )
+
+        # Step 2: Apply manifest values for specified charms
+        tfvars_from_manifest = self._get_tfvars(manifest, charms)
+        self._apply_tfvars(updated_tfvars, tfvars_from_manifest)
+
+        # Step 3: Save and apply
         if tfvar_config:
-            update_config(client, tfvar_config, updated_tfvars)
+            data_to_save = dict(updated_tfvars)
+            data_to_save["_computed_keys"] = list(computed_keys)
+            update_config(client, tfvar_config, data_to_save)
 
         self.write_tfvars(updated_tfvars)
         LOG.debug(f"Applying plan {self.plan} with tfvars {updated_tfvars}")
@@ -460,70 +458,180 @@ class TerraformHelper:
     ) -> None:
         """Updates terraform vars and Apply the terraform.
 
-        Get tfvars from cluster db using tfvar_config key, Manifest file using
-        Charm Manifest tfvar map from core and features, User provided override_tfvars.
-        Merge the tfvars in the above order so that terraform vars in override_tfvars
-        will have highest priority.
-        Get tfhelper object for tfplan and write tfvars and apply the terraform plan.
+        Merges tfvars from three sources with precedence Manifest > Override > DB:
+        1. DB: Previously stored values (filtered by source tracking)
+        2. Manifest: Values from deployment manifest
+        3. Override: Runtime computed values (e.g., from features)
+
+        Source tracking distinguishes computed values (from override_tfvars) from
+        manifest-derivable values. Computed values persist across runs.
 
         :param tfvar_config: TerraformVar key name used to save tfvar in clusterdb
-        :type tfvar_config: str or None
-        :param override_tfvars: Terraform vars to override
-        :type override_tfvars: dict
+        :param override_tfvars: Terraform vars to override (computed/runtime)
         :param tf_apply_extra_args: Extra args to terraform apply command
-        :type tf_apply_extra_args: list or None
         """
-        updated_tfvars = {}
-        if tfvar_config:
-            try:
-                current_tfvars = read_config(client, tfvar_config)
-                # Exclude all default tfvar keys from the previous terraform
-                # vars applied to the plan. Ignore the keys that should
-                # be preserved.
-                _tfvar_names = set(self._get_tfvar_names()).difference(
-                    self.tfvar_map.get("preserve", [])
-                )
-                updated_tfvars = {
-                    k: v for k, v in current_tfvars.items() if k not in _tfvar_names
-                }
-            except ConfigItemNotFoundException:
-                pass
+        # Step 1: Load and filter DB values
+        computed_keys, updated_tfvars = self._load_and_filter_db_tfvars(
+            client, tfvar_config
+        )
 
-        # NOTE: It is expected for Manifest to contain all previous changes
-        # So override tfvars from configdb to defaults if not specified in
-        # manifest file
+        # Step 2: Apply manifest values (manifest > DB)
         tfvars_from_manifest = self._get_tfvars(manifest)
-        updated_tfvars.update(tfvars_from_manifest)
+        self._apply_tfvars(updated_tfvars, tfvars_from_manifest)
 
+        # Step 3: Apply override values and track as computed
         if override_tfvars:
-            self._handle_charm_configs_in_override_tfvars(
-                override_tfvars, tfvars_from_manifest
-            )
-            updated_tfvars.update(override_tfvars)
+            computed_keys.update(override_tfvars.keys())
+            # For charm configs: merge manifest into override (manifest wins)
+            # For non-charm configs: override wins (don't merge manifest)
+            self._merge_manifest_into_override(override_tfvars, tfvars_from_manifest)
+            # Apply override to final result
+            self._apply_tfvars(updated_tfvars, override_tfvars)
 
+        # Step 4: Save and apply
         if tfvar_config:
-            update_config(client, tfvar_config, updated_tfvars)
+            data_to_save = dict(updated_tfvars)
+            data_to_save["_computed_keys"] = list(computed_keys)
+            update_config(client, tfvar_config, data_to_save)
 
         self.write_tfvars(updated_tfvars)
         LOG.debug(f"Applying plan {self.plan} with tfvars {updated_tfvars}")
         self.apply(tf_apply_extra_args)
 
-    def _handle_charm_configs_in_override_tfvars(
-        self, override_tfvars: dict, tfvars_from_manifest: dict
-    ):
-        # Fetch all tfvar names of charm configs
-        config_tfvars = [
-            per_charm_tfvar_map.get("config")
-            for _, per_charm_tfvar_map in self.tfvar_map.get("charms", {}).items()
-        ]
+    def _load_and_filter_db_tfvars(
+        self, client: Client, tfvar_config: str | None
+    ) -> tuple[set, dict]:
+        """Load tfvars from DB and filter based on source tracking.
 
-        # charm configs are dict, so require union of configs from overrides
-        # and manifest with precedence for overrides
-        for override_config in override_tfvars:
-            if override_config in config_tfvars:
-                override_tfvars[override_config].update(
-                    tfvars_from_manifest.get(override_config, {})
-                )
+        Returns tuple of (computed_keys, filtered_tfvars).
+        """
+        computed_keys: set = set()
+        updated_tfvars: dict = {}
+
+        if not tfvar_config:
+            return computed_keys, updated_tfvars
+
+        try:
+            stored_data = read_config(client, tfvar_config)
+            computed_keys = set(stored_data.get("_computed_keys", []))
+
+            # Migration: use preserve list if no computed_keys yet
+            if not computed_keys and "_computed_keys" not in stored_data:
+                computed_keys = set(self.tfvar_map.get("preserve", []))
+
+            # Filter: keep computed or non-manifest-derivable values
+            current_tfvars = {
+                k: v for k, v in stored_data.items() if k != "_computed_keys"
+            }
+            manifest_derivable = set(self._get_tfvar_names())
+
+            for key, value in current_tfvars.items():
+                if key in computed_keys or key not in manifest_derivable:
+                    updated_tfvars[key] = value
+
+        except ConfigItemNotFoundException:
+            pass
+
+        return computed_keys, updated_tfvars
+
+    def _apply_tfvars(self, target: dict, source: dict) -> None:
+        """Apply source tfvars to target with charm config merging.
+
+        For charm configs (dicts): merge fields (source wins conflicts).
+        For other values: source replaces target.
+        Modifies target in place.
+        """
+        charm_config_keys = self._get_charm_config_keys()
+
+        for key, source_value in source.items():
+            if key in charm_config_keys:
+                # Charm config: merge dicts
+                if key in target:
+                    target_value = target[key]
+                    if isinstance(target_value, dict) and isinstance(
+                        source_value, dict
+                    ):
+                        target_value.update(source_value)
+                    else:
+                        target[key] = source_value
+                else:
+                    target[key] = source_value
+            else:
+                # Non-charm config: simple replacement
+                target[key] = source_value
+
+    def _merge_manifest_into_override(
+        self, override_tfvars: dict, manifest_tfvars: dict
+    ) -> None:
+        """Merge manifest into override for charm configs only.
+
+        For charm configs (dicts): merge manifest fields (manifest wins).
+        For non-charm configs: keep override values (don't touch them).
+        This ensures manifest precedence for charm configs while preserving
+        override precedence for non-charm configs.
+        Modifies override_tfvars in place.
+        """
+        charm_config_keys = self._get_charm_config_keys()
+
+        for key in charm_config_keys:
+            if key in override_tfvars and key in manifest_tfvars:
+                override_value = override_tfvars[key]
+                manifest_value = manifest_tfvars[key]
+                if isinstance(override_value, dict) and isinstance(
+                    manifest_value, dict
+                ):
+                    override_value.update(manifest_value)
+
+    def _load_and_filter_db_tfvars_for_charms(
+        self, client: Client, tfvar_config: str | None, charms: list[str]
+    ) -> tuple[set, dict]:
+        """Load tfvars from DB and filter for partial charm updates.
+
+        Only refreshes tfvars related to specified charms from manifest.
+        Keeps all computed values and values unrelated to these charms.
+
+        Returns tuple of (computed_keys, filtered_tfvars).
+        """
+        computed_keys: set = set()
+        updated_tfvars: dict = {}
+
+        if not tfvar_config:
+            return computed_keys, updated_tfvars
+
+        try:
+            stored_data = read_config(client, tfvar_config)
+            computed_keys = set(stored_data.get("_computed_keys", []))
+
+            # Migration: use preserve list if no computed_keys yet
+            if not computed_keys and "_computed_keys" not in stored_data:
+                computed_keys = set(self.tfvar_map.get("preserve", []))
+
+            # Filter: keep computed and non-charm-specific values
+            current_tfvars = {
+                k: v for k, v in stored_data.items() if k != "_computed_keys"
+            }
+            charm_tfvar_names = set(self._get_tfvar_names(charms))
+
+            for key, value in current_tfvars.items():
+                if key in computed_keys or key not in charm_tfvar_names:
+                    updated_tfvars[key] = value
+
+        except ConfigItemNotFoundException:
+            pass
+
+        return computed_keys, updated_tfvars
+
+    def _get_charm_config_keys(self) -> set[str]:
+        """Get the set of charm config tfvar keys.
+
+        :return: Set of charm config keys defined in tfvar_map
+        """
+        config_tfvars = set()
+        for _, per_charm_tfvar_map in self.tfvar_map.get("charms", {}).items():
+            config_key = per_charm_tfvar_map.get("config")
+            if config_key:
+                config_tfvars.add(config_key)
+        return config_tfvars
 
     def _get_tfvars(self, manifest: Manifest, charms: list | None = None) -> dict:
         """Get tfvars from the manifest.
