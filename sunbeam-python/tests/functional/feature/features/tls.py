@@ -273,7 +273,7 @@ class TlsCaTest(BaseFeatureTest):
 
     TLS CA mode uses Certificate Authority certificates for TLS.
     This test runs the complete flow:
-    - Enable TLS CA with --ca and --endpoint public/internal
+    - Enable TLS CA with --ca and --endpoint public/internal/rgw
     - List outstanding CSRs (with retry/backoff)
     - Sign CSRs and update manifest
     - Push certs via sunbeam tls ca unit_certs -m manifest
@@ -289,22 +289,38 @@ class TlsCaTest(BaseFeatureTest):
     timeout_seconds = 600
 
     def __init__(self, *args, **kwargs):
-        """Initialize and generate CA certificate and key (for signing CSRs)."""
+        """Initialise CA material (root+intermediate) for signing CSRs.
+
+        For TLS CA we mirror the TLS Vault PKI model and the
+        generate-a-ca-certificate.rst guide by generating a root CA and an
+        intermediate CA, then using the intermediate as the issuing CA for
+        Traefik CSRs. The intermediate certificate (base64) is passed via
+        --ca, and its key is used to sign the outstanding CSRs; the chain
+        (intermediate + root) is currently not surfaced but can be used if
+        needed in future.
+        """
         super().__init__(*args, **kwargs)
         (
             self.ca_cert_base64,
-            _,
+            self.ca_chain_base64,
             self._ca_cert_pem,
             self._ca_key_pem,
-        ) = generate_self_signed_ca_certificate_with_key()
+            _vault_ca_conf,
+            _certindex,
+            _certserial,
+        ) = generate_root_and_intermediate_ca_for_vault()
         self.enable_args = [
             "ca",
             "--ca",
             self.ca_cert_base64,
+            "--ca-chain",
+            self.ca_chain_base64,
             "--endpoint",
             "public",
             "--endpoint",
             "internal",
+            "--endpoint",
+            "rgw",
         ]
 
     def enable(self) -> bool:
@@ -427,7 +443,9 @@ class TlsCaTest(BaseFeatureTest):
             logger.warning("No certificates signed; skipping unit_certs")
             return
 
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+        with tempfile.NamedTemporaryFile(
+            mode="w", dir=str(Path.home()), suffix=".yaml", delete=False
+        ) as f:
             manifest_data = {
                 "features": {
                     "tls": {
@@ -463,6 +481,7 @@ class TlsCaTest(BaseFeatureTest):
         - Internal endpoints (when present) must use HTTPS.
         - A basic OpenStack operation (image list) must succeed.
         """
+        self._ensure_openstack_env()
         logger.info("Verifying public endpoints use HTTPS (TLS CA mode)...")
         result = subprocess.run(
             [
@@ -609,6 +628,8 @@ class TlsVaultTest(BaseFeatureTest):
             "public",
             "--endpoint",
             "internal",
+            "--endpoint",
+            "rgw",
         ]
 
     def verify_enabled(self) -> None:
@@ -629,6 +650,7 @@ class TlsVaultTest(BaseFeatureTest):
         - Public and internal endpoints use HTTPS.
         - A basic OpenStack CLI operation (image list) works.
         """
+        self._ensure_openstack_env()
         logger.info("Verifying public endpoints use HTTPS (TLS Vault mode)...")
         cmd = [
             "openstack",
@@ -861,6 +883,8 @@ class TlsVaultTest(BaseFeatureTest):
             "public",
             "--endpoint",
             "internal",
+            "--endpoint",
+            "rgw",
         ]
 
         self.enable()

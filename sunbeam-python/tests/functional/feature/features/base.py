@@ -5,6 +5,8 @@
 
 import logging
 import os
+import subprocess
+import tempfile
 import time
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -207,40 +209,53 @@ class BaseFeatureTest:
                     )
         logger.info("Basic verification completed for feature '%s'", self.feature_name)
 
+    def _load_openrc_file_into_env(self, path: Path) -> None:
+        """Load export KEY=value lines from an openrc file into os.environ."""
+        for line in path.read_text().splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if not line.startswith("export "):
+                continue
+            _, rest = line.split("export ", 1)
+            if "=" not in rest:
+                continue
+            key, value = rest.split("=", 1)
+            key = key.strip()
+            value = value.strip().strip('"').strip("'")
+            os.environ.setdefault(key, value)
+
     def _ensure_openstack_env(self) -> None:
-        """Load OpenStack credentials from adminrc if needed.
+        """Load OpenStack credentials for CLI access.
 
-        This avoids repeating sourcing logic across tests and keeps credentials
-        out of the code. If OS_AUTH_URL is already set, this is a no-op.
+        Runs `sunbeam openrc` to generate credentials, stores them in a temp file
+        (e.g. /tmp/adminrc), and loads them into the environment so OpenStack CLI
+        subprocess calls use them. If OS_AUTH_URL is already set, this is a no-op.
+        If `sunbeam openrc` fails, falls back to the legacy features/adminrc file
+        if it exists.
         """
-        if os.environ.get("OS_AUTH_URL"):
-            return
+        sunbeam_cmd = getattr(self.sunbeam, "_sunbeam_cmd", "sunbeam")
+        result = subprocess.run(
+            [sunbeam_cmd, "openrc"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=60,
+        )
 
-        adminrc_path = Path(__file__).resolve().parent / "adminrc"
-        if not adminrc_path.exists():
-            logger.debug(
-                "adminrc file not found at %s; relying on existing environment",
-                adminrc_path,
-            )
-            return
-
-        try:
-            for line in adminrc_path.read_text().splitlines():
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                if not line.startswith("export "):
-                    continue
-                _, rest = line.split("export ", 1)
-                if "=" not in rest:
-                    continue
-                key, value = rest.split("=", 1)
-                key = key.strip()
-                value = value.strip().strip('"').strip("'")
-                os.environ.setdefault(key, value)
-            logger.info("Loaded OpenStack credentials from %s", adminrc_path)
-        except Exception:  # noqa: BLE001
-            logger.exception(
-                "Failed to load OpenStack credentials from %s",
-                adminrc_path,
-            )
+        if result.returncode == 0:
+            openrc_content = result.stdout or result.stderr or ""
+            if "export " in openrc_content:
+                adminrc_path = Path(tempfile.gettempdir()) / "adminrc"
+                try:
+                    adminrc_path.write_text(openrc_content)
+                    self._load_openrc_file_into_env(adminrc_path)
+                    logger.info(
+                        "Loaded OpenStack credentials from sunbeam openrc (%s)",
+                        adminrc_path,
+                    )
+                    return
+                except Exception:  # noqa: BLE001
+                    logger.exception(
+                        "Failed to write or load openrc from %s", adminrc_path
+                    )
