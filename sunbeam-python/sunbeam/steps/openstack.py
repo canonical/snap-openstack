@@ -547,8 +547,13 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
             return {}
 
         if not endpoints_config.get("configure", False):
-            # No endpoints configured, return empty dict
-            return {}
+            # No endpoints configured, explicitly clear traefik configs
+            # to remove any previously computed values from source tracking
+            return {
+                "traefik-public-config": None,
+                "traefik-config": None,
+                "traefik-rgw-config": None,
+            }
 
         tfvars: dict[str, dict] = {}
 
@@ -1127,6 +1132,8 @@ class EndpointsConfigurationStep(BaseStep):
         self.variables["configure"] = configure_endpoint_bank.configure.ask()
 
         if not self.variables["configure"]:
+            # Clear all endpoint data when user chooses not to configure endpoints
+            self.variables = {"configure": False}
             write_answers(self.client, ENDPOINTS_CONFIG_KEY, self.variables)
             return
 
