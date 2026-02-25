@@ -114,6 +114,10 @@ jobs:
           # sg snap_daemon "sunbeam validation run --output tempest_validation.log"
           # sg snap_daemon "sunbeam disable resource-optimization"
           # sg snap_daemon "sunbeam disable images-sync"
+
+          # Sanity-check new list-features command after enabling features
+          sg snap_daemon "sunbeam list-features"
+
           sg snap_daemon "sunbeam disable caas"
           sg snap_daemon "sunbeam disable secrets"
           sg snap_daemon "sunbeam disable vault"

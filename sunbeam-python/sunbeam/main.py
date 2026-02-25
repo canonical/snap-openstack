@@ -22,6 +22,7 @@ from sunbeam.commands import proxy as proxy_cmds
 from sunbeam.commands import sso as sso_cmd
 from sunbeam.commands import utils as utils_cmds
 from sunbeam.core import deployments as deployments_jobs
+from sunbeam.feature_manager import list_features
 from sunbeam.provider import commands as provider_cmds
 from sunbeam.utils import CatchGroup, clean_env
 
@@ -152,6 +153,7 @@ def main():
     cli.add_command(disable)
 
     cli.add_command(plans_cmd.plans)
+    cli.add_command(list_features)
 
     cli.add_command(utils)
     utils.add_command(utils_cmds.juju_login)

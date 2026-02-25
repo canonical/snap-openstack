@@ -7,12 +7,20 @@ import pathlib
 import typing
 
 import click
+import yaml
+from rich.console import Console
+from rich.table import Table
 from snaphelpers import Snap
 
 import sunbeam.features
 from sunbeam import utils
 from sunbeam.clusterd.service import ClusterServiceUnavailableException
-from sunbeam.core.common import SunbeamException, infer_risk
+from sunbeam.core.common import (
+    FORMAT_TABLE,
+    FORMAT_YAML,
+    SunbeamException,
+    infer_risk,
+)
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.manifest import FeatureGroupManifest, FeatureManifest
 from sunbeam.features.interface.v1.base import (
@@ -29,8 +37,52 @@ from sunbeam.features.interface.v1.base import (
 from sunbeam.versions import VarMap
 
 LOG = logging.getLogger(__name__)
+console = Console()
 
 _FEATURES: dict[str, BaseFeature] = {}
+
+
+@click.command("list-features")
+@click.option(
+    "-f",
+    "--format",
+    type=click.Choice([FORMAT_TABLE, FORMAT_YAML]),
+    default=FORMAT_TABLE,
+    help="Output format.",
+)
+@click.pass_context
+def list_features(ctx: click.Context, format: str) -> None:
+    """List all features and show whether each is enabled or not."""
+    deployment: Deployment = ctx.obj
+    try:
+        client = deployment.get_client()
+        feature_manager = deployment.get_feature_manager()
+    except ClusterServiceUnavailableException as e:
+        raise click.ClickException(
+            "Cannot list features: cluster service is not available. "
+            "Ensure the node is part of a bootstrapped cluster."
+        ) from e
+
+    feature_states: dict[str, bool] = {}
+    for name, feature in feature_manager.features().items():
+        if not isinstance(feature, EnableDisableFeature):
+            continue
+        try:
+            enabled = feature.is_enabled(client)
+        except Exception as e:
+            LOG.debug("Failed to get status for feature %r: %r", name, e)
+            enabled = False
+        feature_states[name] = enabled
+
+    if format == FORMAT_TABLE:
+        table = Table()
+        table.add_column("Feature", justify="left")
+        table.add_column("Enabled", justify="center")
+        for name, enabled in feature_states.items():
+            table.add_row(name, "X" if enabled else "")
+        console.print(table)
+    elif format == FORMAT_YAML:
+        console.print(yaml.dump(feature_states))
 
 
 class FeatureManager:
