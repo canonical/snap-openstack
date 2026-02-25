@@ -552,3 +552,61 @@ class TestTerraformHelper:
             assert applied_tfvars["glance-config"]["ceph-osd-replication-count"] == 5
             # Custom fields should be preserved
             assert applied_tfvars["glance-config"]["custom-field"] == "preserved"
+
+    def test_clear_computed_values_with_none_vs_empty(
+        self,
+        mocker,
+        snap,
+        copytree,
+        deployment: Deployment,
+        read_config,
+    ):
+        """Test that None properly clears computed values in override_tfvars.
+
+        This is critical for scenarios like disabling TLS vault where
+        vault-config has a computed common_name field that needs to be removed.
+        Both {} and None do replacement for non-charm-config keys, but None
+        is more explicit and handles all cases correctly.
+        """
+        tfplan = "openstack-plan"
+        # DB has computed vault-config with common_name (added by TLS feature)
+        read_config.return_value = {
+            "_computed_keys": ["vault-config"],
+            "vault-config": {"common_name": "example.com"},
+            "keystone-channel": OPENSTACK_CHANNEL,
+        }
+
+        mocker.patch.object(deployment_mod, "Snap", return_value=snap)
+        mocker.patch.object(manifest_mod, "Snap", return_value=snap)
+        mocker.patch.object(terraform_mod, "Snap", return_value=snap)
+        client = Mock()
+        client.cluster.get_latest_manifest.return_value = {"data": test_manifest}
+        client.cluster.get_config.return_value = "{}"
+        deployment.get_client.return_value = client
+        manifest = deployment.get_manifest()
+
+        tfhelper = deployment.get_tfhelper(tfplan)
+
+        # Test 1: Using {} (empty dict) - replaces with empty dict
+        with (
+            patch.object(tfhelper, "write_tfvars") as write_tfvars,
+            patch.object(tfhelper, "apply"),
+        ):
+            tfhelper.update_tfvars_and_apply_tf(
+                client, manifest, "fake-config", {"vault-config": {}}
+            )
+            applied_tfvars = write_tfvars.call_args.args[0]
+            # vault-config is replaced with empty dict (common_name removed)
+            assert applied_tfvars.get("vault-config") == {}
+
+        # Test 2: Using None - replaces with None, more explicit clearing
+        with (
+            patch.object(tfhelper, "write_tfvars") as write_tfvars,
+            patch.object(tfhelper, "apply"),
+        ):
+            tfhelper.update_tfvars_and_apply_tf(
+                client, manifest, "fake-config", {"vault-config": None}
+            )
+            applied_tfvars = write_tfvars.call_args.args[0]
+            # vault-config is None (common_name removed, more explicit)
+            assert applied_tfvars.get("vault-config") is None

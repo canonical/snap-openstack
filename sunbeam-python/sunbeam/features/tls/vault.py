@@ -227,22 +227,20 @@ class VaultTlsFeature(TlsFeature):
         provider_config = self.provider_config(deployment)
         endpoints = provider_config.get("endpoints", [])
 
-        # Remove Traefik endpoints external hostnames
+        # Disable TLS for endpoints, no need to remove endpoint information
         if "public" in endpoints:
-            tfvars.update(
-                {"enable-tls-for-public-endpoint": False, "traefik-public-config": {}}
-            )
+            tfvars.update({"enable-tls-for-public-endpoint": False})
         if "internal" in endpoints:
-            tfvars.update(
-                {"enable-tls-for-internal-endpoint": False, "traefik-config": {}}
-            )
+            tfvars.update({"enable-tls-for-internal-endpoint": False})
         if "rgw" in endpoints:
-            tfvars.update(
-                {"enable-tls-for-rgw-endpoint": False, "traefik-rgw-config": {}}
-            )
+            tfvars.update({"enable-tls-for-rgw-endpoint": False})
 
-        # Remove Vault common_name
-        tfvars.update({"vault-config": {}})
+        # Clear vault-config to remove TLS-added common_name
+        # update_tfvars_and_apply_tf will restore manifest value if it exists
+        # tfvars["vault-config"] = {} will not remove vault-config from
+        # terraform state, which causes issues when re-enabling with different
+        # common_name
+        tfvars["vault-config"] = None
 
         return tfvars
 
