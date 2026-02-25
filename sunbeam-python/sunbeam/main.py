@@ -150,10 +150,10 @@ def main():
     proxy.add_command(proxy_cmds.clear)
 
     cli.add_command(enable)
-    enable.add_command(list_features)
     cli.add_command(disable)
 
     cli.add_command(plans_cmd.plans)
+    cli.add_command(list_features)
 
     cli.add_command(utils)
     utils.add_command(utils_cmds.juju_login)

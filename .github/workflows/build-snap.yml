@@ -130,6 +130,9 @@ jobs:
           # sg snap_daemon "openstack.sunbeam disable instance-recovery"
           # sg snap_daemon "openstack.sunbeam disable resource-optimization"
 
+          # Sanity-check new list-features command after enabling features
+          sg snap_daemon "openstack.sunbeam list-features"
+
       - name: Collect logs
         if: always()
         run: |

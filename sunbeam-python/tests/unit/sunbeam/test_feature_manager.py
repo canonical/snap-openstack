@@ -10,18 +10,18 @@ from sunbeam.clusterd.service import ClusterServiceUnavailableException
 from sunbeam.feature_manager import list_features
 
 
-@click.group("enable")
+@click.group()
 @click.pass_context
-def enable_group(ctx):
-    """Enable features."""
+def cli_group(ctx):
+    """Top-level CLI for testing."""
     pass
 
 
-enable_group.add_command(list_features)
+cli_group.add_command(list_features)
 
 
 class TestListFeatures:
-    """Tests for the sunbeam enable list command."""
+    """Tests for the sunbeam list-features command."""
 
     def test_list_features_cluster_unavailable(self):
         """When cluster is unavailable, ClickException is raised with clear message."""
@@ -31,7 +31,7 @@ class TestListFeatures:
         )
 
         runner = CliRunner()
-        result = runner.invoke(enable_group, ["list"], obj=deployment)
+        result = runner.invoke(cli_group, ["list-features"], obj=deployment)
 
         assert result.exit_code != 0
         assert "cluster service is not available" in result.output
@@ -47,7 +47,7 @@ class TestListFeatures:
         deployment.get_feature_manager.return_value = feature_manager
 
         runner = CliRunner()
-        result = runner.invoke(enable_group, ["list"], obj=deployment)
+        result = runner.invoke(cli_group, ["list-features"], obj=deployment)
 
         assert result.exit_code == 0
         assert "Feature" in result.output and "Enabled" in result.output

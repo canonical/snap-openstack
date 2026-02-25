@@ -42,7 +42,7 @@ console = Console()
 _FEATURES: dict[str, BaseFeature] = {}
 
 
-@click.command("list")
+@click.command("list-features")
 @click.option(
     "-f",
     "--format",
