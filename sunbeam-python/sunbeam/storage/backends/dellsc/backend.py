@@ -28,23 +28,27 @@ class DellSCConfig(StorageBackendConfig):
     san_ip: Annotated[
         str, Field(description="Dell Storage Center management IP or hostname")
     ]
-    san_username: Annotated[
+    san_login: Annotated[
         str,
         Field(description="SAN management username"),
-        SecretDictField(field="primary-username"),
+        SecretDictField(field="san-login"),
     ]
     san_password: Annotated[
         str,
         Field(description="SAN management password"),
-        SecretDictField(field="primary-password"),
+        SecretDictField(field="san-password"),
     ]
     dell_sc_ssn: Annotated[
-        int | None, Field(description="Storage Center System Serial Number")
-    ] = None
+        int, Field(description="Storage Center System Serial Number")
+    ]
     protocol: Annotated[
-        Literal["fc", "iscsi"] | None,
+        Literal["fc", "iscsi"],
         Field(description="Front-end protocol (fc or iscsi)"),
-    ] = None
+    ]
+    enable_unsupported_driver: Annotated[
+        Literal[True],
+        Field(description="Must be enabled for Dell SC driver"),
+    ] = True
 
     # Backend configuration
     volume_backend_name: Annotated[
@@ -76,10 +80,31 @@ class DellSCConfig(StorageBackendConfig):
     san_thin_provision: Annotated[
         bool | None, Field(description="Enable thin provisioning")
     ] = None
+    san_api_port: Annotated[
+        int | None, Field(description="Port to use to access SAN API")
+    ] = None
+    san_clustername: Annotated[
+        str | None, Field(description="Cluster name to use for creating volumes")
+    ] = None
+    san_is_local: Annotated[
+        bool | None, Field(description="Execute commands locally instead of over SSH")
+    ] = None
+    san_private_key: Annotated[
+        str | None, Field(description="Filename of private key for SSH authentication")
+    ] = None
+    san_ssh_port: Annotated[
+        int | None, Field(description="SSH port to use with SAN")
+    ] = None
 
     # Domain and network filtering
     excluded_domain_ips: Annotated[
         str | None, Field(description="Comma-separated list of excluded domain IPs")
+    ] = None
+    excluded_domain_ip: Annotated[
+        str | None,
+        Field(
+            description="Deprecated: Fault domain IP to be excluded from iSCSI returns"
+        ),
     ] = None
     included_domain_ips: Annotated[
         str | None, Field(description="Comma-separated list of included domain IPs")
@@ -89,15 +114,15 @@ class DellSCConfig(StorageBackendConfig):
     secondary_san_ip: Annotated[
         str | None, Field(description="Secondary Dell Storage Center management IP")
     ] = None
-    secondary_san_username: Annotated[
+    secondary_san_login: Annotated[
         str | None,
         Field(description="Secondary SAN management username"),
-        SecretDictField(field="secondary-username"),
+        SecretDictField(field="secondary-san-login"),
     ] = None
     secondary_san_password: Annotated[
         str | None,
         Field(description="Secondary SAN management password"),
-        SecretDictField(field="secondary-password"),
+        SecretDictField(field="secondary-san-password"),
     ] = None
     secondary_sc_api_port: Annotated[
         int | None, Field(description="Secondary Dell Storage Center API port")
