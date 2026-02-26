@@ -21,7 +21,7 @@ variable "charm_microovn_config" {
 variable "charm_openstack_network_agents_channel" {
   description = "Operator channel for openstack-network-agents deployment"
   type        = string
-  default     = "latest/edge"
+  default     = "2024.1/edge"
 }
 
 variable "charm_openstack_network_agents_revision" {
@@ -50,6 +50,24 @@ variable "charm_microcluster_token_distributor_revision" {
 
 variable "charm_microcluster_token_distributor_config" {
   description = "Operator config for microcluster-token-distributor deployment"
+  type        = map(string)
+  default     = {}
+}
+
+variable "charm_sunbeam_ovn_proxy_channel" {
+  description = "Operator channel for sunbeam-ovn-proxy deployment"
+  type        = string
+  default     = "2024.1/edge"
+}
+
+variable "charm_sunbeam_ovn_proxy_revision" {
+  description = "Operator channel revision for sunbeam-ovn-proxy deployment"
+  type        = number
+  default     = null
+}
+
+variable "charm_sunbeam_ovn_proxy_config" {
+  description = "Operator config for sunbeam-ovn-proxy deployment"
   type        = map(string)
   default     = {}
 }

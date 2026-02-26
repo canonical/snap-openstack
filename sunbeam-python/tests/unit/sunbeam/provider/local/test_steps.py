@@ -78,9 +78,7 @@ class TestLocalUserQuestions(BaseTestUserQuestions):
         user_bank_mock.run_demo_setup.ask.return_value = True
 
         step = self.get_step()
-        with patch(
-            "sunbeam.commands.configure.utils.get_fqdn", return_value="test-node"
-        ):
+        with patch("sunbeam.steps.configure.utils.get_fqdn", return_value="test-node"):
             step.prompt()
         self.check_demo_questions(user_bank_mock, net_bank_mock)
         self.check_not_remote_questions(net_bank_mock)
@@ -97,9 +95,7 @@ class TestLocalUserQuestions(BaseTestUserQuestions):
         user_bank_mock.run_demo_setup.ask.return_value = False
 
         step = self.get_step()
-        with patch(
-            "sunbeam.commands.configure.utils.get_fqdn", return_value="test-node"
-        ):
+        with patch("sunbeam.steps.configure.utils.get_fqdn", return_value="test-node"):
             step.prompt()
         self.check_not_demo_questions(user_bank_mock, net_bank_mock)
         self.check_not_remote_questions(net_bank_mock)

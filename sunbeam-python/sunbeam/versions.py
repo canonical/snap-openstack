@@ -76,6 +76,7 @@ MACHINE_CHARMS = {
     "openstack-network-agents": OPENSTACK_CHANNEL,
     # TODO: ensure correct channel for the distributor
     "microcluster-token-distributor": "latest/edge",
+    "sunbeam-ovn-proxy": OPENSTACK_CHANNEL,
     "k8s": K8S_CHANNEL,
     "openstack-hypervisor": OPENSTACK_CHANNEL,
     "sunbeam-machine": OPENSTACK_CHANNEL,
@@ -246,6 +247,11 @@ DEPLOY_MICROOVN_TFVAR_MAP: VarMap = {
             "channel": "charm_microcluster_token_distributor_channel",
             "revision": "charm_microcluster_token_distributor_revision",
             "config": "charm_microcluster_token_distributor_config",
+        },
+        "sunbeam-ovn-proxy": {
+            "channel": "charm_sunbeam_ovn_proxy_channel",
+            "revision": "charm_sunbeam_ovn_proxy_revision",
+            "config": "charm_sunbeam_ovn_proxy_config",
         },
     }
 }

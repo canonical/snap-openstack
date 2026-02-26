@@ -95,8 +95,15 @@ resource "juju_integration" "hypervisor-certs" {
   }
 }
 
+moved {
+  from = juju_integration.hypervisor-ovn
+  to   = juju_integration.hypervisor-ovn[0]
+}
+
 resource "juju_integration" "hypervisor-ovn" {
   model = var.machine_model
+  # Should be deployed if ovn-relay-offer-url set
+  count = (var.ovn-relay-offer-url != null) ? 1 : 0
 
   application {
     name     = juju_application.openstack-hypervisor.name
@@ -105,6 +112,23 @@ resource "juju_integration" "hypervisor-ovn" {
 
   application {
     offer_url = var.ovn-relay-offer-url
+  }
+}
+
+resource "juju_integration" "hypervisor-ovn-proxy" {
+  model = var.machine_model
+
+  # Shouldn't be deployed if ovn-relay-offer-url is set
+  count = (var.ovn-relay-offer-url == null) ? 1 : 0
+
+  application {
+    name     = juju_application.openstack-hypervisor.name
+    endpoint = "ovsdb-cms"
+  }
+
+  application {
+    name     = "sunbeam-ovn-proxy"
+    endpoint = "ovsdb-cms"
   }
 }
 

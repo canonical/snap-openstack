@@ -15,6 +15,7 @@ from rich.status import Status
 import sunbeam.steps.microceph as microceph
 from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import ConfigItemNotFoundException
+from sunbeam.core import ovn
 from sunbeam.core.common import (
     RAM_32_GB_IN_KB,
     BaseStep,
@@ -456,6 +457,7 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
         self.deployment = deployment
         self.client = deployment.get_client()
         self.storage_manager = deployment.get_storage_manager()
+        self.ovn_manager = deployment.get_ovn_manager()
         self.tfhelper = tfhelper
         self.jhelper = jhelper
         self.manifest = manifest
@@ -501,6 +503,10 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
             tfvars["enable-cinder-volume"] = False
 
         return tfvars
+
+    def get_network_tfvars(self) -> dict:
+        """Create terraform variables related to network."""
+        return self.ovn_manager.get_control_plane_tfvars(self.deployment, self.jhelper)
 
     def _get_database_resource_tfvars(
         self, service_scale: typing.Callable[[str], int]
@@ -585,6 +591,15 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
                 pass
 
         return apps_to_remove
+
+    def remove_blocked_apps_from_ovn_provider(self) -> list:
+        """Juju apps that are in blocked state because of the OVN provider."""
+        apps = []
+        if self.ovn_manager.get_provider() == ovn.OvnProvider.MICROOVN:
+            apps += [
+                "neutron",
+            ]
+        return apps
 
     def remove_blocked_apps_from_role(self) -> list:
         """Juju apps that are in blocked state because of the node role.
@@ -704,6 +719,7 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
             self.topology, len(control_nodes) or len(region_controllers)
         )
         extra_tfvars = self.get_storage_tfvars(storage_nodes)
+        extra_tfvars.update(self.get_network_tfvars())
         extra_tfvars.update(self.get_region_tfvars())
 
         # This is used to calculate the "experimental-max-connections" mysql setting.
@@ -779,6 +795,7 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
             apps.remove("cinder")
         apps = list(set(apps) - set(self.remove_blocked_apps_from_features()))
         apps = list(set(apps) - set(self.remove_blocked_apps_from_role()))
+        apps = list(set(apps) - set(self.remove_blocked_apps_from_ovn_provider()))
 
         LOG.debug(f"Applications monitored for readiness: {apps}")
         status_queue: queue.Queue[str] = queue.Queue()
@@ -804,14 +821,20 @@ class OpenStackPatchLoadBalancerServicesIPStep(PatchLoadBalancerServicesIPStep):
     def __init__(
         self,
         client: Client,
+        ovn_manager: ovn.OvnManager,
     ):
         super().__init__(client)
+        self.ovn_manager = ovn_manager
 
     def services(self):
         """List of services to patch."""
         services = ["traefik", "traefik-public", "rabbitmq"]
-        if not self.client.cluster.list_nodes_by_role("region_controller"):
+        if not (
+            self.client.cluster.list_nodes_by_role("region_controller")
+            or self.ovn_manager.get_provider() == ovn.OvnProvider.MICROOVN
+        ):
             # The region controller cluster is not expected to have ovn-relay.
+            # Microovn based deployments do not use ovn-relay.
             services.append("ovn-relay")
         if self.client.cluster.list_nodes_by_role("storage"):
             services.append("traefik-rgw")

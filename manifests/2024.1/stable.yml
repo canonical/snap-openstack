@@ -49,6 +49,8 @@ core:
           snap-channel: 2024.1/stable
       microcluster-token-distributor:
         channel: latest/edge
+      sunbeam-ovn-proxy:
+        channel: 2024.1/stable
 features:
   baremetal:
     software:
