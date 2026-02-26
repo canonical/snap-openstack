@@ -175,6 +175,16 @@ class TlsFeature(OpenStackControlPlaneFeature):
         }
         update_config(deployment.get_client(), CERTIFICATE_FEATURE_KEY, stored_config)
 
+    def pre_disable(self, deployment: Deployment, show_hints: bool) -> None:
+        """Handler to perform tasks before disabling the feature."""
+        super().pre_disable(deployment, show_hints)
+
+        provider_config = self.provider_config(deployment)
+
+        provider = provider_config.get("provider")
+        if provider and provider != self.name:
+            raise Exception(f"Certificate provider already set to {provider!r}")
+
     def post_disable(self, deployment: Deployment, show_hints: bool) -> None:
         """Handler to perform tasks after the feature is disabled."""
         super().post_disable(deployment, show_hints)
