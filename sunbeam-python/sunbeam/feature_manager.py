@@ -64,7 +64,7 @@ def list_features(ctx: click.Context, format: str) -> None:
             "Ensure the node is part of a bootstrapped cluster."
         ) from e
 
-    feature_states: dict[str, bool] = {}
+    feature_data: dict[str, dict[str, bool]] = {}
     for name, feature in feature_manager.features().items():
         if not isinstance(feature, EnableDisableFeature):
             continue
@@ -73,17 +73,29 @@ def list_features(ctx: click.Context, format: str) -> None:
         except Exception as e:
             LOG.debug("Failed to get status for feature %r: %r", name, e)
             enabled = False
-        feature_states[name] = enabled
+
+        # Check if feature is experimental (not generally available)
+        experimental = not getattr(feature, "generally_available", True)
+
+        feature_data[name] = {
+            "enabled": enabled,
+            "experimental": experimental,
+        }
 
     if format == FORMAT_TABLE:
         table = Table()
         table.add_column("Feature", justify="left")
         table.add_column("Enabled", justify="center")
-        for name, enabled in feature_states.items():
-            table.add_row(name, "X" if enabled else "")
+        table.add_column("Experimental", justify="center")
+        for name, data in feature_data.items():
+            table.add_row(
+                name,
+                "X" if data["enabled"] else "",
+                "X" if data["experimental"] else "",
+            )
         console.print(table)
     elif format == FORMAT_YAML:
-        console.print(yaml.dump(feature_states))
+        console.print(yaml.dump(feature_data))
 
 
 class FeatureManager:

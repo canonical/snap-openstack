@@ -51,7 +51,9 @@ class TestListFeatures:
         result = runner.invoke(cli_group, ["list-features"], obj=deployment)
 
         assert result.exit_code == 0
-        assert "Feature" in result.output and "Enabled" in result.output
+        assert "Feature" in result.output
+        assert "Enabled" in result.output
+        assert "Experimental" in result.output
 
 
 class TestFeatureRegistration:
