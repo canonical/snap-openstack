@@ -34,6 +34,10 @@ jobs:
     needs: build
     name: Functional test
     runs-on: [self-hosted, large, noble, x64]
+    strategy:
+      fail-fast: false
+      matrix:
+        flavor: [storage, no-storage]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -50,6 +54,27 @@ jobs:
           # Check docker, containerd and remove them if exists
           sudo apt remove --purge docker.io containerd runc -y
           sudo rm -rf /run/containerd
+
+          roles="control,compute"
+          if [ "${{ matrix.flavor }}" == "storage" ]; then
+            roles="$roles,storage"
+            sudo mkdir -p /dev/disk/by-id/ || true
+            function loop_device() {
+                local free_device
+                local id_path="/dev/disk/by-id/$(basename $1)"
+                local ld_path="$1.img"
+                sudo dd if=/dev/zero of="$ld_path" bs=4096 count=305175
+                sync
+                free_device=$(sudo losetup --show --find "$ld_path")
+                wipefs --all "$free_device" 1>&2
+                sgdisk --zap-all "$free_device" 1>&2
+                sudo ln -s "$free_device" "$id_path"
+                echo $id_path
+            }
+            sudo snap install yq
+            lds="$(loop_device /ld1),$(loop_device /ld2),$(loop_device /ld3)"
+            yq e -i ".core.config.microceph_config.\"$(hostname -f)\".osd_devices = \"$lds\"" .github/assets/testing/edge.yml
+          fi
 
           # Allow lxd controller to reach to k8s controller on loadbalancer ip
           # sudo nft insert rule ip filter FORWARD tcp dport 17070 accept
@@ -77,7 +102,7 @@ jobs:
           # have more than 32 GiB of memory where Sunbeam selects the multi mysql
           # mode instead. So we have to override the Sunbeam's decision to be
           # closer to the tutorial scenario.
-          sg snap_daemon "openstack.sunbeam cluster bootstrap --manifest .github/assets/testing/edge.yml --accept-defaults --topology single --database single"
+          sg snap_daemon "openstack.sunbeam cluster bootstrap --role "$roles" --manifest .github/assets/testing/edge.yml --accept-defaults --topology single --database single"
           sg snap_daemon "openstack.sunbeam cluster list"
           # Note: Moving configure before enabling caas just to ensure caas images are not downloaded
           # To download caas image, require ports to open on firewall to access fedora images.
@@ -164,7 +189,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: sunbeam_logs
+          name: sunbeam_logs-${{ matrix.flavor}}
           path: logs
           retention-days: 30
       - name: Setup tmate session

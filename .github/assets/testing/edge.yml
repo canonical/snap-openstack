@@ -4,6 +4,8 @@ core:
       bootstrap_args:
         - --bootstrap-constraints
         - root-disk=5G
+        - --config
+        - caas-image-repo=ghcr.io/juju
     charms:
       cinder-volume:
         channel: 2024.1/edge
