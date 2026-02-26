@@ -14,7 +14,8 @@ from typing import Tuple
 import yaml
 
 from sunbeam.features.interface.utils import get_subject_from_csr
-
+from cryptography import x509
+from cryptography.x509.oid import NameOID
 from .base import BaseFeatureTest
 from .vault import ensure_vault_prerequisites
 
@@ -250,6 +251,9 @@ stateOrProvinceName = optional
 organizationName = optional
 organizationalUnitName = optional
 commonName = supplied
+
+[alt_names]
+DNS.1 = test.com
 """
         certindex_content = (tmp_path / "certindex").read_text()
         certserial_content = (tmp_path / "certserial").read_text()
@@ -415,6 +419,11 @@ class TlsCaTest(BaseFeatureTest):
                 csr_path = tmp_path / f"req_{subject[:8]}.csr"
                 csr_path.write_text(str(csr_pem).strip() + "\n")
                 cert_path = tmp_path / f"out_{subject[:8]}.crt"
+
+                req = x509.load_pem_x509_csr(csr_path.read_bytes())
+                cn = req.subject.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value
+                san_txt = f"subjectAltName=DNS:{cn}\n"
+
                 subprocess.run(
                     [
                         "openssl",
@@ -431,7 +440,11 @@ class TlsCaTest(BaseFeatureTest):
                         str(cert_path),
                         "-days",
                         "365",
+                        "-extfile",
+                        "/dev/stdin",
                     ],
+                    input=san_txt,
+                    text=True,
                     check=True,
                     capture_output=True,
                 )
