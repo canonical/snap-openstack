@@ -8,6 +8,7 @@ import pytest
 import tenacity
 
 from sunbeam.clusterd.service import ConfigItemNotFoundException
+from sunbeam.core import ovn
 from sunbeam.core.common import ResultType
 from sunbeam.core.juju import (
     ApplicationNotFoundException,
@@ -134,6 +135,7 @@ class TestDeployControlPlaneStep:
         basic_jhelper.get_application.side_effect = ApplicationNotFoundException(
             "not found"
         )
+        deployment_with_client.get_ovn_manager().get_control_plane_tfvars.return_value = {}
 
         step = DeployControlPlaneStep(
             deployment_with_client,
@@ -159,6 +161,7 @@ class TestDeployControlPlaneStep:
         snap_mock,
     ):
         snap_mock().config.get.return_value = "k8s"
+        deployment_with_client.get_ovn_manager().get_control_plane_tfvars.return_value = {}
         basic_tfhelper.update_tfvars_and_apply_tf.side_effect = TerraformException(
             "apply failed..."
         )
@@ -188,6 +191,7 @@ class TestDeployControlPlaneStep:
         snap_mock,
     ):
         snap_mock().config.get.return_value = "k8s"
+        deployment_with_client.get_ovn_manager().get_control_plane_tfvars.return_value = {}
         basic_jhelper.get_application_names.return_value = ["app1"]
         basic_jhelper.wait_until_active.side_effect = TimeoutError("timed out")
 
@@ -216,6 +220,7 @@ class TestDeployControlPlaneStep:
         snap_mock,
     ):
         snap_mock().config.get.return_value = "k8s"
+        deployment_with_client.get_ovn_manager().get_control_plane_tfvars.return_value = {}
         basic_jhelper.get_application_names.return_value = ["app1"]
         basic_jhelper.wait_until_active.side_effect = JujuWaitException(
             "Unit in error: placement/0"
@@ -290,6 +295,14 @@ class TestDeployControlPlaneStep:
         assert result.result_type == ResultType.COMPLETED
 
 
+@pytest.fixture
+def ovn_manager():
+    """Ovn manager mock."""
+    ovn_manager = Mock()
+    ovn_manager.get_provider.return_value = ovn.OvnProvider.OVN_K8S
+    yield ovn_manager
+
+
 class PatchLoadBalancerServicesIPStepTest:
     @pytest.fixture
     def patch_client(self):
@@ -298,7 +311,9 @@ class PatchLoadBalancerServicesIPStepTest:
         client.cluster.list_nodes_by_role.return_value = ["node-1"]
         return client
 
-    def test_is_skip(self, patch_client, read_config_patch, snap_patch, snap_mock):
+    def test_is_skip(
+        self, patch_client, read_config_patch, snap_patch, snap_mock, ovn_manager
+    ):
         snap_mock().config.get.return_value = "k8s"
         with patch(
             "sunbeam.core.steps.l_client.Client",
@@ -314,12 +329,12 @@ class PatchLoadBalancerServicesIPStepTest:
                 )
             ),
         ):
-            step = OpenStackPatchLoadBalancerServicesIPStep(patch_client)
+            step = OpenStackPatchLoadBalancerServicesIPStep(patch_client, ovn_manager)
             result = step.is_skip()
         assert result.result_type == ResultType.SKIPPED
 
     def test_is_skip_missing_annotation(
-        self, patch_client, read_config_patch, snap_patch, snap_mock
+        self, patch_client, read_config_patch, snap_patch, snap_mock, ovn_manager
     ):
         snap_mock().config.get.return_value = "k8s"
         with patch(
@@ -330,21 +345,25 @@ class PatchLoadBalancerServicesIPStepTest:
                 )
             ),
         ):
-            step = OpenStackPatchLoadBalancerServicesIPStep(patch_client)
+            step = OpenStackPatchLoadBalancerServicesIPStep(patch_client, ovn_manager)
             result = step.is_skip()
         assert result.result_type == ResultType.COMPLETED
 
-    def test_is_skip_missing_config(self, patch_client, snap_patch, snap_mock):
+    def test_is_skip_missing_config(
+        self, patch_client, snap_patch, snap_mock, ovn_manager
+    ):
         snap_mock().config.get.return_value = "k8s"
         with patch(
             "sunbeam.core.steps.read_config",
             new=Mock(side_effect=ConfigItemNotFoundException),
         ):
-            step = OpenStackPatchLoadBalancerServicesIPStep(patch_client)
+            step = OpenStackPatchLoadBalancerServicesIPStep(patch_client, ovn_manager)
             result = step.is_skip()
         assert result.result_type == ResultType.FAILED
 
-    def test_run(self, patch_client, read_config_patch, snap_patch, snap_mock):
+    def test_run(
+        self, patch_client, read_config_patch, snap_patch, snap_mock, ovn_manager
+    ):
         snap_mock().config.get.return_value = "k8s"
         with patch(
             "sunbeam.core.steps.l_client.Client",
@@ -361,7 +380,7 @@ class PatchLoadBalancerServicesIPStepTest:
                 )
             ),
         ):
-            step = OpenStackPatchLoadBalancerServicesIPStep(patch_client)
+            step = OpenStackPatchLoadBalancerServicesIPStep(patch_client, ovn_manager)
             step.is_skip()
             result = step.run()
         assert result.result_type == ResultType.COMPLETED

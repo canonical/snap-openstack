@@ -47,6 +47,8 @@ core:
           snap-channel: 2025.1/beta
       microcluster-token-distributor:
         channel: latest/edge
+      sunbeam-ovn-proxy:
+        channel: 2025.1/beta
 features:
   baremetal:
     software:

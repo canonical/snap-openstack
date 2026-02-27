@@ -17,7 +17,6 @@ from sunbeam.clusterd.client import Client
 from sunbeam.core.common import BaseStep, Result, ResultType, Status, validate_ip_range
 from sunbeam.core.juju import ActionFailedException, JujuHelper, JujuStepHelper
 from sunbeam.core.manifest import Manifest
-from sunbeam.steps import microovn
 
 LOG = logging.getLogger(__name__)
 
@@ -192,6 +191,33 @@ def ext_net_questions_local_only():
             description=EXT_NETWORK_SEGMENTATION_ID_DESCRIPTION,
         ),
     }
+
+
+def get_external_network_configs(client: Client) -> dict:
+    charm_config = {}
+
+    variables = sunbeam.core.questions.load_answers(client, CLOUD_CONFIG_SECTION)
+    ext_network = variables.get("external_network", {})
+    if (
+        variables.get("user", {}).get("remote_access_location", "")
+        == utils.LOCAL_ACCESS
+    ):
+        # In local access, we only support a single external network
+        # get the first one
+        # Check if ext_network is nested (dict of dict) or flat (single dict)
+        first_key = next(iter(ext_network)) if ext_network else None
+        if first_key and isinstance(ext_network.get(first_key), dict):
+            # Nested structure like {"asd": {"cidr": ""}}
+            ext_network = ext_network.get(first_key)
+        # else: already a flat dict like {"cidr": ""}
+
+        external_network = ipaddress.ip_network(ext_network.get("cidr"))
+        bridge_interface = f"{ext_network.get('gateway')}/{external_network.prefixlen}"
+        charm_config["external-bridge-address"] = bridge_interface
+    else:
+        charm_config["external-bridge-address"] = utils.IPVANYNETWORK_UNSET
+
+    return charm_config
 
 
 class BaseUserQuestions(BaseStep):
@@ -450,6 +476,8 @@ class PrincipalUnitGetterMixin(UnitGetterMixin):
 class OpenstackNetworkAgentsUnitGetterMixin(UnitGetterMixin, JujuStepHelper):
     def get_unit(self, name: str) -> str:
         """Get the juju unit for the given network agent name."""
+        from sunbeam.steps import microovn
+
         node = self.client.cluster.get_node_info(name)
         machine_id = str(node.get("machineid"))
         principal = self.jhelper.get_unit_from_machine(
