@@ -2318,7 +2318,7 @@ class MaasConfigSRIOVStep(BaseStep):
 
             for snap_nic in snap_nics["nics"]:
                 nic_name = snap_nic["name"]
-                if not (snap_nic["product_id"] and snap_nic["vendor_id"]):
+                if not (snap_nic.get("product_id") and snap_nic.get("vendor_id")):
                     LOG.debug("Ignoring nic, not a PCI device: %s", snap_nic["name"])
                     continue
 
