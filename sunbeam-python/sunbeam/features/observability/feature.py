@@ -103,6 +103,7 @@ OBSERVABILITY_OFFER_INTERFACES = [
     "prometheus_remote_write",
     "loki_push_api",
 ]
+INTEGRATION_APPS = ["openstack-hypervisor", "microceph", "k8s"]
 
 
 class ProviderType(enum.Enum):
@@ -261,10 +262,9 @@ class DeployObservabilityAgentStep(BaseStep, JujuStepHelper):
 
     def run(self, status: Status | None = None) -> Result:
         """Execute configuration using terraform."""
-        integration_apps = ["openstack-hypervisor"]
         extra_tfvars = {
             "principal-application-model": self.model,
-            "observability-agent-integration-apps": integration_apps,
+            "observability-agent-integration-apps": INTEGRATION_APPS,
         }
         # Offer URLs from COS are added from feature
         extra_tfvars.update(
@@ -380,7 +380,7 @@ class RemoveObservabilityAgentStep(BaseStep, JujuStepHelper):
 
         extra_tfvars = {
             "principal-application-model": self.model,
-            "principal-application": "openstack-hypervisor",
+            "observability-agent-integration-apps": [],
         }
         # Offer URLs from COS are added from feature
         extra_tfvars.update(self.feature.set_tfvars_on_disable(self.deployment))
