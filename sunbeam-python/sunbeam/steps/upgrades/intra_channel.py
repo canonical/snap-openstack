@@ -7,6 +7,7 @@ import queue
 from rich.console import Console
 from rich.status import Status
 
+from sunbeam.clusterd.client import Client
 from sunbeam.core.common import (
     BaseStep,
     Result,
@@ -24,6 +25,7 @@ from sunbeam.steps.hypervisor import ReapplyHypervisorTerraformPlanStep
 from sunbeam.steps.k8s import DeployK8SApplicationStep
 from sunbeam.steps.microceph import DeployMicrocephApplicationStep
 from sunbeam.steps.microovn import DeployMicroOVNApplicationStep
+from sunbeam.steps.mysql import MySQLCharmUpgradeStep
 from sunbeam.steps.openstack import (
     OpenStackPatchLoadBalancerServicesIPPoolStep,
     OpenStackPatchLoadBalancerServicesIPStep,
@@ -90,6 +92,9 @@ class LatestInChannel(BaseStep, JujuStepHelper):
         """
         refreshed_apps = []
         for app_name, (charm, channel, _) in apps.items():
+            # Skip mysql-k8s here, it is refreshed via `sunbeam cluster refresh mysql`
+            if charm in ["mysql-k8s"]:
+                continue
             manifest_charm = self.manifest.core.software.charms.get(charm)
             if not manifest_charm:
                 for _, feature in self.manifest.get_features():
@@ -310,4 +315,41 @@ class LatestInChannelCoordinator(UpgradeCoordinator):
             ]
         )
 
+        return plan
+
+
+class MySQLInChannelUpgradeCoordinator(UpgradeCoordinator):
+    """Coordinator for refreshing mysql-k8s charm in its current channel."""
+
+    def __init__(
+        self,
+        deployment: Deployment,
+        client: Client,
+        jhelper: JujuHelper,
+        manifest: Manifest,
+        reset_mysql_upgrade_state: bool,
+    ):
+        super().__init__(deployment, client, jhelper, manifest)
+        self.reset_mysql_upgrade_state = reset_mysql_upgrade_state
+
+    def get_plan(self) -> list[BaseStep]:
+        """Return the upgrade plan."""
+        plan = [
+            MySQLCharmUpgradeStep(
+                self.deployment,
+                self.client,
+                self.jhelper,
+                self.manifest,
+                self.reset_mysql_upgrade_state,
+            ),
+            TerraformInitStep(self.deployment.get_tfhelper("openstack-plan")),
+            ReapplyOpenStackTerraformPlanStep(
+                self.deployment,
+                self.client,
+                self.deployment.get_tfhelper("openstack-plan"),
+                self.jhelper,
+                self.manifest,
+                self.deployment.openstack_machines_model,
+            ),
+        ]
         return plan
