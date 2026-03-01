@@ -28,3 +28,20 @@ class StorageBackend(pydantic.BaseModel):
 
 class StorageBackends(pydantic.RootModel[list[StorageBackend]]):
     """Storage backends model."""
+
+
+class FeatureGate(pydantic.BaseModel):
+    """Feature gate model."""
+
+    model_config = pydantic.ConfigDict(
+        alias_generator=pydantic.AliasGenerator(
+            validation_alias=utils.to_kebab,
+            serialization_alias=utils.to_kebab,
+        ),
+    )
+    gate_key: str
+    enabled: bool
+
+
+class FeatureGates(pydantic.RootModel[list[FeatureGate]]):
+    """Feature gates model."""
