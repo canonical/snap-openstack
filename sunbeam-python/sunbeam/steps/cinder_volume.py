@@ -4,7 +4,6 @@
 import logging
 from typing import Any
 
-import sunbeam.steps.microceph as microceph
 from sunbeam import versions
 from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import (
@@ -122,6 +121,7 @@ class DeployCinderVolumeApplicationStep(DeployMachineApplicationStep):
     def extra_tfvars(self) -> dict:
         """Extra terraform vars to pass to terraform apply."""
         storage_nodes = self.client.cluster.list_nodes_by_role("storage")
+        ceph_provider = self.deployment.get_ceph_provider()
         tfvars: dict[str, Any] = {
             "endpoint_bindings": [
                 {
@@ -169,12 +169,10 @@ class DeployCinderVolumeApplicationStep(DeployMachineApplicationStep):
                 },
             ],
             "charm_cinder_volume_config": {"snap-channel": versions.OPENSTACK_CHANNEL},
-            "charm_cinder_volume_ceph_config": {
-                "ceph-osd-replication-count": microceph.ceph_replica_scale(
-                    len(storage_nodes)
-                ),
-            },
         }
+        tfvars.update(
+            ceph_provider.get_cinder_volume_tfvars(self.deployment, len(storage_nodes))
+        )
 
         charm_manifest: CharmManifest | None = self.manifest.core.software.charms.get(
             APPLICATION
@@ -191,13 +189,6 @@ class DeployCinderVolumeApplicationStep(DeployMachineApplicationStep):
             tfvars["enable-telemetry-notifications"] = False
 
         if len(storage_nodes):
-            microceph_tfhelper = self.deployment.get_tfhelper("microceph-plan")
-            microceph_tf_output = microceph_tfhelper.output()
-
-            ceph_application_name = microceph_tf_output.get("ceph-application-name")
-
-            if ceph_application_name:
-                tfvars["ceph-application-name"] = ceph_application_name
             tfvars.update(self._get_offers())
             tfvars.update(self._get_optional_offers())
 

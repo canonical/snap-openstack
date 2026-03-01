@@ -27,6 +27,7 @@ from sunbeam.core.manifest import Manifest
 from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.core.terraform import TerraformInitStep
 from sunbeam.features.interface.v1.base import is_maas_deployment
+from sunbeam.features.microceph.steps import DeployMicrocephApplicationStep
 from sunbeam.steps.cinder_volume import DeployCinderVolumeApplicationStep
 from sunbeam.steps.hypervisor import ReapplyHypervisorTerraformPlanStep
 from sunbeam.steps.k8s import (
@@ -35,7 +36,6 @@ from sunbeam.steps.k8s import (
     EnsureDefaultL2AdvertisementMutedStep,
     EnsureL2AdvertisementByHostStep,
 )
-from sunbeam.steps.microceph import DeployMicrocephApplicationStep
 from sunbeam.steps.microovn import DeployMicroOVNApplicationStep
 from sunbeam.steps.mysql import MySQLCharmUpgradeStep
 from sunbeam.steps.openstack import (

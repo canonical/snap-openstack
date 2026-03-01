@@ -11,7 +11,6 @@ import typing
 import tenacity
 from rich.console import Console
 
-import sunbeam.steps.microceph as microceph
 from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import ConfigItemNotFoundException
 from sunbeam.core import ovn
@@ -559,6 +558,7 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
         self.client = deployment.get_client()
         self.storage_manager = deployment.get_storage_manager()
         self.ovn_manager = deployment.get_ovn_manager()
+        self.ceph_provider = deployment.get_ceph_provider()
         self.tfhelper = tfhelper
         self.jhelper = jhelper
         self.manifest = manifest
@@ -573,20 +573,14 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
 
     def get_storage_tfvars(self, storage_nodes: list[dict]) -> dict:
         """Create terraform variables related to storage."""
+        model_with_owner = self.get_model_name_with_owner(self.machine_model)
         tfvars: dict[str, str | bool | int | list[str]] = {}
+        tfvars.update(
+            self.ceph_provider.get_control_plane_tfvars(
+                model_with_owner, len(storage_nodes)
+            )
+        )
         if storage_nodes:
-            model_with_owner = self.get_model_name_with_owner(self.machine_model)
-            tfvars["enable-ceph"] = True
-            tfvars["ceph-offer-url"] = f"{model_with_owner}.{microceph.APPLICATION}"
-            tfvars["ceph-nfs-offer-url"] = (
-                f"{model_with_owner}.{microceph.NFS_OFFER_NAME}"
-            )
-            tfvars["ceph-rgw-offer-url"] = (
-                f"{model_with_owner}.{microceph.RGW_OFFER_NAME}"
-            )
-            tfvars["ceph-osd-replication-count"] = microceph.ceph_replica_scale(
-                len(storage_nodes)
-            )
             tfvars["enable-cinder-volume"] = True
             urls = [f"{model_with_owner}.cinder-volume"]
             principal_apps = self.storage_manager.list_principal_applications(
@@ -600,7 +594,6 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
 
             tfvars["cinder-volume-offer-urls"] = urls
         else:
-            tfvars["enable-ceph"] = False
             tfvars["enable-cinder-volume"] = False
 
         return tfvars
@@ -927,6 +920,7 @@ class ReapplyOpenStackTerraformPlanStep(BaseStep, JujuStepHelper):
         self.client = client
         self.storage_manager = deployment.get_storage_manager()
         self.ovn_manager = deployment.get_ovn_manager()
+        self.ceph_provider = deployment.get_ceph_provider()
         self.tfhelper = tfhelper
         self.jhelper = jhelper
         self.manifest = manifest
@@ -936,20 +930,14 @@ class ReapplyOpenStackTerraformPlanStep(BaseStep, JujuStepHelper):
 
     def get_storage_tfvars(self, storage_nodes: list[dict]) -> dict:
         """Create terraform variables related to storage."""
+        model_with_owner = self.get_model_name_with_owner(self.machine_model)
         tfvars: dict[str, str | bool | int | list[str]] = {}
+        tfvars.update(
+            self.ceph_provider.get_control_plane_tfvars(
+                model_with_owner, len(storage_nodes)
+            )
+        )
         if storage_nodes:
-            model_with_owner = self.get_model_name_with_owner(self.machine_model)
-            tfvars["enable-ceph"] = True
-            tfvars["ceph-offer-url"] = f"{model_with_owner}.{microceph.APPLICATION}"
-            tfvars["ceph-nfs-offer-url"] = (
-                f"{model_with_owner}.{microceph.NFS_OFFER_NAME}"
-            )
-            tfvars["ceph-rgw-offer-url"] = (
-                f"{model_with_owner}.{microceph.RGW_OFFER_NAME}"
-            )
-            tfvars["ceph-osd-replication-count"] = microceph.ceph_replica_scale(
-                len(storage_nodes)
-            )
             tfvars["enable-cinder-volume"] = True
             urls = [f"{model_with_owner}.cinder-volume"]
             principal_apps = self.storage_manager.list_principal_applications(
@@ -963,7 +951,6 @@ class ReapplyOpenStackTerraformPlanStep(BaseStep, JujuStepHelper):
 
             tfvars["cinder-volume-offer-urls"] = urls
         else:
-            tfvars["enable-ceph"] = False
             tfvars["enable-cinder-volume"] = False
 
         return tfvars

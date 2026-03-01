@@ -84,6 +84,12 @@ from sunbeam.feature_gates import (
     feature_gate_option,
     split_roles_enabled,
 )
+from sunbeam.features.microceph.steps import (
+    CheckMicrocephDistributionStep,
+    ConfigureMicrocephOSDStep,
+    DeployMicrocephApplicationStep,
+    RemoveMicrocephUnitsStep,
+)
 from sunbeam.provider.base import ProviderBase
 from sunbeam.provider.common.multiregion import connect_to_region_controller
 from sunbeam.provider.local.deployment import LOCAL_TYPE, LocalDeployment
@@ -164,12 +170,6 @@ from sunbeam.steps.k8s import (
     RemoveK8SUnitsStep,
     StoreK8SKubeConfigStep,
     UpdateK8SCloudStep,
-)
-from sunbeam.steps.microceph import (
-    CheckMicrocephDistributionStep,
-    ConfigureMicrocephOSDStep,
-    DeployMicrocephApplicationStep,
-    RemoveMicrocephUnitsStep,
 )
 from sunbeam.steps.microovn import (
     DeployMicroOVNApplicationStep,
