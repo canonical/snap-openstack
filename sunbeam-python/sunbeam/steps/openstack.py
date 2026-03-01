@@ -15,6 +15,7 @@ from rich.status import Status
 from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import ConfigItemNotFoundException
 from sunbeam.core import ovn
+from sunbeam.core.ceph import is_microceph_necessary
 from sunbeam.core.common import (
     RAM_32_GB_IN_KB,
     BaseStep,
@@ -834,7 +835,9 @@ class OpenStackPatchLoadBalancerServicesIPStep(PatchLoadBalancerServicesIPStep):
             # The region controller cluster is not expected to have ovn-relay.
             # Microovn based deployments do not use ovn-relay.
             services.append("ovn-relay")
-        if self.client.cluster.list_nodes_by_role("storage"):
+        if self.client.cluster.list_nodes_by_role("storage") and is_microceph_necessary(
+            self.client
+        ):
             services.append("traefik-rgw")
         return services
 
@@ -854,7 +857,9 @@ class OpenStackPatchLoadBalancerServicesIPPoolStep(PatchLoadBalancerServicesIPPo
     def services(self):
         """List of services to patch."""
         services = ["traefik-public"]
-        if self.client.cluster.list_nodes_by_role("storage"):
+        if self.client.cluster.list_nodes_by_role("storage") and is_microceph_necessary(
+            self.client
+        ):
             services.append("traefik-rgw")
         return services
 

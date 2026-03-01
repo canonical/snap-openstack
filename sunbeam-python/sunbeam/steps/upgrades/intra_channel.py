@@ -193,7 +193,7 @@ class LatestInChannelCoordinator(UpgradeCoordinator):
 
     def get_plan(self) -> list[BaseStep]:
         """Return the upgrade plan."""
-        plan = [
+        plan: list[BaseStep] = [
             LatestInChannel(self.deployment, self.jhelper, self.manifest),
         ]
         # Microceph introduces new offer urls for rgw and so microceph

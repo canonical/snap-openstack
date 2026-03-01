@@ -17,6 +17,7 @@ from sunbeam.clusterd.service import (
     URLNotFoundException,
 )
 from sunbeam.commands.proxy import proxy_questions
+from sunbeam.core.ceph import is_microceph_necessary
 from sunbeam.core.checks import DaemonGroupCheck
 from sunbeam.core.common import SunbeamException
 from sunbeam.core.deployment import PROXY_CONFIG_KEY, CertPair, Deployment, Networks
@@ -288,26 +289,27 @@ class LocalDeployment(Deployment):
             variables = load_answers(client, CONFIG_DISKS_KEY)
         except ClusterServiceUnavailableException:
             variables = {}
-        microceph_content: list[str] = []
-        for name, disks in variables.get("microceph_config", {fqdn: None}).items():
-            microceph_config_bank = QuestionBank(
-                questions=microceph_questions(),
-                console=console,
-                previous_answers=disks,
-            )
-            lines = show_questions(
-                microceph_config_bank,
-                section="microceph_config",
-                subsection=name,
-                section_description="MicroCeph config",
-            )
-            # if there's more than one microceph,
-            # don't rewrite the section and section description
-            if len(microceph_content) < 2:
-                microceph_content.extend(lines)
-            else:
-                microceph_content.extend(lines[2:])
-        preseed_content.extend(microceph_content)
+        if is_microceph_necessary(client):
+            microceph_content: list[str] = []
+            for name, disks in variables.get("microceph_config", {fqdn: None}).items():
+                microceph_config_bank = QuestionBank(
+                    questions=microceph_questions(),
+                    console=console,
+                    previous_answers=disks,
+                )
+                lines = show_questions(
+                    microceph_config_bank,
+                    section="microceph_config",
+                    subsection=name,
+                    section_description="MicroCeph config",
+                )
+                # if there's more than one microceph,
+                # don't rewrite the section and section description
+                if len(microceph_content) < 2:
+                    microceph_content.extend(lines)
+                else:
+                    microceph_content.extend(lines[2:])
+            preseed_content.extend(microceph_content)
 
         preseed_content_final = "\n".join(preseed_content)
         return preseed_content_final
