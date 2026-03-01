@@ -8,6 +8,7 @@ from typing import Any
 import click
 from rich.console import Console
 
+from sunbeam.core.ceph import is_microceph_necessary
 from sunbeam.core.checks import Check, run_preflight_checks
 from sunbeam.core.common import (
     BaseStep,
@@ -155,7 +156,7 @@ class EnableMaintenance(MaintenanceCommand):
                 ),
             ]
 
-        if "storage" in node_status:
+        if "storage" in node_status and is_microceph_necessary(self.client):
             preflight_checks += [
                 checks.MicroCephMaintenancePreflightCheck(
                     client=self.client,
@@ -219,7 +220,7 @@ class EnableMaintenance(MaintenanceCommand):
                 )
             )
 
-        if "storage" in node_status:
+        if "storage" in node_status and is_microceph_necessary(self.client):
             operation_plan.append(
                 MicroCephActionStep(
                     client=self.client,
@@ -308,7 +309,7 @@ class EnableMaintenance(MaintenanceCommand):
                 )
             )
 
-        if "storage" in node_status:
+        if "storage" in node_status and is_microceph_necessary(self.client):
             generate_operation_plan.append(
                 MicroCephActionStep(
                     client=self.client,
@@ -363,7 +364,7 @@ class EnableMaintenance(MaintenanceCommand):
 
         if "compute" in node_status:
             self.ops_viewer.add_watch_actions(actions=audit_info["actions"])
-        if "storage" in node_status:
+        if "storage" in node_status and is_microceph_necessary(self.client):
             self.ops_viewer.add_maintenance_action_steps(
                 action_result=microceph_enter_maintenance_dry_run_action_result
             )
@@ -446,7 +447,7 @@ class DisableMaintenance(MaintenanceCommand):
                         audit=audit_info["audit"],
                     ),
                 ]
-        if "storage" in node_status:
+        if "storage" in node_status and is_microceph_necessary(self.client):
             operation_plan.append(
                 MicroCephActionStep(
                     client=self.client,
@@ -507,7 +508,7 @@ class DisableMaintenance(MaintenanceCommand):
                         deployment=self.deployment, node=self.node
                     )
                 )
-        if "storage" in node_status:
+        if "storage" in node_status and is_microceph_necessary(self.client):
             generate_operation_plan.append(
                 MicroCephActionStep(
                     client=self.client,
@@ -552,7 +553,7 @@ class DisableMaintenance(MaintenanceCommand):
             self.ops_viewer.add_step(step_name=EnableHypervisorStep.__name__)
             if not self.disable_instance_rebalancing:
                 self.ops_viewer.add_watch_actions(actions=audit_info["actions"])
-        if "storage" in node_status:
+        if "storage" in node_status and is_microceph_necessary(self.client):
             self.ops_viewer.add_maintenance_action_steps(
                 action_result=microceph_exit_maintenance_dry_run_action_result
             )

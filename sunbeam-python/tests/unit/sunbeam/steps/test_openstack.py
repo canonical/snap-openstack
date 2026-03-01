@@ -495,6 +495,7 @@ class TestPatchLoadBalancerServicesIPStaleAnnotation:
         """Client mock; returns node-1 for any role so ovn-relay is excluded."""
         client = Mock()
         client.cluster.list_nodes_by_role.return_value = ["node-1"]
+        client.cluster.get_config.return_value = "{}"
         return client
 
     def _make_service(self, ip_annotation=None, ingress_ip=None):

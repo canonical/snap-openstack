@@ -402,7 +402,7 @@ class LatestInChannelCoordinator(UpgradeCoordinator):
 
     def get_plan(self) -> list[BaseStep]:
         """Return the upgrade plan."""
-        plan = [
+        plan: list[BaseStep] = [
             LatestInChannel(self.deployment, self.jhelper, self.manifest),
             ReapplyInfraModelConfigStep(self.deployment, self.jhelper, self.manifest),
             RefreshSnapStep(self.deployment, self.jhelper),
