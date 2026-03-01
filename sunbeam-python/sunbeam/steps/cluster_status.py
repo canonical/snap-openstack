@@ -126,13 +126,15 @@ class ClusterStatusStep(abc.ABC, BaseStep):
     def applications_to_columns(self) -> dict:
         """Mapping of applications to columns."""
         ceph_provider = self.deployment.get_ceph_provider()
-        return {
+        mapping = {
             clusterd.APPLICATION: "clusterd",
             k8s.APPLICATION: "control",
             hypervisor.APPLICATION: "compute",
-            ceph_provider.application_name: ceph_provider.status_column,
             microovn.APPLICATION: "network",
         }
+        if ceph_provider.application_name:
+            mapping[ceph_provider.application_name] = ceph_provider.status_column
+        return mapping
 
     @abc.abstractmethod
     def _update_microcluster_status(self, status: dict, microcluster_status: dict):

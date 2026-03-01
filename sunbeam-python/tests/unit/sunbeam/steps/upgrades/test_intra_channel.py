@@ -825,6 +825,7 @@ class TestLatestInChannelCoordinator:
         ovn_manager.get_roles_for_microovn.return_value = []
         self.client = Mock()
         self.client.cluster.list_nodes_by_role.return_value = []
+        self.client.cluster.get_config.return_value = "{}"
         self.jhelper = Mock()
         self.manifest = Mock()
 
@@ -1256,6 +1257,7 @@ class TestRefreshSnapStep:
         deployment.get_ovn_manager = Mock(return_value=ovn_manager)
         client = Mock()
         client.cluster.list_nodes_by_role.return_value = []
+        client.cluster.get_config.return_value = "{}"
         jhelper = Mock()
         manifest = Mock()
 
@@ -1278,6 +1280,7 @@ class TestRefreshSnapStep:
         deployment.get_ovn_manager = Mock(return_value=ovn_manager)
         client = Mock()
         client.cluster.list_nodes_by_role.return_value = []
+        client.cluster.get_config.return_value = "{}"
         jhelper = Mock()
         manifest = Mock()
 
