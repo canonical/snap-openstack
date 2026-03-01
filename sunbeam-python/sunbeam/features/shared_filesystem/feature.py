@@ -50,6 +50,7 @@ class SharedFilesystemFeature(OpenStackControlPlaneFeature):
     version = Version("0.0.1")
 
     name = "shared-filesystem"
+    generally_available = False
     tf_plan_location = TerraformPlanLocation.SUNBEAM_TERRAFORM_REPO
 
     def __init__(self) -> None:

@@ -23,6 +23,7 @@ from sunbeam.core.common import (
 )
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.manifest import FeatureGroupManifest, FeatureManifest
+from sunbeam.feature_gates import log_gated_feature
 from sunbeam.features.interface.v1.base import (
     BaseFeature,
     BaseFeatureGroup,
@@ -63,7 +64,7 @@ def list_features(ctx: click.Context, format: str) -> None:
             "Ensure the node is part of a bootstrapped cluster."
         ) from e
 
-    feature_states: dict[str, bool] = {}
+    feature_data: dict[str, dict[str, bool]] = {}
     for name, feature in feature_manager.features().items():
         if not isinstance(feature, EnableDisableFeature):
             continue
@@ -72,17 +73,29 @@ def list_features(ctx: click.Context, format: str) -> None:
         except Exception as e:
             LOG.debug("Failed to get status for feature %r: %r", name, e)
             enabled = False
-        feature_states[name] = enabled
+
+        # Check if feature is experimental (not generally available)
+        experimental = not getattr(feature, "generally_available", True)
+
+        feature_data[name] = {
+            "enabled": enabled,
+            "experimental": experimental,
+        }
 
     if format == FORMAT_TABLE:
         table = Table()
         table.add_column("Feature", justify="left")
         table.add_column("Enabled", justify="center")
-        for name, enabled in feature_states.items():
-            table.add_row(name, "X" if enabled else "")
+        table.add_column("Experimental", justify="center")
+        for name, data in feature_data.items():
+            table.add_row(
+                name,
+                "X" if data["enabled"] else "",
+                "X" if data["experimental"] else "",
+            )
         console.print(table)
     elif format == FORMAT_YAML:
-        console.print(yaml.dump(feature_states))
+        console.print(yaml.dump(feature_data))
 
 
 class FeatureManager:
@@ -225,19 +238,25 @@ class FeatureManager:
     def register(self, cli: click.Group, deployment: Deployment) -> None:
         """Register the features.
 
-        Register the features. Once registeted, all the commands/groups defined by
+        Register the features. Once registered, all the commands/groups defined by
         features will be shown as part of sunbeam cli.
+
+        Features are checked against:
+        1. Risk level availability
+        2. Feature gates (via snap config feature.<feature-name>)
 
         :param deployment: Deployment instance.
         :param cli: Main click group for sunbeam cli.
         """
         LOG.debug("Registering features")
         installation_risk = infer_risk(Snap())
+        snap = Snap()
 
         for group in self.groups().values():
             group.register(cli)
 
         for feature in self.features().values():
+            # Check 1: Risk level availability
             if feature.risk_availability > installation_risk:
                 LOG.debug(
                     "Not registering feature %r,"
@@ -245,6 +264,28 @@ class FeatureManager:
                     feature.name,
                 )
                 continue
+
+            # Check 2: Feature gates - skip if feature is gated
+            client = None
+            if deployment:
+                try:
+                    client = deployment.get_client()
+                except SunbeamException:
+                    # Cannot get client (e.g., insufficient permissions)
+                    # Check will proceed with client=None
+                    pass
+
+            if hasattr(feature, "check_gated") and feature.check_gated(
+                client=client,
+                snap=snap,
+                # Features track their own enabled state via is_enabled() method,
+                # so enabled_config_key is None. Storage backends use this to check
+                # if the backend type is in the "StorageBackendsEnabled" config.
+                enabled_config_key=None,
+            ):
+                log_gated_feature(feature.name, feature.gate_key)
+                continue
+
             try:
                 enabled = feature.is_enabled(deployment.get_client())  # type: ignore
             except AttributeError:

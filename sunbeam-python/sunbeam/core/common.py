@@ -22,6 +22,7 @@ from tenacity import RetryCallState
 
 from sunbeam.clusterd.client import Client
 from sunbeam.errors import SunbeamException  # noqa F401
+from sunbeam.feature_gates import is_feature_gate_enabled
 
 LOG = logging.getLogger(__name__)
 RAM_16_GB_IN_KB = 16 * 1000 * 1000
@@ -124,6 +125,41 @@ class Role(enum.Enum):
                  False otherwise
         """
         return self == Role.REGION_CONTROLLER
+
+    @classmethod
+    def enabled_values(cls) -> list[str]:
+        """Return list of role names (lowercase), filtered by feature gates.
+
+        Uses ROLE_GATES configuration.
+        To make a role GA, set generally_available=True in FEATURE_GATES.
+        """
+        return [role.name.lower() for role in cls if _is_role_enabled(role)]
+
+
+# Role to feature gate mapping
+# When a role should be gated, map it to its feature gate key.
+# The gate configuration (including GA status) is defined in feature_gates.py
+ROLE_GATES: dict[Role, str] = {
+    Role.REGION_CONTROLLER: "feature.multi-region",
+}
+
+
+def _is_role_enabled(role: Role) -> bool:
+    """Check if a role is enabled based on its feature gate.
+
+    Args:
+        role: The role to check
+
+    Returns:
+        True if role is always available or its feature gate is enabled
+    """
+    gate_key = ROLE_GATES.get(role)
+    if not gate_key:
+        # Role not in ROLE_GATES means it's always available
+        return True
+
+    # Check feature gate (will return True if GA or snap config enabled)
+    return is_feature_gate_enabled(gate_key)
 
 
 def roles_to_str_list(roles: list[Role]) -> list[str]:

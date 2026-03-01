@@ -44,6 +44,7 @@ class BaremetalFeature(OpenStackControlPlaneFeature):
     version = Version("0.0.1")
 
     name = "baremetal"
+    generally_available = False
     tf_plan_location = TerraformPlanLocation.SUNBEAM_TERRAFORM_REPO
 
     def config_type(self) -> type | None:

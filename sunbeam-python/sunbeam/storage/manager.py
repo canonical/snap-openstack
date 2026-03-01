@@ -256,7 +256,7 @@ class StorageBackendManager:
             LOG.debug("Could not get client for deployment", exc_info=True)
             client = None
         for backend in self._backends.values():
-            if not backend.is_enabled(client, snap):
+            if not backend.check_enabled(client, snap):
                 LOG.debug(
                     "Not registering backend %r, it is not enabled",
                     backend.backend_type,
