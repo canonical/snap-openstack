@@ -6,7 +6,6 @@ from typing import Any
 
 from rich.status import Status
 
-import sunbeam.steps.microceph as microceph
 from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import (
     NodeNotExistInClusterException,
@@ -101,6 +100,7 @@ class DeployCinderVolumeApplicationStep(DeployMachineApplicationStep):
     def extra_tfvars(self) -> dict:
         """Extra terraform vars to pass to terraform apply."""
         storage_nodes = self.client.cluster.list_nodes_by_role("storage")
+        ceph_provider = self.deployment.get_ceph_provider()
         tfvars: dict[str, Any] = {
             "endpoint_bindings": [
                 {
@@ -144,12 +144,10 @@ class DeployCinderVolumeApplicationStep(DeployMachineApplicationStep):
                 },
             ],
             "charm_cinder_volume_config": {},
-            "charm_cinder_volume_ceph_config": {
-                "ceph-osd-replication-count": microceph.ceph_replica_scale(
-                    len(storage_nodes)
-                ),
-            },
         }
+        tfvars.update(
+            ceph_provider.get_cinder_volume_tfvars(self.deployment, len(storage_nodes))
+        )
 
         # This may not be required ideally as Cinder volume is deployed always
         # before user can enable or disable telemetry.
@@ -160,13 +158,6 @@ class DeployCinderVolumeApplicationStep(DeployMachineApplicationStep):
             tfvars["enable-telemetry-notifications"] = False
 
         if len(storage_nodes):
-            microceph_tfhelper = self.deployment.get_tfhelper("microceph-plan")
-            microceph_tf_output = microceph_tfhelper.output()
-
-            ceph_application_name = microceph_tf_output.get("ceph-application-name")
-
-            if ceph_application_name:
-                tfvars["ceph-application-name"] = ceph_application_name
             tfvars.update(self._get_offers())
 
         # Any tfvars that needs override will take precedence from self.override_tfvars

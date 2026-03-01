@@ -7,6 +7,7 @@ import queue
 from rich.console import Console
 from rich.status import Status
 
+from sunbeam.core.ceph import is_microceph_necessary
 from sunbeam.core.common import (
     BaseStep,
     Result,
@@ -19,10 +20,10 @@ from sunbeam.core.manifest import Manifest
 from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.core.terraform import TerraformInitStep
 from sunbeam.features.interface.v1.base import is_maas_deployment
+from sunbeam.features.microceph.steps import DeployMicrocephApplicationStep
 from sunbeam.steps.cinder_volume import DeployCinderVolumeApplicationStep
 from sunbeam.steps.hypervisor import ReapplyHypervisorTerraformPlanStep
 from sunbeam.steps.k8s import DeployK8SApplicationStep
-from sunbeam.steps.microceph import DeployMicrocephApplicationStep
 from sunbeam.steps.microovn import DeployMicroOVNApplicationStep
 from sunbeam.steps.openstack import (
     OpenStackPatchLoadBalancerServicesIPPoolStep,
@@ -192,38 +193,47 @@ class LatestInChannelCoordinator(UpgradeCoordinator):
 
     def get_plan(self) -> list[BaseStep]:
         """Return the upgrade plan."""
-        plan = [
+        plan: list[BaseStep] = [
             LatestInChannel(self.deployment, self.jhelper, self.manifest),
-            # Microceph introduces new offer urls for rgw and so microceph
-            # plan need to be applied before openstack plan
-            TerraformInitStep(self.deployment.get_tfhelper("microceph-plan")),
-            DeployMicrocephApplicationStep(
-                self.deployment,
-                self.client,
-                self.deployment.get_tfhelper("microceph-plan"),
-                self.jhelper,
-                self.manifest,
-                self.deployment.openstack_machines_model,
-            ),
-            TerraformInitStep(self.deployment.get_tfhelper("openstack-plan")),
-            ReapplyOpenStackTerraformPlanStep(
-                self.deployment,
-                self.client,
-                self.deployment.get_tfhelper("openstack-plan"),
-                self.jhelper,
-                self.manifest,
-                self.deployment.openstack_machines_model,
-            ),
-            TerraformInitStep(self.deployment.get_tfhelper("sunbeam-machine-plan")),
-            DeploySunbeamMachineApplicationStep(
-                self.deployment,
-                self.client,
-                self.deployment.get_tfhelper("sunbeam-machine-plan"),
-                self.jhelper,
-                self.manifest,
-                self.deployment.openstack_machines_model,
-            ),
         ]
+        # Microceph introduces new offer urls for rgw and so microceph
+        # plan need to be applied before openstack plan
+        if is_microceph_necessary(self.client):
+            plan.extend(
+                [
+                    TerraformInitStep(self.deployment.get_tfhelper("microceph-plan")),
+                    DeployMicrocephApplicationStep(
+                        self.deployment,
+                        self.client,
+                        self.deployment.get_tfhelper("microceph-plan"),
+                        self.jhelper,
+                        self.manifest,
+                        self.deployment.openstack_machines_model,
+                    ),
+                ]
+            )
+        plan.extend(
+            [
+                TerraformInitStep(self.deployment.get_tfhelper("openstack-plan")),
+                ReapplyOpenStackTerraformPlanStep(
+                    self.deployment,
+                    self.client,
+                    self.deployment.get_tfhelper("openstack-plan"),
+                    self.jhelper,
+                    self.manifest,
+                    self.deployment.openstack_machines_model,
+                ),
+                TerraformInitStep(self.deployment.get_tfhelper("sunbeam-machine-plan")),
+                DeploySunbeamMachineApplicationStep(
+                    self.deployment,
+                    self.client,
+                    self.deployment.get_tfhelper("sunbeam-machine-plan"),
+                    self.jhelper,
+                    self.manifest,
+                    self.deployment.openstack_machines_model,
+                ),
+            ]
+        )
 
         plan.extend(
             [
@@ -278,17 +288,22 @@ class LatestInChannelCoordinator(UpgradeCoordinator):
                 ]
             )
 
+        if is_microceph_necessary(self.client):
+            plan.extend(
+                [
+                    TerraformInitStep(self.deployment.get_tfhelper("microceph-plan")),
+                    DeployMicrocephApplicationStep(
+                        self.deployment,
+                        self.client,
+                        self.deployment.get_tfhelper("microceph-plan"),
+                        self.jhelper,
+                        self.manifest,
+                        self.deployment.openstack_machines_model,
+                    ),
+                ]
+            )
         plan.extend(
             [
-                TerraformInitStep(self.deployment.get_tfhelper("microceph-plan")),
-                DeployMicrocephApplicationStep(
-                    self.deployment,
-                    self.client,
-                    self.deployment.get_tfhelper("microceph-plan"),
-                    self.jhelper,
-                    self.manifest,
-                    self.deployment.openstack_machines_model,
-                ),
                 TerraformInitStep(self.deployment.get_tfhelper("cinder-volume-plan")),
                 DeployCinderVolumeApplicationStep(
                     self.deployment,

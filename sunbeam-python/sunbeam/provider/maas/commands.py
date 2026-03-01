@@ -27,6 +27,7 @@ from sunbeam.commands.configure import (
 from sunbeam.commands.dashboard_url import retrieve_dashboard_url
 from sunbeam.commands.proxy import PromptForProxyStep
 from sunbeam.core import ovn
+from sunbeam.core.ceph import is_microceph_necessary
 from sunbeam.core.checks import (
     Check,
     DiagnosticResultType,
@@ -62,6 +63,13 @@ from sunbeam.core.juju import (
 from sunbeam.core.manifest import AddManifestStep
 from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.core.terraform import TerraformInitStep
+from sunbeam.features.microceph.steps import (
+    CheckMicrocephDistributionStep,
+    DeployMicrocephApplicationStep,
+    DestroyMicrocephApplicationStep,
+    RemoveMicrocephUnitsStep,
+    SetCephMgrPoolSizeStep,
+)
 from sunbeam.provider.base import ProviderBase
 from sunbeam.provider.common.multiregion import connect_to_region_controller
 from sunbeam.provider.maas.client import (
@@ -161,13 +169,6 @@ from sunbeam.steps.k8s import (
     RemoveK8SUnitsStep,
     StoreK8SKubeConfigStep,
     UpdateK8SCloudStep,
-)
-from sunbeam.steps.microceph import (
-    CheckMicrocephDistributionStep,
-    DeployMicrocephApplicationStep,
-    DestroyMicrocephApplicationStep,
-    RemoveMicrocephUnitsStep,
-    SetCephMgrPoolSizeStep,
 )
 from sunbeam.steps.microovn import (
     DeployMicroOVNApplicationStep,
@@ -755,27 +756,29 @@ def deploy(
     plan2.append(AddK8SCloudStep(deployment, jhelper))
     plan2.append(PatchCoreDNSStep(deployment, jhelper))
 
-    plan2.append(TerraformInitStep(tfhelper_microceph))
-    plan2.append(
-        DeployMicrocephApplicationStep(
-            deployment,
-            client,
-            tfhelper_microceph,
-            jhelper,
-            manifest,
-            deployment.openstack_machines_model,
+    microceph_necessary = is_microceph_necessary(client)
+    if microceph_necessary:
+        plan2.append(TerraformInitStep(tfhelper_microceph))
+        plan2.append(
+            DeployMicrocephApplicationStep(
+                deployment,
+                client,
+                tfhelper_microceph,
+                jhelper,
+                manifest,
+                deployment.openstack_machines_model,
+            )
         )
-    )
-    plan2.append(
-        MaasConfigureMicrocephOSDStep(
-            client,
-            maas_client,
-            jhelper,
-            storage,
-            manifest,
-            deployment.openstack_machines_model,
+        plan2.append(
+            MaasConfigureMicrocephOSDStep(
+                client,
+                maas_client,
+                jhelper,
+                storage,
+                manifest,
+                deployment.openstack_machines_model,
+            )
         )
-    )
     plan2.append(TerraformInitStep(tfhelper_cinder_volume))
     plan2.append(
         DeployCinderVolumeApplicationStep(
@@ -863,16 +866,17 @@ def deploy(
     # Redeploy of Microceph is required to fill terraform vars
     # related to traefik-rgw/keystone-endpoints offers from
     # openstack model
-    plan2.append(
-        DeployMicrocephApplicationStep(
-            deployment,
-            client,
-            tfhelper_microceph,
-            jhelper,
-            manifest,
-            deployment.openstack_machines_model,
+    if microceph_necessary:
+        plan2.append(
+            DeployMicrocephApplicationStep(
+                deployment,
+                client,
+                tfhelper_microceph,
+                jhelper,
+                manifest,
+                deployment.openstack_machines_model,
+            )
         )
-    )
     # Fill AMQP / Keystone / MySQL offers from openstack model
     plan2.append(
         DeployCinderVolumeApplicationStep(
@@ -1580,35 +1584,42 @@ def remove_node(ctx: click.Context, name: str, force: bool, show_hints: bool) ->
             deployment.openstack_machines_model,
             force=force,
         ),
-        CheckMicrocephDistributionStep(
-            client,
-            name,
-            jhelper,
-            deployment.openstack_machines_model,
-            force=force,
-        ),
-        CheckMysqlK8SDistributionStep(
-            client,
-            name,
-            jhelper,
-            deployment.openstack_machines_model,
-            force=force,
-        ),
-        CheckOvnK8SDistributionStep(
-            client,
-            name,
-            jhelper,
-            deployment.openstack_machines_model,
-            force=force,
-        ),
-        CheckRabbitmqK8SDistributionStep(
-            client,
-            name,
-            jhelper,
-            deployment.openstack_machines_model,
-            force=force,
-        ),
     ]
+    if is_microceph_necessary(client):
+        check_plan.append(
+            CheckMicrocephDistributionStep(
+                client,
+                name,
+                jhelper,
+                deployment.openstack_machines_model,
+                force=force,
+            ),
+        )
+    check_plan.extend(
+        [
+            CheckMysqlK8SDistributionStep(
+                client,
+                name,
+                jhelper,
+                deployment.openstack_machines_model,
+                force=force,
+            ),
+            CheckOvnK8SDistributionStep(
+                client,
+                name,
+                jhelper,
+                deployment.openstack_machines_model,
+                force=force,
+            ),
+            CheckRabbitmqK8SDistributionStep(
+                client,
+                name,
+                jhelper,
+                deployment.openstack_machines_model,
+                force=force,
+            ),
+        ]
+    )
 
     run_plan(check_plan, console, show_hints)
 
@@ -1628,39 +1639,56 @@ def remove_node(ctx: click.Context, name: str, force: bool, show_hints: bool) ->
         RemoveCinderVolumeUnitsStep(
             client, name, jhelper, deployment.openstack_machines_model
         ),
-        RemoveMicrocephUnitsStep(
-            client, name, jhelper, deployment.openstack_machines_model
-        ),
-        CordonK8SUnitStep(client, name, jhelper, deployment.openstack_machines_model),
-        DrainK8SUnitStep(
-            client, name, jhelper, deployment.openstack_machines_model, remove_pvc=True
-        ),
-        RemoveK8SUnitsStep(client, name, jhelper, deployment.openstack_machines_model),
-        EnsureL2AdvertisementByHostStep(
-            deployment,
-            client,
-            jhelper,
-            deployment.openstack_machines_model,
-            Networks.INTERNAL,
-            deployment.internal_ip_pool,
-        ),
-        EnsureL2AdvertisementByHostStep(
-            deployment,
-            client,
-            jhelper,
-            deployment.openstack_machines_model,
-            Networks.PUBLIC,
-            deployment.public_ip_pool,
-        ),
-        RemoveSunbeamMachineUnitsStep(
-            client, name, jhelper, deployment.openstack_machines_model
-        ),
-        RemoveJujuMachineStep(
-            client, name, jhelper, deployment.openstack_machines_model
-        ),
-        MaasRemoveMachineFromClusterdStep(client, name),
-        SetCephMgrPoolSizeStep(client, jhelper, deployment.openstack_machines_model),
     ]
+    if is_microceph_necessary(client):
+        plan.append(
+            RemoveMicrocephUnitsStep(
+                client, name, jhelper, deployment.openstack_machines_model
+            ),
+        )
+    plan.extend(
+        [
+            CordonK8SUnitStep(
+                client, name, jhelper, deployment.openstack_machines_model
+            ),
+            DrainK8SUnitStep(
+                client,
+                name,
+                jhelper,
+                deployment.openstack_machines_model,
+                remove_pvc=True,
+            ),
+            RemoveK8SUnitsStep(
+                client, name, jhelper, deployment.openstack_machines_model
+            ),
+            EnsureL2AdvertisementByHostStep(
+                deployment,
+                client,
+                jhelper,
+                deployment.openstack_machines_model,
+                Networks.INTERNAL,
+                deployment.internal_ip_pool,
+            ),
+            EnsureL2AdvertisementByHostStep(
+                deployment,
+                client,
+                jhelper,
+                deployment.openstack_machines_model,
+                Networks.PUBLIC,
+                deployment.public_ip_pool,
+            ),
+            RemoveSunbeamMachineUnitsStep(
+                client, name, jhelper, deployment.openstack_machines_model
+            ),
+            RemoveJujuMachineStep(
+                client, name, jhelper, deployment.openstack_machines_model
+            ),
+            MaasRemoveMachineFromClusterdStep(client, name),
+            SetCephMgrPoolSizeStep(
+                client, jhelper, deployment.openstack_machines_model
+            ),
+        ]
+    )
 
     run_plan(plan, console, show_hints)
     click.echo(
@@ -1762,14 +1790,23 @@ def destroy_deployment_cmd(
                     RemoveSaasApplicationsStep(
                         jhelper, deployment.openstack_machines_model, OPENSTACK_MODEL
                     ),
-                    TerraformInitStep(microceph_tfhelper),
-                    DestroyMicrocephApplicationStep(
-                        client,
-                        microceph_tfhelper,
-                        jhelper,
-                        manifest,
-                        deployment.openstack_machines_model,
-                    ),
+                ]
+            )
+            if is_microceph_necessary(client):
+                plan.extend(
+                    [
+                        TerraformInitStep(microceph_tfhelper),
+                        DestroyMicrocephApplicationStep(
+                            client,
+                            microceph_tfhelper,
+                            jhelper,
+                            manifest,
+                            deployment.openstack_machines_model,
+                        ),
+                    ]
+                )
+            plan.extend(
+                [
                     TerraformInitStep(k8s_tfhelper),
                     DestroyK8SApplicationStep(
                         client,

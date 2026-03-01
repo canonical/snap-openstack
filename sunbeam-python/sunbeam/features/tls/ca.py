@@ -15,6 +15,7 @@ from sunbeam.clusterd.service import (
     ConfigItemNotFoundException,
 )
 from sunbeam.core import questions
+from sunbeam.core.ceph import is_microceph_necessary
 from sunbeam.core.common import (
     FORMAT_TABLE,
     FORMAT_YAML,
@@ -243,7 +244,9 @@ class CaTlsFeature(TlsFeature):
             preseed = ca.config.model_dump(by_alias=True)
         model = OPENSTACK_MODEL
         apps_to_monitor = ["traefik", "traefik-public", "keystone"]
-        if client.cluster.list_nodes_by_role("storage"):
+        if client.cluster.list_nodes_by_role("storage") and is_microceph_necessary(
+            client
+        ):
             apps_to_monitor.append("traefik-rgw")
 
         try:
