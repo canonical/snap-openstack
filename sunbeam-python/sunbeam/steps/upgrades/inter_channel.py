@@ -23,10 +23,10 @@ from sunbeam.core.juju import (
 )
 from sunbeam.core.manifest import Manifest
 from sunbeam.core.terraform import TerraformException, TerraformHelper
+from sunbeam.features.microceph.steps import CONFIG_KEY as MICROCEPH_CONFIG_KEY
 from sunbeam.steps.cinder_volume import CONFIG_KEY as CINDER_VOLUME_CONFIG_KEY
 from sunbeam.steps.hypervisor import CONFIG_KEY as HYPERVISOR_CONFIG_KEY
 from sunbeam.steps.k8s import K8S_CONFIG_KEY
-from sunbeam.steps.microceph import CONFIG_KEY as MICROCEPH_CONFIG_KEY
 from sunbeam.steps.openstack import CONFIG_KEY as OPENSTACK_CONFIG_KEY
 from sunbeam.steps.openstack import OPENSTACK_DEPLOY_TIMEOUT
 from sunbeam.steps.sunbeam_machine import CONFIG_KEY as SUNBEAM_MACHINE_CONFIG_KEY

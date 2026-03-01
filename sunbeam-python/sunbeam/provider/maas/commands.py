@@ -62,6 +62,13 @@ from sunbeam.core.juju import (
 from sunbeam.core.manifest import AddManifestStep
 from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.core.terraform import TerraformInitStep
+from sunbeam.features.microceph.steps import (
+    CheckMicrocephDistributionStep,
+    DeployMicrocephApplicationStep,
+    DestroyMicrocephApplicationStep,
+    RemoveMicrocephUnitsStep,
+    SetCephMgrPoolSizeStep,
+)
 from sunbeam.provider.base import ProviderBase
 from sunbeam.provider.common.multiregion import connect_to_region_controller
 from sunbeam.provider.maas.client import (
@@ -161,13 +168,6 @@ from sunbeam.steps.k8s import (
     RemoveK8SUnitsStep,
     StoreK8SKubeConfigStep,
     UpdateK8SCloudStep,
-)
-from sunbeam.steps.microceph import (
-    CheckMicrocephDistributionStep,
-    DeployMicrocephApplicationStep,
-    DestroyMicrocephApplicationStep,
-    RemoveMicrocephUnitsStep,
-    SetCephMgrPoolSizeStep,
 )
 from sunbeam.steps.microovn import (
     DeployMicroOVNApplicationStep,

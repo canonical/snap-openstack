@@ -9,6 +9,7 @@ from watcherclient import v1 as watcher
 
 from sunbeam.core.common import ResultType, SunbeamException
 from sunbeam.core.juju import ActionFailedException, UnitNotFoundException
+from sunbeam.features.microceph.steps import APPLICATION as _MICROCEPH_APPLICATION
 from sunbeam.steps.maintenance import (
     CordonControlRoleNodeStep,
     CreateWatcherAuditStepABC,
@@ -19,7 +20,6 @@ from sunbeam.steps.maintenance import (
     RunWatcherAuditStep,
     UncordonControlRoleNodeStep,
 )
-from sunbeam.steps.microceph import APPLICATION as _MICROCEPH_APPLICATION
 
 
 @pytest.fixture(autouse=True)

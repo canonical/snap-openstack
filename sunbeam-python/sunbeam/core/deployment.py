@@ -43,10 +43,12 @@ from sunbeam.versions import MANIFEST_ATTRIBUTES_TFVAR_MAP, TERRAFORM_DIR_NAMES
 
 if TYPE_CHECKING:
     from sunbeam.core import ovn
+    from sunbeam.core.ceph import CephProvider
     from sunbeam.feature_manager import FeatureManager
     from sunbeam.features.interface.v1.base import BaseFeature
     from sunbeam.storage.manager import StorageBackendManager
 else:
+    CephProvider = object
     FeatureManager = object
     BaseFeature = object
     StorageBackendManager = object
@@ -112,6 +114,7 @@ class Deployment(pydantic.BaseModel):
     _tfhelpers: dict[str, TerraformHelper] = pydantic.PrivateAttr(default={})
     _feature_manager: FeatureManager | None = pydantic.PrivateAttr(default=None)
     _storage_manager: StorageBackendManager | None = pydantic.PrivateAttr(default=None)
+    _ceph_provider: CephProvider | None = pydantic.PrivateAttr(default=None)
 
     @property
     def openstack_machines_model(self) -> str:
@@ -216,6 +219,15 @@ class Deployment(pydantic.BaseModel):
         from sunbeam.core import ovn
 
         return ovn.OvnManager(self.get_client())
+
+    def get_ceph_provider(self) -> "CephProvider":
+        """Return the Ceph storage provider for the deployment."""
+        from sunbeam.features.microceph.provider import MicrocephProvider
+
+        if self._ceph_provider is None:
+            self._ceph_provider = MicrocephProvider()
+
+        return self._ceph_provider
 
     def get_proxy_settings(self) -> dict:
         """Fetch proxy settings from clusterd, if not available use defaults."""
