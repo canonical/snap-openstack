@@ -8,6 +8,7 @@ from click.core import ParameterSource
 from rich.console import Console
 
 from sunbeam.clusterd.client import Client
+from sunbeam.core.ceph import is_microceph_necessary
 from sunbeam.core.common import click_option_topology, run_plan
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import JujuHelper
@@ -58,7 +59,7 @@ def resize(
         LOG.warning("WARNING: Option --force is deprecated and the value is ignored.")
 
     plan = []
-    if len(storage_nodes):
+    if len(storage_nodes) and is_microceph_necessary(client):
         # Change default-pool-size based on number of storage nodes
         plan.extend(
             [

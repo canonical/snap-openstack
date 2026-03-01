@@ -221,11 +221,27 @@ class Deployment(pydantic.BaseModel):
         return ovn.OvnManager(self.get_client())
 
     def get_ceph_provider(self) -> "CephProvider":
-        """Return the Ceph storage provider for the deployment."""
+        """Return the Ceph storage provider for the deployment.
+
+        Returns MicrocephProvider when the deployment mode is MICROCEPH
+        (or unset, for backward compatibility), NoCephProvider otherwise.
+        """
+        from sunbeam.core.ceph import (
+            CephDeploymentMode,
+            NoCephProvider,
+            load_ceph_config,
+        )
         from sunbeam.features.microceph.provider import MicrocephProvider
 
         if self._ceph_provider is None:
-            self._ceph_provider = MicrocephProvider()
+            config = load_ceph_config(self.get_client())
+            mode = (
+                config.mode if config.mode is not None else CephDeploymentMode.MICROCEPH
+            )
+            if mode == CephDeploymentMode.MICROCEPH:
+                self._ceph_provider = MicrocephProvider()
+            else:
+                self._ceph_provider = NoCephProvider()
 
         return self._ceph_provider
 
