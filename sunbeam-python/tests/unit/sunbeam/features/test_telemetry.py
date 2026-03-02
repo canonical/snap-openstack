@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2025 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 from unittest.mock import Mock, patch
 
 import pytest
@@ -16,6 +17,8 @@ def deployment():
 
     client = deploy.get_client.return_value
     client.cluster.list_nodes_by_role.return_value = [{"name": "node1", "machineid": 1}]
+    # Return empty config for metrics backend (no S3 offer configured)
+    client.cluster.get_config.return_value = json.dumps({})
 
     return deploy
 
