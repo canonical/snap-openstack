@@ -7,7 +7,7 @@ import sys
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
-from typing import Sequence, Tuple, Type
+from typing import Any, Sequence, Tuple, Type
 
 import click
 import yaml
@@ -70,6 +70,7 @@ from sunbeam.core.manifest import AddManifestStep
 from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.core.terraform import TerraformInitStep
 from sunbeam.feature_gates import feature_gate_option, split_roles_enabled
+from sunbeam.features.interface.v1.base import EnableDisableFeature
 from sunbeam.features.microceph.steps import (
     CheckMicrocephDistributionStep,
     DeployMicrocephApplicationStep,
@@ -211,6 +212,67 @@ from sunbeam.utils import (
 
 LOG = logging.getLogger(__name__)
 console = Console()
+
+
+def _set_ceph_feature_enabled_state(
+    deployment: MaasDeployment, client: Any, enabled: bool
+) -> None:
+    """Persist ceph feature enablement state."""
+    feature = deployment.get_feature_manager().resolve_feature("ceph")
+    if not isinstance(feature, EnableDisableFeature):
+        LOG.debug("Failed to resolve ceph feature to update feature state.")
+        return
+    feature.update_feature_info(client, {"enabled": str(enabled).lower()})
+
+
+def _is_microceph_necessary_feature_aware(
+    deployment: MaasDeployment, client: Any
+) -> bool:
+    """Return whether microceph operations are needed."""
+    mode_requires_microceph = is_microceph_necessary(client)
+    try:
+        ceph_feature_enabled = deployment.get_feature_manager().is_feature_enabled(
+            deployment, "ceph"
+        )
+    except Exception as e:
+        LOG.debug("Failed to read ceph feature enablement state: %r", e)
+        return mode_requires_microceph
+    return ceph_feature_enabled or mode_requires_microceph
+
+
+def _call_enabled_feature_join_hooks(
+    deployment: MaasDeployment, client: Any, node_names: Sequence[str]
+) -> None:
+    """Call on_join hook for all enabled features."""
+    feature_manager = deployment.get_feature_manager()
+    for node_name in sorted(set(node_names)):
+        try:
+            node_info = client.cluster.get_node_info(node_name)
+        except Exception:
+            node_info = {"name": node_name}
+        roles = node_info.get("role", []) if isinstance(node_info, dict) else []
+        feature_manager.call_enabled_features_on_join(
+            deployment,
+            node_info,
+            node_name=node_name,
+            roles=roles,
+            status="joined",
+        )
+
+
+def _call_enabled_feature_depart_hooks(
+    deployment: MaasDeployment, node_info: Any, name: str, force: bool
+) -> None:
+    """Call on_depart hook for all enabled features."""
+    roles = node_info.get("role", []) if isinstance(node_info, dict) else []
+    deployment.get_feature_manager().call_enabled_features_on_depart(
+        deployment,
+        node_info,
+        node_name=name,
+        roles=roles,
+        status="departed",
+        force=force,
+    )
 
 
 @click.group("cluster", context_settings=CONTEXT_SETTINGS, cls=CatchGroup)
@@ -620,6 +682,7 @@ def deploy(
     preflight_checks = []
     preflight_checks.append(NetworkMappingCompleteCheck(deployment))
     run_preflight_checks(preflight_checks, console)
+    _set_ceph_feature_enabled_state(deployment, client, enabled=True)
 
     manifest = deployment.get_manifest(manifest_path)
 
@@ -772,7 +835,7 @@ def deploy(
     plan2.append(AddK8SCloudStep(deployment, jhelper))
     plan2.append(PatchCoreDNSStep(deployment, jhelper))
 
-    microceph_necessary = is_microceph_necessary(client)
+    microceph_necessary = _is_microceph_necessary_feature_aware(deployment, client)
     if microceph_necessary:
         plan2.append(TerraformInitStep(tfhelper_microceph))
         plan2.append(
@@ -961,6 +1024,11 @@ def deploy(
 
     plan2.append(SetBootstrapped(client))
     run_plan(plan2, console, show_hints)
+    _call_enabled_feature_join_hooks(
+        deployment,
+        client,
+        list(set(control + compute + network + storage + region_controllers)),
+    )
 
     console.print(
         f"Deployment complete with {nb_control} control, "
@@ -1608,6 +1676,11 @@ def remove_node(ctx: click.Context, name: str, force: bool, show_hints: bool) ->
     deployment: MaasDeployment = ctx.obj
     client = deployment.get_client()
     jhelper = JujuHelper(deployment.juju_controller)
+    try:
+        node_info = client.cluster.get_node_info(name)
+    except Exception:
+        node_info = {"name": name}
+    microceph_necessary = _is_microceph_necessary_feature_aware(deployment, client)
 
     preflight_checks = [
         LocalShareCheck(),
@@ -1624,7 +1697,7 @@ def remove_node(ctx: click.Context, name: str, force: bool, show_hints: bool) ->
             force=force,
         ),
     ]
-    if is_microceph_necessary(client):
+    if microceph_necessary:
         check_plan.append(
             CheckMicrocephDistributionStep(
                 client,
@@ -1679,7 +1752,7 @@ def remove_node(ctx: click.Context, name: str, force: bool, show_hints: bool) ->
             client, name, jhelper, deployment.openstack_machines_model
         ),
     ]
-    if is_microceph_necessary(client):
+    if microceph_necessary:
         plan.append(
             RemoveMicrocephUnitsStep(
                 client, name, jhelper, deployment.openstack_machines_model
@@ -1730,6 +1803,7 @@ def remove_node(ctx: click.Context, name: str, force: bool, show_hints: bool) ->
     )
 
     run_plan(plan, console, show_hints)
+    _call_enabled_feature_depart_hooks(deployment, node_info, name, force)
     click.echo(
         f"Removed node {name} from the cluster."
         " Run `sunbeam cluster resize` to scale down the cluster"
@@ -1831,7 +1905,7 @@ def destroy_deployment_cmd(
                     ),
                 ]
             )
-            if is_microceph_necessary(client):
+            if _is_microceph_necessary_feature_aware(deployment, client):
                 plan.extend(
                     [
                         TerraformInitStep(microceph_tfhelper),

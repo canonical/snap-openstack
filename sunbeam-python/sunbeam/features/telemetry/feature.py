@@ -585,8 +585,8 @@ class TelemetryFeature(OpenStackControlPlaneFeature):
         elif not is_microceph_necessary(client):
             # No S3 (new or existing) and no microceph — cannot proceed
             raise click.ClickException(
-                "Microceph is not configured. --metrics-storage-offer is required "
-                "to provide S3-compatible storage for Gnocchi metrics."
+                "No internal storage is configured. --metrics-storage-offer is "
+                "required to provide S3-compatible storage for Gnocchi metrics."
             )
 
         self.enable_feature(deployment, FeatureConfig(), show_hints)
