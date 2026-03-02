@@ -8,6 +8,7 @@ import click
 from packaging.version import Version
 from rich.console import Console
 
+from sunbeam.core.ceph import is_microceph_necessary
 from sunbeam.core.common import (
     BaseStep,
     run_plan,
@@ -217,6 +218,14 @@ class SharedFilesystemFeature(OpenStackControlPlaneFeature):
     @pass_method_obj
     def enable_cmd(self, deployment: Deployment, show_hints: bool) -> None:
         """Enable Shared Filesystems service."""
+        client = deployment.get_client()
+        if not client.cluster.list_nodes_by_role(
+            "storage"
+        ) or not is_microceph_necessary(client):
+            raise click.ClickException(
+                "Shared Filesystems requires Ceph storage."
+                " Add storage nodes before enabling this feature."
+            )
         self.enable_feature(deployment, FeatureConfig(), show_hints)
 
     @click.command()
