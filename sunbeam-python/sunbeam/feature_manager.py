@@ -23,6 +23,7 @@ from sunbeam.core.common import (
 )
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.manifest import FeatureGroupManifest, FeatureManifest
+from sunbeam.feature_gates import log_gated_feature
 from sunbeam.features.interface.v1.base import (
     BaseFeature,
     BaseFeatureGroup,
@@ -225,19 +226,25 @@ class FeatureManager:
     def register(self, cli: click.Group, deployment: Deployment) -> None:
         """Register the features.
 
-        Register the features. Once registeted, all the commands/groups defined by
+        Register the features. Once registered, all the commands/groups defined by
         features will be shown as part of sunbeam cli.
+
+        Features are checked against:
+        1. Risk level availability
+        2. Feature gates (via snap config feature.<feature-name>)
 
         :param deployment: Deployment instance.
         :param cli: Main click group for sunbeam cli.
         """
         LOG.debug("Registering features")
         installation_risk = infer_risk(Snap())
+        snap = Snap()
 
         for group in self.groups().values():
             group.register(cli)
 
         for feature in self.features().values():
+            # Check 1: Risk level availability
             if feature.risk_availability > installation_risk:
                 LOG.debug(
                     "Not registering feature %r,"
@@ -245,6 +252,28 @@ class FeatureManager:
                     feature.name,
                 )
                 continue
+
+            # Check 2: Feature gates - skip if feature is gated
+            client = None
+            if deployment:
+                try:
+                    client = deployment.get_client()
+                except SunbeamException:
+                    # Cannot get client (e.g., insufficient permissions)
+                    # Check will proceed with client=None
+                    pass
+
+            if hasattr(feature, "check_gated") and feature.check_gated(
+                client=client,
+                snap=snap,
+                # Features track their own enabled state via is_enabled() method,
+                # so enabled_config_key is None. Storage backends use this to check
+                # if the backend type is in the "StorageBackendsEnabled" config.
+                enabled_config_key=None,
+            ):
+                log_gated_feature(feature.name, feature.gate_key)
+                continue
+
             try:
                 enabled = feature.is_enabled(deployment.get_client())  # type: ignore
             except AttributeError:

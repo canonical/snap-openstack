@@ -3,11 +3,14 @@ module github.com/canonical/snap-openstack/sunbeam-microcluster
 go 1.24.6
 
 require (
+	github.com/canonical/go-snapctl v0.0.0-20260224231552-bd101c543677
 	github.com/canonical/lxd v0.0.0-20250624133916-8079534cf291
 	github.com/canonical/microcluster/v2 v2.2.0
 	github.com/gorilla/mux v1.8.1
 	github.com/spf13/cobra v1.10.1
 )
+
+replace github.com/canonical/go-snapctl => github.com/canonical/go-snapctl v0.0.0-20260224231552-bd101c543677
 
 require (
 	github.com/Rican7/retry v0.3.1 // indirect

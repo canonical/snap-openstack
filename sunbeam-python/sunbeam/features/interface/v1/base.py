@@ -17,6 +17,7 @@ from sunbeam.clusterd.service import ConfigItemNotFoundException
 from sunbeam.core.common import RiskLevel, SunbeamException, read_config, update_config
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.manifest import FeatureConfig, Manifest, SoftwareConfig
+from sunbeam.feature_gates import FeatureGateMixin
 from sunbeam.features.interface import utils
 from sunbeam.provider.maas.deployment import MAAS_TYPE
 from sunbeam.versions import VarMap
@@ -285,8 +286,15 @@ class BaseFeatureGroup(BaseRegisterable):
 ConfigType = typing.TypeVar("ConfigType", bound=FeatureConfig)
 
 
-class BaseFeature(BaseRegisterable, Generic[ConfigType]):
-    """Base class for Feature interface."""
+class BaseFeature(BaseRegisterable, FeatureGateMixin, Generic[ConfigType]):
+    """Base class for Feature interface.
+
+    Inherits from FeatureGateMixin to provide feature gating capabilities.
+    Features can be gated by setting generally_available=False and requiring
+    users to enable them via: snap set openstack feature.<feature-name>=true
+
+    New features should set generally_available=False to gate them by default.
+    """
 
     # Version of feature interface used by Feature
     interface_version = Version("0.0.1")
@@ -300,6 +308,11 @@ class BaseFeature(BaseRegisterable, Generic[ConfigType]):
 
     # Risk level of the feature
     risk_availability: RiskLevel = RiskLevel.STABLE
+
+    # Feature gate flag - if False, feature is gated (hidden) unless enabled
+    # Note: Default is True for backward compatibility with existing features.
+    # New features should explicitly set generally_available=False for gradual rollout.
+    generally_available: bool = True
 
     def __init_subclass__(cls, **kwargs):
         """Register inherited features classes."""

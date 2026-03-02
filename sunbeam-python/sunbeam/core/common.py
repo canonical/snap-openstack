@@ -125,6 +125,43 @@ class Role(enum.Enum):
         """
         return self == Role.REGION_CONTROLLER
 
+    @classmethod
+    def enabled_values(cls) -> list[str]:
+        """Return list of role names (lowercase), filtered by feature gates.
+
+        Uses ROLE_GATES configuration.
+        To make a role GA, set generally_available=True in FEATURE_GATES.
+        """
+        return [role.name.lower() for role in cls if _is_role_enabled(role)]
+
+
+# Role to feature gate mapping
+# When a role should be gated, map it to its feature gate key.
+# The gate configuration (including GA status) is defined in feature_gates.py
+ROLE_GATES: dict[Role, str] = {
+    Role.REGION_CONTROLLER: "feature.multi-region",
+}
+
+
+def _is_role_enabled(role: Role) -> bool:
+    """Check if a role is enabled based on its feature gate.
+
+    Args:
+        role: The role to check
+
+    Returns:
+        True if role is always available or its feature gate is enabled
+    """
+    from sunbeam.feature_gates import is_feature_gate_enabled
+
+    gate_key = ROLE_GATES.get(role)
+    if not gate_key:
+        # Role not in ROLE_GATES means it's always available
+        return True
+
+    # Check feature gate (will return True if GA or snap config enabled)
+    return is_feature_gate_enabled(gate_key)
+
 
 def roles_to_str_list(roles: list[Role]) -> list[str]:
     return [role.name.lower() for role in roles]
@@ -321,17 +358,33 @@ def get_step_message(plan_results: dict, step: Type[BaseStep]) -> Any:
 def validate_roles(
     ctx: click.core.Context, param: click.core.Option, value: Sequence[str]
 ) -> list[Role]:
-    """Validate roles."""
+    """Validate roles and check feature gate permissions."""
     roles: set[str] = set()
     for val in value:
         roles.update(val.split(","))
-    try:
-        return [Role[role.upper()] for role in roles]
-    except KeyError as e:
-        raise click.BadParameter(
-            f"{str(e)}. Valid choices are "
-            + ", ".join(role.lower() for role in Role.__members__)
-        ) from e
+
+    validated_roles = []
+    for role_str in roles:
+        try:
+            role = Role[role_str.upper()]
+        except KeyError as e:
+            enabled_roles = Role.enabled_values()
+            raise click.BadParameter(
+                f"{str(e)}. Valid choices are " + ", ".join(enabled_roles)
+            ) from e
+
+        # Check if role is enabled via feature gates
+        if not _is_role_enabled(role):
+            gate_key = ROLE_GATES.get(role)
+            raise click.BadParameter(
+                f"Role '{role_str}' is not enabled. "
+                f"To use this role, enable the feature gate: "
+                f"sudo snap set openstack {gate_key}=true"
+            )
+
+        validated_roles.append(role)
+
+    return validated_roles
 
 
 def get_host_total_ram() -> int:
