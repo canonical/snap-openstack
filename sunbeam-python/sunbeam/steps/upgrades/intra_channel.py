@@ -409,7 +409,8 @@ class LatestInChannelCoordinator(UpgradeCoordinator):
         ]
         # Microceph introduces new offer urls for rgw and so microceph
         # plan need to be applied before openstack plan
-        if is_microceph_necessary(self.client):
+        microceph_necessary = is_microceph_necessary(self.client)
+        if microceph_necessary:
             plan.extend(
                 [
                     TerraformInitStep(self.deployment.get_tfhelper("microceph-plan")),
@@ -552,7 +553,7 @@ class LatestInChannelCoordinator(UpgradeCoordinator):
                 ]
             )
 
-        if is_microceph_necessary(self.client):
+        if microceph_necessary:
             plan.extend(
                 [
                     TerraformInitStep(self.deployment.get_tfhelper("microceph-plan")),
