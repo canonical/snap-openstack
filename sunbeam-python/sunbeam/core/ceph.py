@@ -81,14 +81,16 @@ def is_microceph_necessary(client: Client) -> bool:
 class SetCephProviderStep(BaseStep):
     """Persist the Ceph deployment mode in clusterd."""
 
-    def __init__(self, client: Client, *, no_microceph: bool = False):
+    def __init__(self, client: Client, *, no_default_storage: bool = False):
         super().__init__(
             "Set Ceph provider",
             "Setting Ceph provider in deployment configuration",
         )
         self.client = client
         self.wanted_mode = (
-            CephDeploymentMode.NONE if no_microceph else CephDeploymentMode.MICROCEPH
+            CephDeploymentMode.NONE
+            if no_default_storage
+            else CephDeploymentMode.MICROCEPH
         )
 
     def is_skip(self, status: Status | None = None) -> Result:
