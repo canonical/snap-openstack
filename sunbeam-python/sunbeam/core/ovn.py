@@ -13,7 +13,7 @@ from sunbeam.core.juju import JujuHelper
 from sunbeam.core.questions import load_answers, write_answers
 
 CLUSTERD_CONFIG_KEY = "OvnConfig"
-SNAP_PROVIDER_CONFIG_KEY = "feature.microovn-sdn"
+SNAP_PROVIDER_CONFIG_KEY = "ovn.provider"
 
 
 class OvnProvider(enum.StrEnum):

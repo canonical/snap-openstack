@@ -32,6 +32,7 @@ from sunbeam.core.terraform import (
     TerraformHelper,
     TerraformStateLockedException,
 )
+from sunbeam.feature_gates import is_feature_gate_enabled
 from sunbeam.steps.configure import get_external_network_configs
 
 LOG = logging.getLogger(__name__)
@@ -313,12 +314,34 @@ class SetOvnProviderStep(BaseStep):
     def get_config_from_snap(self, snap: Snap) -> ovn.OvnProvider:
         """Get OVN provider from snap configuration.
 
+        Returns MICROOVN only if both conditions are met:
+        1. The feature gate 'feature.microovn-sdn' is enabled
+        2. The provider config 'ovn.provider' is set to 'microovn'
+
         :param snap: the snap instance
         :return: the OVN provider
         """
+        # Check if MicroOVN feature gate is enabled
+        if not is_feature_gate_enabled("feature.microovn-sdn", snap):
+            return ovn.DEFAULT_PROVIDER
+
+        # Check if provider is explicitly set to microovn
         try:
-            if snap.config.get(ovn.SNAP_PROVIDER_CONFIG_KEY):
-                return ovn.OvnProvider.MICROOVN
+            provider_value = snap.config.get(ovn.SNAP_PROVIDER_CONFIG_KEY)
+            if provider_value:
+                # Check if it's a valid OvnProvider value
+                try:
+                    parsed_provider = ovn.OvnProvider(provider_value)
+                    if parsed_provider == ovn.OvnProvider.MICROOVN:
+                        return ovn.OvnProvider.MICROOVN
+                except ValueError:
+                    # Invalid provider value - raise error to fail fast
+                    valid_values = ", ".join([p.value for p in ovn.OvnProvider])
+                    raise ValueError(
+                        f"Invalid value '{provider_value}' for "
+                        f"{ovn.SNAP_PROVIDER_CONFIG_KEY}. "
+                        f"Valid values are: {valid_values}"
+                    )
         except UnknownConfigKey:
             # fallback to default
             pass

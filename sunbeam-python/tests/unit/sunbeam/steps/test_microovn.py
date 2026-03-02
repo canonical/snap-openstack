@@ -260,6 +260,73 @@ class TestReapplyMicroOVNTerraformPlanStep:
 
 
 class TestSetOvnProviderStep:
+    def test_get_config_from_snap_feature_gate_disabled(self, basic_client):
+        """Test get_config_from_snap when feature gate is disabled."""
+        mock_snap = Mock()
+        mock_snap.config.get.return_value = "microovn"
+        step = SetOvnProviderStep(basic_client, mock_snap)
+
+        with patch("sunbeam.steps.microovn.is_feature_gate_enabled") as mock_gate:
+            mock_gate.return_value = False
+            result = step.get_config_from_snap(mock_snap)
+            assert result == ovn.DEFAULT_PROVIDER
+            mock_gate.assert_called_once_with("feature.microovn-sdn", mock_snap)
+
+    def test_get_config_from_snap_feature_gate_enabled_provider_not_set(
+        self, basic_client
+    ):
+        """Test get_config_from_snap when gate enabled but no provider."""
+        mock_snap = Mock()
+        mock_snap.config.get.return_value = None
+        step = SetOvnProviderStep(basic_client, mock_snap)
+
+        with patch("sunbeam.steps.microovn.is_feature_gate_enabled") as mock_gate:
+            mock_gate.return_value = True
+            result = step.get_config_from_snap(mock_snap)
+            assert result == ovn.DEFAULT_PROVIDER
+            mock_gate.assert_called_once_with("feature.microovn-sdn", mock_snap)
+
+    def test_get_config_from_snap_feature_gate_enabled_provider_microovn(
+        self, basic_client
+    ):
+        """Test get_config_from_snap when both gate enabled and provider set."""
+        mock_snap = Mock()
+        mock_snap.config.get.return_value = ovn.OvnProvider.MICROOVN
+        step = SetOvnProviderStep(basic_client, mock_snap)
+
+        with patch("sunbeam.steps.microovn.is_feature_gate_enabled") as mock_gate:
+            mock_gate.return_value = True
+            result = step.get_config_from_snap(mock_snap)
+            assert result == ovn.OvnProvider.MICROOVN
+            mock_gate.assert_called_once_with("feature.microovn-sdn", mock_snap)
+
+    def test_get_config_from_snap_unknown_config_key(self, basic_client):
+        """Test get_config_from_snap when snap config key doesn't exist."""
+        from snaphelpers import UnknownConfigKey
+
+        mock_snap = Mock()
+        mock_snap.config.get.side_effect = UnknownConfigKey("ovn.provider")
+        step = SetOvnProviderStep(basic_client, mock_snap)
+
+        with patch("sunbeam.steps.microovn.is_feature_gate_enabled") as mock_gate:
+            mock_gate.return_value = True
+            result = step.get_config_from_snap(mock_snap)
+            assert result == ovn.DEFAULT_PROVIDER
+
+    def test_get_config_from_snap_invalid_provider_value(self, basic_client):
+        """Test get_config_from_snap with invalid provider value raises error."""
+        mock_snap = Mock()
+        mock_snap.config.get.return_value = "invalid-provider"
+        step = SetOvnProviderStep(basic_client, mock_snap)
+
+        with patch("sunbeam.steps.microovn.is_feature_gate_enabled") as mock_gate:
+            mock_gate.return_value = True
+            with pytest.raises(ValueError) as exc_info:
+                step.get_config_from_snap(mock_snap)
+            assert "Invalid value 'invalid-provider'" in str(exc_info.value)
+            assert "ovn.provider" in str(exc_info.value)
+            assert "Valid values are:" in str(exc_info.value)
+
     def test_is_skip(self, basic_client):
         """Test is_skip method."""
         step = SetOvnProviderStep(basic_client, Mock())
@@ -295,6 +362,17 @@ class TestSetOvnProviderStep:
                     mock_bootstrapped.return_value = True
                     result = step.is_skip()
                     assert result.result_type == ResultType.FAILED
+
+    def test_is_skip_invalid_provider(self, basic_client):
+        """Test is_skip returns FAILED when invalid provider is configured."""
+        step = SetOvnProviderStep(basic_client, Mock())
+        with patch.object(step, "get_config_from_snap") as mock_get_config:
+            mock_get_config.side_effect = ValueError(
+                "Invalid value 'bad-provider' for ovn.provider. Valid values are: ovn-k8s, microovn"
+            )
+            result = step.is_skip()
+            assert result.result_type == ResultType.FAILED
+            assert "Invalid value 'bad-provider'" in result.message
 
     def test_run(self, basic_client):
         """Test run method."""

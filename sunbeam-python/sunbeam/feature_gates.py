@@ -220,9 +220,17 @@ class FeatureGateMixin:
 # Example gates:
 # - feature.multi-region: Gates multi-region deployment options and
 #                         region_controller role
+# - feature.microovn-sdn: Gates MicroOVN SDN provider option
 # - feature.experimental: Gates experimental features
 #
-FEATURE_GATES: dict[str, dict[str, bool]] = {}
+FEATURE_GATES: dict[str, dict[str, bool]] = {
+    "feature.multi-region": {
+        "generally_available": False,  # TODO: Set to True when multi-region is GA
+    },
+    "feature.microovn-sdn": {
+        "generally_available": False,  # TODO: Set to True when MicroOVN is GA
+    },
+}
 
 
 def is_feature_gate_enabled(
