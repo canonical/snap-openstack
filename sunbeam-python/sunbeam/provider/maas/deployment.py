@@ -17,6 +17,7 @@ from sunbeam.core.openstack import (
     generate_endpoint_preseed_questions,
 )
 from sunbeam.core.questions import Question, QuestionBank, load_answers, show_questions
+from sunbeam.feature_gates import is_feature_gate_enabled
 from sunbeam.steps.configure import (
     CLOUD_CONFIG_SECTION,
     ext_net_questions,
@@ -48,6 +49,41 @@ class RoleTags(enum.Enum):
     def values(cls) -> list[str]:
         """Return list of tag values."""
         return [tag.value for tag in cls]
+
+    @classmethod
+    def enabled_values(cls) -> list[str]:
+        """Return list of tag values, filtered by feature gates.
+
+        Uses ROLETAG_GATES configuration.
+        To make a tag GA, set generally_available=True in FEATURE_GATES.
+        """
+        return [tag.value for tag in cls if _is_roletag_enabled(tag)]
+
+
+# RoleTag to feature gate mapping
+# When a tag should be gated, map it to its feature gate key
+# The GA status is controlled in FEATURE_GATES (feature_gates.py)
+ROLETAG_GATES: dict[RoleTags, str] = {
+    RoleTags.REGION_CONTROLLER: "feature.multi-region",
+}
+
+
+def _is_roletag_enabled(tag: RoleTags) -> bool:
+    """Check if a role tag is enabled based on its feature gate.
+
+    Args:
+        tag: The role tag to check
+
+    Returns:
+        True if tag is always available or its feature gate is enabled
+    """
+    gate_key = ROLETAG_GATES.get(tag)
+    if not gate_key:
+        # Tag not in ROLETAG_GATES means it's always available
+        return True
+
+    # Check feature gate (will return True if GA or snap config enabled)
+    return is_feature_gate_enabled(gate_key)
 
 
 ROLE_NETWORK_MAPPING = {
