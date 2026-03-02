@@ -34,6 +34,10 @@ def deployment_with_tfhelpers(basic_deployment, os_tfhelper, mceph_tfhelper):
         "microceph-plan": mceph_tfhelper,
         "openstack-plan": os_tfhelper,
     }[plan]
+
+    from sunbeam.features.microceph.provider import MicrocephProvider
+
+    basic_deployment.get_ceph_provider.return_value = MicrocephProvider()
     return basic_deployment
 
 
@@ -101,10 +105,8 @@ class TestDeployCinderVolumeApplicationStep:
         accepted_status = deploy_cinder_volume_step.get_accepted_application_status()
         assert "blocked" not in accepted_status
 
-    @patch("sunbeam.steps.cinder_volume.microceph.ceph_replica_scale", return_value=3)
     def test_extra_tfvars(
         self,
-        mock_ceph_replica_scale,
         deploy_cinder_volume_step,
         basic_client,
         mceph_tfhelper,
@@ -114,7 +116,7 @@ class TestDeployCinderVolumeApplicationStep:
         tfvars = deploy_cinder_volume_step.extra_tfvars()
         assert tfvars["ceph-application-name"] == "ceph-app"
         assert (
-            tfvars["charm_cinder_volume_ceph_config"]["ceph-osd-replication-count"] == 3
+            tfvars["charm_cinder_volume_ceph_config"]["ceph-osd-replication-count"] == 1
         )
 
     def test_extra_tfvars_after_openstack_model(
@@ -202,7 +204,7 @@ class TestDeployCinderVolumeApplicationStep:
         )
         assert step.override_tfvars == {}
 
-    @patch("sunbeam.steps.cinder_volume.microceph.ceph_replica_scale", return_value=3)
+    @patch("sunbeam.features.microceph.provider.ceph_replica_scale", return_value=3)
     def test_extra_tfvars_override_precedence(
         self,
         mock_ceph_replica_scale,
@@ -244,7 +246,7 @@ class TestDeployCinderVolumeApplicationStep:
         assert tfvars["enable-telemetry-notifications"] is True  # overridden
         assert tfvars["ceph-application-name"] == "override-ceph-app"  # overridden
 
-    @patch("sunbeam.steps.cinder_volume.microceph.ceph_replica_scale", return_value=3)
+    @patch("sunbeam.features.microceph.provider.ceph_replica_scale", return_value=3)
     def test_extra_tfvars_telemetry_feature_enabled(
         self,
         mock_ceph_replica_scale,
@@ -284,7 +286,7 @@ class TestDeployCinderVolumeApplicationStep:
             deployment_with_tfhelpers, "telemetry"
         )
 
-    @patch("sunbeam.steps.cinder_volume.microceph.ceph_replica_scale", return_value=3)
+    @patch("sunbeam.features.microceph.provider.ceph_replica_scale", return_value=3)
     def test_extra_tfvars_telemetry_feature_disabled(
         self,
         mock_ceph_replica_scale,

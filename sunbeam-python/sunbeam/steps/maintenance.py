@@ -19,12 +19,12 @@ from sunbeam.core.juju import (
     UnitNotFoundException,
 )
 from sunbeam.core.watcher import WatcherActionFailedException
+from sunbeam.features.microceph.steps import APPLICATION as _MICROCEPH_APPLICATION
 from sunbeam.steps.k8s import (
     CordonK8SUnitStep,
     DrainK8SUnitStep,
     UncordonK8SUnitStep,
 )
-from sunbeam.steps.microceph import APPLICATION as _MICROCEPH_APPLICATION
 
 if TYPE_CHECKING:
     from watcherclient import v1 as watcher

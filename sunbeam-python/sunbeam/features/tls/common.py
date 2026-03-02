@@ -14,6 +14,7 @@ from rich.status import Status
 from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import ConfigItemNotFoundException
 from sunbeam.core import questions
+from sunbeam.core.ceph import is_microceph_necessary
 from sunbeam.core.common import (
     BaseStep,
     Result,
@@ -196,7 +197,9 @@ class TlsFeature(OpenStackControlPlaneFeature):
 
         model = OPENSTACK_MODEL
         apps_to_monitor = ["traefik", "traefik-public", "keystone"]
-        if client.cluster.list_nodes_by_role("storage"):
+        if client.cluster.list_nodes_by_role("storage") and is_microceph_necessary(
+            client
+        ):
             apps_to_monitor.append("traefik-rgw")
 
         plan: list[BaseStep] = [

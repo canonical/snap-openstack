@@ -62,6 +62,10 @@ def deployment_with_client(basic_client):
     storage_manager = Mock()
     storage_manager.list_principal_applications.return_value = []
     deployment.get_storage_manager.return_value = storage_manager
+
+    from sunbeam.features.microceph.provider import MicrocephProvider
+
+    deployment.get_ceph_provider.return_value = MicrocephProvider()
     return deployment
 
 
@@ -676,6 +680,10 @@ class TestReapplyOpenStackTerraformPlanStep:
         storage_manager = Mock()
         storage_manager.list_principal_applications.return_value = []
         deployment.get_storage_manager.return_value = storage_manager
+
+        from sunbeam.features.microceph.provider import MicrocephProvider
+
+        deployment.get_ceph_provider.return_value = MicrocephProvider()
         return deployment
 
     def test_run(

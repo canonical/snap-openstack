@@ -49,7 +49,7 @@ if typing.TYPE_CHECKING:
 else:
     l_client = LazyImport("lightkube.core.client")
     l_apps = LazyImport("lightkube.resources.apps_v1")
-from sunbeam.steps.microceph import APPLICATION as _MICROCEPH_APPLICATION
+from sunbeam.features.microceph.steps import APPLICATION as _MICROCEPH_APPLICATION
 
 console = Console()
 LOG = logging.getLogger(__name__)

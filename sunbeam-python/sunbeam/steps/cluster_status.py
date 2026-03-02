@@ -22,7 +22,7 @@ from sunbeam.core.common import (
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import JujuHelper, ModelNotFoundException
 from sunbeam.core.steps import BaseStep
-from sunbeam.steps import clusterd, hypervisor, k8s, microceph, microovn
+from sunbeam.steps import clusterd, hypervisor, k8s, microovn
 from sunbeam.utils import merge_dict
 
 LOG = logging.getLogger(__name__)
@@ -125,13 +125,16 @@ class ClusterStatusStep(abc.ABC, BaseStep):
 
     def applications_to_columns(self) -> dict:
         """Mapping of applications to columns."""
-        return {
+        ceph_provider = self.deployment.get_ceph_provider()
+        mapping = {
             clusterd.APPLICATION: "clusterd",
             k8s.APPLICATION: "control",
             hypervisor.APPLICATION: "compute",
-            microceph.APPLICATION: "storage",
             microovn.APPLICATION: "network",
         }
+        if ceph_provider.application_name:
+            mapping[ceph_provider.application_name] = ceph_provider.status_column
+        return mapping
 
     @abc.abstractmethod
     def _update_microcluster_status(self, status: dict, microcluster_status: dict):
