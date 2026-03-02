@@ -160,7 +160,10 @@ def _is_role_enabled(role: Role) -> bool:
         return True
 
     # Check feature gate (will return True if GA or snap config enabled)
-    return is_feature_gate_enabled(gate_key)
+    enabled = is_feature_gate_enabled(gate_key)
+    if not enabled:
+        LOG.debug(f"Role {role.name} is gated by {gate_key} (disabled)")
+    return enabled
 
 
 def roles_to_str_list(roles: list[Role]) -> list[str]:
