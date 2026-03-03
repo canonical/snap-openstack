@@ -12,10 +12,11 @@ from pathlib import Path
 from typing import Tuple
 
 import yaml
-
-from sunbeam.features.interface.utils import get_subject_from_csr
 from cryptography import x509
 from cryptography.x509.oid import NameOID
+
+from sunbeam.features.interface.utils import get_subject_from_csr
+
 from .base import BaseFeatureTest
 from .vault import ensure_vault_prerequisites
 
@@ -421,8 +422,13 @@ class TlsCaTest(BaseFeatureTest):
                 cert_path = tmp_path / f"out_{subject[:8]}.crt"
 
                 req = x509.load_pem_x509_csr(csr_path.read_bytes())
-                cn = req.subject.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value
-                san_txt = f"subjectAltName=DNS:{cn}\n"
+                cn_attr = req.subject.get_attributes_for_oid(NameOID.COMMON_NAME)[0]
+                cn_raw = cn_attr.value
+                if isinstance(cn_raw, bytes):
+                    cn_str: str = cn_raw.decode()
+                else:
+                    cn_str = str(cn_raw)
+                san_txt = f"subjectAltName=DNS:{cn_str}\n"
 
                 subprocess.run(
                     [

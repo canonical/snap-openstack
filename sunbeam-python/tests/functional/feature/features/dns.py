@@ -20,7 +20,7 @@ class DnsTest(BaseFeatureTest):
 
     feature_name = "dns"
     # DNS requires nameservers argument - using dummy values for testing
-    enable_args: list[str] = ["ns1.example.com.", "ns2.example.com."]
+    enable_args: list[str] = ["ns1.example.com."]
     expected_applications: list[str] = []
     timeout_seconds = 600
 
