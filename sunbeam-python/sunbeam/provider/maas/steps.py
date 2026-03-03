@@ -85,7 +85,7 @@ LOG = logging.getLogger(__name__)
 console = Console()
 
 ROLES_NEEDED_ERROR = f"""A machine needs roles to be a part of an openstack deployment.
-Available roles are: {maas_deployment.RoleTags.values()}.
+Available roles are: {maas_deployment.RoleTags.enabled_values()}.
 Roles can be assigned to a machine by applying tags in MAAS.
 More on assigning tags: https://maas.io/docs/how-to-use-machine-tags
 """
@@ -1389,15 +1389,7 @@ class MaasAddMachinesToClusterdStep(BaseStep):
         filtered_machines = []
         for machine in maas_machines:
             if set(machine["roles"]).intersection(
-                {
-                    maas_deployment.RoleTags.JUJU_CONTROLLER.value,
-                    maas_deployment.RoleTags.SUNBEAM.value,
-                    maas_deployment.RoleTags.CONTROL.value,
-                    maas_deployment.RoleTags.COMPUTE.value,
-                    maas_deployment.RoleTags.STORAGE.value,
-                    maas_deployment.RoleTags.NETWORK.value,
-                    maas_deployment.RoleTags.REGION_CONTROLLER.value,
-                }
+                set(maas_deployment.RoleTags.enabled_values())
             ):
                 filtered_machines.append(machine)
         LOG.debug(f"Machines containing worker roles: {filtered_machines}")

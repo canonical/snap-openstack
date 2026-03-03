@@ -45,6 +45,7 @@ class BaremetalFeature(OpenStackControlPlaneFeature):
 
     name = "baremetal"
     tf_plan_location = TerraformPlanLocation.SUNBEAM_TERRAFORM_REPO
+    generally_available = False
 
     def config_type(self) -> type | None:
         """Return the config type for the feature."""
