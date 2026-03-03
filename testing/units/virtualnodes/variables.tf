@@ -36,15 +36,15 @@ variable "maas_hostname" {
 }
 
 variable "node_rootfs_size" {
-  description = "Node rootfs disk size (in bytes)"
+  description = "Node rootfs disk size (in Gigabytes)"
   type        = number
-  default     = 21474836480  # 20 GiB
+  default     = 20
 }
 
-variable "node_secondary_disk_size" {
-  description = "Node secondary disk size (in bytes)"
+variable "node_osd_disk_size" {
+  description = "Node secondary disk size (in Gigabytes)"
   type        = number
-  default     = 21474836480  # 20 GiB
+  default     = 20
 }
 
 variable "generic_net_domain" {
@@ -89,7 +89,7 @@ variable "maas_controller_mac_address" {
 }
 
 variable "maas_controller_rootfs_size" {
-  description = "MAAS Controller rootfs disk size (in bytes)"
+  description = "MAAS Controller rootfs disk size (in Gigabytes)"
   type        = number
-  default     = 21474836480  # 20 GiB
+  default     = 20
 }

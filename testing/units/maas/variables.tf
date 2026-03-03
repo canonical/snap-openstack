@@ -24,6 +24,11 @@ variable "nodes" {
   type = list(object({
     name        = string
     mac_address = string
+    osd_disks   = list(object({
+      serial = string
+      size   = number
+      dev    = string
+    }))
   }))
 }
 

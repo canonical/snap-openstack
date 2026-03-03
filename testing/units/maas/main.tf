@@ -5,6 +5,8 @@ locals {
   generic_dhcp_end = cidrhost(local.generic_net_addresses[0], 254)
   generic_reserved_start = cidrhost(local.generic_net_addresses[0], 1)
   generic_reserved_end = cidrhost(local.generic_net_addresses[0], 5)
+  external_reserved_start = cidrhost(local.external_net_addresses[0], 1)
+  external_reserved_end = cidrhost(local.external_net_addresses[0], 5)
 }
 
 resource "maas_configuration" "kernel_opts" {
@@ -145,7 +147,7 @@ resource "maas_vlan" "generic_vlan" {
   space  = maas_space.space_generic.name
 }
 
-# Subent - generic
+# Subnet - generic
 
 data "maas_subnet" "generic_subnet" {
   cidr   = local.generic_net_addresses[0]
@@ -175,6 +177,7 @@ resource "maas_subnet_ip_range" "generic_subnet_reserved_range" {
   start_ip = local.generic_reserved_start
   end_ip   = local.generic_reserved_end
   type     = "reserved"
+  comment  = "Internal API"
 }
 
 resource "maas_vlan_dhcp" "generic_vlan_dhcp" {
@@ -183,6 +186,68 @@ resource "maas_vlan_dhcp" "generic_vlan_dhcp" {
   primary_rack_controller = data.maas_rack_controller.primary.id
   ip_ranges               = [maas_subnet_ip_range.generic_subnet_dhcp_range.id]
 }
+
+# # Fabric - external
+# data "maas_fabric" "external_fabric" {
+#   name = "fabric-0"  # TODO: fix name
+# }
+
+# import {
+#   to = maas_fabric.external_fabric
+#   id = "${data.maas_fabric.external_fabric.id}"
+# }
+
+# resource "maas_fabric" "external_fabric" {
+#   name = "fabric-0"  # TODO: fix name
+# }
+
+# # VLAN - Generic
+# data "maas_vlan" "external_vlan" {
+#   fabric = resource.maas_fabric.external_fabric.id
+#   vlan   = 0
+# }
+
+# import {
+#   to = maas_vlan.external_vlan
+#   id = "${data.maas_fabric.external_fabric.name}:0"
+# }
+
+# resource "maas_vlan" "external_vlan" {
+#   fabric = maas_fabric.external_fabric.id
+#   vid    = 0
+#   name   = "untagged"
+#   space  = maas_space.space_external.name
+# }
+
+# # Subnet - external
+
+# data "maas_subnet" "external_subnet" {
+#   cidr   = local.external_net_addresses[0]
+# }
+
+# import {
+#   to = maas_subnet.external_subnet
+#   id = "${data.maas_subnet.external_subnet.cidr}"
+# }
+
+# resource "maas_subnet" "external_subnet" {
+#   name   = local.external_net_addresses[0]
+#   cidr   = local.external_net_addresses[0]
+#   fabric = maas_fabric.external_fabric.id
+#   vlan   = maas_vlan.external_vlan.vid
+# }
+
+
+# resource "maas_subnet_ip_range" "external_subnet_reserved_range" {
+#   subnet   = maas_subnet.external_subnet.id
+#   start_ip = local.external_reserved_start
+#   end_ip   = local.external_reserved_end
+#   type     = "reserved"
+#   comment  = "Public API" 
+# }
+
+
+# Nodes configuration
 
 resource "maas_machine" "node" {
   count = length(var.nodes)
@@ -193,4 +258,58 @@ resource "maas_machine" "node" {
     power_id      = var.nodes[count.index].name
   })
   pxe_mac_address = var.nodes[count.index].mac_address
+}
+
+resource "maas_tag" "openstack" {
+  name = "openstack-sunbeam"
+  machines = [for node in maas_machine.node : node.id]
+}
+
+resource "maas_tag" "juju" {
+  name     = "juju-controller"
+  machines = [maas_machine.node[0].id, maas_machine.node[1].id, maas_machine.node[2].id]
+}
+
+resource "maas_tag" "sunbeam" {
+  name     = "sunbeam"
+  machines = [maas_machine.node[0].id, maas_machine.node[1].id, maas_machine.node[2].id]
+}
+
+resource "maas_tag" "control" {
+  name     = "control"
+  machines = [maas_machine.node[0].id, maas_machine.node[1].id, maas_machine.node[2].id]
+}
+
+resource "maas_tag" "compute" {
+  name     = "compute"
+  machines = [maas_machine.node[3].id, maas_machine.node[4].id, maas_machine.node[5].id]
+}
+
+resource "maas_tag" "storage" {
+  name     = "storage"
+  machines = [maas_machine.node[3].id, maas_machine.node[4].id, maas_machine.node[5].id]
+}
+
+locals {
+  osd_hosts = flatten([for node in var.nodes : [for osd_disk in node.osd_disks : { hostname = node.name, disk_serial = osd_disk.serial, disk_size = osd_disk.size } ]])
+}
+
+
+# import block devices
+import {
+  to = maas_block_device.osd
+  id = "${data.maas_block_device.generic_fabric.id}"
+}
+
+resource "maas_block_device" "osd" {
+  depends_on = [maas_machine.node]
+  count = length(local.osd_hosts)
+  machine    = local.osd_hosts[count.index].hostname
+  name       = substr(local.osd_hosts[count.index].disk_serial, 0, 20)
+
+  id_path        = "/dev/disk/by-id/virtio-${substr(local.osd_hosts[count.index].disk_serial, 0, 20)}"
+  size_gigabytes = local.osd_hosts[count.index].disk_size
+  tags = [
+    "ceph",
+  ]
 }

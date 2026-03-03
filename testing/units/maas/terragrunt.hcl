@@ -5,6 +5,16 @@ include "stack" {
 
 terraform {
   source = "."
+  before_hook "ensure_authorized_keys" {
+    commands = ["apply", "plan"]
+    execute  = ["bash", "-c", <<-EOT
+      mkdir -p $HOME/.ssh
+      chmod 700 $HOME/.ssh
+      touch $HOME/.ssh/authorized_keys
+      chmod 600 $HOME/.ssh/authorized_keys
+    EOT
+    ]
+  }
 }
 
 dependency "virtualnodes" {

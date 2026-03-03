@@ -23,6 +23,7 @@ snapcraft pack --use-lxd
 ## TODO
 
 * [ ] Expose a knob to turn on/off the log level of terragrunt/terraform.
+* [ ] Redirect libvirt instances' console to a log file
 
 
 ## Known Issues

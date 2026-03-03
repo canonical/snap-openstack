@@ -96,18 +96,20 @@ resource "libvirt_pool" "sunbeam" {
 #### Volumes
 
 resource "libvirt_volume" "node_vol" {
-  name      = "node_${count.index}.qcow2"
-  count     = var.nodes_count
-  pool      = libvirt_pool.sunbeam.name
-  capacity  = var.node_rootfs_size
+  name          = "node_${count.index}.qcow2"
+  count         = var.nodes_count
+  pool          = libvirt_pool.sunbeam.name
+  # transform GB to bytes
+  capacity      = var.node_rootfs_size * 1024 * 1024 * 1024
   target = { format = { type = "qcow2" } }
 }
 
-resource "libvirt_volume" "node_vol_secondary" {
-  name      = "node_${count.index}_secondary.qcow2"
-  count     = var.nodes_count
-  pool      = libvirt_pool.sunbeam.name
-  capacity  = var.node_secondary_disk_size
+resource "libvirt_volume" "node_vol_osd" {
+  name          = "node_${count.index}_osd.qcow2"
+  count         = var.nodes_count
+  pool          = libvirt_pool.sunbeam.name
+  # transform GB to bytes
+  capacity      = var.node_osd_disk_size  * 1024 * 1024 * 1024
   target = { format = { type = "qcow2" } }
 }
 
@@ -126,7 +128,8 @@ resource "libvirt_volume" "ubuntu_noble" {
 resource "libvirt_volume" "maas_controller_vol" {
   name      = "maas-controller-vol"
   pool      = libvirt_pool.sunbeam.name
-  capacity  = var.maas_controller_rootfs_size
+  # transform GB to bytes
+  capacity  = var.maas_controller_rootfs_size  * 1024 * 1024 * 1024
   target = { format = { type = "qcow2" } }
   backing_store = {
     path = libvirt_volume.ubuntu_noble.path
@@ -193,7 +196,7 @@ resource "libvirt_domain" "maas_controller" {
             volume = libvirt_volume.maas_controller_vol.name
           }
         }
-        target = { dev = "sda", bus = "virtio" }
+        target = { dev = "vda", bus = "virtio" }
         driver = { name = "qemu", type = "qcow2" }
       },
       {
@@ -275,7 +278,7 @@ resource "libvirt_domain" "node" {
             volume = libvirt_volume.node_vol[count.index].name
           }
         }
-        target = { dev = "sda", bus = "virtio" }
+        target = { dev = "vda", bus = "virtio" }
         driver = { name = "qemu", type = "qcow2" }
       },
       {
@@ -283,10 +286,10 @@ resource "libvirt_domain" "node" {
         source = {
           volume = {
             pool = libvirt_pool.sunbeam.name
-            volume = libvirt_volume.node_vol_secondary[count.index].name
+            volume = libvirt_volume.node_vol_osd[count.index].name
           }
         }
-        target = { dev = "sdb", bus = "virtio" }
+        target = { dev = "vdb", bus = "virtio" }
         driver = { name = "qemu", type = "qcow2" }
       }
     ]

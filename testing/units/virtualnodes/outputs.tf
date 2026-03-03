@@ -10,6 +10,13 @@ output "nodes" {
     for node in libvirt_domain.node : {
       name        = node.name
       mac_address = node.devices.interfaces[0].mac.address
+      osd_disks   = [
+        for disk in node.devices.disks : {
+          serial = disk.serial
+          size = var.node_osd_disk_size
+          dev   = disk.target.dev
+        } if strcontains(disk.serial, "CEPH")
+      ]
     }
   ]
   depends_on = [libvirt_domain.node]
