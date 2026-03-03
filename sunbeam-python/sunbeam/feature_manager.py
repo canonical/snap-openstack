@@ -61,7 +61,7 @@ def list_features(ctx: click.Context, format: str) -> None:
     try:
         client = deployment.get_client()
         feature_manager = deployment.get_feature_manager()
-    except ClusterServiceUnavailableException as e:
+    except (ClusterServiceUnavailableException, ValueError) as e:
         raise click.ClickException(
             "Cannot list features: cluster service is not available. "
             "Ensure the node is part of a bootstrapped cluster."
@@ -156,7 +156,7 @@ def list_feature_gates(ctx: click.Context, format: str) -> None:
     client = None
     try:
         client = deployment.get_client()
-    except ClusterServiceUnavailableException:
+    except (ClusterServiceUnavailableException, ValueError):
         LOG.debug("Cluster service unavailable, will check snap config only")
         client = None
 
@@ -404,9 +404,10 @@ class FeatureManager:
             if deployment:
                 try:
                     client = deployment.get_client()
-                except SunbeamException:
-                    # Cannot get client (e.g., insufficient permissions)
-                    # Check will proceed with client=None
+                except (SunbeamException, ValueError):
+                    # Cannot get client (e.g., insufficient permissions,
+                    # clusterd not configured). Check will proceed with
+                    # client=None
                     pass
 
             if hasattr(feature, "check_gated") and feature.check_gated(
