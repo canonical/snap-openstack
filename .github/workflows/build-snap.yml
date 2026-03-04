@@ -133,6 +133,9 @@ jobs:
           # Sanity-check new list-features command after enabling features
           sg snap_daemon "openstack.sunbeam list-features"
 
+          # cluster refresh
+          sg snap_daemon "openstack.sunbeam cluster refresh"
+
       - name: Collect logs
         if: always()
         run: |
