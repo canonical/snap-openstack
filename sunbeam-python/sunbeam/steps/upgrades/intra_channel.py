@@ -205,6 +205,11 @@ class LatestInChannel(BaseStep, JujuStepHelper):
         If the manifest has only charm, then juju refresh is required if channel is
         same as deployed charm, otherwise juju upgrade charm.
         """
+        deployed_infra_apps: dict = {}
+        if is_maas_deployment(self.deployment):
+            deployed_infra_apps = self.get_charm_deployed_versions(
+                self.deployment.infra_model
+            )
         deployed_k8s_apps = self.get_charm_deployed_versions(OPENSTACK_MODEL)
         deployed_machine_apps = self.get_charm_deployed_versions(
             self.deployment.openstack_machines_model
@@ -212,6 +217,7 @@ class LatestInChannel(BaseStep, JujuStepHelper):
 
         all_deployed_apps = deployed_k8s_apps.copy()
         all_deployed_apps.update(deployed_machine_apps)
+        all_deployed_apps.update(deployed_infra_apps)
         LOG.debug(f"All deployed apps: {all_deployed_apps}")
         if self.is_track_changed_for_any_charm(all_deployed_apps):
             error_msg = (
@@ -219,6 +225,13 @@ class LatestInChannel(BaseStep, JujuStepHelper):
                 "option --upgrade-release for release upgrades."
             )
             return Result(ResultType.FAILED, error_msg)
+
+        if is_maas_deployment(self.deployment):
+            result = self.refresh_apps(
+                deployed_infra_apps, self.deployment.infra_model, status
+            )
+            if result.result_type == ResultType.FAILED:
+                return result
 
         result = self.refresh_apps(deployed_k8s_apps, OPENSTACK_MODEL, status)
         if result.result_type == ResultType.FAILED:

@@ -3,10 +3,13 @@
 
 from unittest.mock import Mock, call, patch
 
-from sunbeam.core.common import ResultType
+from sunbeam.core.common import Result, ResultType
 from sunbeam.core.juju import JujuWaitException
 from sunbeam.core.openstack import OPENSTACK_MODEL
-from sunbeam.steps.upgrades.intra_channel import LatestInChannel
+from sunbeam.steps.upgrades.intra_channel import (
+    LatestInChannel,
+    LatestInChannelCoordinator,
+)
 
 _INTRA_CHANNEL = "sunbeam.steps.upgrades.intra_channel"
 
@@ -576,3 +579,256 @@ class TestIsTrackChanged:
         result = self.upgrader.is_track_changed_for_any_charm(apps)
 
         assert result is True
+
+
+class TestLatestInChannelRun:
+    """Tests for the LatestInChannel.run() method, including MAAS infra model."""
+
+    def setup_method(self):
+        """Set up test fixtures."""
+        self.deployment = Mock()
+        self.deployment.openstack_machines_model = "openstack-machines"
+        self.jhelper = Mock()
+        self.manifest = Mock()
+        self.manifest.core.software.charms = {}
+        self.manifest.get_features.return_value = []
+
+        self.upgrader = LatestInChannel(self.deployment, self.jhelper, self.manifest)
+
+    @patch(f"{_INTRA_CHANNEL}.is_maas_deployment")
+    def test_run_local_deployment_does_not_refresh_infra_model(self, mock_is_maas):
+        """Local deployment should NOT discover or refresh infra model apps."""
+        mock_is_maas.return_value = False
+
+        k8s_apps = {"nova": ("nova-k8s", "2024.1/stable", 123)}
+        machine_apps = {"sunbeam-machine": ("sunbeam-machine", "2024.1/stable", 10)}
+
+        # Call order: k8s, machines (no infra for local)
+        self.upgrader.get_charm_deployed_versions = Mock(
+            side_effect=[k8s_apps, machine_apps]
+        )
+        self.upgrader.refresh_apps = Mock(return_value=Result(ResultType.COMPLETED))
+
+        result = self.upgrader.run()
+
+        assert result.result_type == ResultType.COMPLETED
+        # get_charm_deployed_versions called only for k8s and machines models
+        assert self.upgrader.get_charm_deployed_versions.call_count == 2
+        # refresh_apps called only for k8s and machines models
+        assert self.upgrader.refresh_apps.call_count == 2
+        self.upgrader.refresh_apps.assert_any_call(k8s_apps, "openstack", None)
+        self.upgrader.refresh_apps.assert_any_call(
+            machine_apps, "openstack-machines", None
+        )
+
+    @patch(f"{_INTRA_CHANNEL}.is_maas_deployment")
+    def test_run_maas_deployment_discovers_and_refreshes_infra_model(
+        self, mock_is_maas
+    ):
+        """MAAS deployment should discover and refresh infra model apps."""
+        mock_is_maas.return_value = True
+        self.deployment.infra_model = "openstack-infra"
+
+        k8s_apps = {"nova": ("nova-k8s", "2024.1/stable", 123)}
+        machine_apps = {"sunbeam-machine": ("sunbeam-machine", "2024.1/stable", 10)}
+        infra_apps = {
+            "sunbeam-clusterd": ("sunbeam-clusterd", "2024.1/stable", 5),
+            "tls-operator": ("self-signed-certificates", "latest/stable", 20),
+        }
+
+        # Call order: infra, k8s, machines
+        self.upgrader.get_charm_deployed_versions = Mock(
+            side_effect=[infra_apps, k8s_apps, machine_apps]
+        )
+        self.upgrader.refresh_apps = Mock(return_value=Result(ResultType.COMPLETED))
+
+        result = self.upgrader.run()
+
+        assert result.result_type == ResultType.COMPLETED
+        # get_charm_deployed_versions called for infra, k8s, AND machines models
+        assert self.upgrader.get_charm_deployed_versions.call_count == 3
+        self.upgrader.get_charm_deployed_versions.assert_any_call("openstack-infra")
+        # refresh_apps called for all 3 models: infra, k8s, machines
+        assert self.upgrader.refresh_apps.call_count == 3
+        self.upgrader.refresh_apps.assert_any_call(infra_apps, "openstack-infra", None)
+        self.upgrader.refresh_apps.assert_any_call(k8s_apps, "openstack", None)
+        self.upgrader.refresh_apps.assert_any_call(
+            machine_apps, "openstack-machines", None
+        )
+
+    @patch(f"{_INTRA_CHANNEL}.is_maas_deployment")
+    def test_run_maas_infra_apps_included_in_track_check(self, mock_is_maas):
+        """MAAS infra model apps should be included in track change detection."""
+        mock_is_maas.return_value = True
+        self.deployment.infra_model = "openstack-infra"
+
+        k8s_apps = {"nova": ("nova-k8s", "2024.1/stable", 123)}
+        machine_apps = {}
+        infra_apps = {
+            "sunbeam-clusterd": ("sunbeam-clusterd", "2025.1/stable", 5),
+        }
+
+        # Call order: infra, k8s, machines
+        self.upgrader.get_charm_deployed_versions = Mock(
+            side_effect=[infra_apps, k8s_apps, machine_apps]
+        )
+
+        # Simulate track change detected (manifest track differs from deployed)
+        manifest_charm = Mock()
+        manifest_charm.channel = "2024.1/stable"
+        self.manifest.core.software.charms = {"sunbeam-clusterd": manifest_charm}
+
+        result = self.upgrader.run()
+
+        assert result.result_type == ResultType.FAILED
+        assert "upgrade-release" in result.message
+
+    @patch(f"{_INTRA_CHANNEL}.is_maas_deployment")
+    def test_run_maas_infra_refresh_failure_halts_execution(self, mock_is_maas):
+        """If infra model refresh fails, the run should return failure."""
+        mock_is_maas.return_value = True
+        self.deployment.infra_model = "openstack-infra"
+
+        k8s_apps = {"nova": ("nova-k8s", "2024.1/stable", 123)}
+        machine_apps = {"sunbeam-machine": ("sunbeam-machine", "2024.1/stable", 10)}
+        infra_apps = {
+            "sunbeam-clusterd": ("sunbeam-clusterd", "2024.1/stable", 5),
+        }
+
+        # Call order: infra, k8s, machines
+        self.upgrader.get_charm_deployed_versions = Mock(
+            side_effect=[infra_apps, k8s_apps, machine_apps]
+        )
+
+        # Refresh order: infra fails immediately
+        self.upgrader.refresh_apps = Mock(
+            return_value=Result(ResultType.FAILED, "infra refresh timed out")
+        )
+
+        result = self.upgrader.run()
+
+        assert result.result_type == ResultType.FAILED
+        assert "infra refresh timed out" in result.message
+        # Only infra refresh attempted before halting
+        assert self.upgrader.refresh_apps.call_count == 1
+
+    @patch(f"{_INTRA_CHANNEL}.is_maas_deployment")
+    def test_run_maas_k8s_failure_skips_machines_refresh(self, mock_is_maas):
+        """If k8s model refresh fails, machines refresh is skipped."""
+        mock_is_maas.return_value = True
+        self.deployment.infra_model = "openstack-infra"
+
+        k8s_apps = {"nova": ("nova-k8s", "2024.1/stable", 123)}
+        machine_apps = {"sunbeam-machine": ("sunbeam-machine", "2024.1/stable", 10)}
+        infra_apps = {
+            "sunbeam-clusterd": ("sunbeam-clusterd", "2024.1/stable", 5),
+        }
+
+        # Call order: infra, k8s, machines
+        self.upgrader.get_charm_deployed_versions = Mock(
+            side_effect=[infra_apps, k8s_apps, machine_apps]
+        )
+
+        # Refresh order: infra succeeds, k8s fails
+        self.upgrader.refresh_apps = Mock(
+            side_effect=[
+                Result(ResultType.COMPLETED),  # infra
+                Result(ResultType.FAILED, "k8s refresh failed"),  # k8s
+            ]
+        )
+
+        result = self.upgrader.run()
+
+        assert result.result_type == ResultType.FAILED
+        # refresh_apps called for infra (ok) then k8s (fail), machines skipped
+        assert self.upgrader.refresh_apps.call_count == 2
+
+    @patch(f"{_INTRA_CHANNEL}.is_maas_deployment")
+    def test_run_maas_empty_infra_model_is_handled(self, mock_is_maas):
+        """MAAS with no apps in infra model should still succeed."""
+        mock_is_maas.return_value = True
+        self.deployment.infra_model = "openstack-infra"
+
+        k8s_apps = {"nova": ("nova-k8s", "2024.1/stable", 123)}
+        machine_apps = {}
+        infra_apps = {}  # empty infra model
+
+        # Call order: infra, k8s, machines
+        self.upgrader.get_charm_deployed_versions = Mock(
+            side_effect=[infra_apps, k8s_apps, machine_apps]
+        )
+        self.upgrader.refresh_apps = Mock(return_value=Result(ResultType.COMPLETED))
+
+        result = self.upgrader.run()
+
+        assert result.result_type == ResultType.COMPLETED
+        # refresh_apps called for infra (empty), k8s, machines
+        assert self.upgrader.refresh_apps.call_count == 3
+
+
+class TestLatestInChannelCoordinator:
+    """Tests for the LatestInChannelCoordinator.get_plan() method."""
+
+    def setup_method(self):
+        """Set up test fixtures."""
+        self.deployment = Mock()
+        self.deployment.openstack_machines_model = "openstack-machines"
+        self.deployment.get_tfhelper = Mock(return_value=Mock())
+        self.deployment.get_ovn_manager = Mock(return_value=Mock())
+        ovn_manager = self.deployment.get_ovn_manager()
+        ovn_manager.get_roles_for_microovn.return_value = []
+        self.client = Mock()
+        self.client.cluster.list_nodes_by_role.return_value = []
+        self.jhelper = Mock()
+        self.manifest = Mock()
+
+    @patch(f"{_INTRA_CHANNEL}.is_maas_deployment")
+    def test_get_plan_local_excludes_lb_ip_pool_step(self, mock_is_maas):
+        """Local deployment plan should NOT include LB IP pool step."""
+        mock_is_maas.return_value = False
+
+        coordinator = LatestInChannelCoordinator(
+            self.deployment, self.client, self.jhelper, self.manifest
+        )
+        plan = coordinator.get_plan()
+
+        from sunbeam.steps.openstack import (
+            OpenStackPatchLoadBalancerServicesIPPoolStep,
+        )
+
+        step_types = [type(step) for step in plan]
+        assert OpenStackPatchLoadBalancerServicesIPPoolStep not in step_types
+
+    @patch(f"{_INTRA_CHANNEL}.is_maas_deployment")
+    def test_get_plan_maas_includes_lb_ip_pool_step(self, mock_is_maas):
+        """MAAS deployment plan should include LB IP pool step."""
+        mock_is_maas.return_value = True
+        self.deployment.public_api_label = "test-public-api"
+
+        coordinator = LatestInChannelCoordinator(
+            self.deployment, self.client, self.jhelper, self.manifest
+        )
+        plan = coordinator.get_plan()
+
+        from sunbeam.steps.openstack import (
+            OpenStackPatchLoadBalancerServicesIPPoolStep,
+        )
+
+        step_types = [type(step) for step in plan]
+        assert OpenStackPatchLoadBalancerServicesIPPoolStep in step_types
+
+    @patch(f"{_INTRA_CHANNEL}.is_maas_deployment")
+    def test_get_plan_always_includes_core_steps(self, mock_is_maas):
+        """Both local and MAAS plans should include all core refresh steps."""
+        mock_is_maas.return_value = False
+
+        coordinator = LatestInChannelCoordinator(
+            self.deployment, self.client, self.jhelper, self.manifest
+        )
+        plan = coordinator.get_plan()
+
+        from sunbeam.steps.upgrades.base import UpgradeFeatures
+
+        step_types = [type(step) for step in plan]
+        assert LatestInChannel in step_types
+        assert UpgradeFeatures in step_types
