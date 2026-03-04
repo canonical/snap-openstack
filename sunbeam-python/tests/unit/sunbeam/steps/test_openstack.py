@@ -35,6 +35,9 @@ from sunbeam.steps.openstack import (
     compute_os_api_scale,
     get_database_default_storage_dict,
     get_database_storage_dict,
+    remove_blocked_apps_from_features,
+    remove_blocked_apps_from_ovn_provider,
+    remove_blocked_apps_from_role,
 )
 
 TOPOLOGY = "single"
@@ -863,3 +866,116 @@ def test_get_database_storage_dict(
     default_storages = get_database_default_storage_dict(many_mysql)
     storages = get_database_storage_dict(client, many_mysql, manifest, default_storages)
     assert storages == expected_storage
+
+
+# ---------------------------------------------------------------------------
+# remove_blocked_apps_from_features
+# ---------------------------------------------------------------------------
+
+
+def test_remove_blocked_apps_from_features_active_app_excluded():
+    jhelper = Mock()
+    app_mock = Mock()
+    app_mock.app_status.current = "active"
+    jhelper.get_application.return_value = app_mock
+    result = remove_blocked_apps_from_features(jhelper, "test-model")
+    assert result == []
+
+
+def test_remove_blocked_apps_from_features_blocked_app_included():
+    jhelper = Mock()
+    app_mock = Mock()
+    app_mock.app_status.current = "blocked"
+    jhelper.get_application.return_value = app_mock
+    result = remove_blocked_apps_from_features(jhelper, "test-model")
+    assert "barbican" in result
+    assert "vault" in result
+
+
+def test_remove_blocked_apps_from_features_missing_app_skipped():
+    jhelper = Mock()
+    jhelper.get_application.side_effect = ApplicationNotFoundException("not found")
+    result = remove_blocked_apps_from_features(jhelper, "test-model")
+    assert result == []
+
+
+def test_remove_blocked_apps_from_features_mixed():
+    jhelper = Mock()
+    active_app = Mock()
+    active_app.app_status.current = "active"
+    blocked_app = Mock()
+    blocked_app.app_status.current = "blocked"
+
+    def _get_app(name, model):
+        if name == "barbican":
+            return blocked_app
+        return active_app
+
+    jhelper.get_application.side_effect = _get_app
+    result = remove_blocked_apps_from_features(jhelper, "test-model")
+    assert result == ["barbican"]
+
+
+# ---------------------------------------------------------------------------
+# remove_blocked_apps_from_ovn_provider
+# ---------------------------------------------------------------------------
+
+
+def test_remove_blocked_apps_from_ovn_provider_microovn():
+    ovn_manager = Mock()
+    ovn_manager.get_provider.return_value = ovn.OvnProvider.MICROOVN
+    result = remove_blocked_apps_from_ovn_provider(ovn_manager)
+    assert result == ["neutron"]
+
+
+def test_remove_blocked_apps_from_ovn_provider_non_microovn():
+    ovn_manager = Mock()
+    ovn_manager.get_provider.return_value = ovn.OvnProvider.OVN_K8S
+    result = remove_blocked_apps_from_ovn_provider(ovn_manager)
+    assert result == []
+
+
+# ---------------------------------------------------------------------------
+# remove_blocked_apps_from_role
+# ---------------------------------------------------------------------------
+
+
+def test_remove_blocked_apps_from_role_no_special_role():
+    result = remove_blocked_apps_from_role(
+        external_keystone_model=None,
+        is_region_controller=False,
+    )
+    assert result == []
+
+
+def test_remove_blocked_apps_from_role_external_keystone():
+    result = remove_blocked_apps_from_role(
+        external_keystone_model="some-model",
+        is_region_controller=False,
+    )
+    assert "keystone" in result
+    assert "horizon" in result
+
+
+def test_remove_blocked_apps_from_role_region_controller():
+    result = remove_blocked_apps_from_role(
+        external_keystone_model=None,
+        is_region_controller=True,
+    )
+    assert "nova" in result
+    assert "glance" in result
+    assert "neutron" in result
+    assert "placement" in result
+
+
+def test_remove_blocked_apps_from_role_both():
+    result = remove_blocked_apps_from_role(
+        external_keystone_model="some-model",
+        is_region_controller=True,
+    )
+    # external keystone group
+    assert "keystone" in result
+    assert "horizon" in result
+    # region controller group
+    assert "nova" in result
+    assert "glance" in result

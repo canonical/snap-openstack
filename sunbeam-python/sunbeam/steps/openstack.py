@@ -37,6 +37,7 @@ from sunbeam.core.juju import (
     JujuHelper,
     JujuStepHelper,
     JujuWaitException,
+    build_pre_status_overlay,
 )
 from sunbeam.core.k8s import CREDENTIAL_SUFFIX, K8SHelper
 from sunbeam.core.manifest import Manifest
@@ -88,6 +89,83 @@ MULTI_MYSQL_CORE_THRESHOLD = 16
 # List of all the apps that will be blocked when corresponding
 # feature is enabled.
 APPS_BLOCKED_WHEN_FEATURE_ENABLED = ["barbican", "vault"]
+
+
+def remove_blocked_apps_from_features(jhelper: JujuHelper, model: str) -> list[str]:
+    """Apps that are in blocked state from features.
+
+    Only consider the apps that will be in blocked state after enabling the
+    feature.
+    """
+    apps_to_remove = []
+    for app_name in APPS_BLOCKED_WHEN_FEATURE_ENABLED:
+        try:
+            app = jhelper.get_application(app_name, model)
+            LOG.debug(f"Application status for {app_name}: {app.app_status.current}")
+            if app.app_status.current != "active":
+                apps_to_remove.append(app_name)
+        except ApplicationNotFoundException:
+            pass
+    return apps_to_remove
+
+
+def remove_blocked_apps_from_ovn_provider(
+    ovn_manager: "ovn.OvnManager",
+) -> list[str]:
+    """Juju apps that are in blocked state because of the OVN provider."""
+    if ovn_manager.get_provider() == ovn.OvnProvider.MICROOVN:
+        return ["neutron"]
+    return []
+
+
+def remove_blocked_apps_from_role(
+    external_keystone_model: str | None,
+    is_region_controller: bool,
+) -> list[str]:
+    """Juju apps that are in blocked state because of the node role.
+
+    Some OpenStack services may be disabled based on the node role.  For
+    example, Keystone and Horizon will be the only services running on region
+    controllers.
+
+    Unfortunately we have to avoid Terraform schema changes, so the
+    corresponding Juju applications will still be deployed, however the scale
+    will be set to 0.
+    """
+    apps: list[str] = []
+    if external_keystone_model:
+        # Secondary region — Horizon and Keystone will be disabled.
+        apps += [
+            "keystone",
+            "keystone-mysql",
+            "keystone-mysql-router",
+            "horizon",
+            "horizon-mysql",
+            "horizon-mysql-router",
+        ]
+    if is_region_controller:
+        apps += [
+            "cinder-mysql-router",
+            "glance",
+            "glance-mysql",
+            "glance-mysql-router",
+            "neutron",
+            "neutron-mysql",
+            "neutron-mysql-router",
+            "nova",
+            "nova-mysql",
+            "nova-mysql-router",
+            "nova-api-mysql",
+            "nova-api-mysql-router",
+            "nova-cell-mysql",
+            "nova-cell-mysql-router",
+            "ovn-relay",
+            "ovn-central",
+            "placement",
+            "placement-mysql",
+            "placement-mysql-router",
+        ]
+    return apps
 
 
 # This dict maps every databases that can be used by OpenStack services
@@ -578,83 +656,18 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
         return tfvars
 
     def remove_blocked_apps_from_features(self) -> list:
-        """Apps that are in blocked state from features.
-
-        Only consider the apps that will be in blocked state after
-        enabling the feature.
-        """
-        apps_to_remove = []
-        for app_name in APPS_BLOCKED_WHEN_FEATURE_ENABLED:
-            try:
-                app = self.jhelper.get_application(app_name, self.model)
-                LOG.debug(
-                    f"Application status for {app_name}: {app.app_status.current}"
-                )
-                if app.app_status.current != "active":
-                    apps_to_remove.append(app_name)
-            except ApplicationNotFoundException:
-                pass
-
-        return apps_to_remove
+        """Apps that are in blocked state from features."""
+        return remove_blocked_apps_from_features(self.jhelper, self.model)
 
     def remove_blocked_apps_from_ovn_provider(self) -> list:
         """Juju apps that are in blocked state because of the OVN provider."""
-        apps = []
-        if self.ovn_manager.get_provider() == ovn.OvnProvider.MICROOVN:
-            apps += [
-                "neutron",
-            ]
-        return apps
+        return remove_blocked_apps_from_ovn_provider(self.ovn_manager)
 
     def remove_blocked_apps_from_role(self) -> list:
-        """Juju apps that are in blocked state because of the node role.
-
-        Some Openstack services may be disabled based on the node role.
-        For example, Keystone and Horizon will be the only services running on
-        region controllers.
-
-        Unfortunately we have to avoid Terraform schema changes, so the
-        corresponding Juju applications will still be deployed, however the scale
-        will be set to 0.
-
-        This helper returns a list of applications that are expected to remain
-        in blocked state
-        """
-        apps = []
-
-        if self.external_keystone_model:
-            # Secondary region, Horizon and Keystone will be disabled.
-            apps += [
-                "keystone",
-                "keystone-mysql",
-                "keystone-mysql-router",
-                "horizon",
-                "horizon-mysql",
-                "horizon-mysql-router",
-            ]
-        if self.is_region_controller:
-            apps += [
-                "cinder-mysql-router",
-                "glance",
-                "glance-mysql",
-                "glance-mysql-router",
-                "neutron",
-                "neutron-mysql",
-                "neutron-mysql-router",
-                "nova",
-                "nova-mysql",
-                "nova-mysql-router",
-                "nova-api-mysql",
-                "nova-api-mysql-router",
-                "nova-cell-mysql",
-                "nova-cell-mysql-router",
-                "ovn-relay",
-                "ovn-central",
-                "placement",
-                "placement-mysql",
-                "placement-mysql-router",
-            ]
-        return apps
+        """Juju apps that are in blocked state because of the node role."""
+        return remove_blocked_apps_from_role(
+            self.external_keystone_model, self.is_region_controller
+        )
 
     def is_skip(self, status: Status | None = None) -> Result:
         """Determines if the step should be skipped or not.
@@ -891,11 +904,13 @@ class ReapplyOpenStackTerraformPlanStep(BaseStep, JujuStepHelper):
         self.deployment = deployment
         self.client = client
         self.storage_manager = deployment.get_storage_manager()
+        self.ovn_manager = deployment.get_ovn_manager()
         self.tfhelper = tfhelper
         self.jhelper = jhelper
         self.manifest = manifest
         self.model = OPENSTACK_MODEL
         self.machine_model = machine_model
+        self.external_keystone_model = deployment.external_keystone_model
 
     def get_storage_tfvars(self, storage_nodes: list[dict]) -> dict:
         """Create terraform variables related to storage."""
@@ -968,7 +983,28 @@ class ReapplyOpenStackTerraformPlanStep(BaseStep, JujuStepHelper):
         apps = self.jhelper.get_application_names(self.model)
         if not storage_nodes and "cinder" in apps:
             apps.remove("cinder")
+        apps = list(
+            set(apps) - set(remove_blocked_apps_from_features(self.jhelper, self.model))
+        )
+        apps = list(
+            set(apps)
+            - set(
+                remove_blocked_apps_from_role(
+                    self.external_keystone_model,
+                    bool(self.client.cluster.list_nodes_by_role("region_controller")),
+                )
+            )
+        )
+        apps = list(
+            set(apps) - set(remove_blocked_apps_from_ovn_provider(self.ovn_manager))
+        )
         LOG.debug(f"Application monitored for readiness: {apps}")
+        pre_status: dict[str, str] = {}
+        try:
+            pre_status = self.jhelper.snapshot_workload_status(self.model, apps)
+        except Exception:
+            LOG.debug("Could not fetch pre-wait status", exc_info=True)
+        LOG.debug(f"Pre-wait workload status for {self.model}: {pre_status}")
         status_queue: queue.Queue[str] = queue.Queue()
         task = update_status_background(self, apps, status_queue, status)
         try:
@@ -977,6 +1013,9 @@ class ReapplyOpenStackTerraformPlanStep(BaseStep, JujuStepHelper):
                 apps,
                 timeout=OPENSTACK_DEPLOY_TIMEOUT,
                 queue=status_queue,
+                overlay=build_pre_status_overlay(
+                    apps, pre_status, build_overlay_dict(apps)
+                ),
             )
         except (JujuWaitException, TimeoutError) as e:
             LOG.debug(str(e))

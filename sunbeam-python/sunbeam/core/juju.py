@@ -162,6 +162,38 @@ class ApplicationStatusOverlay(TypedDict, total=False):
     workload_status_message: list[str] | None
 
 
+def build_pre_status_overlay(
+    apps: list[str],
+    pre_status: dict[str, str],
+    base_overlay: dict[str, ApplicationStatusOverlay] | None = None,
+) -> dict[str, ApplicationStatusOverlay]:
+    """Build a per-app wait overlay that accepts pre-operation status OR active.
+
+    For each app not already covered by a "status" key in *base_overlay*, the
+    accepted workload statuses are set to the union of the app's entry in
+    *pre_status* (defaulting to "active") and "active".  Apps that already have
+    a "status" key in *base_overlay* are left unchanged so that special-case
+    overlays (e.g. traefik, mysql) take precedence.
+
+    :param apps: Applications to build the overlay for.
+    :param pre_status: Mapping of app-name → workload-status captured before
+        the operation (e.g. from JujuHelper.snapshot_workload_status).
+    :param base_overlay: Optional starting overlay; entries with a "status" key
+        are not overwritten.
+    :returns: A per-application ApplicationStatusOverlay dict.
+    """
+    overlay: dict[str, ApplicationStatusOverlay] = dict(base_overlay or {})
+    for app_name in apps:
+        app_overlay = overlay.get(app_name, {})
+        if "status" not in app_overlay:
+            prior = pre_status.get(app_name, "active")
+            overlay[app_name] = {
+                **app_overlay,
+                "status": list({prior, "active"}),
+            }
+    return overlay
+
+
 class JujuAccount(pydantic.BaseModel):
     user: str
     password: str
@@ -410,6 +442,25 @@ class JujuHelper:
         :model: Name of the model
         """
         return list(self.get_model_status(model).apps.keys())
+
+    def snapshot_workload_status(self, model: str, apps: list[str]) -> dict[str, str]:
+        """Return the current workload status for each of the given apps.
+
+        Queries the model once and extracts app_status.current for every app
+        that is present.  Raises on model connectivity errors; callers that
+        want graceful degradation should catch exceptions themselves.
+
+        :param model: Name of the Juju model.
+        :param apps: Application names to snapshot.
+        :returns: Mapping of app-name → workload-status string.
+        """
+        result: dict[str, str] = {}
+        model_status = self.get_model_status(model)
+        for app_name in apps:
+            app_info = model_status.apps.get(app_name)
+            if app_info:
+                result[app_name] = app_info.app_status.current
+        return result
 
     def get_application(
         self, name: str, model: str
