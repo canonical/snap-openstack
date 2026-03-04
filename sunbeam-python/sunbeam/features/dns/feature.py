@@ -4,6 +4,7 @@
 import logging
 
 import click
+import lightkube.resources.core_v1 as l_core_v1
 import pydantic
 from packaging.version import Version
 from rich.console import Console
@@ -29,6 +30,7 @@ from sunbeam.features.interface.v1.openstack import (
     OpenStackControlPlaneFeature,
     TerraformPlanLocation,
 )
+from sunbeam.steps.k8s import get_kube_client
 from sunbeam.utils import (
     click_option_show_hints,
     pass_method_obj,
@@ -207,16 +209,27 @@ class DnsFeature(OpenStackControlPlaneFeature):
         """Manage dns."""
 
     def bind_address(self, deployment: Deployment) -> str | None:
-        """Fetch bind address from juju."""
-        model = OPENSTACK_MODEL
-        application = "bind"
-        jhelper = JujuHelper(deployment.juju_controller)
-        status = jhelper.get_model_status(model)
-        if app_status := status.apps.get(application):
-            # TODO(gboutry): the address does not return the public address
-            # since we don't modify the load balancer service anymore.
-            return app_status.address
-        return None
+        """Fetch bind LoadBalancer address from Kubernetes.
+
+        This returns the external IP of the ``bind-lb`` Service in the
+        OpenStack model namespace, instead of the internal ClusterIP of
+        the ``bind`` Service.
+        """
+        client = deployment.get_client()
+        kube = get_kube_client(client, OPENSTACK_MODEL)
+
+        service = kube.get(l_core_v1.Service, name="bind-lb", namespace=OPENSTACK_MODEL)
+
+        status = getattr(service, "status", None)
+        load_balancer = getattr(status, "loadBalancer", None) if status else None
+        ingress = getattr(load_balancer, "ingress", None) if load_balancer else None
+        if not ingress:
+            raise click.ClickException("DNS LoadBalancer has no ingress address")
+
+        address = getattr(ingress[0], "ip", None) or getattr(
+            ingress[0], "hostname", None
+        )
+        return address
 
     @click.command()
     @pass_method_obj
