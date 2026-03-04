@@ -246,6 +246,51 @@ class LatestInChannel(BaseStep, JujuStepHelper):
         return Result(ResultType.COMPLETED)
 
 
+class ReapplyInfraModelConfigStep(BaseStep, JujuStepHelper):
+    """Re-apply manifest config to openstack-infra model applications.
+
+    The infra model is not managed by Terraform, so config changes from
+    the manifest must be applied directly via Juju.
+    """
+
+    # Map of Juju application name -> charm name in manifest
+    INFRA_APPS: dict[str, str] = {
+        "sunbeam-clusterd": "sunbeam-clusterd",
+        "tls-operator": "self-signed-certificates",
+    }
+
+    def __init__(self, deployment: Deployment, jhelper: JujuHelper, manifest: Manifest):
+        super().__init__(
+            "Reapply infra model config",
+            "Re-applying config to openstack-infra model applications",
+        )
+        self.deployment = deployment
+        self.jhelper = jhelper
+        self.manifest = manifest
+
+    def is_skip(self, status: Status | None = None) -> Result:
+        """Skip if not a MAAS deployment."""
+        if not is_maas_deployment(self.deployment):
+            return Result(ResultType.SKIPPED)
+        return Result(ResultType.COMPLETED)
+
+    def run(self, status: Status | None = None) -> Result:
+        """Apply manifest charm config to each infra model application."""
+        model = self.deployment.infra_model  # type: ignore[attr-defined]
+        for app_name, charm_name in self.INFRA_APPS.items():
+            charm_manifest = self.manifest.core.software.charms.get(charm_name)
+            if not charm_manifest or not charm_manifest.config:
+                LOG.debug(
+                    f"No manifest config for {charm_name}, skipping config reapply"
+                )
+                continue
+            LOG.debug(
+                f"Reapplying config for {app_name} in {model}: {charm_manifest.config}"
+            )
+            self.jhelper.set_app_config(app_name, model, charm_manifest.config)
+        return Result(ResultType.COMPLETED)
+
+
 class LatestInChannelCoordinator(UpgradeCoordinator):
     """Coordinator for refreshing charms in their current channel."""
 
@@ -253,6 +298,7 @@ class LatestInChannelCoordinator(UpgradeCoordinator):
         """Return the upgrade plan."""
         plan = [
             LatestInChannel(self.deployment, self.jhelper, self.manifest),
+            ReapplyInfraModelConfigStep(self.deployment, self.jhelper, self.manifest),
             # Microceph introduces new offer urls for rgw and so microceph
             # plan need to be applied before openstack plan
             TerraformInitStep(self.deployment.get_tfhelper("microceph-plan")),

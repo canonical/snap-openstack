@@ -9,6 +9,7 @@ from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.steps.upgrades.intra_channel import (
     LatestInChannel,
     LatestInChannelCoordinator,
+    ReapplyInfraModelConfigStep,
 )
 
 _INTRA_CHANNEL = "sunbeam.steps.upgrades.intra_channel"
@@ -831,4 +832,116 @@ class TestLatestInChannelCoordinator:
 
         step_types = [type(step) for step in plan]
         assert LatestInChannel in step_types
+        assert ReapplyInfraModelConfigStep in step_types
         assert UpgradeFeatures in step_types
+
+
+class TestReapplyInfraModelConfigStep:
+    """Tests for ReapplyInfraModelConfigStep."""
+
+    def setup_method(self):
+        """Set up test fixtures."""
+        self.deployment = Mock()
+        self.deployment.infra_model = "openstack-infra"
+        self.jhelper = Mock()
+        self.manifest = Mock()
+
+    @patch(f"{_INTRA_CHANNEL}.is_maas_deployment")
+    def test_is_skip_local_deployment(self, mock_is_maas):
+        """Local deployment should skip this step."""
+        mock_is_maas.return_value = False
+        step = ReapplyInfraModelConfigStep(self.deployment, self.jhelper, self.manifest)
+        result = step.is_skip()
+        assert result.result_type == ResultType.SKIPPED
+
+    @patch(f"{_INTRA_CHANNEL}.is_maas_deployment")
+    def test_is_skip_maas_deployment(self, mock_is_maas):
+        """MAAS deployment should not skip this step."""
+        mock_is_maas.return_value = True
+        step = ReapplyInfraModelConfigStep(self.deployment, self.jhelper, self.manifest)
+        result = step.is_skip()
+        assert result.result_type == ResultType.COMPLETED
+
+    def test_run_applies_manifest_config(self):
+        """Config from manifest is applied to infra model apps."""
+        clusterd_manifest = Mock()
+        clusterd_manifest.config = {"snap-channel": "2024.1/stable", "debug": "true"}
+
+        certs_manifest = Mock()
+        certs_manifest.config = {"ca-common-name": "sunbeam"}
+
+        def get_charm(name):
+            if name == "sunbeam-clusterd":
+                return clusterd_manifest
+            if name == "self-signed-certificates":
+                return certs_manifest
+            return None
+
+        self.manifest.core.software.charms.get = Mock(side_effect=get_charm)
+
+        step = ReapplyInfraModelConfigStep(self.deployment, self.jhelper, self.manifest)
+        result = step.run()
+
+        assert result.result_type == ResultType.COMPLETED
+        assert self.jhelper.set_app_config.call_count == 2
+        self.jhelper.set_app_config.assert_any_call(
+            "sunbeam-clusterd",
+            "openstack-infra",
+            {"snap-channel": "2024.1/stable", "debug": "true"},
+        )
+        self.jhelper.set_app_config.assert_any_call(
+            "tls-operator",
+            "openstack-infra",
+            {"ca-common-name": "sunbeam"},
+        )
+
+    def test_run_skips_app_with_no_manifest_config(self):
+        """Apps without manifest config are skipped."""
+        clusterd_manifest = Mock()
+        clusterd_manifest.config = None  # No config
+
+        certs_manifest = Mock()
+        certs_manifest.config = {"ca-common-name": "sunbeam"}
+
+        def get_charm(name):
+            if name == "sunbeam-clusterd":
+                return clusterd_manifest
+            if name == "self-signed-certificates":
+                return certs_manifest
+            return None
+
+        self.manifest.core.software.charms.get = Mock(side_effect=get_charm)
+
+        step = ReapplyInfraModelConfigStep(self.deployment, self.jhelper, self.manifest)
+        result = step.run()
+
+        assert result.result_type == ResultType.COMPLETED
+        # Only tls-operator config applied
+        self.jhelper.set_app_config.assert_called_once_with(
+            "tls-operator",
+            "openstack-infra",
+            {"ca-common-name": "sunbeam"},
+        )
+
+    def test_run_skips_app_not_in_manifest(self):
+        """Apps not in manifest are skipped."""
+        self.manifest.core.software.charms.get = Mock(return_value=None)
+
+        step = ReapplyInfraModelConfigStep(self.deployment, self.jhelper, self.manifest)
+        result = step.run()
+
+        assert result.result_type == ResultType.COMPLETED
+        self.jhelper.set_app_config.assert_not_called()
+
+    def test_run_empty_config_dict_skipped(self):
+        """Apps with empty config dict are skipped."""
+        clusterd_manifest = Mock()
+        clusterd_manifest.config = {}  # Empty dict is falsy
+
+        self.manifest.core.software.charms.get = Mock(return_value=clusterd_manifest)
+
+        step = ReapplyInfraModelConfigStep(self.deployment, self.jhelper, self.manifest)
+        result = step.run()
+
+        assert result.result_type == ResultType.COMPLETED
+        self.jhelper.set_app_config.assert_not_called()

@@ -654,6 +654,27 @@ def test_get_available_charm_revision(jhelper: jujulib.JujuHelper, juju):
     assert revno == 121
 
 
+def test_set_app_config(jhelper: jujulib.JujuHelper, juju):
+    """set_app_config passes config values to jubilant."""
+    config = {"key1": "value1", "key2": 42}
+    jhelper.set_app_config("nova", "test-model", config)
+    juju.config.assert_called_once_with("nova", config)
+
+
+def test_set_app_config_app_not_found(jhelper: jujulib.JujuHelper, juju):
+    """set_app_config raises ApplicationNotFoundException for missing app."""
+    juju.config.side_effect = jubilant.CLIError(1, ["config"], "", "not found")
+    with pytest.raises(jujulib.ApplicationNotFoundException):
+        jhelper.set_app_config("missing-app", "test-model", {"key": "val"})
+
+
+def test_set_app_config_juju_error(jhelper: jujulib.JujuHelper, juju):
+    """set_app_config raises JujuException for other CLI errors."""
+    juju.config.side_effect = jubilant.CLIError(1, ["config"], "", "some error")
+    with pytest.raises(jujulib.JujuException):
+        jhelper.set_app_config("nova", "test-model", {"key": "val"})
+
+
 class TestJujuStepHelper:
     def test_normalise_channel(self):
         jsh = jujulib.JujuStepHelper()

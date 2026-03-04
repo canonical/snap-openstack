@@ -944,6 +944,23 @@ class JujuHelper:
                 ) from e
         return config_value
 
+    def set_app_config(self, app: str, model: str, config: dict) -> None:
+        """Set charm config for an application.
+
+        :app: Name of the application.
+        :model: Name of the model.
+        :config: Dictionary of config key-value pairs to set.
+        """
+        with self._model(model) as juju:
+            try:
+                juju.config(app, config)
+            except jubilant.CLIError as e:
+                if "not found" in e.stderr:
+                    raise ApplicationNotFoundException(f"App {app!r} not found") from e
+                raise JujuException(
+                    f"Failed to set config on application {app!r} in model {model!r}"
+                ) from e
+
     def _generate_juju_credential(self, user: dict) -> dict:
         """Generate juju credential object from kubeconfig user."""
         if "token" in user:
