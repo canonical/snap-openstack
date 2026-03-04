@@ -14,7 +14,12 @@ from sunbeam.core.common import (
     update_status_background,
 )
 from sunbeam.core.deployment import Deployment
-from sunbeam.core.juju import JujuHelper, JujuStepHelper, JujuWaitException
+from sunbeam.core.juju import (
+    JujuHelper,
+    JujuStepHelper,
+    JujuWaitException,
+    build_pre_status_overlay,
+)
 from sunbeam.core.manifest import Manifest
 from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.core.terraform import TerraformInitStep
@@ -80,6 +85,68 @@ class LatestInChannel(BaseStep, JujuStepHelper):
 
         return False
 
+    def _wait_after_refresh(
+        self,
+        refreshed_apps: list[str],
+        model: str,
+        pre_refresh_status: dict[str, str],
+        status: Status | None = None,
+    ) -> Result:
+        """Wait for refreshed apps to settle after a juju refresh.
+
+        Each app is accepted in its pre-refresh workload status OR active so
+        that apps that were in a non-active state before the refresh are not
+        held against an impossible condition.
+        """
+        if not refreshed_apps:
+            return Result(ResultType.COMPLETED)
+
+        LOG.debug(f"Waiting for apps {refreshed_apps} in model {model}")
+        if model == OPENSTACK_MODEL:
+            overlay = build_pre_status_overlay(
+                refreshed_apps,
+                pre_refresh_status,
+                build_overlay_dict(refreshed_apps),
+            )
+            LOG.debug(f"Wait overlay for {model}: {overlay}")
+            status_queue: queue.Queue[str] = queue.Queue()
+            task = update_status_background(self, refreshed_apps, status_queue, status)
+            try:
+                self.jhelper.wait_until_desired_status(
+                    model,
+                    refreshed_apps,
+                    timeout=3600,  # 60 minutes
+                    queue=status_queue,
+                    overlay=overlay,
+                )
+            except (JujuWaitException, TimeoutError) as e:
+                LOG.warning(str(e))
+                return Result(ResultType.FAILED, str(e))
+            finally:
+                task.stop()
+        else:
+            # For machine applications, accept the pre-refresh status plus
+            # active and unknown.
+            try:
+                for app_name in refreshed_apps:
+                    prior = pre_refresh_status.get(app_name, "active")
+                    accepted = list({prior, "active", "unknown"})
+                    LOG.debug(
+                        f"Waiting for {app_name} in {model} "
+                        f"with accepted_status={accepted}"
+                    )
+                    self.jhelper.wait_application_ready(
+                        app_name,
+                        model,
+                        accepted_status=accepted,
+                        timeout=1800,  # 30 minutes
+                    )
+            except TimeoutError as e:
+                LOG.warning(str(e))
+                return Result(ResultType.FAILED, str(e))
+
+        return Result(ResultType.COMPLETED)
+
     def refresh_apps(
         self, apps: dict, model: str, status: Status | None = None
     ) -> Result:
@@ -87,7 +154,22 @@ class LatestInChannel(BaseStep, JujuStepHelper):
 
         If there is no manifest charm entry, refresh the charm to latest revision.
         If manifest charm exists, refresh using channel and revision from manifest.
+
+        After the refresh the wait accepts the app's pre-refresh workload status
+        OR active.  This avoids false timeouts for apps that were in a
+        non-active state (e.g. waiting, blocked) before the refresh was issued.
         """
+        # Snapshot the workload status of every app before the refresh so the
+        # post-refresh wait can use it as one of the accepted statuses.
+        pre_refresh_status: dict[str, str] = {}
+        try:
+            pre_refresh_status = self.jhelper.snapshot_workload_status(
+                model, list(apps)
+            )
+        except Exception:
+            LOG.debug("Could not fetch pre-refresh status", exc_info=True)
+        LOG.debug(f"Pre-refresh workload status in {model}: {pre_refresh_status}")
+
         refreshed_apps = []
         for app_name, (charm, channel, _) in apps.items():
             manifest_charm = self.manifest.core.software.charms.get(charm)
@@ -98,12 +180,10 @@ class LatestInChannel(BaseStep, JujuStepHelper):
                         break
 
             if not manifest_charm:
-                # No manifest entry, refresh to latest revision in current channel
                 LOG.debug(f"Running refresh for app {app_name} (no manifest entry)")
                 self.jhelper.charm_refresh(app_name, model)
                 refreshed_apps.append(app_name)
             else:
-                # Manifest entry exists, use channel and revision from manifest
                 LOG.debug(f"Running refresh for app {app_name} with manifest config")
                 self.jhelper.charm_refresh(
                     app_name,
@@ -113,43 +193,9 @@ class LatestInChannel(BaseStep, JujuStepHelper):
                 )
                 refreshed_apps.append(app_name)
 
-        # Wait until refreshed apps are in active state
-        if refreshed_apps:
-            LOG.debug(f"Waiting for apps {refreshed_apps} in model {model}")
-            if model == OPENSTACK_MODEL:
-                # For k8s applications, use wait_until_active
-                status_queue: queue.Queue[str] = queue.Queue()
-                task = update_status_background(
-                    self, refreshed_apps, status_queue, status
-                )
-                try:
-                    self.jhelper.wait_until_active(
-                        model,
-                        refreshed_apps,
-                        timeout=3600,  # 60 minutes
-                        queue=status_queue,
-                        overlay=build_overlay_dict(refreshed_apps),
-                    )
-                except (JujuWaitException, TimeoutError) as e:
-                    LOG.warning(str(e))
-                    return Result(ResultType.FAILED, str(e))
-                finally:
-                    task.stop()
-            else:
-                # For machine applications, use wait_application_ready
-                try:
-                    for app_name in refreshed_apps:
-                        self.jhelper.wait_application_ready(
-                            app_name,
-                            model,
-                            accepted_status=["active", "unknown"],
-                            timeout=1800,  # 30 minutes
-                        )
-                except TimeoutError as e:
-                    LOG.warning(str(e))
-                    return Result(ResultType.FAILED, str(e))
-
-        return Result(ResultType.COMPLETED)
+        return self._wait_after_refresh(
+            refreshed_apps, model, pre_refresh_status, status
+        )
 
     def run(self, status: Status | None = None) -> Result:
         """Refresh all charms identified as needing a refresh.
