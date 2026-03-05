@@ -19,7 +19,6 @@ from sunbeam.core.common import (
     FORMAT_TABLE,
     FORMAT_YAML,
     SunbeamException,
-    infer_risk,
 )
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.manifest import FeatureGroupManifest, FeatureManifest
@@ -376,30 +375,19 @@ class FeatureManager:
         features will be shown as part of sunbeam cli.
 
         Features are checked against:
-        1. Risk level availability
-        2. Feature gates (via snap config feature.<feature-name>)
+        1. Feature gates (via snap config feature.<feature-name>)
 
         :param deployment: Deployment instance.
         :param cli: Main click group for sunbeam cli.
         """
         LOG.debug("Registering features")
-        installation_risk = infer_risk(Snap())
         snap = Snap()
 
         for group in self.groups().values():
             group.register(cli)
 
         for feature in self.features().values():
-            # Check 1: Risk level availability
-            if feature.risk_availability > installation_risk:
-                LOG.debug(
-                    "Not registering feature %r,"
-                    " it is available at a higher risk level",
-                    feature.name,
-                )
-                continue
-
-            # Check 2: Feature gates - skip if feature is gated
+            # Check 1: Feature gates - skip if feature is gated
             client = None
             if deployment:
                 try:
