@@ -14,7 +14,7 @@ from sunbeam.core.common import (
     ResultType,
     update_status_background,
 )
-from sunbeam.core.deployment import Deployment
+from sunbeam.core.deployment import Deployment, Networks
 from sunbeam.core.juju import (
     JujuHelper,
     JujuStepHelper,
@@ -27,7 +27,11 @@ from sunbeam.core.terraform import TerraformInitStep
 from sunbeam.features.interface.v1.base import is_maas_deployment
 from sunbeam.steps.cinder_volume import DeployCinderVolumeApplicationStep
 from sunbeam.steps.hypervisor import ReapplyHypervisorTerraformPlanStep
-from sunbeam.steps.k8s import DeployK8SApplicationStep
+from sunbeam.steps.k8s import (
+    DeployK8SApplicationStep,
+    EnsureDefaultL2AdvertisementMutedStep,
+    EnsureL2AdvertisementByHostStep,
+)
 from sunbeam.steps.microceph import DeployMicrocephApplicationStep
 from sunbeam.steps.microovn import DeployMicroOVNApplicationStep
 from sunbeam.steps.mysql import MySQLCharmUpgradeStep
@@ -337,28 +341,69 @@ class LatestInChannelCoordinator(UpgradeCoordinator):
             ),
         ]
 
-        plan.extend(
-            [
-                TerraformInitStep(self.deployment.get_tfhelper("k8s-plan")),
-                DeployK8SApplicationStep(
-                    self.deployment,
-                    self.client,
-                    self.deployment.get_tfhelper("k8s-plan"),
-                    self.jhelper,
-                    self.manifest,
-                    self.deployment.openstack_machines_model,
-                    refresh=True,
-                ),
-            ]
-        )
-
         if is_maas_deployment(self.deployment):
+            from sunbeam.provider.maas.client import MaasClient  # noqa: PLC0415
+            from sunbeam.provider.maas.steps import (  # noqa: PLC0415
+                MaasCreateLoadBalancerIPPoolsStep,
+                MaasDeployK8SApplicationStep,
+            )
+
+            maas_client = MaasClient.from_deployment(self.deployment)
             plan.extend(
                 [
+                    TerraformInitStep(self.deployment.get_tfhelper("k8s-plan")),
+                    MaasDeployK8SApplicationStep(
+                        self.deployment,  # type: ignore [arg-type]
+                        self.client,
+                        maas_client,
+                        self.deployment.get_tfhelper("k8s-plan"),
+                        self.jhelper,
+                        self.manifest,
+                        self.deployment.openstack_machines_model,
+                    ),
+                    EnsureDefaultL2AdvertisementMutedStep(
+                        self.deployment, self.client, self.jhelper
+                    ),
+                    MaasCreateLoadBalancerIPPoolsStep(
+                        self.deployment,  # type: ignore [arg-type]
+                        self.client,
+                        maas_client,
+                    ),
+                    EnsureL2AdvertisementByHostStep(
+                        self.deployment,
+                        self.client,
+                        self.jhelper,
+                        self.deployment.openstack_machines_model,
+                        Networks.INTERNAL,
+                        self.deployment.internal_ip_pool,  # type: ignore [attr-defined]
+                    ),
+                    EnsureL2AdvertisementByHostStep(
+                        self.deployment,
+                        self.client,
+                        self.jhelper,
+                        self.deployment.openstack_machines_model,
+                        Networks.PUBLIC,
+                        self.deployment.public_ip_pool,  # type: ignore [attr-defined]
+                    ),
                     OpenStackPatchLoadBalancerServicesIPPoolStep(
                         self.client,
                         self.deployment.public_api_label,  # type: ignore [attr-defined]
-                    )
+                    ),
+                ]
+            )
+        else:
+            plan.extend(
+                [
+                    TerraformInitStep(self.deployment.get_tfhelper("k8s-plan")),
+                    DeployK8SApplicationStep(
+                        self.deployment,
+                        self.client,
+                        self.deployment.get_tfhelper("k8s-plan"),
+                        self.jhelper,
+                        self.manifest,
+                        self.deployment.openstack_machines_model,
+                        refresh=True,
+                    ),
                 ]
             )
 

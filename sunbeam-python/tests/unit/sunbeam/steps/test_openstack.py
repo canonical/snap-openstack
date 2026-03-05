@@ -396,6 +396,120 @@ class PatchLoadBalancerServicesIPStepTest:
         assert step.kube.apply.mock_calls[0][2]["field_manager"] == "sunbeam"
 
 
+class TestPatchLoadBalancerServicesIPStaleAnnotation:
+    """Tests for stale MetalLB IP annotation handling."""
+
+    @pytest.fixture
+    def patch_client(self):
+        """Client mock; returns node-1 for any role so ovn-relay is excluded."""
+        client = Mock()
+        client.cluster.list_nodes_by_role.return_value = ["node-1"]
+        return client
+
+    def _make_service(self, ip_annotation=None, ingress_ip=None):
+        """Helper: build a plausible lightkube Service mock."""
+        annotations = {}
+        if ip_annotation is not None:
+            annotations[METALLB_IP_ANNOTATION] = ip_annotation
+        ingress = [Mock(ip=ingress_ip)] if ingress_ip else None
+        lb_status = Mock()
+        lb_status.ingress = ingress
+        status = Mock()
+        status.loadBalancer = lb_status
+        return Mock(
+            metadata=Mock(
+                annotations=annotations,
+                name=None,
+                managedFields=None,
+            ),
+            status=status,
+        )
+
+    def test_is_skip_stale_annotation_pending_returns_completed(
+        self, patch_client, read_config_patch, snap_patch, snap_mock, ovn_manager
+    ):
+        """is_skip should return COMPLETED when a service has a stale IP annotation.
+
+        Service is still in <pending> state (no allocated IP).
+        """
+        snap_mock().config.get.return_value = "k8s"
+
+        # traefik and traefik-public have proper annotations+IPs; rabbitmq has a
+        # stale annotation but no ingress (pending).
+        svc_with_ip = self._make_service(ip_annotation="1.2.3.4", ingress_ip="1.2.3.4")
+        svc_stale = self._make_service(ip_annotation="172.22.0.230", ingress_ip=None)
+
+        get_mock = Mock(
+            side_effect=[
+                svc_with_ip,  # traefik-lb
+                svc_with_ip,  # traefik-public-lb
+                svc_stale,  # rabbitmq-lb  ← stale annotation, pending
+            ]
+        )
+        with patch(
+            "sunbeam.core.steps.l_client.Client",
+            new=Mock(return_value=Mock(get=get_mock)),
+        ):
+            step = OpenStackPatchLoadBalancerServicesIPStep(patch_client, ovn_manager)
+            result = step.is_skip()
+
+        assert result.result_type == ResultType.COMPLETED
+
+    def test_run_removes_stale_ip_annotation(
+        self, patch_client, read_config_patch, snap_patch, snap_mock, ovn_manager
+    ):
+        """run() should remove a stale IP annotation from a pending service.
+
+        MetalLB can then assign a fresh IP from the pool.
+        """
+        snap_mock().config.get.return_value = "k8s"
+
+        svc_with_ip = self._make_service(ip_annotation="1.2.3.4", ingress_ip="1.2.3.4")
+        svc_with_ip.metadata.name = "traefik-lb"
+        svc_stale = self._make_service(ip_annotation="172.22.0.230", ingress_ip=None)
+        svc_stale.metadata.name = "rabbitmq-lb"
+
+        # is_skip needs one pass over 3 services; run() needs another pass.
+        get_mock = Mock(
+            side_effect=[
+                # is_skip pass
+                svc_with_ip,  # traefik-lb
+                svc_with_ip,  # traefik-public-lb
+                svc_stale,  # rabbitmq-lb (stale → returns COMPLETED so run fires)
+                # run pass
+                svc_with_ip,  # traefik-lb  (annotation present + ingress → skip)
+                svc_with_ip,  # traefik-public-lb  (same)
+                svc_stale,  # rabbitmq-lb (stale → clear annotation)
+                svc_with_ip,  # traefik-rgw-lb (annotation present + ingress → skip)
+            ]
+        )
+        with patch(
+            "sunbeam.core.steps.l_client.Client",
+            new=Mock(return_value=Mock(get=get_mock)),
+        ):
+            step = OpenStackPatchLoadBalancerServicesIPStep(patch_client, ovn_manager)
+            step.is_skip()
+            result = step.run()
+
+        assert result.result_type == ResultType.COMPLETED
+        # patch must have been called exactly once — for rabbitmq-lb
+        step.kube.patch.assert_called_once()
+        call_args = step.kube.patch.mock_calls[0]
+        # First positional arg is the resource type
+        from lightkube.resources import core_v1
+
+        assert call_args[1][0] is core_v1.Service
+        # Second positional arg is the service name
+        assert call_args[1][1] == "rabbitmq-lb"
+        # Third positional arg is the patch body — annotation set to None (deletion)
+        patch_body = call_args[1][2]
+        assert patch_body["metadata"]["annotations"][METALLB_IP_ANNOTATION] is None
+        # patch_type must be MERGE
+        from lightkube.types import PatchType
+
+        assert call_args[2]["patch_type"] == PatchType.MERGE
+
+
 class PatchLoadBalancerServicesIPPoolStepTest:
     @pytest.fixture
     def pool_name(self):
