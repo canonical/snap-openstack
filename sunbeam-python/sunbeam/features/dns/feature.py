@@ -4,6 +4,8 @@
 import logging
 
 import click
+import lightkube.core.exceptions as l_core_exceptions
+import lightkube.resources.core_v1 as l_core_v1
 import pydantic
 from packaging.version import Version
 from rich.console import Console
@@ -29,6 +31,7 @@ from sunbeam.features.interface.v1.openstack import (
     OpenStackControlPlaneFeature,
     TerraformPlanLocation,
 )
+from sunbeam.steps.k8s import KubeClientError, get_kube_client
 from sunbeam.utils import (
     click_option_show_hints,
     pass_method_obj,
@@ -37,6 +40,8 @@ from sunbeam.versions import BIND_CHANNEL, OPENSTACK_CHANNEL
 
 LOG = logging.getLogger(__name__)
 console = Console()
+
+BIND_LB_SERVICE_NAME = "bind-lb"
 
 
 class DnsFeatureConfig(FeatureConfig):
@@ -207,16 +212,46 @@ class DnsFeature(OpenStackControlPlaneFeature):
         """Manage dns."""
 
     def bind_address(self, deployment: Deployment) -> str | None:
-        """Fetch bind address from juju."""
-        model = OPENSTACK_MODEL
-        application = "bind"
-        jhelper = JujuHelper(deployment.juju_controller)
-        status = jhelper.get_model_status(model)
-        if app_status := status.apps.get(application):
-            # TODO(gboutry): the address does not return the public address
-            # since we don't modify the load balancer service anymore.
-            return app_status.address
-        return None
+        """Fetch bind LoadBalancer address from Kubernetes.
+
+        This returns the external IP of the ``bind-lb`` Service in the
+        OpenStack model namespace, instead of the internal ClusterIP of
+        the ``bind`` Service.
+        """
+        client = deployment.get_client()
+        try:
+            kube = get_kube_client(client, OPENSTACK_MODEL)
+        except KubeClientError as exc:
+            LOG.debug("Failed to create k8s client for bind-lb lookup", exc_info=True)
+            raise click.ClickException(
+                f"Failed to create Kubernetes client for DNS service: {exc}"
+            ) from exc
+
+        try:
+            service = kube.get(
+                l_core_v1.Service,
+                name=BIND_LB_SERVICE_NAME,
+                namespace=OPENSTACK_MODEL,
+            )
+        except l_core_exceptions.ApiError as exc:
+            LOG.debug("Failed to fetch bind-lb service", exc_info=True)
+            raise click.ClickException(
+                f"Failed to retrieve DNS LoadBalancer service: {exc}"
+            ) from exc
+
+        status = getattr(service, "status", None)
+        load_balancer = getattr(status, "loadBalancer", None) if status else None
+        ingress = getattr(load_balancer, "ingress", None) if load_balancer else None
+        if not ingress:
+            raise click.ClickException("DNS LoadBalancer has no ingress address")
+
+        address = getattr(ingress[0], "ip", None) or getattr(
+            ingress[0], "hostname", None
+        )
+        if not address:
+            raise click.ClickException("DNS LoadBalancer ingress has no IP/hostname")
+
+        return address
 
     @click.command()
     @pass_method_obj
