@@ -59,17 +59,14 @@ class TestFeatureRegistration:
     """Tests for feature registration with insufficient permissions."""
 
     @patch("sunbeam.feature_manager.Snap")
-    @patch("sunbeam.feature_manager.infer_risk")
-    def test_register_without_permissions(self, mock_infer_risk, mock_snap):
+    def test_register_without_permissions(self, mock_snap):
         """Feature registration should handle SunbeamException from get_client()."""
         # Setup mocks
-        mock_infer_risk.return_value = 0
         mock_snap.return_value = Mock()
 
         # Create a mock feature with check_gated method
         mock_feature = Mock()
         mock_feature.name = "test-feature"
-        mock_feature.risk_availability = 0
         mock_feature.check_gated.return_value = False  # Not gated
         mock_feature.is_enabled.side_effect = SunbeamException(
             "Insufficient permissions"

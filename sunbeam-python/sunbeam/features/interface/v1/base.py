@@ -14,7 +14,7 @@ from snaphelpers import Snap
 
 from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import ConfigItemNotFoundException
-from sunbeam.core.common import RiskLevel, SunbeamException, read_config, update_config
+from sunbeam.core.common import SunbeamException, read_config, update_config
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.manifest import FeatureConfig, Manifest, SoftwareConfig
 from sunbeam.feature_gates import FeatureGateMixin
@@ -305,9 +305,6 @@ class BaseFeature(BaseRegisterable, FeatureGateMixin, Generic[ConfigType]):
     # Name of feature
     name: str
     group: type[BaseFeatureGroup] | None = None
-
-    # Risk level of the feature
-    risk_availability: RiskLevel = RiskLevel.STABLE
 
     # Feature gate flag - if False, feature is gated (hidden) unless enabled
     # Note: Default is True for backward compatibility with existing features.

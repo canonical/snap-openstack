@@ -8,7 +8,7 @@ import click
 from packaging.version import Version
 from rich.console import Console
 
-from sunbeam.core.common import BaseStep, RiskLevel, run_plan
+from sunbeam.core.common import BaseStep, run_plan
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import JujuHelper
 from sunbeam.core.manifest import (
@@ -46,8 +46,6 @@ class InstanceRecoveryFeature(OpenStackControlPlaneFeature):
     name = "instance-recovery"
     tf_plan_location = TerraformPlanLocation.SUNBEAM_TERRAFORM_REPO
     tf_plan_consul_client = "consul-client-plan"
-
-    risk_availability: RiskLevel = RiskLevel.EDGE
 
     def default_software_overrides(self) -> SoftwareConfig:
         """Feature software configuration."""
