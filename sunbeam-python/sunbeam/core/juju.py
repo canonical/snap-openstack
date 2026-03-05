@@ -169,28 +169,29 @@ def build_pre_status_overlay(
 ) -> dict[str, ApplicationStatusOverlay]:
     """Build a per-app wait overlay that accepts pre-operation status OR active.
 
-    For each app not already covered by a "status" key in *base_overlay*, the
-    accepted workload statuses are set to the union of the app's entry in
-    *pre_status* (defaulting to "active") and "active".  Apps that already have
-    a "status" key in *base_overlay* are left unchanged so that special-case
-    overlays (e.g. traefik, mysql) take precedence.
+    For each app the accepted workload statuses are set to the union of the
+    app's entry in *pre_status* (defaulting to "active"), "active", and any
+    statuses already present in *base_overlay*.  This ensures that apps which
+    were already in a non-active state (e.g. "blocked") before the operation
+    are not held against an impossible condition, even for apps with special-
+    case overlays (e.g. traefik, mysql).
 
     :param apps: Applications to build the overlay for.
     :param pre_status: Mapping of app-name → workload-status captured before
         the operation (e.g. from JujuHelper.snapshot_workload_status).
-    :param base_overlay: Optional starting overlay; entries with a "status" key
-        are not overwritten.
+    :param base_overlay: Optional starting overlay; "status" entries are merged
+        with the pre-refresh status rather than replaced.
     :returns: A per-application ApplicationStatusOverlay dict.
     """
     overlay: dict[str, ApplicationStatusOverlay] = dict(base_overlay or {})
     for app_name in apps:
         app_overlay = overlay.get(app_name, {})
-        if "status" not in app_overlay:
-            prior = pre_status.get(app_name, "active")
-            overlay[app_name] = {
-                **app_overlay,
-                "status": list({prior, "active"}),
-            }
+        prior = pre_status.get(app_name, "active")
+        existing_statuses = app_overlay.get("status") or ["active"]
+        overlay[app_name] = {
+            **app_overlay,
+            "status": list(set(existing_statuses) | {prior, "active"}),
+        }
     return overlay
 
 

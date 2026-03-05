@@ -374,10 +374,18 @@ class TestWaitAfterRefresh:
         assert result.result_type == ResultType.COMPLETED
         assert set(captured["nova"]["status"]) == {"active"}
 
-    def test_k8s_model_build_overlay_dict_takes_precedence(self):
-        """K8s path: apps already covered by build_overlay_dict keep their overlay."""
+    def test_k8s_model_build_overlay_dict_merged_with_pre_status(self):
+        """K8s path: build_overlay_dict statuses are merged with pre-refresh status.
+
+        If traefik was 'blocked' before the refresh, 'blocked' must appear in
+        the accepted statuses alongside the base overlay's values so that the
+        wait does not time-out when the charm is still blocked after refresh.
+        """
         # build_overlay_dict returns a "status" for traefik
-        traefik_overlay = {"status": ["active", "waiting/idle"]}
+        traefik_overlay = {
+            "status": ["active", "maintenance"],
+            "agent_status": ["idle"],
+        }
         captured = {}
 
         def capture(*args, **kwargs):
@@ -395,8 +403,14 @@ class TestWaitAfterRefresh:
                 )
 
         assert result.result_type == ResultType.COMPLETED
-        # build_overlay_dict result must NOT be overwritten with pre-refresh status
-        assert captured["traefik"]["status"] == ["active", "waiting/idle"]
+        # pre-refresh 'blocked' must be merged in, not dropped
+        assert set(captured["traefik"]["status"]) == {
+            "active",
+            "maintenance",
+            "blocked",
+        }
+        # non-status keys from build_overlay_dict must be preserved
+        assert captured["traefik"]["agent_status"] == ["idle"]
 
     def test_k8s_model_juju_wait_exception_returns_failed(self):
         """K8s path: JujuWaitException propagates as FAILED result."""
@@ -802,21 +816,44 @@ class TestLatestInChannelCoordinator:
 
     @patch(f"{_INTRA_CHANNEL}.is_maas_deployment")
     def test_get_plan_maas_includes_lb_ip_pool_step(self, mock_is_maas):
-        """MAAS deployment plan should include LB IP pool step."""
+        """MAAS deployment plan should include LB IP pool and pool management steps."""
         mock_is_maas.return_value = True
         self.deployment.public_api_label = "test-public-api"
 
-        coordinator = LatestInChannelCoordinator(
-            self.deployment, self.client, self.jhelper, self.manifest
+        mock_maas_client = Mock()
+        mock_maas_client_module = Mock()
+        mock_maas_client_module.MaasClient.from_deployment.return_value = (
+            mock_maas_client
         )
-        plan = coordinator.get_plan()
 
+        mock_maas_deploy_k8s_cls = Mock()
+        mock_maas_steps_module = Mock()
+        mock_maas_steps_module.MaasDeployK8SApplicationStep = mock_maas_deploy_k8s_cls
+
+        import sys
+
+        with patch.dict(
+            sys.modules,
+            {
+                "sunbeam.provider.maas.client": mock_maas_client_module,
+                "sunbeam.provider.maas.steps": mock_maas_steps_module,
+            },
+        ):
+            coordinator = LatestInChannelCoordinator(
+                self.deployment, self.client, self.jhelper, self.manifest
+            )
+            plan = coordinator.get_plan()
+
+        from sunbeam.steps.k8s import EnsureDefaultL2AdvertisementMutedStep
         from sunbeam.steps.openstack import (
             OpenStackPatchLoadBalancerServicesIPPoolStep,
         )
 
         step_types = [type(step) for step in plan]
         assert OpenStackPatchLoadBalancerServicesIPPoolStep in step_types
+        assert EnsureDefaultL2AdvertisementMutedStep in step_types
+        # MaasDeployK8SApplicationStep was called; its return value is in the plan
+        assert mock_maas_deploy_k8s_cls.return_value in plan
 
     @patch(f"{_INTRA_CHANNEL}.is_maas_deployment")
     def test_get_plan_always_includes_core_steps(self, mock_is_maas):

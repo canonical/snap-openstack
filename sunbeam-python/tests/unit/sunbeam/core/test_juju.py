@@ -1162,12 +1162,37 @@ def test_build_pre_status_overlay_missing_pre_status_defaults_to_active():
     assert result["app1"]["status"] == ["active"]
 
 
-def test_build_pre_status_overlay_base_overlay_status_not_overwritten():
+def test_build_pre_status_overlay_base_overlay_status_merged():
     base = {"app1": {"status": ["maintenance"]}}
     result = jujulib.build_pre_status_overlay(
         ["app1"], {"app1": "waiting"}, base_overlay=base
     )
-    assert result["app1"]["status"] == ["maintenance"]
+    assert set(result["app1"]["status"]) == {"maintenance", "waiting", "active"}
+
+
+def test_build_pre_status_overlay_traefik_blocked_before_refresh():
+    """Pre-refresh 'blocked' is merged into the traefik special-case overlay.
+
+    If traefik was blocked before the refresh (e.g. missing IPAddressPool),
+    the wait should not time-out: 'blocked' must appear in the accepted
+    statuses even though TRAEFIK_OVERLAY seeds the base with only
+    ['active', 'maintenance'].
+    """
+    base = {
+        "traefik-public": {
+            "status": ["active", "maintenance"],
+            "agent_status": ["idle", "executing"],
+        }
+    }
+    result = jujulib.build_pre_status_overlay(
+        ["traefik-public"], {"traefik-public": "blocked"}, base_overlay=base
+    )
+    assert set(result["traefik-public"]["status"]) == {
+        "active",
+        "maintenance",
+        "blocked",
+    }
+    assert result["traefik-public"]["agent_status"] == ["idle", "executing"]
 
 
 def test_build_pre_status_overlay_base_overlay_other_keys_preserved():
