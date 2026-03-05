@@ -5,7 +5,7 @@ import logging
 import typing
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Generic, Literal, Type
+from typing import Generic, Literal, Type, TypeGuard
 
 import click
 from packaging.requirements import Requirement
@@ -19,7 +19,7 @@ from sunbeam.core.deployment import Deployment
 from sunbeam.core.manifest import FeatureConfig, Manifest, SoftwareConfig
 from sunbeam.feature_gates import FeatureGateMixin
 from sunbeam.features.interface import utils
-from sunbeam.provider.maas.deployment import MAAS_TYPE
+from sunbeam.provider.maas.deployment import MaasDeployment
 from sunbeam.versions import VarMap
 
 LOG = logging.getLogger(__name__)
@@ -844,9 +844,6 @@ class EnableDisableFeature(BaseFeature, Generic[ConfigType]):
         return {}
 
 
-def is_maas_deployment(deployment: Deployment) -> bool:
+def is_maas_deployment(deployment: Deployment) -> TypeGuard[MaasDeployment]:
     """Check if deployment type is maas."""
-    if deployment.type == MAAS_TYPE:
-        return True
-
-    return False
+    return isinstance(deployment, MaasDeployment)

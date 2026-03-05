@@ -17,6 +17,7 @@ from rich.table import Table
 from snaphelpers import Snap
 
 from sunbeam.clusterd.service import ConfigItemNotFoundException
+from sunbeam.commands import refresh as refresh_cmds
 from sunbeam.commands import resize as resize_cmds
 from sunbeam.commands.configure import (
     DemoSetup,
@@ -262,6 +263,7 @@ class MaasProvider(ProviderBase):
         cluster.add_command(deploy)
         cluster.add_command(list_nodes)
         cluster.add_command(resize_cmds.resize)
+        cluster.add_command(refresh_cmds.refresh)
         cluster.add_command(remove_node)
         cluster.add_command(destroy_deployment_cmd)
         configure.add_command(configure_cmd)
