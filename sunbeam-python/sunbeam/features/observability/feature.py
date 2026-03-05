@@ -438,7 +438,7 @@ class IntegrateRemoteCosOffersStep(BaseStep, JujuStepHelper):
                 "opentelemetry-collector:send-remote-write",
                 self.feature.prometheus_offer_url,
             ),
-            ("opentelemetry-collector:logging-consumer", self.feature.loki_offer_url),
+            ("opentelemetry-collector:send-loki-logs", self.feature.loki_offer_url),
         ]
 
     def run(self, status: Status | None = None) -> Result:
