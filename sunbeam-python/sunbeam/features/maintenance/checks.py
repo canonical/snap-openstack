@@ -63,23 +63,14 @@ class InstancesStatusCheck(Check):
         operator should manually handle it first.
     - If there are any instance in MIGRATING status,
         operator should wait until migration finished.
-    - If there are any instance in SHUTOFF status,
-        the maintenance will be blocked, because sunbeam doesn't support
-        cold migration now. this will blocked until we have disable cold migration
-        feature support in watcher. see:
-        https://bugs.launchpad.net/snap-openstack/+bug/2082056 and
-        https://review.opendev.org/c/openstack/watcher-specs/+/943873
     """
 
     def __init__(
         self, jhelper: JujuHelper, deployment: Deployment, node: str, force: bool
     ):
         super().__init__(
-            "Check no instance in ERROR/MIGRATING/SHUTOFF status on nodes",
-            (
-                "Checking if there are any instance in"
-                " ERROR/MIGRATING/SHUTOFF status on nodes"
-            ),
+            "Check no instance in ERROR/MIGRATING status on nodes",
+            ("Checking if there are any instance in ERROR/MIGRATING status on nodes"),
         )
         self.jhelper = jhelper
         self.deployment = deployment
@@ -96,7 +87,7 @@ class InstancesStatusCheck(Check):
 
         not_expected_status_instances: dict[str, str] = {}
 
-        for status in ["ERROR", "MIGRATING", "SHUTOFF"]:
+        for status in ["ERROR", "MIGRATING"]:
             for inst in guests_on_hypervisor(
                 hypervisor_name=self.node,
                 conn=conn,
