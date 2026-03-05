@@ -31,6 +31,7 @@ class MaintenanceFeature(EnableDisableFeature):
     requires = {FeatureRequirement("resource-optimization")}
 
     name = "maintenance"
+    generally_available = False
 
     def run_enable_plans(
         self, deployment: Deployment, config: ConfigType, show_hints: bool
