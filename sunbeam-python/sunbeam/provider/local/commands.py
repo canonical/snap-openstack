@@ -82,6 +82,7 @@ from sunbeam.core.terraform import TerraformInitStep
 from sunbeam.feature_gates import (
     feature_gate_command,
     feature_gate_option,
+    split_roles_enabled,
 )
 from sunbeam.provider.base import ProviderBase
 from sunbeam.provider.common.multiregion import connect_to_region_controller
@@ -662,7 +663,7 @@ def bootstrap(  # noqa: C901
     is_network_node = any(role.is_network_node() for role in roles)
     is_region_controller = any(role.is_region_controller() for role in roles)
 
-    if is_network_node and is_compute_node:
+    if is_network_node and is_compute_node and not split_roles_enabled():
         raise click.ClickException(
             "A node cannot be both a compute and network node at the same time."
         )
@@ -1360,7 +1361,7 @@ def join(  # noqa: C901
     is_network_node = any(role.is_network_node() for role in roles)
     is_region_controller = any(role.is_region_controller() for role in roles)
 
-    if is_network_node and is_compute_node:
+    if is_network_node and is_compute_node and not split_roles_enabled():
         raise click.ClickException(
             "A node cannot be both a compute and network node at the same time."
         )
@@ -1566,7 +1567,9 @@ def join(  # noqa: C901
                 deployment.get_ovn_manager(),
             )
         )
-        if ovn_manager.is_network_agent_dataplane_node(roles):
+        if ovn_manager.is_network_agent_dataplane_node(roles) or (
+            split_roles_enabled() and microovn_necessary
+        ):
             plan4.append(
                 LocalSetOpenStackNetworkAgentsStep(
                     client,
@@ -2037,7 +2040,11 @@ def configure_cmd(
         )
 
     if "network" in node["role"] or (
-        is_microovn_deployment and "compute" in node["role"]
+        is_microovn_deployment
+        and (
+            "compute" in node["role"]
+            or (split_roles_enabled() and "control" in node["role"])
+        )
     ):
         microovn_tfhelper = deployment.get_tfhelper("microovn-plan")
         plan.append(

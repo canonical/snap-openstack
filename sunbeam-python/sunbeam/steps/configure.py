@@ -538,23 +538,41 @@ class SetExternalNetworkUnitsOptionsStep(BaseStep, UnitGetterMixin):
 
     def run(self, status: Status | None = None) -> Result:
         """Apply individual unit settings."""
+        from sunbeam.feature_gates import split_roles_enabled
+
+        split_roles = split_roles_enabled()
+
         for name in self.names:
             self.update_status(status, f"setting configuration for {name}")
             bridge_mapping = self.bridge_mappings.get(name)
-            if bridge_mapping is None:
+            node = self.client.cluster.get_node_info(name)
+            node_roles = node.get("role", [])
+            is_network_node = "network" in node_roles
+
+            if bridge_mapping is None and not split_roles:
                 LOG.debug(f"No NIC found for {name}, skipping.")
                 continue
-            node = self.client.cluster.get_node_info(name)
+
+            # When split-roles is active, only network nodes get
+            # bridge mappings; other nodes only need enable-chassis-as-gw.
+            if split_roles and not is_network_node:
+                bridge_mapping = None
+
             self.machine_id = str(node.get("machineid"))
             unit = self.get_unit(name)
+
+            action_params: dict[str, str | bool] = {}
+            if bridge_mapping is not None:
+                action_params["bridge-mapping"] = bridge_mapping
+            if split_roles:
+                action_params["enable-chassis-as-gw"] = is_network_node
+
             try:
                 self.jhelper.run_action(
                     unit,
                     self.model,
                     self.ACTION,
-                    action_params={
-                        "bridge-mapping": bridge_mapping,
-                    },
+                    action_params=action_params,
                 )
             except (ActionFailedException, TimeoutError):
                 _message = f"Unable to set {name!r} configuration"

@@ -55,6 +55,7 @@ from sunbeam.core.juju import (
 from sunbeam.core.manifest import Manifest
 from sunbeam.core.steps import CreateLoadBalancerIPPoolsStep
 from sunbeam.core.terraform import TerraformHelper
+from sunbeam.feature_gates import split_roles_enabled
 from sunbeam.lazy import LazyImport
 from sunbeam.provider.common import nic_utils
 from sunbeam.steps import clusterd
@@ -387,7 +388,9 @@ class MachineStorageCheck(DiagnosticsCheck):
 
 
 class MachineComputeNicCheck(DiagnosticsCheck):
-    """Check machine has compute nic assigned if required."""
+    """Check machine has a neutron-tagged nic assigned if required."""
+
+    NEUTRON_TAG_PREFIX = "neutron:"
 
     def __init__(self, machine: dict):
         super().__init__(
@@ -396,8 +399,16 @@ class MachineComputeNicCheck(DiagnosticsCheck):
         )
         self.machine = machine
 
+    def _has_neutron_nic(self) -> bool:
+        """Check if any NIC has a tag starting with 'neutron:'."""
+        for nic in self.machine["nics"]:
+            for tag in nic["tags"]:
+                if tag.startswith(self.NEUTRON_TAG_PREFIX):
+                    return True
+        return False
+
     def run(self) -> DiagnosticsResult:
-        """Check machine has compute nic if required."""
+        """Check machine has neutron nic if required."""
         assigned_roles = self.machine["roles"]
         LOG.debug(f"{self.machine['hostname']=!r} assigned roles: {assigned_roles!r}")
         if not assigned_roles:
@@ -407,35 +418,48 @@ class MachineComputeNicCheck(DiagnosticsCheck):
                 ROLES_NEEDED_ERROR,
                 machine=self.machine["hostname"],
             )
-        compute_tag = maas_deployment.NicTags.COMPUTE.value
-        if (
-            maas_deployment.RoleTags.COMPUTE.value not in assigned_roles
-            and maas_deployment.RoleTags.NETWORK.value not in assigned_roles
-        ):
-            self.message = "not a compute or network node."
-            return DiagnosticsResult.success(
+
+        is_network_node = maas_deployment.RoleTags.NETWORK.value in assigned_roles
+        is_compute_node = maas_deployment.RoleTags.COMPUTE.value in assigned_roles
+        needs_neutron_nic = is_network_node or (
+            is_compute_node and not split_roles_enabled()
+        )
+
+        has_nic = self._has_neutron_nic()
+
+        if not needs_neutron_nic and has_nic and split_roles_enabled():
+            return DiagnosticsResult.warn(
                 self.name,
-                self.message,
+                "machine has a neutron-tagged NIC but does not have"
+                " the network role; NIC will be ignored.",
                 machine=self.machine["hostname"],
             )
-        nics = self.machine["nics"]
-        for nic in nics:
-            if compute_tag in nic["tags"]:
-                return DiagnosticsResult.success(
-                    self.name,
-                    compute_tag + " nic found",
-                    machine=self.machine["hostname"],
-                )
 
+        if not needs_neutron_nic:
+            return DiagnosticsResult.success(
+                self.name,
+                "neutron NIC not required for this role.",
+                machine=self.machine["hostname"],
+            )
+
+        if has_nic:
+            return DiagnosticsResult.success(
+                self.name,
+                "neutron NIC found",
+                machine=self.machine["hostname"],
+            )
+
+        role_hint = "network" if split_roles_enabled() else "compute/network"
         return DiagnosticsResult.fail(
             self.name,
-            "no compute nic found",
+            "no neutron NIC found",
             textwrap.dedent(
                 f"""\
-                A compute node needs to have a dedicated nic for compute to be a part
-                of an openstack deployment. Either add a compute nic to the machine or
-                remove the compute role. Add the tag `{compute_tag}`
-                to the nic in MAAS.
+                This node needs a dedicated NIC tagged with
+                '{self.NEUTRON_TAG_PREFIX}<physnet>' """
+                f"""(e.g. {self.NEUTRON_TAG_PREFIX}physnet1)
+                to be a part of an openstack deployment. Either add a
+                neutron-tagged NIC to the machine or remove the {role_hint} role.
                 More on assigning tags: https://maas.io/docs/how-to-use-network-tags
                 """
             ),
@@ -2031,11 +2055,29 @@ class MaasSetExternalNetworkUnitsOptionsStep(SetExternalNetworkUnitsOptionsStep)
 
         for machine, nic in bridge_mappings.items():
             if nic is None:
-                nic_tag = "neutron:*"
-                return Result(
-                    ResultType.FAILED,
-                    f"Machine {machine} does not have any {nic_tag} nic defined.",
-                )
+                if split_roles_enabled():
+                    node = self.client.cluster.get_node_info(machine)
+                    node_roles = node.get("role", [])
+                    if "network" in node_roles:
+                        return Result(
+                            ResultType.FAILED,
+                            f"Machine {machine} does not have any"
+                            " neutron:* nic defined.",
+                        )
+                else:
+                    return Result(
+                        ResultType.FAILED,
+                        f"Machine {machine} does not have any neutron:* nic defined.",
+                    )
+            elif split_roles_enabled():
+                node = self.client.cluster.get_node_info(machine)
+                node_roles = node.get("role", [])
+                if "network" not in node_roles:
+                    LOG.warning(
+                        "Machine %r has a neutron-tagged NIC but does not have"
+                        " the network role; NIC will be ignored.",
+                        machine,
+                    )
 
         self.bridge_mappings = bridge_mappings
         return Result(ResultType.COMPLETED)
