@@ -2,11 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
+from typing import Any
 
 import tenacity
 from rich.status import Status
 from snaphelpers import Snap, UnknownConfigKey
 
+from sunbeam import versions
 from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import (
     NodeNotExistInClusterException,
@@ -24,7 +26,7 @@ from sunbeam.core.juju import (
     JujuHelper,
     JujuStepHelper,
 )
-from sunbeam.core.manifest import Manifest
+from sunbeam.core.manifest import CharmManifest, Manifest
 from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.core.steps import DeployMachineApplicationStep, RemoveMachineUnitsStep
 from sunbeam.core.terraform import (
@@ -86,7 +88,9 @@ class DeployMicroOVNApplicationStep(DeployMachineApplicationStep):
             "ca-offer-url",
             "ovn-relay-offer-url",
         }
-        extra_tfvars = {offer: openstack_tf_output.get(offer) for offer in juju_offers}
+        extra_tfvars: dict[str, Any] = {
+            offer: openstack_tf_output.get(offer) for offer in juju_offers
+        }
 
         machine_ids = self.ovn_manager.get_machines()
         if machine_ids:
@@ -113,9 +117,21 @@ class DeployMicroOVNApplicationStep(DeployMachineApplicationStep):
                         "endpoint": "ovsdb",
                         "space": self.deployment.get_space(Networks.INTERNAL),
                     },
-                ]
+                ],
+                "charm_openstack_network_agents_config": {
+                    "snap-channel": versions.OPENSTACK_CHANNEL
+                },
             }
         )
+
+        agent_charm_manifest: CharmManifest | None = (
+            self.manifest.core.software.charms.get(AGENT_APP)
+        )
+        if agent_charm_manifest and agent_charm_manifest.config:
+            extra_tfvars["charm_openstack_network_agents_config"].update(
+                agent_charm_manifest.config
+            )
+
         return extra_tfvars
 
 

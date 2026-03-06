@@ -7,6 +7,7 @@ from typing import Any
 from rich.status import Status
 
 import sunbeam.steps.microceph as microceph
+from sunbeam import versions
 from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import (
     NodeNotExistInClusterException,
@@ -17,7 +18,7 @@ from sunbeam.core.juju import (
     ApplicationNotFoundException,
     JujuHelper,
 )
-from sunbeam.core.manifest import Manifest
+from sunbeam.core.manifest import CharmManifest, Manifest
 from sunbeam.core.steps import (
     DeployMachineApplicationStep,
     DestroyMachineApplicationStep,
@@ -143,13 +144,19 @@ class DeployCinderVolumeApplicationStep(DeployMachineApplicationStep):
                     "endpoint": "ceph",
                 },
             ],
-            "charm_cinder_volume_config": {},
+            "charm_cinder_volume_config": {"snap-channel": versions.OPENSTACK_CHANNEL},
             "charm_cinder_volume_ceph_config": {
                 "ceph-osd-replication-count": microceph.ceph_replica_scale(
                     len(storage_nodes)
                 ),
             },
         }
+
+        charm_manifest: CharmManifest | None = self.manifest.core.software.charms.get(
+            APPLICATION
+        )
+        if charm_manifest and charm_manifest.config:
+            tfvars["charm_cinder_volume_config"].update(charm_manifest.config)
 
         # This may not be required ideally as Cinder volume is deployed always
         # before user can enable or disable telemetry.

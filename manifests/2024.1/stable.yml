@@ -37,6 +37,8 @@ core:
         channel: 2024.1/stable
       epa-orchestrator:
         channel: 2024.1/stable
+        config:
+          snap-channel: 2024.1/stable
       microceph:
         channel: squid/stable
         config:

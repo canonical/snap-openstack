@@ -2,12 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
+from typing import Any
 
+from sunbeam import versions
 from sunbeam.clusterd.client import Client
 from sunbeam.core.common import Role
 from sunbeam.core.deployment import Deployment, Networks
 from sunbeam.core.juju import JujuHelper
-from sunbeam.core.manifest import Manifest
+from sunbeam.core.manifest import CharmManifest, Manifest
 from sunbeam.core.steps import (
     DeployMachineApplicationStep,
     DestroyMachineApplicationStep,
@@ -22,7 +24,8 @@ SUNBEAM_MACHINE_APP_TIMEOUT = 1800  # 30 minutes, deploys multiple units in para
 SUNBEAM_MACHINE_UNIT_TIMEOUT = (
     1800  # 30 minutes, adding / removing units, can be multiple units in parallel
 )
-SUBORDINATE_APPLICATIONS = ["epa-orchestrator"]
+EPA_ORCHESTRATOR_APPLICATION = "epa-orchestrator"
+SUBORDINATE_APPLICATIONS = [EPA_ORCHESTRATOR_APPLICATION]
 
 
 class DeploySunbeamMachineApplicationStep(DeployMachineApplicationStep):
@@ -59,7 +62,7 @@ class DeploySunbeamMachineApplicationStep(DeployMachineApplicationStep):
 
     def extra_tfvars(self) -> dict:
         """Extra terraform vars to pass to terraform apply."""
-        return {
+        tfvars: dict[str, Any] = {
             "endpoint_bindings": [
                 {"space": self.deployment.get_space(Networks.MANAGEMENT)},
                 {
@@ -72,7 +75,18 @@ class DeploySunbeamMachineApplicationStep(DeployMachineApplicationStep):
                 "https_proxy": self.proxy_settings.get("HTTPS_PROXY", ""),
                 "no_proxy": self.proxy_settings.get("NO_PROXY", ""),
             },
+            "charm_epa_orchestrator_config": {
+                "snap-channel": versions.OPENSTACK_CHANNEL
+            },
         }
+
+        epa_charm_manifest: CharmManifest | None = (
+            self.manifest.core.software.charms.get(EPA_ORCHESTRATOR_APPLICATION)
+        )
+        if epa_charm_manifest and epa_charm_manifest.config:
+            tfvars["charm_epa_orchestrator_config"].update(epa_charm_manifest.config)
+
+        return tfvars
 
 
 class RemoveSunbeamMachineUnitsStep(RemoveMachineUnitsStep):
