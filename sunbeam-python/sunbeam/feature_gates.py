@@ -63,12 +63,15 @@ from typing import Any, Callable, Optional
 
 import click
 from snaphelpers import Snap, UnknownConfigKey
+from snaphelpers._ctl import SnapCtlError
+from snaphelpers._env import NotASnapError
 
 from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import (
     ClusterServiceUnavailableException,
     ConfigItemNotFoundException,
 )
+from sunbeam.errors import SunbeamException
 
 LOG = logging.getLogger(__name__)
 
@@ -223,12 +226,16 @@ class FeatureGateMixin:
 # - feature.microovn-sdn: Gates MicroOVN SDN provider option
 # - feature.experimental: Gates experimental features
 #
-FEATURE_GATES: dict[str, dict[str, bool]] = {
+FEATURE_GATES: dict[str, dict[str, bool | list[str]]] = {
     "feature.multi-region": {
         "generally_available": False,  # TODO: Set to True when multi-region is GA
     },
     "feature.microovn-sdn": {
         "generally_available": False,  # TODO: Set to True when MicroOVN is GA
+    },
+    "feature.split-roles": {
+        "generally_available": False,  # TODO: Set to True when split-roles is GA
+        "requires": ["feature.microovn-sdn"],
     },
 }
 
@@ -262,12 +269,79 @@ def is_feature_gate_enabled(
 
     # Otherwise check snap configuration
     if snap is None:
-        snap = Snap()
+        try:
+            snap = Snap()
+        except NotASnapError:
+            return False
 
     try:
         return bool(snap.config.get(gate_key))
-    except UnknownConfigKey:
+    except (UnknownConfigKey, SnapCtlError):
         return False
+
+
+def split_roles_enabled(snap: Optional[Snap] = None) -> bool:
+    """Check if the split-roles feature gate is enabled.
+
+    When enabled, compute and network roles become independent:
+    - Compute + network can co-locate on the same node
+    - Compute-only nodes do not act as OVN gateways
+    """
+    return is_feature_gate_enabled("feature.split-roles", snap)
+
+
+def _get_feature_gate_states(snap: Snap) -> dict[str, bool]:
+    """Read the enabled/disabled state of all known feature gates.
+
+    :param snap: Snap instance to read config from
+    :returns: dict mapping gate key to enabled state
+    """
+    states: dict[str, bool] = {}
+    for gate_key, gate_config in FEATURE_GATES.items():
+        if gate_config.get("generally_available"):
+            states[gate_key] = True
+        else:
+            try:
+                states[gate_key] = bool(snap.config.get(gate_key))
+            except UnknownConfigKey:
+                states[gate_key] = False
+    return states
+
+
+def validate_feature_gate_config(snap: Optional[Snap] = None) -> None:
+    """Validate that all feature gate dependencies are satisfied.
+
+    This validates forward dependencies: an enabled gate must have all its
+    required gates enabled. Any configuration where a disabled gate is
+    required by an enabled gate will also be rejected by this forward check.
+
+    :param snap: Snap instance (creates one if not provided)
+    :raises FeatureGateError: if any dependency is violated
+    """
+    if snap is None:
+        snap = Snap()
+
+    states = _get_feature_gate_states(snap)
+    violations: list[str] = []
+
+    for gate_key, gate_config in FEATURE_GATES.items():
+        dep_keys = gate_config.get("requires", [])
+        if not isinstance(dep_keys, list) or not dep_keys:
+            continue
+
+        gate_enabled = states.get(gate_key, False)
+        if not gate_enabled:
+            continue
+
+        for dep_key in dep_keys:
+            dep_enabled = states.get(dep_key, False)
+            if not dep_enabled:
+                violations.append(f"'{gate_key}' requires '{dep_key}' to be enabled")
+
+    if violations:
+        raise FeatureGateError(
+            "Feature gate dependency violation: " + "; ".join(violations)
+        )
 
 
 class FeatureGatedChoice(click.Choice):
@@ -583,7 +657,7 @@ def feature_gate_command(
     return decorator
 
 
-class FeatureGateError(Exception):
+class FeatureGateError(SunbeamException):
     """Exception raised when a feature gate prevents an operation."""
 
     pass
