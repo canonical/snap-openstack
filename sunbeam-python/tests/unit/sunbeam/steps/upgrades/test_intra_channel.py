@@ -4,12 +4,19 @@
 from unittest.mock import Mock, call, patch
 
 from sunbeam.core.common import Result, ResultType
-from sunbeam.core.juju import JujuWaitException
+from sunbeam.core.juju import (
+    ActionFailedException,
+    ApplicationNotFoundException,
+    JujuWaitException,
+)
 from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.steps.upgrades.intra_channel import (
+    SNAP_APPS_INFRA_MODEL,
+    SNAP_APPS_MACHINE_MODEL,
     LatestInChannel,
     LatestInChannelCoordinator,
     ReapplyInfraModelConfigStep,
+    RefreshSnapStep,
 )
 
 _INTRA_CHANNEL = "sunbeam.steps.upgrades.intra_channel"
@@ -982,3 +989,246 @@ class TestReapplyInfraModelConfigStep:
 
         assert result.result_type == ResultType.COMPLETED
         self.jhelper.set_app_config.assert_not_called()
+
+
+class TestRefreshSnapStep:
+    """Tests for RefreshSnapStep."""
+
+    def setup_method(self):
+        self.deployment = Mock()
+        self.deployment.openstack_machines_model = "openstack-machines"
+        self.jhelper = Mock()
+
+    def _make_application(self, unit_names: list[str]) -> Mock:
+        """Return a Mock application whose .units dict maps names to Mock units."""
+        app = Mock()
+        app.units = {name: Mock() for name in unit_names}
+        return app
+
+    # ------------------------------------------------------------------
+    # _refresh_snap_for_apps
+    # ------------------------------------------------------------------
+
+    def test_skips_app_not_deployed(self):
+        """Application not found in model is silently skipped."""
+        self.jhelper.get_application.side_effect = ApplicationNotFoundException(
+            "not found"
+        )
+        step = RefreshSnapStep(self.deployment, self.jhelper)
+
+        result = step._refresh_snap_for_apps(
+            ["openstack-hypervisor"], "openstack-machines"
+        )
+
+        assert result.result_type == ResultType.COMPLETED
+        self.jhelper.run_action.assert_not_called()
+
+    def test_runs_action_on_all_units(self):
+        """refresh-snap is called once per unit for each app."""
+        self.jhelper.get_application.return_value = self._make_application(
+            ["openstack-hypervisor/0", "openstack-hypervisor/1"]
+        )
+        step = RefreshSnapStep(self.deployment, self.jhelper)
+
+        result = step._refresh_snap_for_apps(
+            ["openstack-hypervisor"], "openstack-machines"
+        )
+
+        assert result.result_type == ResultType.COMPLETED
+        assert self.jhelper.run_action.call_count == 2
+        for unit in ("openstack-hypervisor/0", "openstack-hypervisor/1"):
+            self.jhelper.run_action.assert_any_call(
+                unit, "openstack-machines", "refresh-snap", timeout=600
+            )
+
+    def test_returns_failed_when_action_fails(self):
+        """A failed action on any unit returns FAILED immediately."""
+        self.jhelper.get_application.return_value = self._make_application(
+            ["openstack-hypervisor/0", "openstack-hypervisor/1"]
+        )
+        self.jhelper.run_action.side_effect = ActionFailedException("snap error")
+        step = RefreshSnapStep(self.deployment, self.jhelper)
+
+        result = step._refresh_snap_for_apps(
+            ["openstack-hypervisor"], "openstack-machines"
+        )
+
+        assert result.result_type == ResultType.FAILED
+        assert "snap error" in result.message
+        # Stopped after first unit failure
+        assert self.jhelper.run_action.call_count == 1
+
+    def test_multiple_apps_all_refreshed(self):
+        """All apps in the list have refresh-snap run on their units."""
+
+        def get_app(name, model):
+            return self._make_application([f"{name}/0"])
+
+        self.jhelper.get_application.side_effect = get_app
+        step = RefreshSnapStep(self.deployment, self.jhelper)
+
+        result = step._refresh_snap_for_apps(
+            ["openstack-hypervisor", "cinder-volume"], "openstack-machines"
+        )
+
+        assert result.result_type == ResultType.COMPLETED
+        assert self.jhelper.run_action.call_count == 2
+
+    def test_partial_deployment_skips_missing_apps(self):
+        """Apps not deployed are skipped; deployed apps are still refreshed."""
+
+        def get_app(name, model):
+            if name == "cinder-volume":
+                raise ApplicationNotFoundException("not deployed")
+            return self._make_application([f"{name}/0"])
+
+        self.jhelper.get_application.side_effect = get_app
+        step = RefreshSnapStep(self.deployment, self.jhelper)
+
+        result = step._refresh_snap_for_apps(
+            ["openstack-hypervisor", "cinder-volume"], "openstack-machines"
+        )
+
+        assert result.result_type == ResultType.COMPLETED
+        # Only openstack-hypervisor/0 should be refreshed
+        self.jhelper.run_action.assert_called_once_with(
+            "openstack-hypervisor/0", "openstack-machines", "refresh-snap", timeout=600
+        )
+
+    def test_empty_app_list_returns_completed(self):
+        """Empty app list does nothing and returns COMPLETED."""
+        step = RefreshSnapStep(self.deployment, self.jhelper)
+
+        result = step._refresh_snap_for_apps([], "openstack-machines")
+
+        assert result.result_type == ResultType.COMPLETED
+        self.jhelper.get_application.assert_not_called()
+
+    # ------------------------------------------------------------------
+    # run()
+    # ------------------------------------------------------------------
+
+    @patch(f"{_INTRA_CHANNEL}.is_maas_deployment")
+    def test_run_local_refreshes_machine_model_only(self, mock_is_maas):
+        """Local deployment refreshes only the machines model."""
+        mock_is_maas.return_value = False
+        self.jhelper.get_application.side_effect = ApplicationNotFoundException("x")
+        step = RefreshSnapStep(self.deployment, self.jhelper)
+
+        result = step.run()
+
+        assert result.result_type == ResultType.COMPLETED
+        # All calls are for the machines model
+        for c in self.jhelper.get_application.call_args_list:
+            assert c.args[1] == "openstack-machines"
+
+    @patch(f"{_INTRA_CHANNEL}.is_maas_deployment")
+    def test_run_maas_also_refreshes_infra_model(self, mock_is_maas):
+        """MAAS deployment also refreshes the infra model apps."""
+        mock_is_maas.return_value = True
+        self.deployment.infra_model = "openstack-infra"
+
+        called_models: list[str] = []
+
+        def get_app(name, model):
+            called_models.append(model)
+            raise ApplicationNotFoundException("not deployed")
+
+        self.jhelper.get_application.side_effect = get_app
+        step = RefreshSnapStep(self.deployment, self.jhelper)
+
+        result = step.run()
+
+        assert result.result_type == ResultType.COMPLETED
+        assert "openstack-machines" in called_models
+        assert "openstack-infra" in called_models
+
+    @patch(f"{_INTRA_CHANNEL}.is_maas_deployment")
+    def test_run_machine_failure_halts_before_infra(self, mock_is_maas):
+        """Failure in machines model prevents infra model refresh."""
+        mock_is_maas.return_value = True
+        self.deployment.infra_model = "openstack-infra"
+
+        self.jhelper.get_application.return_value = self._make_application(
+            ["openstack-hypervisor/0"]
+        )
+        self.jhelper.run_action.side_effect = ActionFailedException("disk full")
+        step = RefreshSnapStep(self.deployment, self.jhelper)
+
+        result = step.run()
+
+        assert result.result_type == ResultType.FAILED
+        assert "disk full" in result.message
+        # No infra-model get_application calls should have happened
+        infra_calls = [
+            c
+            for c in self.jhelper.get_application.call_args_list
+            if c.args[1] == "openstack-infra"
+        ]
+        assert infra_calls == []
+
+    @patch(f"{_INTRA_CHANNEL}.is_maas_deployment")
+    def test_run_uses_correct_snap_app_lists(self, mock_is_maas):
+        """run() passes SNAP_APPS_MACHINE_MODEL and SNAP_APPS_INFRA_MODEL."""
+        mock_is_maas.return_value = True
+        self.deployment.infra_model = "openstack-infra"
+
+        queried: dict[str, list[str]] = {
+            "openstack-machines": [],
+            "openstack-infra": [],
+        }
+
+        def get_app(name, model):
+            queried[model].append(name)
+            raise ApplicationNotFoundException("not deployed")
+
+        self.jhelper.get_application.side_effect = get_app
+        step = RefreshSnapStep(self.deployment, self.jhelper)
+        step.run()
+
+        assert set(queried["openstack-machines"]) == set(SNAP_APPS_MACHINE_MODEL)
+        assert set(queried["openstack-infra"]) == set(SNAP_APPS_INFRA_MODEL)
+
+    @patch(f"{_INTRA_CHANNEL}.is_maas_deployment")
+    def test_get_plan_includes_refresh_snap_step(self, mock_is_maas):
+        """LatestInChannelCoordinator plan includes RefreshSnapStep."""
+        mock_is_maas.return_value = False
+
+        deployment = Mock()
+        deployment.openstack_machines_model = "openstack-machines"
+        deployment.get_tfhelper = Mock(return_value=Mock())
+        ovn_manager = Mock()
+        ovn_manager.get_roles_for_microovn.return_value = []
+        deployment.get_ovn_manager = Mock(return_value=ovn_manager)
+        client = Mock()
+        client.cluster.list_nodes_by_role.return_value = []
+        jhelper = Mock()
+        manifest = Mock()
+
+        coordinator = LatestInChannelCoordinator(deployment, client, jhelper, manifest)
+        plan = coordinator.get_plan()
+
+        step_types = [type(s) for s in plan]
+        assert RefreshSnapStep in step_types
+
+    @patch(f"{_INTRA_CHANNEL}.is_maas_deployment")
+    def test_refresh_snap_step_placed_after_charm_refresh(self, mock_is_maas):
+        """RefreshSnapStep must appear after LatestInChannel in the plan."""
+        mock_is_maas.return_value = False
+
+        deployment = Mock()
+        deployment.openstack_machines_model = "openstack-machines"
+        deployment.get_tfhelper = Mock(return_value=Mock())
+        ovn_manager = Mock()
+        ovn_manager.get_roles_for_microovn.return_value = []
+        deployment.get_ovn_manager = Mock(return_value=ovn_manager)
+        client = Mock()
+        client.cluster.list_nodes_by_role.return_value = []
+        jhelper = Mock()
+        manifest = Mock()
+
+        coordinator = LatestInChannelCoordinator(deployment, client, jhelper, manifest)
+        plan = coordinator.get_plan()
+
+        step_types = [type(s) for s in plan]
+        assert step_types.index(RefreshSnapStep) > step_types.index(LatestInChannel)
