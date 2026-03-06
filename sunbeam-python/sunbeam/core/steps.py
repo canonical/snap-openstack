@@ -41,6 +41,7 @@ if typing.TYPE_CHECKING:
     import lightkube.config.kubeconfig as l_kubeconfig
     import lightkube.core.client as l_client
     import lightkube.core.exceptions as l_exceptions
+    import lightkube.types as l_patch_type
     from lightkube.models import meta_v1
     from lightkube.resources import core_v1
 else:
@@ -49,6 +50,7 @@ else:
     l_exceptions = LazyImport("lightkube.core.exceptions")
     meta_v1 = LazyImport("lightkube.models.meta_v1")
     core_v1 = LazyImport("lightkube.resources.core_v1")
+    l_patch_type = LazyImport("lightkube.types")
 
 
 LOG = logging.getLogger(__name__)
@@ -462,6 +464,11 @@ class PatchLoadBalancerServicesIPStep(BaseStep, abc.ABC):
         if pool_check_result.result_type != ResultType.COMPLETED:
             return pool_check_result
 
+        LOG.info(
+            "PatchLoadBalancerServicesIP checking services: %s",
+            self.services(),
+        )
+
         for service_name in self.services():
             try:
                 service = self._get_service(service_name, find_lb=True)
@@ -491,13 +498,45 @@ class PatchLoadBalancerServicesIPStep(BaseStep, abc.ABC):
                 return Result(
                     ResultType.FAILED, f"k8s service {service_name!r} has no metadata"
                 )
-            service_annotations = service.metadata.annotations
-            if (
-                service_annotations is None
-                or self.lb_ip_annotation not in service_annotations
-            ):
+
+            resolved_name = service.metadata.name or service_name
+            service_annotations = service.metadata.annotations or {}
+            has_ip_annotation = self.lb_ip_annotation in service_annotations
+            ingress = (
+                service.status.loadBalancer.ingress
+                if service.status and service.status.loadBalancer
+                else None
+            )
+            allocated_ip = ingress[0].ip if ingress else None
+            LOG.info(
+                "is_skip check for service %r: lb_ip_annotation=%r, allocated_ip=%r",
+                resolved_name,
+                service_annotations.get(self.lb_ip_annotation),
+                allocated_ip,
+            )
+
+            if not has_ip_annotation:
+                LOG.info(
+                    "Service %r has no %r annotation — step will run",
+                    resolved_name,
+                    self.lb_ip_annotation,
+                )
                 return Result(ResultType.COMPLETED)
 
+            # Annotation is present but service is still pending (no allocated IP).
+            # The annotation holds a stale IP that MetalLB cannot assign, so the
+            # step must run to clear it.
+            if not allocated_ip:
+                LOG.info(
+                    "Service %r has stale annotation %r=%r but no allocated IP "
+                    "— step will run to clear it",
+                    resolved_name,
+                    self.lb_ip_annotation,
+                    service_annotations[self.lb_ip_annotation],
+                )
+                return Result(ResultType.COMPLETED)
+
+        LOG.info("All services already have IP annotations — skipping step")
         return Result(ResultType.SKIPPED)
 
     def run(self, status: Status | None = None) -> Result:
@@ -515,31 +554,78 @@ class PatchLoadBalancerServicesIPStep(BaseStep, abc.ABC):
             service_annotations = service.metadata.annotations
             if service_annotations is None:
                 service_annotations = {}
+            ingress = (
+                service.status.loadBalancer.ingress
+                if service.status and service.status.loadBalancer
+                else None
+            )
+            allocated_ip = ingress[0].ip if ingress else None
+            LOG.info(
+                "run: service %r — lb_ip_annotation=%r, allocated_ip=%r",
+                service_name,
+                service_annotations.get(self.lb_ip_annotation),
+                allocated_ip,
+            )
             if self.lb_ip_annotation not in service_annotations:
-                if not service.status:
-                    return Result(
-                        ResultType.FAILED, f"k8s service {service_name!r} has no status"
+                if not allocated_ip:
+                    # No annotation and no IP yet — MetalLB hasn't allocated yet
+                    # (e.g. annotation was just cleared on a previous step run).
+                    # Skip this service; MetalLB will assign from the pool.
+                    LOG.info(
+                        "Service %r has no IP annotation and no allocated IP yet"
+                        " — skipping (MetalLB will allocate from pool)",
+                        service_name,
                     )
-                if not service.status.loadBalancer:
-                    return Result(
-                        ResultType.FAILED,
-                        f"k8s service {service_name!r} has no loadBalancer status",
-                    )
-                if not service.status.loadBalancer.ingress:
-                    return Result(
-                        ResultType.FAILED,
-                        f"k8s service {service_name!r} has no loadBalancer ingress",
-                    )
-                loadbalancer_ip = service.status.loadBalancer.ingress[0].ip
-                service_annotations[self.lb_ip_annotation] = loadbalancer_ip
+                    continue
+                service_annotations[self.lb_ip_annotation] = allocated_ip
                 service.metadata.annotations = service_annotations
-                LOG.debug(f"Updating {service_name!r} to use IP {loadbalancer_ip!r}")
+                LOG.info(
+                    "Pinning %r IP annotation to allocated IP %r",
+                    service_name,
+                    allocated_ip,
+                )
                 # Some services like consul have Nodeport for protocol TCP and UDP
                 # defined with same port number and so kubernetes cannot patch the
                 # file with a strategic merge. So we use apply here.
                 # https://github.com/kubernetes/kubernetes/issues/105610
                 service.metadata.managedFields = None
                 self.kube.apply(service, field_manager="sunbeam")
+            elif not allocated_ip:
+                # Annotation is present but the service is still pending — the
+                # stored IP is stale (e.g. reallocated to another service after a
+                # pool recreation). Remove the annotation so MetalLB can assign a
+                # fresh IP from the pool.
+                stale_ip = service_annotations[self.lb_ip_annotation]
+                # Log all field-manager names so ownership conflicts are visible.
+                owners = [
+                    e.manager
+                    for e in (service.metadata.managedFields or [])
+                    if e.manager
+                ]
+                LOG.info(
+                    "Service %r has stale IP annotation %r (no allocated IP)"
+                    " — removing annotation so MetalLB can re-allocate"
+                    " (field managers: %r)",
+                    service_name,
+                    stale_ip,
+                    owners,
+                )
+                # Use a JSON merge patch with null to remove the annotation.
+                # SSA (apply) cannot delete a field owned by another manager;
+                # merge patch bypasses field-manager ownership and always wins.
+                self.kube.patch(
+                    core_v1.Service,
+                    service_name,
+                    {"metadata": {"annotations": {self.lb_ip_annotation: None}}},
+                    patch_type=l_patch_type.PatchType.MERGE,
+                    namespace=self.model(),
+                )
+            else:
+                LOG.info(
+                    "Service %r already has IP annotation %r — no change needed",
+                    service_name,
+                    service_annotations[self.lb_ip_annotation],
+                )
 
         return Result(ResultType.COMPLETED)
 

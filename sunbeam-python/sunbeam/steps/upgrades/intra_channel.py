@@ -7,24 +7,34 @@ import queue
 from rich.console import Console
 from rich.status import Status
 
+from sunbeam.clusterd.client import Client
 from sunbeam.core.common import (
     BaseStep,
     Result,
     ResultType,
-    Role,
     update_status_background,
 )
-from sunbeam.core.deployment import Deployment
-from sunbeam.core.juju import JujuHelper, JujuStepHelper, JujuWaitException
+from sunbeam.core.deployment import Deployment, Networks
+from sunbeam.core.juju import (
+    JujuHelper,
+    JujuStepHelper,
+    JujuWaitException,
+    build_pre_status_overlay,
+)
 from sunbeam.core.manifest import Manifest
 from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.core.terraform import TerraformInitStep
 from sunbeam.features.interface.v1.base import is_maas_deployment
 from sunbeam.steps.cinder_volume import DeployCinderVolumeApplicationStep
 from sunbeam.steps.hypervisor import ReapplyHypervisorTerraformPlanStep
-from sunbeam.steps.k8s import DeployK8SApplicationStep
+from sunbeam.steps.k8s import (
+    DeployK8SApplicationStep,
+    EnsureDefaultL2AdvertisementMutedStep,
+    EnsureL2AdvertisementByHostStep,
+)
 from sunbeam.steps.microceph import DeployMicrocephApplicationStep
 from sunbeam.steps.microovn import DeployMicroOVNApplicationStep
+from sunbeam.steps.mysql import MySQLCharmUpgradeStep
 from sunbeam.steps.openstack import (
     OpenStackPatchLoadBalancerServicesIPPoolStep,
     OpenStackPatchLoadBalancerServicesIPStep,
@@ -36,6 +46,8 @@ from sunbeam.steps.upgrades.base import UpgradeCoordinator, UpgradeFeatures
 
 LOG = logging.getLogger(__name__)
 console = Console()
+
+INFRA_APPS = ["mysql-k8s"]
 
 
 class LatestInChannel(BaseStep, JujuStepHelper):
@@ -81,6 +93,68 @@ class LatestInChannel(BaseStep, JujuStepHelper):
 
         return False
 
+    def _wait_after_refresh(
+        self,
+        refreshed_apps: list[str],
+        model: str,
+        pre_refresh_status: dict[str, str],
+        status: Status | None = None,
+    ) -> Result:
+        """Wait for refreshed apps to settle after a juju refresh.
+
+        Each app is accepted in its pre-refresh workload status OR active so
+        that apps that were in a non-active state before the refresh are not
+        held against an impossible condition.
+        """
+        if not refreshed_apps:
+            return Result(ResultType.COMPLETED)
+
+        LOG.debug(f"Waiting for apps {refreshed_apps} in model {model}")
+        if model == OPENSTACK_MODEL:
+            overlay = build_pre_status_overlay(
+                refreshed_apps,
+                pre_refresh_status,
+                build_overlay_dict(refreshed_apps),
+            )
+            LOG.debug(f"Wait overlay for {model}: {overlay}")
+            status_queue: queue.Queue[str] = queue.Queue()
+            task = update_status_background(self, refreshed_apps, status_queue, status)
+            try:
+                self.jhelper.wait_until_desired_status(
+                    model,
+                    refreshed_apps,
+                    timeout=3600,  # 60 minutes
+                    queue=status_queue,
+                    overlay=overlay,
+                )
+            except (JujuWaitException, TimeoutError) as e:
+                LOG.warning(str(e))
+                return Result(ResultType.FAILED, str(e))
+            finally:
+                task.stop()
+        else:
+            # For machine applications, accept the pre-refresh status plus
+            # active and unknown.
+            try:
+                for app_name in refreshed_apps:
+                    prior = pre_refresh_status.get(app_name, "active")
+                    accepted = list({prior, "active", "unknown"})
+                    LOG.debug(
+                        f"Waiting for {app_name} in {model} "
+                        f"with accepted_status={accepted}"
+                    )
+                    self.jhelper.wait_application_ready(
+                        app_name,
+                        model,
+                        accepted_status=accepted,
+                        timeout=1800,  # 30 minutes
+                    )
+            except TimeoutError as e:
+                LOG.warning(str(e))
+                return Result(ResultType.FAILED, str(e))
+
+        return Result(ResultType.COMPLETED)
+
     def refresh_apps(
         self, apps: dict, model: str, status: Status | None = None
     ) -> Result:
@@ -88,9 +162,27 @@ class LatestInChannel(BaseStep, JujuStepHelper):
 
         If there is no manifest charm entry, refresh the charm to latest revision.
         If manifest charm exists, refresh using channel and revision from manifest.
+
+        After the refresh the wait accepts the app's pre-refresh workload status
+        OR active.  This avoids false timeouts for apps that were in a
+        non-active state (e.g. waiting, blocked) before the refresh was issued.
         """
+        # Snapshot the workload status of every app before the refresh so the
+        # post-refresh wait can use it as one of the accepted statuses.
+        pre_refresh_status: dict[str, str] = {}
+        try:
+            pre_refresh_status = self.jhelper.snapshot_workload_status(
+                model, list(apps)
+            )
+        except Exception:
+            LOG.debug("Could not fetch pre-refresh status", exc_info=True)
+        LOG.debug(f"Pre-refresh workload status in {model}: {pre_refresh_status}")
+
         refreshed_apps = []
         for app_name, (charm, channel, _) in apps.items():
+            # Skip infra apps, they are refreshed via `sunbeam cluster refresh <app>`
+            if charm in INFRA_APPS:
+                continue
             manifest_charm = self.manifest.core.software.charms.get(charm)
             if not manifest_charm:
                 for _, feature in self.manifest.get_features():
@@ -99,12 +191,10 @@ class LatestInChannel(BaseStep, JujuStepHelper):
                         break
 
             if not manifest_charm:
-                # No manifest entry, refresh to latest revision in current channel
                 LOG.debug(f"Running refresh for app {app_name} (no manifest entry)")
                 self.jhelper.charm_refresh(app_name, model)
                 refreshed_apps.append(app_name)
             else:
-                # Manifest entry exists, use channel and revision from manifest
                 LOG.debug(f"Running refresh for app {app_name} with manifest config")
                 self.jhelper.charm_refresh(
                     app_name,
@@ -114,43 +204,9 @@ class LatestInChannel(BaseStep, JujuStepHelper):
                 )
                 refreshed_apps.append(app_name)
 
-        # Wait until refreshed apps are in active state
-        if refreshed_apps:
-            LOG.debug(f"Waiting for apps {refreshed_apps} in model {model}")
-            if model == OPENSTACK_MODEL:
-                # For k8s applications, use wait_until_active
-                status_queue: queue.Queue[str] = queue.Queue()
-                task = update_status_background(
-                    self, refreshed_apps, status_queue, status
-                )
-                try:
-                    self.jhelper.wait_until_active(
-                        model,
-                        refreshed_apps,
-                        timeout=3600,  # 60 minutes
-                        queue=status_queue,
-                        overlay=build_overlay_dict(refreshed_apps),
-                    )
-                except (JujuWaitException, TimeoutError) as e:
-                    LOG.warning(str(e))
-                    return Result(ResultType.FAILED, str(e))
-                finally:
-                    task.stop()
-            else:
-                # For machine applications, use wait_application_ready
-                try:
-                    for app_name in refreshed_apps:
-                        self.jhelper.wait_application_ready(
-                            app_name,
-                            model,
-                            accepted_status=["active", "unknown"],
-                            timeout=1800,  # 30 minutes
-                        )
-                except TimeoutError as e:
-                    LOG.warning(str(e))
-                    return Result(ResultType.FAILED, str(e))
-
-        return Result(ResultType.COMPLETED)
+        return self._wait_after_refresh(
+            refreshed_apps, model, pre_refresh_status, status
+        )
 
     def run(self, status: Status | None = None) -> Result:
         """Refresh all charms identified as needing a refresh.
@@ -160,6 +216,11 @@ class LatestInChannel(BaseStep, JujuStepHelper):
         If the manifest has only charm, then juju refresh is required if channel is
         same as deployed charm, otherwise juju upgrade charm.
         """
+        deployed_infra_apps: dict = {}
+        if is_maas_deployment(self.deployment):
+            deployed_infra_apps = self.get_charm_deployed_versions(
+                self.deployment.infra_model
+            )
         deployed_k8s_apps = self.get_charm_deployed_versions(OPENSTACK_MODEL)
         deployed_machine_apps = self.get_charm_deployed_versions(
             self.deployment.openstack_machines_model
@@ -167,6 +228,7 @@ class LatestInChannel(BaseStep, JujuStepHelper):
 
         all_deployed_apps = deployed_k8s_apps.copy()
         all_deployed_apps.update(deployed_machine_apps)
+        all_deployed_apps.update(deployed_infra_apps)
         LOG.debug(f"All deployed apps: {all_deployed_apps}")
         if self.is_track_changed_for_any_charm(all_deployed_apps):
             error_msg = (
@@ -174,6 +236,13 @@ class LatestInChannel(BaseStep, JujuStepHelper):
                 "option --upgrade-release for release upgrades."
             )
             return Result(ResultType.FAILED, error_msg)
+
+        if is_maas_deployment(self.deployment):
+            result = self.refresh_apps(
+                deployed_infra_apps, self.deployment.infra_model, status
+            )
+            if result.result_type == ResultType.FAILED:
+                return result
 
         result = self.refresh_apps(deployed_k8s_apps, OPENSTACK_MODEL, status)
         if result.result_type == ResultType.FAILED:
@@ -188,6 +257,51 @@ class LatestInChannel(BaseStep, JujuStepHelper):
         return Result(ResultType.COMPLETED)
 
 
+class ReapplyInfraModelConfigStep(BaseStep, JujuStepHelper):
+    """Re-apply manifest config to openstack-infra model applications.
+
+    The infra model is not managed by Terraform, so config changes from
+    the manifest must be applied directly via Juju.
+    """
+
+    # Map of Juju application name -> charm name in manifest
+    INFRA_APPS: dict[str, str] = {
+        "sunbeam-clusterd": "sunbeam-clusterd",
+        "tls-operator": "self-signed-certificates",
+    }
+
+    def __init__(self, deployment: Deployment, jhelper: JujuHelper, manifest: Manifest):
+        super().__init__(
+            "Reapply infra model config",
+            "Re-applying config to openstack-infra model applications",
+        )
+        self.deployment = deployment
+        self.jhelper = jhelper
+        self.manifest = manifest
+
+    def is_skip(self, status: Status | None = None) -> Result:
+        """Skip if not a MAAS deployment."""
+        if not is_maas_deployment(self.deployment):
+            return Result(ResultType.SKIPPED)
+        return Result(ResultType.COMPLETED)
+
+    def run(self, status: Status | None = None) -> Result:
+        """Apply manifest charm config to each infra model application."""
+        model = self.deployment.infra_model  # type: ignore[attr-defined]
+        for app_name, charm_name in self.INFRA_APPS.items():
+            charm_manifest = self.manifest.core.software.charms.get(charm_name)
+            if not charm_manifest or not charm_manifest.config:
+                LOG.debug(
+                    f"No manifest config for {charm_name}, skipping config reapply"
+                )
+                continue
+            LOG.debug(
+                f"Reapplying config for {app_name} in {model}: {charm_manifest.config}"
+            )
+            self.jhelper.set_app_config(app_name, model, charm_manifest.config)
+        return Result(ResultType.COMPLETED)
+
+
 class LatestInChannelCoordinator(UpgradeCoordinator):
     """Coordinator for refreshing charms in their current channel."""
 
@@ -195,6 +309,7 @@ class LatestInChannelCoordinator(UpgradeCoordinator):
         """Return the upgrade plan."""
         plan = [
             LatestInChannel(self.deployment, self.jhelper, self.manifest),
+            ReapplyInfraModelConfigStep(self.deployment, self.jhelper, self.manifest),
             # Microceph introduces new offer urls for rgw and so microceph
             # plan need to be applied before openstack plan
             TerraformInitStep(self.deployment.get_tfhelper("microceph-plan")),
@@ -226,36 +341,84 @@ class LatestInChannelCoordinator(UpgradeCoordinator):
             ),
         ]
 
-        plan.extend(
-            [
-                TerraformInitStep(self.deployment.get_tfhelper("k8s-plan")),
-                DeployK8SApplicationStep(
-                    self.deployment,
-                    self.client,
-                    self.deployment.get_tfhelper("k8s-plan"),
-                    self.jhelper,
-                    self.manifest,
-                    self.deployment.openstack_machines_model,
-                    refresh=True,
-                ),
-            ]
-        )
-
         if is_maas_deployment(self.deployment):
+            from sunbeam.provider.maas.client import MaasClient  # noqa: PLC0415
+            from sunbeam.provider.maas.steps import (  # noqa: PLC0415
+                MaasCreateLoadBalancerIPPoolsStep,
+                MaasDeployK8SApplicationStep,
+            )
+
+            maas_client = MaasClient.from_deployment(self.deployment)
             plan.extend(
                 [
+                    TerraformInitStep(self.deployment.get_tfhelper("k8s-plan")),
+                    MaasDeployK8SApplicationStep(
+                        self.deployment,  # type: ignore [arg-type]
+                        self.client,
+                        maas_client,
+                        self.deployment.get_tfhelper("k8s-plan"),
+                        self.jhelper,
+                        self.manifest,
+                        self.deployment.openstack_machines_model,
+                    ),
+                    EnsureDefaultL2AdvertisementMutedStep(
+                        self.deployment, self.client, self.jhelper
+                    ),
+                    MaasCreateLoadBalancerIPPoolsStep(
+                        self.deployment,  # type: ignore [arg-type]
+                        self.client,
+                        maas_client,
+                    ),
+                    EnsureL2AdvertisementByHostStep(
+                        self.deployment,
+                        self.client,
+                        self.jhelper,
+                        self.deployment.openstack_machines_model,
+                        Networks.INTERNAL,
+                        self.deployment.internal_ip_pool,  # type: ignore [attr-defined]
+                    ),
+                    EnsureL2AdvertisementByHostStep(
+                        self.deployment,
+                        self.client,
+                        self.jhelper,
+                        self.deployment.openstack_machines_model,
+                        Networks.PUBLIC,
+                        self.deployment.public_ip_pool,  # type: ignore [attr-defined]
+                    ),
                     OpenStackPatchLoadBalancerServicesIPPoolStep(
                         self.client,
                         self.deployment.public_api_label,  # type: ignore [attr-defined]
-                    )
+                    ),
+                ]
+            )
+        else:
+            plan.extend(
+                [
+                    TerraformInitStep(self.deployment.get_tfhelper("k8s-plan")),
+                    DeployK8SApplicationStep(
+                        self.deployment,
+                        self.client,
+                        self.deployment.get_tfhelper("k8s-plan"),
+                        self.jhelper,
+                        self.manifest,
+                        self.deployment.openstack_machines_model,
+                        refresh=True,
+                    ),
                 ]
             )
 
-        plan.extend([OpenStackPatchLoadBalancerServicesIPStep(self.client)])
-
-        network_nodes = self.client.cluster.list_nodes_by_role(
-            Role.NETWORK.name.lower()
+        ovn_manager = self.deployment.get_ovn_manager()
+        plan.extend(
+            [OpenStackPatchLoadBalancerServicesIPStep(self.client, ovn_manager)]
         )
+
+        network_nodes = []
+        microovn_roles = ovn_manager.get_roles_for_microovn()
+        for role in microovn_roles:
+            network_nodes.extend(
+                self.client.cluster.list_nodes_by_role(role.name.lower())
+            )
+
         if len(network_nodes):
             plan.extend(
                 [
@@ -267,6 +430,7 @@ class LatestInChannelCoordinator(UpgradeCoordinator):
                         self.jhelper,
                         self.manifest,
                         self.deployment.openstack_machines_model,
+                        ovn_manager,
                     ),
                 ]
             )
@@ -303,4 +467,41 @@ class LatestInChannelCoordinator(UpgradeCoordinator):
             ]
         )
 
+        return plan
+
+
+class MySQLInChannelUpgradeCoordinator(UpgradeCoordinator):
+    """Coordinator for refreshing mysql-k8s charm in its current channel."""
+
+    def __init__(
+        self,
+        deployment: Deployment,
+        client: Client,
+        jhelper: JujuHelper,
+        manifest: Manifest,
+        reset_mysql_upgrade_state: bool,
+    ):
+        super().__init__(deployment, client, jhelper, manifest)
+        self.reset_mysql_upgrade_state = reset_mysql_upgrade_state
+
+    def get_plan(self) -> list[BaseStep]:
+        """Return the upgrade plan."""
+        plan = [
+            MySQLCharmUpgradeStep(
+                self.deployment,
+                self.client,
+                self.jhelper,
+                self.manifest,
+                self.reset_mysql_upgrade_state,
+            ),
+            TerraformInitStep(self.deployment.get_tfhelper("openstack-plan")),
+            ReapplyOpenStackTerraformPlanStep(
+                self.deployment,
+                self.client,
+                self.deployment.get_tfhelper("openstack-plan"),
+                self.jhelper,
+                self.manifest,
+                self.deployment.openstack_machines_model,
+            ),
+        ]
         return plan

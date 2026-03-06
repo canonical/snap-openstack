@@ -15,6 +15,7 @@ import (
 
 	"github.com/canonical/snap-openstack/sunbeam-microcluster/api"
 	"github.com/canonical/snap-openstack/sunbeam-microcluster/database"
+	"github.com/canonical/snap-openstack/sunbeam-microcluster/sunbeam"
 	"github.com/canonical/snap-openstack/sunbeam-microcluster/version"
 )
 
@@ -83,8 +84,11 @@ func (c *cmdDaemon) Run(_ *cobra.Command, _ []string) error {
 		},
 
 		// OnStart is run after the daemon is started.
-		OnStart: func(_ context.Context, _ state.State) error {
+		OnStart: func(ctx context.Context, s state.State) error {
 			logger.Info("This is a hook that runs after the daemon first starts")
+
+			// Start the feature gate sync watcher to sync cluster DB to snap config
+			sunbeam.StartFeatureGateSync(ctx, s)
 
 			return nil
 		},

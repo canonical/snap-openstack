@@ -7,6 +7,7 @@ from typing import Any
 from rich.status import Status
 
 import sunbeam.steps.microceph as microceph
+from sunbeam import versions
 from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import (
     NodeNotExistInClusterException,
@@ -17,7 +18,7 @@ from sunbeam.core.juju import (
     ApplicationNotFoundException,
     JujuHelper,
 )
-from sunbeam.core.manifest import Manifest
+from sunbeam.core.manifest import CharmManifest, Manifest
 from sunbeam.core.steps import (
     DeployMachineApplicationStep,
     DestroyMachineApplicationStep,
@@ -61,6 +62,7 @@ class DeployCinderVolumeApplicationStep(DeployMachineApplicationStep):
         jhelper: JujuHelper,
         manifest: Manifest,
         model: str,
+        extra_tfvars: dict | None = None,
     ):
         super().__init__(
             deployment,
@@ -76,6 +78,7 @@ class DeployCinderVolumeApplicationStep(DeployMachineApplicationStep):
             "Deploying Cinder Volume",
         )
         self._offers: dict[str, str | None] = {}
+        self.override_tfvars: dict[str, Any] = extra_tfvars or {}
 
     def get_application_timeout(self) -> int:
         """Return application timeout in seconds."""
@@ -141,13 +144,27 @@ class DeployCinderVolumeApplicationStep(DeployMachineApplicationStep):
                     "endpoint": "ceph",
                 },
             ],
-            "charm_cinder_volume_config": {},
+            "charm_cinder_volume_config": {"snap-channel": versions.OPENSTACK_CHANNEL},
             "charm_cinder_volume_ceph_config": {
                 "ceph-osd-replication-count": microceph.ceph_replica_scale(
                     len(storage_nodes)
                 ),
             },
         }
+
+        charm_manifest: CharmManifest | None = self.manifest.core.software.charms.get(
+            APPLICATION
+        )
+        if charm_manifest and charm_manifest.config:
+            tfvars["charm_cinder_volume_config"].update(charm_manifest.config)
+
+        # This may not be required ideally as Cinder volume is deployed always
+        # before user can enable or disable telemetry.
+        feature_manager = self.deployment.get_feature_manager()
+        if feature_manager.is_feature_enabled(self.deployment, "telemetry"):
+            tfvars["enable-telemetry-notifications"] = True
+        else:
+            tfvars["enable-telemetry-notifications"] = False
 
         if len(storage_nodes):
             microceph_tfhelper = self.deployment.get_tfhelper("microceph-plan")
@@ -158,6 +175,11 @@ class DeployCinderVolumeApplicationStep(DeployMachineApplicationStep):
             if ceph_application_name:
                 tfvars["ceph-application-name"] = ceph_application_name
             tfvars.update(self._get_offers())
+
+        # Any tfvars that needs override will take precedence from self.override_tfvars
+        # Example usage: When telemetry is enabled/disabled, telemetry feature can set
+        # enable-telemetry-notifications using override_tfvars
+        tfvars.update(self.override_tfvars)
 
         return tfvars
 

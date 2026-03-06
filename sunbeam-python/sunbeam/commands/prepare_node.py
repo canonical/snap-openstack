@@ -39,6 +39,15 @@ sudo grep -r $USER /etc/{{sudoers,sudoers.d}} | grep NOPASSWD:ALL &> /dev/null |
     rm -f /tmp/90-$USER-sudo-access
 }}
 
+# Ensure parallel instances of snaps is enabled
+if [ "$(sudo snap get system experimental.parallel-instances 2>/dev/null)" != "true" ];
+then
+    sudo snap set system experimental.parallel-instances=true
+    # Force recrate the snap sandbox LP#2139363
+    sudo /usr/lib/snapd/snap-discard-ns openstack
+    sudo snap restart openstack
+fi
+
 # Ensure dependency packages are installed
 for pkg in openssh-server curl sed; do
     dpkg -s $pkg &> /dev/null || {{

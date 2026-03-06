@@ -37,6 +37,8 @@ core:
         channel: 2024.1/edge
       epa-orchestrator:
         channel: 2024.1/edge
+        config:
+          snap-channel: 2024.1/edge
       microceph:
         channel: squid/stable
         config:
@@ -49,6 +51,8 @@ core:
           snap-channel: 2024.1/edge
       microcluster-token-distributor:
         channel: latest/edge
+      sunbeam-ovn-proxy:
+        channel: 2024.1/edge
 features:
   baremetal:
     software:

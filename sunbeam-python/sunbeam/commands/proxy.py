@@ -48,7 +48,16 @@ console = Console()
 def _preflight_checks(deployment: Deployment):
     from sunbeam.provider.maas.deployment import MAAS_TYPE  # to avoid circular import
 
-    client = deployment.get_client()
+    try:
+        client = deployment.get_client()
+    except ValueError as e:
+        if deployment.type == MAAS_TYPE:
+            message = (
+                "Deployment not bootstrapped or bootstrap process has not "
+                "completed succesfully. Please run `sunbeam cluster bootstrap`"
+            )
+            raise click.ClickException(message) from e
+        raise
     if deployment.type == MAAS_TYPE:
         if client is None:
             message = (

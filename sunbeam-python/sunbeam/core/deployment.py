@@ -42,6 +42,7 @@ from sunbeam.core.terraform import TerraformHelper
 from sunbeam.versions import MANIFEST_ATTRIBUTES_TFVAR_MAP, TERRAFORM_DIR_NAMES
 
 if TYPE_CHECKING:
+    from sunbeam.core import ovn
     from sunbeam.feature_manager import FeatureManager
     from sunbeam.features.interface.v1.base import BaseFeature
     from sunbeam.storage.manager import StorageBackendManager
@@ -49,9 +50,11 @@ else:
     FeatureManager = object
     BaseFeature = object
     StorageBackendManager = object
+    ovn = object
 
 LOG = logging.getLogger(__name__)
 PROXY_CONFIG_KEY = "ProxySettings"
+DEPLOYMENT_TYPE_CONFIG_KEY = "deployment.type"
 
 _cls_registry: dict[str, Type["Deployment"]] = {}
 
@@ -208,6 +211,12 @@ class Deployment(pydantic.BaseModel):
             self._storage_manager = StorageBackendManager()
 
         return self._storage_manager
+
+    def get_ovn_manager(self) -> "ovn.OvnManager":
+        """Return the OVN manager for the deployment."""
+        from sunbeam.core import ovn
+
+        return ovn.OvnManager(self.get_client())
 
     def get_proxy_settings(self) -> dict:
         """Fetch proxy settings from clusterd, if not available use defaults."""

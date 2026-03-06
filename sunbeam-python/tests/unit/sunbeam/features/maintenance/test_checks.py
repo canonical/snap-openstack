@@ -34,7 +34,7 @@ class TestInstancesStatusCheck:
         mock_guests_on_hypervisor,
     ):
         node = "node1"
-        instances = [[], [], []]
+        instances = [[], []]
         mock_guests_on_hypervisor.side_effect = instances
 
         check = checks.InstancesStatusCheck(Mock(), Mock(), node, False)
@@ -47,10 +47,9 @@ class TestInstancesStatusCheck:
         mock_guests_on_hypervisor,
     ):
         node = "node1"
-        instances = [[Mock()], [Mock()], [Mock()]]
+        instances = [[Mock()], [Mock()]]
         instances[0][-1].id = "target-inst-1"
         instances[1][-1].id = "target-inst-2"
-        instances[2][-1].id = "target-inst-3"
 
         mock_guests_on_hypervisor.side_effect = instances
 
@@ -61,7 +60,6 @@ class TestInstancesStatusCheck:
                 {
                     "target-inst-1": "ERROR",
                     "target-inst-2": "MIGRATING",
-                    "target-inst-3": "SHUTOFF",
                 },
             )
         )
@@ -73,7 +71,7 @@ class TestInstancesStatusCheck:
         mock_guests_on_hypervisor,
     ):
         nodes = "node1"
-        instances = [[Mock()], [Mock()], [Mock(), Mock()]]
+        instances = [[Mock()], [Mock(), Mock()]]
         instances[-1][-1].id = "target-inst"
 
         mock_guests_on_hypervisor.side_effect = instances

@@ -162,6 +162,39 @@ class ApplicationStatusOverlay(TypedDict, total=False):
     workload_status_message: list[str] | None
 
 
+def build_pre_status_overlay(
+    apps: list[str],
+    pre_status: dict[str, str],
+    base_overlay: dict[str, ApplicationStatusOverlay] | None = None,
+) -> dict[str, ApplicationStatusOverlay]:
+    """Build a per-app wait overlay that accepts pre-operation status OR active.
+
+    For each app the accepted workload statuses are set to the union of the
+    app's entry in *pre_status* (defaulting to "active"), "active", and any
+    statuses already present in *base_overlay*.  This ensures that apps which
+    were already in a non-active state (e.g. "blocked") before the operation
+    are not held against an impossible condition, even for apps with special-
+    case overlays (e.g. traefik, mysql).
+
+    :param apps: Applications to build the overlay for.
+    :param pre_status: Mapping of app-name → workload-status captured before
+        the operation (e.g. from JujuHelper.snapshot_workload_status).
+    :param base_overlay: Optional starting overlay; "status" entries are merged
+        with the pre-refresh status rather than replaced.
+    :returns: A per-application ApplicationStatusOverlay dict.
+    """
+    overlay: dict[str, ApplicationStatusOverlay] = dict(base_overlay or {})
+    for app_name in apps:
+        app_overlay = overlay.get(app_name, {})
+        prior = pre_status.get(app_name, "active")
+        existing_statuses = app_overlay.get("status") or ["active"]
+        overlay[app_name] = {
+            **app_overlay,
+            "status": list(set(existing_statuses) | {prior, "active"}),
+        }
+    return overlay
+
+
 class JujuAccount(pydantic.BaseModel):
     user: str
     password: str
@@ -411,6 +444,25 @@ class JujuHelper:
         """
         return list(self.get_model_status(model).apps.keys())
 
+    def snapshot_workload_status(self, model: str, apps: list[str]) -> dict[str, str]:
+        """Return the current workload status for each of the given apps.
+
+        Queries the model once and extracts app_status.current for every app
+        that is present.  Raises on model connectivity errors; callers that
+        want graceful degradation should catch exceptions themselves.
+
+        :param model: Name of the Juju model.
+        :param apps: Application names to snapshot.
+        :returns: Mapping of app-name → workload-status string.
+        """
+        result: dict[str, str] = {}
+        model_status = self.get_model_status(model)
+        for app_name in apps:
+            app_info = model_status.apps.get(app_name)
+            if app_info:
+                result[app_name] = app_info.app_status.current
+        return result
+
     def get_application(
         self, name: str, model: str
     ) -> "jubilant.statustypes.AppStatus":
@@ -488,13 +540,23 @@ class JujuHelper:
         with self._model(model) as juju:
             juju.remove_application(*name, destroy_storage=destroy_storage, force=force)
 
-    def add_machine(self, name: str, model: str, base: str = JUJU_BASE) -> str:
+    def add_machine(
+        self,
+        name: str,
+        model: str,
+        base: str = JUJU_BASE,
+        constraints: list[str] | None = None,
+    ) -> str:
         """Add machine to model.
 
         Workaround for https://github.com/juju/python-libjuju/issues/1229
         """
         with self._model(model) as juju:
-            output, stderr = juju._cli("add-machine", "--base", base, name)
+            cmd = ["add-machine", "--base", base]
+            if constraints:
+                cmd.extend(["--constraints", " ".join(constraints)])
+            cmd.append(name)
+            output, stderr = juju._cli(*cmd)
             machine_id = stderr.strip().split(" ")[-1]
             LOG.debug("Added new machine %s", machine_id)
             return machine_id
@@ -604,6 +666,39 @@ class JujuHelper:
         self._validate_unit(unit)
         with self._model(model) as juju:
             juju.remove_unit(unit)
+
+    def show_unit(self, model: str, unit_name: str) -> dict:
+        """Show information about a unit.
+
+        :model: Name of the model
+        :unit_name: Name of the unit
+        """
+        with self._model(model) as juju:
+            try:
+                unit_data = juju.cli("show-unit", "--format", "json", unit_name)
+            except jubilant.CLIError as e:
+                if "not found" in e.stderr:
+                    raise UnitNotFoundException(f"Unit {unit_name!r} not found") from e
+                raise JujuException(
+                    f"Failed to get unit {unit_name!r} from model {model!r}"
+                ) from e
+        return json.loads(unit_data)[unit_name]
+
+    def scale_application(self, model: str, application: str, scale: int) -> None:
+        """Scale application to the desired number of k8s application units.
+
+        :model: Name of the model where the application is located
+        :application: Application name
+        :scale: Desired scale for the application
+        """
+        with self._model(model) as juju:
+            try:
+                juju.cli("scale-application", application, str(scale))
+            except jubilant.CLIError as e:
+                raise JujuException(
+                    f"Failed to scale app {application!r} in model {model!r} "
+                    f"to {scale}: {e.stderr}"
+                ) from e
 
     def _get_leader_unit(
         self, name: str, model: str
@@ -882,6 +977,23 @@ class JujuHelper:
                     f"Failed to get config {config_value!r} from application {app!r}"
                 ) from e
         return config_value
+
+    def set_app_config(self, app: str, model: str, config: dict) -> None:
+        """Set charm config for an application.
+
+        :app: Name of the application.
+        :model: Name of the model.
+        :config: Dictionary of config key-value pairs to set.
+        """
+        with self._model(model) as juju:
+            try:
+                juju.config(app, config)
+            except jubilant.CLIError as e:
+                if "not found" in e.stderr:
+                    raise ApplicationNotFoundException(f"App {app!r} not found") from e
+                raise JujuException(
+                    f"Failed to set config on application {app!r} in model {model!r}"
+                ) from e
 
     def _generate_juju_credential(self, user: dict) -> dict:
         """Generate juju credential object from kubeconfig user."""
@@ -1463,13 +1575,18 @@ class JujuHelper:
             juju.refresh(application_name, channel=channel, revision=revision)
 
     def get_available_charm_revision(
-        self, charm_name: str, channel: str, base: str = JUJU_BASE
+        self,
+        charm_name: str,
+        channel: str,
+        base: str = JUJU_BASE,
+        arch: str | None = None,
     ) -> int:
         """Find the latest available revision of a charm in a given channel.
 
         :param charm_name: Name of charm to look up
         :param channel: Channel to lookup charm in
         :param base: Base to lookup charm in, default is JUJU_BASE
+        :param arch: Architecture to filter by, or None to match any
         """
         track, risk = channel.split("/")
         base_name, base_channel = base.split("@")
@@ -1486,6 +1603,8 @@ class JujuHelper:
         )
 
         for risk_info in output["channels"][track][risk]:
+            if arch is not None and arch not in risk_info.get("architectures", []):
+                continue
             for base_info in risk_info["bases"]:
                 if base_info["channel"] == base_channel:
                     return risk_info["revision"]

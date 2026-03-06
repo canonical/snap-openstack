@@ -1,5 +1,9 @@
 # How to contribute
 
+## Architecture Decision Records
+
+For significant architectural decisions, we maintain Architecture Decision Records (ADRs) in the [`docs/adr/`](adr/) directory. Please review relevant ADRs before making major changes, and consider creating a new ADR for architectural decisions.
+
 ## Reporting a bug
 
 Please report bugs to the [OpenStack Snap](https://bugs.launchpad.net/snap-openstack) project on Launchpad.

@@ -16,9 +16,9 @@ from sunbeam.clusterd.service import (
 )
 from sunbeam.commands.configure import (
     get_dpdk_config,
-    get_external_network_configs,
     get_pci_whitelist_config,
 )
+from sunbeam.core import ovn
 from sunbeam.core.common import (
     BaseStep,
     Result,
@@ -48,6 +48,7 @@ from sunbeam.core.terraform import (
     TerraformStateLockedException,
 )
 from sunbeam.lazy import LazyImport
+from sunbeam.steps.configure import get_external_network_configs
 
 if typing.TYPE_CHECKING:
     import openstack
@@ -96,6 +97,7 @@ class DeployHypervisorApplicationStep(DeployMachineApplicationStep):
         self.openstack_tfhelper = openstack_tfhelper
         self.openstack_model = OPENSTACK_MODEL
         self.cinder_volume_tfhelper = cinder_volume_tfhelper
+        self.ovn_manager = deployment.get_ovn_manager()
 
     def extra_tfvars(self) -> dict:
         """Extra terraform vars to pass to terraform apply."""
@@ -114,9 +116,10 @@ class DeployHypervisorApplicationStep(DeployMachineApplicationStep):
             "keystone-offer-url",
             "cert-distributor-offer-url",
             "ca-offer-url",
-            "ovn-relay-offer-url",
             "nova-offer-url",
         }
+        if self.ovn_manager.get_provider() == ovn.OvnProvider.OVN_K8S:
+            juju_offers.add("ovn-relay-offer-url")
         extra_tfvars = {offer: openstack_tf_output.get(offer) for offer in juju_offers}
 
         if len(storage_nodes) > 0:

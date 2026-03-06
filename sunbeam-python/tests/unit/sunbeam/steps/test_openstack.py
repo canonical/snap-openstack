@@ -8,6 +8,7 @@ import pytest
 import tenacity
 
 from sunbeam.clusterd.service import ConfigItemNotFoundException
+from sunbeam.core import ovn
 from sunbeam.core.common import ResultType
 from sunbeam.core.juju import (
     ApplicationNotFoundException,
@@ -34,6 +35,9 @@ from sunbeam.steps.openstack import (
     compute_os_api_scale,
     get_database_default_storage_dict,
     get_database_storage_dict,
+    remove_blocked_apps_from_features,
+    remove_blocked_apps_from_ovn_provider,
+    remove_blocked_apps_from_role,
 )
 
 TOPOLOGY = "single"
@@ -134,6 +138,7 @@ class TestDeployControlPlaneStep:
         basic_jhelper.get_application.side_effect = ApplicationNotFoundException(
             "not found"
         )
+        deployment_with_client.get_ovn_manager().get_control_plane_tfvars.return_value = {}
 
         step = DeployControlPlaneStep(
             deployment_with_client,
@@ -159,6 +164,7 @@ class TestDeployControlPlaneStep:
         snap_mock,
     ):
         snap_mock().config.get.return_value = "k8s"
+        deployment_with_client.get_ovn_manager().get_control_plane_tfvars.return_value = {}
         basic_tfhelper.update_tfvars_and_apply_tf.side_effect = TerraformException(
             "apply failed..."
         )
@@ -188,6 +194,7 @@ class TestDeployControlPlaneStep:
         snap_mock,
     ):
         snap_mock().config.get.return_value = "k8s"
+        deployment_with_client.get_ovn_manager().get_control_plane_tfvars.return_value = {}
         basic_jhelper.get_application_names.return_value = ["app1"]
         basic_jhelper.wait_until_active.side_effect = TimeoutError("timed out")
 
@@ -216,6 +223,7 @@ class TestDeployControlPlaneStep:
         snap_mock,
     ):
         snap_mock().config.get.return_value = "k8s"
+        deployment_with_client.get_ovn_manager().get_control_plane_tfvars.return_value = {}
         basic_jhelper.get_application_names.return_value = ["app1"]
         basic_jhelper.wait_until_active.side_effect = JujuWaitException(
             "Unit in error: placement/0"
@@ -290,6 +298,14 @@ class TestDeployControlPlaneStep:
         assert result.result_type == ResultType.COMPLETED
 
 
+@pytest.fixture
+def ovn_manager():
+    """Ovn manager mock."""
+    ovn_manager = Mock()
+    ovn_manager.get_provider.return_value = ovn.OvnProvider.OVN_K8S
+    yield ovn_manager
+
+
 class PatchLoadBalancerServicesIPStepTest:
     @pytest.fixture
     def patch_client(self):
@@ -298,7 +314,9 @@ class PatchLoadBalancerServicesIPStepTest:
         client.cluster.list_nodes_by_role.return_value = ["node-1"]
         return client
 
-    def test_is_skip(self, patch_client, read_config_patch, snap_patch, snap_mock):
+    def test_is_skip(
+        self, patch_client, read_config_patch, snap_patch, snap_mock, ovn_manager
+    ):
         snap_mock().config.get.return_value = "k8s"
         with patch(
             "sunbeam.core.steps.l_client.Client",
@@ -314,12 +332,12 @@ class PatchLoadBalancerServicesIPStepTest:
                 )
             ),
         ):
-            step = OpenStackPatchLoadBalancerServicesIPStep(patch_client)
+            step = OpenStackPatchLoadBalancerServicesIPStep(patch_client, ovn_manager)
             result = step.is_skip()
         assert result.result_type == ResultType.SKIPPED
 
     def test_is_skip_missing_annotation(
-        self, patch_client, read_config_patch, snap_patch, snap_mock
+        self, patch_client, read_config_patch, snap_patch, snap_mock, ovn_manager
     ):
         snap_mock().config.get.return_value = "k8s"
         with patch(
@@ -330,21 +348,25 @@ class PatchLoadBalancerServicesIPStepTest:
                 )
             ),
         ):
-            step = OpenStackPatchLoadBalancerServicesIPStep(patch_client)
+            step = OpenStackPatchLoadBalancerServicesIPStep(patch_client, ovn_manager)
             result = step.is_skip()
         assert result.result_type == ResultType.COMPLETED
 
-    def test_is_skip_missing_config(self, patch_client, snap_patch, snap_mock):
+    def test_is_skip_missing_config(
+        self, patch_client, snap_patch, snap_mock, ovn_manager
+    ):
         snap_mock().config.get.return_value = "k8s"
         with patch(
             "sunbeam.core.steps.read_config",
             new=Mock(side_effect=ConfigItemNotFoundException),
         ):
-            step = OpenStackPatchLoadBalancerServicesIPStep(patch_client)
+            step = OpenStackPatchLoadBalancerServicesIPStep(patch_client, ovn_manager)
             result = step.is_skip()
         assert result.result_type == ResultType.FAILED
 
-    def test_run(self, patch_client, read_config_patch, snap_patch, snap_mock):
+    def test_run(
+        self, patch_client, read_config_patch, snap_patch, snap_mock, ovn_manager
+    ):
         snap_mock().config.get.return_value = "k8s"
         with patch(
             "sunbeam.core.steps.l_client.Client",
@@ -361,7 +383,7 @@ class PatchLoadBalancerServicesIPStepTest:
                 )
             ),
         ):
-            step = OpenStackPatchLoadBalancerServicesIPStep(patch_client)
+            step = OpenStackPatchLoadBalancerServicesIPStep(patch_client, ovn_manager)
             step.is_skip()
             result = step.run()
         assert result.result_type == ResultType.COMPLETED
@@ -372,6 +394,120 @@ class PatchLoadBalancerServicesIPStepTest:
         assert service_arg.metadata.annotations[METALLB_IP_ANNOTATION] == "fake-ip"
         # Verify field_manager was passed
         assert step.kube.apply.mock_calls[0][2]["field_manager"] == "sunbeam"
+
+
+class TestPatchLoadBalancerServicesIPStaleAnnotation:
+    """Tests for stale MetalLB IP annotation handling."""
+
+    @pytest.fixture
+    def patch_client(self):
+        """Client mock; returns node-1 for any role so ovn-relay is excluded."""
+        client = Mock()
+        client.cluster.list_nodes_by_role.return_value = ["node-1"]
+        return client
+
+    def _make_service(self, ip_annotation=None, ingress_ip=None):
+        """Helper: build a plausible lightkube Service mock."""
+        annotations = {}
+        if ip_annotation is not None:
+            annotations[METALLB_IP_ANNOTATION] = ip_annotation
+        ingress = [Mock(ip=ingress_ip)] if ingress_ip else None
+        lb_status = Mock()
+        lb_status.ingress = ingress
+        status = Mock()
+        status.loadBalancer = lb_status
+        return Mock(
+            metadata=Mock(
+                annotations=annotations,
+                name=None,
+                managedFields=None,
+            ),
+            status=status,
+        )
+
+    def test_is_skip_stale_annotation_pending_returns_completed(
+        self, patch_client, read_config_patch, snap_patch, snap_mock, ovn_manager
+    ):
+        """is_skip should return COMPLETED when a service has a stale IP annotation.
+
+        Service is still in <pending> state (no allocated IP).
+        """
+        snap_mock().config.get.return_value = "k8s"
+
+        # traefik and traefik-public have proper annotations+IPs; rabbitmq has a
+        # stale annotation but no ingress (pending).
+        svc_with_ip = self._make_service(ip_annotation="1.2.3.4", ingress_ip="1.2.3.4")
+        svc_stale = self._make_service(ip_annotation="172.22.0.230", ingress_ip=None)
+
+        get_mock = Mock(
+            side_effect=[
+                svc_with_ip,  # traefik-lb
+                svc_with_ip,  # traefik-public-lb
+                svc_stale,  # rabbitmq-lb  ← stale annotation, pending
+            ]
+        )
+        with patch(
+            "sunbeam.core.steps.l_client.Client",
+            new=Mock(return_value=Mock(get=get_mock)),
+        ):
+            step = OpenStackPatchLoadBalancerServicesIPStep(patch_client, ovn_manager)
+            result = step.is_skip()
+
+        assert result.result_type == ResultType.COMPLETED
+
+    def test_run_removes_stale_ip_annotation(
+        self, patch_client, read_config_patch, snap_patch, snap_mock, ovn_manager
+    ):
+        """run() should remove a stale IP annotation from a pending service.
+
+        MetalLB can then assign a fresh IP from the pool.
+        """
+        snap_mock().config.get.return_value = "k8s"
+
+        svc_with_ip = self._make_service(ip_annotation="1.2.3.4", ingress_ip="1.2.3.4")
+        svc_with_ip.metadata.name = "traefik-lb"
+        svc_stale = self._make_service(ip_annotation="172.22.0.230", ingress_ip=None)
+        svc_stale.metadata.name = "rabbitmq-lb"
+
+        # is_skip needs one pass over 3 services; run() needs another pass.
+        get_mock = Mock(
+            side_effect=[
+                # is_skip pass
+                svc_with_ip,  # traefik-lb
+                svc_with_ip,  # traefik-public-lb
+                svc_stale,  # rabbitmq-lb (stale → returns COMPLETED so run fires)
+                # run pass
+                svc_with_ip,  # traefik-lb  (annotation present + ingress → skip)
+                svc_with_ip,  # traefik-public-lb  (same)
+                svc_stale,  # rabbitmq-lb (stale → clear annotation)
+                svc_with_ip,  # traefik-rgw-lb (annotation present + ingress → skip)
+            ]
+        )
+        with patch(
+            "sunbeam.core.steps.l_client.Client",
+            new=Mock(return_value=Mock(get=get_mock)),
+        ):
+            step = OpenStackPatchLoadBalancerServicesIPStep(patch_client, ovn_manager)
+            step.is_skip()
+            result = step.run()
+
+        assert result.result_type == ResultType.COMPLETED
+        # patch must have been called exactly once — for rabbitmq-lb
+        step.kube.patch.assert_called_once()
+        call_args = step.kube.patch.mock_calls[0]
+        # First positional arg is the resource type
+        from lightkube.resources import core_v1
+
+        assert call_args[1][0] is core_v1.Service
+        # Second positional arg is the service name
+        assert call_args[1][1] == "rabbitmq-lb"
+        # Third positional arg is the patch body — annotation set to None (deletion)
+        patch_body = call_args[1][2]
+        assert patch_body["metadata"]["annotations"][METALLB_IP_ANNOTATION] is None
+        # patch_type must be MERGE
+        from lightkube.types import PatchType
+
+        assert call_args[2]["patch_type"] == PatchType.MERGE
 
 
 class PatchLoadBalancerServicesIPPoolStepTest:
@@ -844,3 +980,116 @@ def test_get_database_storage_dict(
     default_storages = get_database_default_storage_dict(many_mysql)
     storages = get_database_storage_dict(client, many_mysql, manifest, default_storages)
     assert storages == expected_storage
+
+
+# ---------------------------------------------------------------------------
+# remove_blocked_apps_from_features
+# ---------------------------------------------------------------------------
+
+
+def test_remove_blocked_apps_from_features_active_app_excluded():
+    jhelper = Mock()
+    app_mock = Mock()
+    app_mock.app_status.current = "active"
+    jhelper.get_application.return_value = app_mock
+    result = remove_blocked_apps_from_features(jhelper, "test-model")
+    assert result == []
+
+
+def test_remove_blocked_apps_from_features_blocked_app_included():
+    jhelper = Mock()
+    app_mock = Mock()
+    app_mock.app_status.current = "blocked"
+    jhelper.get_application.return_value = app_mock
+    result = remove_blocked_apps_from_features(jhelper, "test-model")
+    assert "barbican" in result
+    assert "vault" in result
+
+
+def test_remove_blocked_apps_from_features_missing_app_skipped():
+    jhelper = Mock()
+    jhelper.get_application.side_effect = ApplicationNotFoundException("not found")
+    result = remove_blocked_apps_from_features(jhelper, "test-model")
+    assert result == []
+
+
+def test_remove_blocked_apps_from_features_mixed():
+    jhelper = Mock()
+    active_app = Mock()
+    active_app.app_status.current = "active"
+    blocked_app = Mock()
+    blocked_app.app_status.current = "blocked"
+
+    def _get_app(name, model):
+        if name == "barbican":
+            return blocked_app
+        return active_app
+
+    jhelper.get_application.side_effect = _get_app
+    result = remove_blocked_apps_from_features(jhelper, "test-model")
+    assert result == ["barbican"]
+
+
+# ---------------------------------------------------------------------------
+# remove_blocked_apps_from_ovn_provider
+# ---------------------------------------------------------------------------
+
+
+def test_remove_blocked_apps_from_ovn_provider_microovn():
+    ovn_manager = Mock()
+    ovn_manager.get_provider.return_value = ovn.OvnProvider.MICROOVN
+    result = remove_blocked_apps_from_ovn_provider(ovn_manager)
+    assert result == ["neutron"]
+
+
+def test_remove_blocked_apps_from_ovn_provider_non_microovn():
+    ovn_manager = Mock()
+    ovn_manager.get_provider.return_value = ovn.OvnProvider.OVN_K8S
+    result = remove_blocked_apps_from_ovn_provider(ovn_manager)
+    assert result == []
+
+
+# ---------------------------------------------------------------------------
+# remove_blocked_apps_from_role
+# ---------------------------------------------------------------------------
+
+
+def test_remove_blocked_apps_from_role_no_special_role():
+    result = remove_blocked_apps_from_role(
+        external_keystone_model=None,
+        is_region_controller=False,
+    )
+    assert result == []
+
+
+def test_remove_blocked_apps_from_role_external_keystone():
+    result = remove_blocked_apps_from_role(
+        external_keystone_model="some-model",
+        is_region_controller=False,
+    )
+    assert "keystone" in result
+    assert "horizon" in result
+
+
+def test_remove_blocked_apps_from_role_region_controller():
+    result = remove_blocked_apps_from_role(
+        external_keystone_model=None,
+        is_region_controller=True,
+    )
+    assert "nova" in result
+    assert "glance" in result
+    assert "neutron" in result
+    assert "placement" in result
+
+
+def test_remove_blocked_apps_from_role_both():
+    result = remove_blocked_apps_from_role(
+        external_keystone_model="some-model",
+        is_region_controller=True,
+    )
+    # external keystone group
+    assert "keystone" in result
+    assert "horizon" in result
+    # region controller group
+    assert "nova" in result
+    assert "glance" in result

@@ -85,7 +85,7 @@ LOG = logging.getLogger(__name__)
 console = Console()
 
 ROLES_NEEDED_ERROR = f"""A machine needs roles to be a part of an openstack deployment.
-Available roles are: {maas_deployment.RoleTags.values()}.
+Available roles are: {maas_deployment.RoleTags.enabled_values()}.
 Roles can be assigned to a machine by applying tags in MAAS.
 More on assigning tags: https://maas.io/docs/how-to-use-machine-tags
 """
@@ -1389,15 +1389,7 @@ class MaasAddMachinesToClusterdStep(BaseStep):
         filtered_machines = []
         for machine in maas_machines:
             if set(machine["roles"]).intersection(
-                {
-                    maas_deployment.RoleTags.JUJU_CONTROLLER.value,
-                    maas_deployment.RoleTags.SUNBEAM.value,
-                    maas_deployment.RoleTags.CONTROL.value,
-                    maas_deployment.RoleTags.COMPUTE.value,
-                    maas_deployment.RoleTags.STORAGE.value,
-                    maas_deployment.RoleTags.NETWORK.value,
-                    maas_deployment.RoleTags.REGION_CONTROLLER.value,
-                }
+                set(maas_deployment.RoleTags.enabled_values())
             ):
                 filtered_machines.append(machine)
         LOG.debug(f"Machines containing worker roles: {filtered_machines}")
@@ -1459,9 +1451,16 @@ class MaasRemoveMachineFromClusterdStep(BaseStep):
 class MaasDeployMachinesStep(BaseStep):
     """Deploy machines stored in Clusterd in Juju."""
 
-    def __init__(self, client: Client, jhelper: JujuHelper, model: str):
+    def __init__(
+        self,
+        deployment: maas_deployment.MaasDeployment,
+        client: Client,
+        jhelper: JujuHelper,
+        model: str,
+    ):
         super().__init__("Deploy machines", "Deploying machines in Juju")
         self.client = client
+        self.deployment = deployment
         self.jhelper = jhelper
         self.model = model
 
@@ -1522,7 +1521,9 @@ class MaasDeployMachinesStep(BaseStep):
             self.update_status(status, f"deploying {node['name']}")
             LOG.debug(f"Adding machine {node['name']} to model {self.model}")
             juju_machine = self.jhelper.add_machine(
-                "system-id=" + node["systemid"], self.model
+                "system-id=" + node["systemid"],
+                self.model,
+                constraints=["tags=" + self.deployment.resource_tag],
             )
             self.client.cluster.update_node_info(
                 node["name"], machineid=int(juju_machine)
@@ -1549,10 +1550,15 @@ class MaasDeployInfraMachinesStep(BaseStep):
     """Deploy infra machines."""
 
     def __init__(
-        self, maas_client: maas_client.MaasClient, jhelper: JujuHelper, model: str
+        self,
+        maas_client: maas_client.MaasClient,
+        deployment: maas_deployment.MaasDeployment,
+        jhelper: JujuHelper,
+        model: str,
     ):
         super().__init__("Deploy Infra machines", "Deploying infra machines")
         self.maas_client = maas_client
+        self.deployment = deployment
         self.jhelper = jhelper
         self.model = model
 
@@ -1591,7 +1597,15 @@ class MaasDeployInfraMachinesStep(BaseStep):
             self.update_status(status, f"deploying {machine['hostname']}")
             LOG.debug(f"Adding machine {machine['hostname']} to model {self.model}")
             self.jhelper.add_machine(
-                "system-id=" + machine["system_id"], self.model, JUJU_BASE
+                "system-id=" + machine["system_id"],
+                self.model,
+                JUJU_BASE,
+                constraints=[
+                    "tags="
+                    + maas_deployment.RoleTags.SUNBEAM.value
+                    + ","
+                    + self.deployment.resource_tag
+                ],
             )
         try:
             self.jhelper.wait_all_machines_deployed(self.model, MACHINE_DEPLOY_TIMEOUT)
@@ -1790,21 +1804,22 @@ class MaasConfigureMicrocephOSDStep(BaseStep):
         for unit, disks in self.disks_to_configure.items():
             hostname = self.unit_to_hostname[unit]
             wipe_disks = self._wipe_requested(hostname)
+            action_params: dict[str, typing.Any] = {
+                "device-id": ",".join(disks),
+            }
             if wipe_disks:
                 LOG.debug(
                     "User expressly accepted to wipe disks before adding OSDs for %s",
                     hostname,
                 )
+                action_params["wipe"] = True
             try:
                 LOG.debug("Running action add-osd on %r", unit)
                 action_result = self.jhelper.run_action(
                     unit,
                     self.model,
                     "add-osd",
-                    action_params={
-                        "device-id": ",".join(disks),
-                        "wipe": wipe_disks,
-                    },
+                    action_params=action_params,
                 )
                 LOG.debug(
                     "Result after running action add-osd on %r: %r", unit, action_result
@@ -2295,7 +2310,7 @@ class MaasConfigSRIOVStep(BaseStep):
 
             for snap_nic in snap_nics["nics"]:
                 nic_name = snap_nic["name"]
-                if not (snap_nic["product_id"] and snap_nic["vendor_id"]):
+                if not (snap_nic.get("product_id") and snap_nic.get("vendor_id")):
                     LOG.debug("Ignoring nic, not a PCI device: %s", snap_nic["name"])
                     continue
 

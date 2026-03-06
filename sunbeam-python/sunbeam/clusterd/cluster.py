@@ -301,6 +301,36 @@ class ExtendedAPIService(service.BaseService):
             data["model-uuid"] = model_uuid
         self._put(f"/1.0/storage-backend/{name}", data=json.dumps(data))
 
+    def get_feature_gates(self) -> models.FeatureGates:
+        """List all feature gates."""
+        gates = self._get("/1.0/feature-gates")
+        return models.FeatureGates(root=gates.get("metadata", []))
+
+    def get_feature_gate(self, gate_key: str) -> models.FeatureGate:
+        """Get feature gate by key."""
+        gate = self._get(f"/1.0/feature-gates/{gate_key}")
+        return models.FeatureGate(**gate.get("metadata", {}))
+
+    def add_feature_gate(self, gate_key: str, enabled: bool) -> None:
+        """Add a new feature gate."""
+        data = {
+            "gate-key": gate_key,
+            "enabled": enabled,
+        }
+        self._post("/1.0/feature-gates", data=json.dumps(data))
+
+    def delete_feature_gate(self, gate_key: str) -> None:
+        """Delete feature gate by key."""
+        self._delete(f"/1.0/feature-gates/{gate_key}")
+
+    def update_feature_gate(self, gate_key: str, enabled: bool) -> None:
+        """Update an existing feature gate."""
+        data = {
+            "gate-key": gate_key,
+            "enabled": enabled,
+        }
+        self._put(f"/1.0/feature-gates/{gate_key}", data=json.dumps(data))
+
 
 class ClusterService(MicroClusterService, ExtendedAPIService):
     """Lists and manages cluster."""

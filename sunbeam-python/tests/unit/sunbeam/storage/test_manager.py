@@ -15,14 +15,11 @@ from sunbeam.storage.models import StorageBackendInfo
 @pytest.fixture
 def mock_backend():
     """Create a mock backend."""
-    from sunbeam.core.common import RiskLevel
-
     backend = Mock()
     backend.backend_type = "test-backend"
     backend.display_name = "Test Backend"
     backend.register_add_cli = Mock()
     backend.register_options_cli = Mock()
-    backend.risk_availability = RiskLevel.STABLE
     backend.is_enabled = Mock(return_value=True)
     return backend
 

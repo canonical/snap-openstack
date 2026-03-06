@@ -4,10 +4,14 @@
 import json
 import logging
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from snaphelpers import Snap
 
 from sunbeam.log import setup_logging
+
+if TYPE_CHECKING:
+    from sunbeam.clusterd.client import Client
 
 LOG = logging.getLogger(__name__)
 DEFAULT_CONFIG = {
@@ -54,6 +58,111 @@ def _read_config(path: Path) -> dict:
         return json.load(fp) or {}
 
 
+def sync_feature_gates_from_snap_to_cluster(
+    client: "Client", snap: Snap | None = None
+) -> None:
+    """Sync feature gates from snap config to cluster database.
+
+    This is a one-way sync: local snap config → cluster DB.
+    The sunbeam-microcluster daemon watches the cluster DB and pushes
+    changes to all nodes' snap configs automatically.
+
+    This function syncs all feature.* keys, including feature.storage.*
+    keys for storage backend gates.
+
+    Flow:
+    1. User runs: snap set openstack feature.X=true (on any node)
+    2. This function pushes change to cluster DB
+    3. Daemon on ALL nodes detects DB change
+    4. Daemon runs: snapctl set feature.X=true (on each node)
+    5. All nodes synchronized automatically
+
+    :param client: cluster client instance
+    :param snap: optional snap reference (if None, will use snaphelpers to read config)
+    """
+    from sunbeam.clusterd.service import ClusterServiceUnavailableException
+
+    try:
+        # Read all feature.* keys from local snap config
+        # This includes feature.storage.* keys for storage backends
+        if snap:
+            feature_options = snap.config.get_options("feature")
+        else:
+            # Use snaphelpers to read config when snap object not available
+            import snaphelpers
+
+            snap_helper = snaphelpers.Snap()
+            feature_options = snap_helper.config.get_options("feature")
+
+        if not feature_options:
+            LOG.debug("No feature gates found in snap config")
+            return
+
+        feature_dict = feature_options.as_dict()
+
+        # Flatten nested structures to get all leaf key-value pairs
+        def flatten_dict(d, parent_key="", sep="."):
+            items = []
+            for k, v in d.items():
+                new_key = f"{parent_key}{sep}{k}" if parent_key else k
+                if isinstance(v, dict):
+                    items.extend(flatten_dict(v, new_key, sep=sep).items())
+                else:
+                    items.append((new_key, v))
+            return dict(items)
+
+        flattened = flatten_dict(feature_dict)
+
+        for key, value in flattened.items():
+            gate_key = key if key.startswith("feature.") else f"feature.{key}"
+            enabled_bool = bool(value) if value is not None else False
+
+            try:
+                # Check if gate exists in cluster
+                existing_gate = client.cluster.get_feature_gate(gate_key)
+
+                # Update if value changed
+                if existing_gate.enabled != enabled_bool:
+                    client.cluster.update_feature_gate(gate_key, enabled_bool)
+                    LOG.info(
+                        f"Updated gate '{gate_key}' in cluster "
+                        f"(changed from {existing_gate.enabled} to {enabled_bool})"
+                    )
+            except Exception:
+                # Create if doesn't exist
+                try:
+                    client.cluster.add_feature_gate(gate_key, enabled_bool)
+                    LOG.info(
+                        f"Created gate '{gate_key}' in cluster (enabled={enabled_bool})"
+                    )
+                except Exception as e:
+                    LOG.warning(f"Failed to sync gate '{gate_key}': {e}")
+
+    except ClusterServiceUnavailableException:
+        LOG.debug("Cluster service unavailable, skipping feature gate sync")
+    except Exception as e:
+        LOG.warning(f"Failed to sync feature gates to cluster: {e}")
+
+
+def _sync_feature_gates_to_cluster(snap: Snap) -> None:
+    """Hook-specific wrapper for syncing feature gates.
+
+    This is called from the configure hook and passes the snap object.
+
+    :param snap: the snap reference
+    """
+    from sunbeam.clusterd.client import Client
+
+    try:
+        client = Client.from_socket()
+    except Exception:
+        # Cluster not initialized yet (single-node or bootstrap phase)
+        LOG.debug("Cluster not available, skipping feature gate sync")
+        return
+
+    sync_feature_gates_from_snap_to_cluster(client, snap)
+
+
 def install(snap: Snap) -> None:
     """Runs the 'install' hook for the snap.
 
@@ -90,12 +199,19 @@ def configure(snap: Snap) -> None:
     daemon. The `configure` hook is invoked when the user runs a sudo snap
     set openstack.<foo> setting.
 
+    For feature gates, this hook syncs the local snap configuration to the
+    cluster database, ensuring all nodes in a multi-node deployment see
+    the same feature gate settings.
+
     :param snap: the snap reference
     """
     setup_logging(snap.paths.common / "hooks.log")
     logging.info("Running configure hook")
 
     _update_default_config(snap)
+
+    # Sync feature gates to cluster database for multi-node consistency
+    _sync_feature_gates_to_cluster(snap)
 
     config_path = snap.paths.data / "config.yaml"
     old_config = _read_config(config_path)

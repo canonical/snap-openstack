@@ -17,6 +17,7 @@ var SchemaExtensions = []schema.Update{
 	ManifestsSchemaUpdate,
 	AddSystemIDToNodes,
 	StorageBackendSchemaUpdate,
+	FeatureGatesSchemaUpdate,
 }
 
 // NodesSchemaUpdate is schema for table nodes
@@ -109,6 +110,21 @@ CREATE TABLE storage_backends (
   model_uuid                    TEXT,
   config                        TEXT,
   UNIQUE(name)
+);
+  `
+
+	_, err := tx.Exec(stmt)
+	return err
+}
+
+// FeatureGatesSchemaUpdate is schema for table feature_gates
+func FeatureGatesSchemaUpdate(_ context.Context, tx *sql.Tx) error {
+	stmt := `
+CREATE TABLE feature_gates (
+  id                            INTEGER  PRIMARY KEY AUTOINCREMENT NOT NULL,
+  gate_key                      TEXT     NOT NULL,
+  enabled                       BOOLEAN  NOT NULL DEFAULT 0,
+  UNIQUE(gate_key)
 );
   `
 

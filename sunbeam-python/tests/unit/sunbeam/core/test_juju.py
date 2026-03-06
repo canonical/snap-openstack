@@ -654,6 +654,27 @@ def test_get_available_charm_revision(jhelper: jujulib.JujuHelper, juju):
     assert revno == 121
 
 
+def test_set_app_config(jhelper: jujulib.JujuHelper, juju):
+    """set_app_config passes config values to jubilant."""
+    config = {"key1": "value1", "key2": 42}
+    jhelper.set_app_config("nova", "test-model", config)
+    juju.config.assert_called_once_with("nova", config)
+
+
+def test_set_app_config_app_not_found(jhelper: jujulib.JujuHelper, juju):
+    """set_app_config raises ApplicationNotFoundException for missing app."""
+    juju.config.side_effect = jubilant.CLIError(1, ["config"], "", "not found")
+    with pytest.raises(jujulib.ApplicationNotFoundException):
+        jhelper.set_app_config("missing-app", "test-model", {"key": "val"})
+
+
+def test_set_app_config_juju_error(jhelper: jujulib.JujuHelper, juju):
+    """set_app_config raises JujuException for other CLI errors."""
+    juju.config.side_effect = jubilant.CLIError(1, ["config"], "", "some error")
+    with pytest.raises(jujulib.JujuException):
+        jhelper.set_app_config("nova", "test-model", {"key": "val"})
+
+
 class TestJujuStepHelper:
     def test_normalise_channel(self):
         jsh = jujulib.JujuStepHelper()
@@ -1114,3 +1135,128 @@ def test_get_relation_map_no_related_units(jhelper, status):
 
     with pytest.raises(jujulib.JujuException):
         jhelper.get_relation_map("app", "certificates", "test-model")
+
+
+# ---------------------------------------------------------------------------
+# build_pre_status_overlay
+# ---------------------------------------------------------------------------
+
+
+def test_build_pre_status_overlay_empty_apps():
+    result = jujulib.build_pre_status_overlay([], {})
+    assert result == {}
+
+
+def test_build_pre_status_overlay_prior_differs_from_active():
+    result = jujulib.build_pre_status_overlay(["app1"], {"app1": "waiting"})
+    assert set(result["app1"]["status"]) == {"waiting", "active"}
+
+
+def test_build_pre_status_overlay_prior_is_active():
+    result = jujulib.build_pre_status_overlay(["app1"], {"app1": "active"})
+    assert result["app1"]["status"] == ["active"]
+
+
+def test_build_pre_status_overlay_missing_pre_status_defaults_to_active():
+    result = jujulib.build_pre_status_overlay(["app1"], {})
+    assert result["app1"]["status"] == ["active"]
+
+
+def test_build_pre_status_overlay_base_overlay_status_merged():
+    base = {"app1": {"status": ["maintenance"]}}
+    result = jujulib.build_pre_status_overlay(
+        ["app1"], {"app1": "waiting"}, base_overlay=base
+    )
+    assert set(result["app1"]["status"]) == {"maintenance", "waiting", "active"}
+
+
+def test_build_pre_status_overlay_traefik_blocked_before_refresh():
+    """Pre-refresh 'blocked' is merged into the traefik special-case overlay.
+
+    If traefik was blocked before the refresh (e.g. missing IPAddressPool),
+    the wait should not time-out: 'blocked' must appear in the accepted
+    statuses even though TRAEFIK_OVERLAY seeds the base with only
+    ['active', 'maintenance'].
+    """
+    base = {
+        "traefik-public": {
+            "status": ["active", "maintenance"],
+            "agent_status": ["idle", "executing"],
+        }
+    }
+    result = jujulib.build_pre_status_overlay(
+        ["traefik-public"], {"traefik-public": "blocked"}, base_overlay=base
+    )
+    assert set(result["traefik-public"]["status"]) == {
+        "active",
+        "maintenance",
+        "blocked",
+    }
+    assert result["traefik-public"]["agent_status"] == ["idle", "executing"]
+
+
+def test_build_pre_status_overlay_base_overlay_other_keys_preserved():
+    base = {"app1": {"agent_status": ["idle"]}}
+    result = jujulib.build_pre_status_overlay(
+        ["app1"], {"app1": "waiting"}, base_overlay=base
+    )
+    assert result["app1"]["agent_status"] == ["idle"]
+    assert set(result["app1"]["status"]) == {"waiting", "active"}
+
+
+def test_build_pre_status_overlay_none_base_overlay():
+    result = jujulib.build_pre_status_overlay(
+        ["app1"], {"app1": "blocked"}, base_overlay=None
+    )
+    assert set(result["app1"]["status"]) == {"blocked", "active"}
+
+
+def test_build_pre_status_overlay_multiple_apps():
+    result = jujulib.build_pre_status_overlay(
+        ["app1", "app2"],
+        {"app1": "waiting", "app2": "active"},
+    )
+    assert set(result["app1"]["status"]) == {"waiting", "active"}
+    assert result["app2"]["status"] == ["active"]
+
+
+# ---------------------------------------------------------------------------
+# JujuHelper.snapshot_workload_status
+# ---------------------------------------------------------------------------
+
+
+def test_snapshot_workload_status_returns_app_statuses(jhelper, status):
+    app_mock = Mock()
+    app_mock.app_status.current = "waiting"
+    status.apps["app1"] = app_mock
+    result = jhelper.snapshot_workload_status("test-model", ["app1"])
+    assert result == {"app1": "waiting"}
+
+
+def test_snapshot_workload_status_skips_missing_apps(jhelper):
+    result = jhelper.snapshot_workload_status("test-model", ["missing-app"])
+    assert result == {}
+
+
+def test_snapshot_workload_status_empty_app_list(jhelper):
+    result = jhelper.snapshot_workload_status("test-model", [])
+    assert result == {}
+
+
+def test_snapshot_workload_status_multiple_apps(jhelper, status):
+    app1 = Mock()
+    app1.app_status.current = "active"
+    app2 = Mock()
+    app2.app_status.current = "blocked"
+    status.apps["app1"] = app1
+    status.apps["app2"] = app2
+    result = jhelper.snapshot_workload_status("test-model", ["app1", "app2"])
+    assert result == {"app1": "active", "app2": "blocked"}
+
+
+def test_snapshot_workload_status_mixed_present_and_absent(jhelper, status):
+    app_mock = Mock()
+    app_mock.app_status.current = "active"
+    status.apps["present"] = app_mock
+    result = jhelper.snapshot_workload_status("test-model", ["present", "absent"])
+    assert result == {"present": "active"}

@@ -83,7 +83,7 @@ class TestConfigureMicrocephOSDStep:
             "unit/0",
             "test-model",
             "add-osd",
-            action_params={"device-id": "/dev/sdb,/dev/sdc", "wipe": False},
+            action_params={"device-id": "/dev/sdb,/dev/sdc"},
         )
         assert result.result_type == ResultType.COMPLETED
 

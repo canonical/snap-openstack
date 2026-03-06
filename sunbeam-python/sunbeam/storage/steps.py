@@ -625,6 +625,7 @@ class DeploySpecificCinderVolumeStep(BaseStep):
         backend_name: str,
         backend_instance: "StorageBackendBase",
         model: str,
+        extra_tfvars: dict | None = None,
     ):
         super().__init__(
             f"Deploy specific cinder-volume for backend {backend_name}",
@@ -639,6 +640,7 @@ class DeploySpecificCinderVolumeStep(BaseStep):
         self.backend_instance = backend_instance
         self.model = model
         self._offers: dict[str, str | None] | None = None
+        self.extra_tfvars: dict = extra_tfvars or {}
 
     def is_skip(self, status: Status | None = None) -> Result:
         """Determine if the step should be skipped.
@@ -666,6 +668,14 @@ class DeploySpecificCinderVolumeStep(BaseStep):
                 self.deployment.get_tfhelper("openstack-plan")
             )
         return self._offers
+
+    def _get_telemetry_notifications_tfvar(self):
+        feature_manager = self.deployment.get_feature_manager()
+        return {
+            "enable-telemetry-notifications": feature_manager.is_feature_enabled(
+                self.deployment, "telemetry"
+            )
+        }
 
     def run(self, status: Status | None = None) -> Result:
         """Deploy the specific cinder-volume application."""
@@ -731,6 +741,13 @@ class DeploySpecificCinderVolumeStep(BaseStep):
             ],
         }
         tfvars["cinder-volumes"][application_name].update(self._get_offers())
+        tfvars["cinder-volumes"][application_name].update(
+            self._get_telemetry_notifications_tfvar()
+        )
+        # Any tfvars that needs override will take precedence from self.extra_tfvars
+        # Example usage: When telemetry is enabled/disabled, telemetry feature can set
+        # enable-telemetry-notifications using extra_tfvars
+        tfvars["cinder-volumes"][application_name].update(self.extra_tfvars)
 
         try:
             self.tfhelper.update_tfvars_and_apply_tf(

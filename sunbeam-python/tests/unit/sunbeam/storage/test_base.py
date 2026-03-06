@@ -483,7 +483,7 @@ class TestStorageBackendBase(BaseStorageBackendTests):
         mock_client = Mock()
         mock_snap = Mock()
 
-        result = backend.is_enabled(mock_client, mock_snap)
+        result = backend.check_enabled(mock_client, mock_snap)
         assert result is True
 
     def test_is_enabled_via_clusterd_config(self, backend):
@@ -494,9 +494,11 @@ class TestStorageBackendBase(BaseStorageBackendTests):
         mock_client = Mock()
         mock_snap = Mock()
 
+        # Feature gate not found in cluster DB
+        mock_client.cluster.get_feature_gate.side_effect = Exception("Not found")
         mock_client.cluster.get_config.return_value = json.dumps([backend.backend_type])
 
-        result = backend.is_enabled(mock_client, mock_snap)
+        result = backend.check_enabled(mock_client, mock_snap)
         assert result is True
         mock_client.cluster.get_config.assert_called_once_with("StorageBackendsEnabled")
 
@@ -508,13 +510,15 @@ class TestStorageBackendBase(BaseStorageBackendTests):
         mock_client = Mock()
         mock_snap = Mock()
 
+        # Feature gate not found in cluster DB
+        mock_client.cluster.get_feature_gate.side_effect = Exception("Not found")
         # Clusterd config not found
         mock_client.cluster.get_config.side_effect = ConfigItemNotFoundException("")
 
         # Snap config returns True
         mock_snap.config.get.return_value = True
 
-        result = backend.is_enabled(mock_client, mock_snap)
+        result = backend.check_enabled(mock_client, mock_snap)
         assert result is True
         mock_snap.config.get.assert_called_once_with(backend._feature_key)
 
@@ -528,13 +532,15 @@ class TestStorageBackendBase(BaseStorageBackendTests):
         mock_client = Mock()
         mock_snap = Mock()
 
+        # Feature gate not found in cluster DB
+        mock_client.cluster.get_feature_gate.side_effect = Exception("Not found")
         # Clusterd config not found
         mock_client.cluster.get_config.side_effect = ConfigItemNotFoundException("")
 
         # Snap config key not found
         mock_snap.config.get.side_effect = UnknownConfigKey("")
 
-        result = backend.is_enabled(mock_client, mock_snap)
+        result = backend.check_enabled(mock_client, mock_snap)
         assert result is False
 
     def test_enable_backend_new(self, backend):

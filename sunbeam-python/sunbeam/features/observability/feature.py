@@ -87,7 +87,7 @@ console = Console()
 OBSERVABILITY_FEATURE_KEY = "ObservabilityProviderType"
 OBSERVABILITY_MODEL = "observability"
 OBSERVABILITY_DEPLOY_TIMEOUT = 1800  # 30 minutes
-OBSERVABILITY_AGENT_K8S_DEPLOY_TIMEOUT = 1200  # 20 minutes
+OBSERVABILITY_AGENT_K8S_DEPLOY_TIMEOUT = 1800  # 30 minutes
 COS_TFPLAN = "cos-plan"
 OBSERVABILITY_AGENT_TFPLAN = "grafana-agent-plan"
 COS_CONFIG_KEY = "TerraformVarsFeatureObservabilityPlanCos"
@@ -438,7 +438,7 @@ class IntegrateRemoteCosOffersStep(BaseStep, JujuStepHelper):
                 "opentelemetry-collector:send-remote-write",
                 self.feature.prometheus_offer_url,
             ),
-            ("opentelemetry-collector:logging-consumer", self.feature.loki_offer_url),
+            ("opentelemetry-collector:send-loki-logs", self.feature.loki_offer_url),
         ]
 
     def run(self, status: Status | None = None) -> Result:

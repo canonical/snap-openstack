@@ -7,14 +7,22 @@ import pathlib
 import typing
 
 import click
+import yaml
+from rich.console import Console
+from rich.table import Table
 from snaphelpers import Snap
 
 import sunbeam.features
 from sunbeam import utils
 from sunbeam.clusterd.service import ClusterServiceUnavailableException
-from sunbeam.core.common import SunbeamException, infer_risk
+from sunbeam.core.common import (
+    FORMAT_TABLE,
+    FORMAT_YAML,
+    SunbeamException,
+)
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.manifest import FeatureGroupManifest, FeatureManifest
+from sunbeam.feature_gates import FEATURE_GATES, FeatureGateMixin, log_gated_feature
 from sunbeam.features.interface.v1.base import (
     BaseFeature,
     BaseFeatureGroup,
@@ -28,9 +36,199 @@ from sunbeam.features.interface.v1.base import (
 )
 from sunbeam.versions import VarMap
 
+if typing.TYPE_CHECKING:
+    from sunbeam.clusterd.client import Client
+
 LOG = logging.getLogger(__name__)
+console = Console()
 
 _FEATURES: dict[str, BaseFeature] = {}
+
+
+@click.command("list-features")
+@click.option(
+    "-f",
+    "--format",
+    type=click.Choice([FORMAT_TABLE, FORMAT_YAML]),
+    default=FORMAT_TABLE,
+    help="Output format.",
+)
+@click.pass_context
+def list_features(ctx: click.Context, format: str) -> None:
+    """List all features and show whether each is enabled or not."""
+    deployment: Deployment = ctx.obj
+    try:
+        client = deployment.get_client()
+        feature_manager = deployment.get_feature_manager()
+    except (ClusterServiceUnavailableException, ValueError) as e:
+        raise click.ClickException(
+            "Cannot list features: cluster service is not available. "
+            "Ensure the node is part of a bootstrapped cluster."
+        ) from e
+
+    feature_states: dict[str, bool] = {}
+    for name, feature in feature_manager.features().items():
+        if not isinstance(feature, EnableDisableFeature):
+            continue
+        try:
+            enabled = feature.is_enabled(client)
+        except Exception as e:
+            LOG.debug("Failed to get status for feature %r: %r", name, e)
+            enabled = False
+        feature_states[name] = enabled
+
+    if format == FORMAT_TABLE:
+        table = Table()
+        table.add_column("Feature", justify="left")
+        table.add_column("Enabled", justify="center")
+        for name, enabled in feature_states.items():
+            table.add_row(name, "X" if enabled else "")
+        console.print(table)
+    elif format == FORMAT_YAML:
+        console.print(yaml.dump(feature_states))
+
+
+def _check_gate_enabled(
+    gate_key: str,
+    client: typing.Optional["Client"],
+    snap: Snap,
+) -> bool:
+    """Check if a feature gate is unlocked.
+
+    Checks cluster DB if available, otherwise checks snap config.
+
+    Args:
+        gate_key: The gate key to check
+        client: Optional cluster client
+        snap: Snap instance
+
+    Returns:
+        True if unlocked, False otherwise
+    """
+    # Check cluster DB if available
+    if client is not None:
+        try:
+            gate = client.cluster.get_feature_gate(gate_key)
+            if gate and gate.enabled:
+                return True
+        except Exception:
+            LOG.debug(f"Failed to get feature gate {gate_key} from cluster")
+            # Fall through to snap config check
+
+    # Check snap config
+    try:
+        return bool(snap.config.get(gate_key))
+    except Exception:
+        return False
+
+
+@click.command("list-feature-gates")
+@click.option(
+    "-f",
+    "--format",
+    type=click.Choice([FORMAT_TABLE, FORMAT_YAML]),
+    default=FORMAT_TABLE,
+    help="Output format.",
+)
+@click.pass_context
+def list_feature_gates(ctx: click.Context, format: str) -> None:
+    """List all feature gates and their status.
+
+    Shows only features that are currently gated (not generally available).
+    This includes:
+    - Feature gates from FEATURE_GATES with generally_available=False
+    - Storage backends with generally_available=False
+    - Features with generally_available=False
+
+    For each gate, shows whether the gate is unlocked by checking
+    cluster DB if available, otherwise snap config. An unlocked gate
+    means users can access the gated feature, but doesn't indicate
+    whether the feature is deployed.
+
+    Once a feature becomes generally available (generally_available=True),
+    it will no longer appear in this list as it's no longer gated.
+    """
+    deployment: Deployment = ctx.obj
+    snap = Snap()
+
+    # Try to get client, but continue without it if unavailable
+    client = None
+    try:
+        client = deployment.get_client()
+    except (ClusterServiceUnavailableException, ValueError):
+        LOG.debug("Cluster service unavailable, will check snap config only")
+        client = None
+
+    gates_info: dict[str, dict[str, typing.Any]] = {}
+
+    # 1. Collect FEATURE_GATES entries (only those not generally available)
+    for gate_key, config in FEATURE_GATES.items():
+        generally_available = config.get("generally_available", False)
+
+        # Skip if generally available - it's not a gate anymore
+        if generally_available:
+            continue
+
+        unlocked = _check_gate_enabled(gate_key, client, snap)
+
+        # Extract name from gate_key by removing "feature." prefix
+        name = gate_key.removeprefix("feature.")
+
+        gates_info[gate_key] = {
+            "type": "feature-gate",
+            "name": name,
+            "unlocked": unlocked,
+        }
+
+    # 2. Collect Storage Backends with generally_available=False
+    storage_manager = deployment.get_storage_manager()
+    for backend_name, backend in storage_manager.backends().items():
+        if isinstance(backend, FeatureGateMixin) and not backend.generally_available:
+            gate_key = backend.gate_key
+            unlocked = _check_gate_enabled(gate_key, client, snap)
+
+            gates_info[gate_key] = {
+                "type": "storage-backend",
+                "backend_name": backend_name,
+                "unlocked": unlocked,
+            }
+
+    # 3. Collect Features with generally_available=False
+    feature_manager = deployment.get_feature_manager()
+    for feature_name, feature in feature_manager.features().items():
+        if isinstance(feature, FeatureGateMixin) and not feature.generally_available:
+            gate_key = feature.gate_key
+            unlocked = _check_gate_enabled(gate_key, client, snap)
+
+            gates_info[gate_key] = {
+                "type": "feature",
+                "feature_name": feature_name,
+                "unlocked": unlocked,
+            }
+
+    # Format output
+    if format == FORMAT_TABLE:
+        table = Table(title="Feature Gates")
+        table.add_column("Gate Key", justify="left")
+        table.add_column("Type", justify="left")
+        table.add_column("Name", justify="left")
+        table.add_column("Unlocked", justify="center")
+
+        for gate_key, info in sorted(gates_info.items()):
+            type_str = info["type"]
+            name = (
+                info.get("feature_name")
+                or info.get("backend_name")
+                or info.get("name")
+                or "-"
+            )
+            unlocked_str = "X" if info["unlocked"] else ""
+
+            table.add_row(gate_key, type_str, name, unlocked_str)
+
+        console.print(table)
+    elif format == FORMAT_YAML:
+        console.print(yaml.dump(gates_info))
 
 
 class FeatureManager:
@@ -98,6 +296,21 @@ class FeatureManager:
         LOG.debug("Enabled features: %s", ",".join(f.name for f in enabled_features))
         return enabled_features
 
+    def is_feature_enabled(self, deployment: Deployment, name: str) -> bool:
+        """Returns true if feature is enabled otherwise false.
+
+        :param deployment: Deployment instance.
+        :param name: Name of the feature.
+        :returns: Boolean
+        """
+        feature = self.features().get(name)
+        if feature is None:
+            raise SunbeamException(f"Feature {name} does not exist")
+        if not isinstance(feature, EnableDisableFeature):
+            raise SunbeamException(f"Feature {name} is not of type EnableDisable")
+
+        return feature.is_enabled(deployment.get_client())
+
     def get_all_feature_manifests(
         self,
     ) -> dict[str, FeatureManifest | FeatureGroupManifest]:
@@ -158,26 +371,44 @@ class FeatureManager:
     def register(self, cli: click.Group, deployment: Deployment) -> None:
         """Register the features.
 
-        Register the features. Once registeted, all the commands/groups defined by
+        Register the features. Once registered, all the commands/groups defined by
         features will be shown as part of sunbeam cli.
+
+        Features are checked against:
+        1. Feature gates (via snap config feature.<feature-name>)
 
         :param deployment: Deployment instance.
         :param cli: Main click group for sunbeam cli.
         """
         LOG.debug("Registering features")
-        installation_risk = infer_risk(Snap())
+        snap = Snap()
 
         for group in self.groups().values():
             group.register(cli)
 
         for feature in self.features().values():
-            if feature.risk_availability > installation_risk:
-                LOG.debug(
-                    "Not registering feature %r,"
-                    " it is available at a higher risk level",
-                    feature.name,
-                )
+            # Check 1: Feature gates - skip if feature is gated
+            client = None
+            if deployment:
+                try:
+                    client = deployment.get_client()
+                except (SunbeamException, ValueError):
+                    # Cannot get client (e.g., insufficient permissions,
+                    # clusterd not configured). Check will proceed with
+                    # client=None
+                    pass
+
+            if hasattr(feature, "check_gated") and feature.check_gated(
+                client=client,
+                snap=snap,
+                # Features track their own enabled state via is_enabled() method,
+                # so enabled_config_key is None. Storage backends use this to check
+                # if the backend type is in the "StorageBackendsEnabled" config.
+                enabled_config_key=None,
+            ):
+                log_gated_feature(feature.name, feature.gate_key)
                 continue
+
             try:
                 enabled = feature.is_enabled(deployment.get_client())  # type: ignore
             except AttributeError:

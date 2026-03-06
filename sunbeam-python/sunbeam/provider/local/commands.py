@@ -28,6 +28,7 @@ from sunbeam.commands.configure import (
 )
 from sunbeam.commands.dashboard_url import retrieve_dashboard_url
 from sunbeam.commands.proxy import PromptForProxyStep
+from sunbeam.core import ovn
 from sunbeam.core.checks import (
     Check,
     DaemonGroupCheck,
@@ -63,7 +64,11 @@ from sunbeam.core.common import (
     update_config,
     validate_roles,
 )
-from sunbeam.core.deployment import Deployment, Networks
+from sunbeam.core.deployment import (
+    DEPLOYMENT_TYPE_CONFIG_KEY,
+    Deployment,
+    Networks,
+)
 from sunbeam.core.deployments import DeploymentsConfig, deployment_path
 from sunbeam.core.juju import (
     JujuHelper,
@@ -74,6 +79,10 @@ from sunbeam.core.manifest import AddManifestStep, Manifest
 from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.core.questions import get_stdin_reopen_tty
 from sunbeam.core.terraform import TerraformInitStep
+from sunbeam.feature_gates import (
+    feature_gate_command,
+    feature_gate_option,
+)
 from sunbeam.provider.base import ProviderBase
 from sunbeam.provider.common.multiregion import connect_to_region_controller
 from sunbeam.provider.local.deployment import LOCAL_TYPE, LocalDeployment
@@ -164,7 +173,9 @@ from sunbeam.steps.microceph import (
 from sunbeam.steps.microovn import (
     DeployMicroOVNApplicationStep,
     ReapplyMicroOVNOptionalIntegrationsStep,
+    ReapplyMicroOVNTerraformPlanStep,
     RemoveMicroOVNUnitsStep,
+    SetOvnProviderStep,
 )
 from sunbeam.steps.openstack import (
     DeployControlPlaneStep,
@@ -182,6 +193,7 @@ from sunbeam.steps.sunbeam_machine import (
     DeploySunbeamMachineApplicationStep,
     RemoveSunbeamMachineUnitsStep,
 )
+from sunbeam.steps.sync_feature_gates import SyncFeatureGatesToCluster
 from sunbeam.utils import (
     CatchGroup,
     click_option_show_hints,
@@ -596,9 +608,10 @@ def deploy_and_migrate_juju_controller(
     type=str,
     help="Juju controller name",
 )
-@click.option(
+@feature_gate_option(
     "--region-controller-token",
     "region_controller_token",
+    gate_key="feature.multi-region",
     help="Token obtained from the region controller.",
     type=str,
 )
@@ -728,7 +741,9 @@ def bootstrap(  # noqa: C901
     plan.append(JujuLoginStep(deployment.juju_account))
     # bootstrapped node is always machine 0 in controller model
     plan.append(ClusterInitStep(client, roles_to_str_list(roles), 0, management_cidr))
+    plan.append(SyncFeatureGatesToCluster(client))
     plan.append(SaveManagementCidrStep(client, management_cidr))
+    plan.append(SetOvnProviderStep(client, snap))
     plan.append(AddManifestStep(client, manifest_path))
     plan.append(
         PromptForProxyStep(
@@ -750,6 +765,8 @@ def bootstrap(  # noqa: C901
         deployments.update_deployment(deployment)
 
     update_config(client, DEPLOYMENTS_CONFIG_KEY, deployments.get_minimal_info())
+    # Store deployment type for feature gate sync behavior
+    client.cluster.update_config(DEPLOYMENT_TYPE_CONFIG_KEY, deployment.type)
     proxy_settings = deployment.get_proxy_settings()
     LOG.debug(f"Proxy settings: {proxy_settings}")
 
@@ -798,7 +815,26 @@ def bootstrap(  # noqa: C901
         plan21.append(AddK8SCredentialStep(deployment, jhelper))
         run_plan(plan21, console, show_hints)
 
+    ovn_manager = deployment.get_ovn_manager()
+
     plan1: list[BaseStep] = []
+
+    microovn_tfhelper = deployment.get_tfhelper("microovn-plan")
+    microovn_necessary = ovn_manager.is_microovn_necessary(roles)
+    if microovn_necessary:
+        plan1.append(TerraformInitStep(microovn_tfhelper))
+        plan1.append(
+            DeployMicroOVNApplicationStep(
+                deployment,
+                client,
+                microovn_tfhelper,
+                jhelper,
+                manifest,
+                deployment.openstack_machines_model,
+                ovn_manager,
+            )
+        )
+
     # Deploy Microceph application during bootstrap irrespective of node role.
     microceph_tfhelper = deployment.get_tfhelper("microceph-plan")
     plan1.append(TerraformInitStep(microceph_tfhelper))
@@ -900,13 +936,25 @@ def bootstrap(  # noqa: C901
                 deployment.openstack_machines_model,
             )
         )
+        if microovn_necessary:
+            plan1.append(
+                ReapplyMicroOVNOptionalIntegrationsStep(
+                    deployment,
+                    client,
+                    microovn_tfhelper,
+                    jhelper,
+                    manifest,
+                    deployment.openstack_machines_model,
+                    ovn_manager,
+                )
+            )
 
     run_plan(plan1, console, show_hints)
 
     plan2: list[BaseStep] = []
 
     if is_control_node or is_region_controller:
-        plan2.append(OpenStackPatchLoadBalancerServicesIPStep(client))
+        plan2.append(OpenStackPatchLoadBalancerServicesIPStep(client, ovn_manager))
 
     if not is_region_controller:
         # NOTE(jamespage):
@@ -921,30 +969,6 @@ def bootstrap(  # noqa: C901
                 hypervisor_tfhelper,
                 openstack_tfhelper,
                 cinder_volume_tfhelper,
-                jhelper,
-                manifest,
-                deployment.openstack_machines_model,
-            )
-        )
-
-    if is_network_node:
-        microovn_tfhelper = deployment.get_tfhelper("microovn-plan")
-        plan2.append(TerraformInitStep(microovn_tfhelper))
-        plan2.append(
-            DeployMicroOVNApplicationStep(
-                deployment,
-                client,
-                microovn_tfhelper,
-                jhelper,
-                manifest,
-                deployment.openstack_machines_model,
-            )
-        )
-        plan2.append(
-            ReapplyMicroOVNOptionalIntegrationsStep(
-                deployment,
-                client,
-                microovn_tfhelper,
                 jhelper,
                 manifest,
                 deployment.openstack_machines_model,
@@ -1214,6 +1238,7 @@ def add(
             console.print("Node is already a member of the Sunbeam cluster")
 
 
+@feature_gate_command(gate_key="feature.multi-region")
 @click.command()
 @click.argument("name", type=str)
 @click.option(
@@ -1300,14 +1325,15 @@ def add_secondary_region_node(
     default=["control", "compute"],
     callback=validate_roles,
     help=(
-        f"Specify which roles ({', '.join(role.lower() for role in Role.__members__)})"
+        f"Specify which roles ({', '.join(Role.enabled_values())})"
         " the node will be assigned in the cluster."
         " Can be repeated and comma separated."
     ),
 )
-@click.option(
+@feature_gate_option(
     "--region-controller-token",
     "region_controller_token",
+    gate_key="feature.multi-region",
     help="Token obtained from the region controller.",
     type=str,
 )
@@ -1447,6 +1473,8 @@ def join(  # noqa: C901
     if machine_id_result is not None:
         machine_id = int(machine_id_result)
 
+    ovn_manager = deployment.get_ovn_manager()
+    microovn_necessary = ovn_manager.is_microovn_necessary(roles)
     plan4: list[BaseStep] = []
     plan4.append(ClusterUpdateNodeStep(client, name, machine_id=machine_id))
     plan4.append(TerraformInitStep(sunbeam_machine_tfhelper))
@@ -1503,7 +1531,7 @@ def join(  # noqa: C901
     plan4.append(TerraformInitStep(openstack_tfhelper))
     plan4.append(TerraformInitStep(hypervisor_tfhelper))
     plan4.append(TerraformInitStep(cinder_volume_tfhelper))
-    if is_network_node:
+    if microovn_necessary:
         microovn_tfhelper = deployment.get_tfhelper("microovn-plan")
         plan4.append(TerraformInitStep(microovn_tfhelper))
         plan4.append(
@@ -1514,6 +1542,7 @@ def join(  # noqa: C901
                 jhelper,
                 manifest,
                 deployment.openstack_machines_model,
+                ovn_manager,
             )
         )
         plan4.append(
@@ -1524,18 +1553,30 @@ def join(  # noqa: C901
                 jhelper,
                 manifest,
                 deployment.openstack_machines_model,
+                ovn_manager,
             )
         )
         plan4.append(
-            LocalSetOpenStackNetworkAgentsStep(
+            ReapplyMicroOVNTerraformPlanStep(
                 client,
-                name,
+                microovn_tfhelper,
                 jhelper,
+                manifest,
                 deployment.openstack_machines_model,
-                join_mode=True,
-                manifest=manifest,
-            ),
+                deployment.get_ovn_manager(),
+            )
         )
+        if ovn_manager.is_network_agent_dataplane_node(roles):
+            plan4.append(
+                LocalSetOpenStackNetworkAgentsStep(
+                    client,
+                    name,
+                    jhelper,
+                    deployment.openstack_machines_model,
+                    join_mode=True,
+                    manifest=manifest,
+                ),
+            )
 
     if is_storage_node:
         plan4.append(TerraformInitStep(microceph_tfhelper))
@@ -1641,6 +1682,12 @@ def join(  # noqa: C901
                     manifest,
                     deployment.openstack_machines_model,
                 ),
+            ]
+        )
+        if not microovn_necessary:
+            # Only set local settings if MicroOVN is not deployed on the
+            # current node
+            plan4.append(
                 LocalSetHypervisorUnitsOptionsStep(
                     client,
                     name,
@@ -1648,7 +1695,10 @@ def join(  # noqa: C901
                     deployment.openstack_machines_model,
                     join_mode=True,
                     manifest=manifest,
-                ),
+                )
+            )
+        plan4.extend(
+            [
                 LocalConfigSRIOVStep(
                     client,
                     name,
@@ -1753,85 +1803,6 @@ def remove(ctx: click.Context, name: str, force: bool, show_hints: bool) -> None
 
     plan: list[BaseStep] = [
         JujuLoginStep(deployment.juju_account),
-        CheckCinderVolumeDistributionStep(
-            client,
-            name,
-            jhelper,
-            deployment.openstack_machines_model,
-            force=force,
-        ),
-        CheckMicrocephDistributionStep(
-            client,
-            name,
-            jhelper,
-            deployment.openstack_machines_model,
-            force=force,
-        ),
-        CheckMysqlK8SDistributionStep(
-            client,
-            name,
-            jhelper,
-            deployment.openstack_machines_model,
-            force=force,
-        ),
-        CheckOvnK8SDistributionStep(
-            client,
-            name,
-            jhelper,
-            deployment.openstack_machines_model,
-            force=force,
-        ),
-        CheckRabbitmqK8SDistributionStep(
-            client,
-            name,
-            jhelper,
-            deployment.openstack_machines_model,
-            force=force,
-        ),
-        MigrateK8SKubeconfigStep(
-            client, name, jhelper, deployment.openstack_machines_model
-        ),
-        UpdateK8SCloudStep(deployment, jhelper),
-        RemoveHypervisorUnitStep(
-            client,
-            jhelper,
-            deployment,
-            name,
-            deployment.openstack_machines_model,
-            force,
-        ),
-        RemoveCinderVolumeUnitsStep(
-            client, name, jhelper, deployment.openstack_machines_model
-        ),
-        RemoveMicrocephUnitsStep(
-            client, name, jhelper, deployment.openstack_machines_model
-        ),
-        RemoveMicroOVNUnitsStep(
-            client, name, jhelper, deployment.openstack_machines_model
-        ),
-        CordonK8SUnitStep(client, name, jhelper, deployment.openstack_machines_model),
-        DrainK8SUnitStep(
-            client, name, jhelper, deployment.openstack_machines_model, remove_pvc=True
-        ),
-        RemoveK8SUnitsStep(client, name, jhelper, deployment.openstack_machines_model),
-        EnsureL2AdvertisementByHostStep(
-            deployment,
-            client,
-            jhelper,
-            deployment.openstack_machines_model,
-            Networks.MANAGEMENT,
-            deployment.internal_ip_pool,
-        ),
-        RemoveSunbeamMachineUnitsStep(
-            client, name, jhelper, deployment.openstack_machines_model
-        ),
-        RemoveJujuMachineStep(
-            client, name, jhelper, deployment.openstack_machines_model
-        ),
-        # Cannot remove user as the same user name cannot be resued,
-        # so commenting the RemoveJujuUserStep
-        # RemoveJujuUserStep(name),
-        ClusterRemoveNodeStep(client, name),
     ]
 
     if not force:
@@ -2035,20 +2006,25 @@ def configure_cmd(
         ]
     )
 
+    is_microovn_deployment = (
+        deployment.get_ovn_manager().get_provider() == ovn.OvnProvider.MICROOVN
+    )
+
     if "compute" in node["role"]:
         tfhelper_hypervisor = deployment.get_tfhelper("hypervisor-plan")
-        plan.append(
-            LocalSetHypervisorUnitsOptionsStep(
-                client,
-                name,
-                jhelper,
-                deployment.openstack_machines_model,
-                # Accept preseed file but do not allow 'accept_defaults' as nic
-                # selection may vary from machine to machine and is potentially
-                # destructive if it takes over an unintended nic.
-                manifest=manifest,
+        if not is_microovn_deployment:
+            plan.append(
+                LocalSetHypervisorUnitsOptionsStep(
+                    client,
+                    name,
+                    jhelper,
+                    deployment.openstack_machines_model,
+                    # Accept preseed file but do not allow 'accept_defaults' as nic
+                    # selection may vary from machine to machine and is potentially
+                    # destructive if it takes over an unintended nic.
+                    manifest=manifest,
+                )
             )
-        )
         plan.append(TerraformInitStep(tfhelper_hypervisor))
         plan.append(
             ReapplyHypervisorTerraformPlanStep(
@@ -2060,7 +2036,10 @@ def configure_cmd(
             )
         )
 
-    if "network" in node["role"]:
+    if "network" in node["role"] or (
+        is_microovn_deployment and "compute" in node["role"]
+    ):
+        microovn_tfhelper = deployment.get_tfhelper("microovn-plan")
         plan.append(
             LocalSetOpenStackNetworkAgentsStep(
                 client,
@@ -2071,6 +2050,17 @@ def configure_cmd(
                 # selection may vary from machine to machine and is potentially
                 # destructive if it takes over an unintended nic.
                 manifest=manifest,
+            )
+        )
+        plan.append(TerraformInitStep(microovn_tfhelper))
+        plan.append(
+            ReapplyMicroOVNTerraformPlanStep(
+                client,
+                microovn_tfhelper,
+                jhelper,
+                manifest,
+                deployment.openstack_machines_model,
+                deployment.get_ovn_manager(),
             )
         )
 

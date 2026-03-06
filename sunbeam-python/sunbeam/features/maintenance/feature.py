@@ -6,7 +6,6 @@ import logging
 import click
 from packaging.version import Version
 
-from sunbeam.core.common import RiskLevel
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.manifest import FeatureConfig
 from sunbeam.features.interface.v1.base import (
@@ -32,7 +31,7 @@ class MaintenanceFeature(EnableDisableFeature):
     requires = {FeatureRequirement("resource-optimization")}
 
     name = "maintenance"
-    risk_availability = RiskLevel.EDGE
+    generally_available = False
 
     def run_enable_plans(
         self, deployment: Deployment, config: ConfigType, show_hints: bool

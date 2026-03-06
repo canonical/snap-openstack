@@ -32,7 +32,8 @@ resource "juju_application" "cinder-volume" {
   }
 
   config = merge({
-    snap-channel = var.cinder_volume_channel
+    snap-channel                   = var.cinder_volume_channel
+    enable-telemetry-notifications = var.enable-telemetry-notifications
   }, var.charm_cinder_volume_config)
   endpoint_bindings = var.endpoint_bindings
 }

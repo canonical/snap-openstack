@@ -86,9 +86,9 @@ class TestConfigureCloudsYamlStep:
       password: {creds["OS_PASSWORD"]}
       project_domain_name: {creds["OS_PROJECT_DOMAIN_NAME"]}
       project_name: {creds["OS_PROJECT_NAME"]}
-      region_name: {DEFAULT_REGION}
       user_domain_name: {creds["OS_USER_DOMAIN_NAME"]}
       username: {creds["OS_USERNAME"]}
+    region_name: {DEFAULT_REGION}
 """
         assert contents == expect
 
@@ -118,9 +118,9 @@ class TestConfigureCloudsYamlStep:
       password: {admin_credentials["OS_PASSWORD"]}
       project_domain_name: {admin_credentials["OS_PROJECT_DOMAIN_NAME"]}
       project_name: {admin_credentials["OS_PROJECT_NAME"]}
-      region_name: {DEFAULT_REGION}
       user_domain_name: {admin_credentials["OS_USER_DOMAIN_NAME"]}
       username: {admin_credentials["OS_USERNAME"]}
+    region_name: {DEFAULT_REGION}
 """
         assert contents == expect
 
@@ -148,8 +148,8 @@ class TestConfigureCloudsYamlStep:
       password: {creds["OS_PASSWORD"]}
       project_domain_name: {creds["OS_PROJECT_DOMAIN_NAME"]}
       project_name: {creds["OS_PROJECT_NAME"]}
-      region_name: {DEFAULT_REGION}
       user_domain_name: {creds["OS_USER_DOMAIN_NAME"]}
       username: {creds["OS_USERNAME"]}
+    region_name: {DEFAULT_REGION}
 """
         cprint.assert_called_with(expect)

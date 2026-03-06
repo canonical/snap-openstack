@@ -17,6 +17,7 @@ from rich.table import Table
 from snaphelpers import Snap
 
 from sunbeam.clusterd.service import ConfigItemNotFoundException
+from sunbeam.commands import refresh as refresh_cmds
 from sunbeam.commands import resize as resize_cmds
 from sunbeam.commands.configure import (
     DemoSetup,
@@ -26,6 +27,7 @@ from sunbeam.commands.configure import (
 )
 from sunbeam.commands.dashboard_url import retrieve_dashboard_url
 from sunbeam.commands.proxy import PromptForProxyStep
+from sunbeam.core import ovn
 from sunbeam.core.checks import (
     Check,
     DiagnosticResultType,
@@ -51,7 +53,12 @@ from sunbeam.core.common import (
     run_plan,
     str_presenter,
 )
-from sunbeam.core.deployment import PROXY_CONFIG_KEY, Deployment, Networks
+from sunbeam.core.deployment import (
+    DEPLOYMENT_TYPE_CONFIG_KEY,
+    PROXY_CONFIG_KEY,
+    Deployment,
+    Networks,
+)
 from sunbeam.core.deployments import DeploymentsConfig, deployment_path
 from sunbeam.core.juju import (
     CONTROLLER_APPLICATION,
@@ -61,6 +68,7 @@ from sunbeam.core.juju import (
 from sunbeam.core.manifest import AddManifestStep
 from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.core.terraform import TerraformInitStep
+from sunbeam.feature_gates import feature_gate_option
 from sunbeam.provider.base import ProviderBase
 from sunbeam.provider.common.multiregion import connect_to_region_controller
 from sunbeam.provider.maas.client import (
@@ -171,6 +179,7 @@ from sunbeam.steps.microceph import (
 from sunbeam.steps.microovn import (
     DeployMicroOVNApplicationStep,
     ReapplyMicroOVNOptionalIntegrationsStep,
+    SetOvnProviderStep,
 )
 from sunbeam.steps.openstack import (
     DeployControlPlaneStep,
@@ -191,6 +200,7 @@ from sunbeam.steps.sunbeam_machine import (
     DestroySunbeamMachineApplicationStep,
     RemoveSunbeamMachineUnitsStep,
 )
+from sunbeam.steps.sync_feature_gates import SyncFeatureGatesToCluster
 from sunbeam.steps.terraform import CleanTerraformPlansStep
 from sunbeam.utils import (
     CatchGroup,
@@ -253,6 +263,7 @@ class MaasProvider(ProviderBase):
         cluster.add_command(deploy)
         cluster.add_command(list_nodes)
         cluster.add_command(resize_cmds.resize)
+        cluster.add_command(refresh_cmds.refresh)
         cluster.add_command(remove_node)
         cluster.add_command(destroy_deployment_cmd)
         configure.add_command(configure_cmd)
@@ -293,9 +304,10 @@ class MaasProvider(ProviderBase):
     type=str,
     help="Juju controller name",
 )
-@click.option(
+@feature_gate_option(
     "--region-controller-token",
     "region_controller_token",
+    gate_key="feature.multi-region",
     help="Token obtained from the region controller.",
     type=str,
 )
@@ -454,7 +466,9 @@ def bootstrap(
         )
     )
     plan2.append(
-        MaasDeployInfraMachinesStep(maas_client, jhelper, deployment.infra_model)
+        MaasDeployInfraMachinesStep(
+            maas_client, deployment, jhelper, deployment.infra_model
+        )
     )
     plan2.append(
         DeployCertificatesProviderApplicationStep(
@@ -484,8 +498,10 @@ def bootstrap(
         sys.exit(1)
 
     client = deployment.get_client()
+    snap = Snap()
     plan3: list[BaseStep] = []
     plan3.append(AddManifestStep(client, manifest_path))
+    plan3.append(SetOvnProviderStep(client, snap))
     plan3.append(MaasAddMachinesToClusterdStep(client, maas_client))
     if not juju_controller:
         plan3.append(
@@ -521,6 +537,10 @@ def bootstrap(
     if proxy_from_user and isinstance(proxy_from_user, dict):
         LOG.debug(f"Writing proxy information to clusterdb: {proxy_from_user}")
         client.cluster.update_config(PROXY_CONFIG_KEY, json.dumps(proxy_from_user))
+
+    # Store deployment type for feature gate sync behavior
+    LOG.debug(f"Writing deployment type to clusterdb: {deployment.type}")
+    client.cluster.update_config(DEPLOYMENT_TYPE_CONFIG_KEY, deployment.type)
 
     console.print("Bootstrap controller components complete.")
 
@@ -614,8 +634,10 @@ def deploy(
     tfhelper_hypervisor_deploy = deployment.get_tfhelper("hypervisor-plan")
     tfhelper_microovn = deployment.get_tfhelper("microovn-plan")
 
+    ovn_manager = deployment.get_ovn_manager()
     plan: list[BaseStep] = []
     plan.append(AddManifestStep(client, manifest_path))
+    plan.append(SyncFeatureGatesToCluster(client))
     plan.append(
         AddJujuModelStep(
             jhelper,
@@ -630,7 +652,9 @@ def deploy(
     )
     plan.append(MaasAddMachinesToClusterdStep(client, maas_client))
     plan.append(
-        MaasDeployMachinesStep(client, jhelper, deployment.openstack_machines_model)
+        MaasDeployMachinesStep(
+            deployment, client, jhelper, deployment.openstack_machines_model
+        )
     )
     run_plan(plan, console, show_hints)
 
@@ -778,6 +802,23 @@ def deploy(
             deployment.openstack_machines_model,
         )
     )
+    # Deploy MicroOVN and subordinate openstack-network-agents on network nodes
+    microovn_necessary = ovn_manager.is_microovn_necessary_maas(
+        nb_network, nb_compute, nb_control
+    )
+    if microovn_necessary:
+        plan2.append(TerraformInitStep(tfhelper_microovn))
+        plan2.append(
+            DeployMicroOVNApplicationStep(
+                deployment,
+                client,
+                tfhelper_microovn,
+                jhelper,
+                manifest,
+                deployment.openstack_machines_model,
+                ovn_manager,
+            )
+        )
     plan2.append(TerraformInitStep(tfhelper_openstack_deploy))
     plan2.append(
         MaasEndpointsConfigurationStep(
@@ -800,6 +841,18 @@ def deploy(
             is_region_controller=bool(nb_region_controllers),
         )
     )
+    if microovn_necessary:
+        plan2.append(
+            ReapplyMicroOVNOptionalIntegrationsStep(
+                deployment,
+                client,
+                tfhelper_microovn,
+                jhelper,
+                manifest,
+                deployment.openstack_machines_model,
+                ovn_manager,
+            )
+        )
     plan2.append(
         SetKeystoneSAMLCertAndKeyStep(
             deployment=deployment,
@@ -816,29 +869,7 @@ def deploy(
             manifest,
         )
     )
-    # Deploy MicroOVN and subordinate openstack-network-agents on network nodes
-    if nb_network > 0:
-        plan2.append(TerraformInitStep(tfhelper_microovn))
-        plan2.append(
-            DeployMicroOVNApplicationStep(
-                deployment,
-                client,
-                tfhelper_microovn,
-                jhelper,
-                manifest,
-                deployment.openstack_machines_model,
-            )
-        )
-        plan2.append(
-            ReapplyMicroOVNOptionalIntegrationsStep(
-                deployment,
-                client,
-                tfhelper_microovn,
-                jhelper,
-                manifest,
-                deployment.openstack_machines_model,
-            )
-        )
+
     plan2.append(
         OpenStackPatchLoadBalancerServicesIPPoolStep(
             client, deployment.public_api_label
@@ -868,7 +899,7 @@ def deploy(
             deployment.openstack_machines_model,
         )
     )
-    plan2.append(OpenStackPatchLoadBalancerServicesIPStep(client))
+    plan2.append(OpenStackPatchLoadBalancerServicesIPStep(client, ovn_manager))
 
     if nb_compute:
         plan2.append(TerraformInitStep(tfhelper_hypervisor_deploy))
@@ -990,6 +1021,7 @@ def configure_cmd(
     network = list(
         map(_name_mapper, client.cluster.list_nodes_by_role(RoleTags.NETWORK.value))
     )
+    ovn_manager = deployment.get_ovn_manager()
     plan = [
         AddManifestStep(client, manifest_path),
         JujuLoginStep(deployment.juju_account),
@@ -1021,14 +1053,6 @@ def configure_cmd(
             manifest,
             model=deployment.openstack_machines_model,
         ),
-        MaasSetHypervisorUnitsOptionsStep(
-            client,
-            maas_client,
-            compute,
-            jhelper,
-            deployment.openstack_machines_model,
-            manifest,
-        ),
         MaasSetOpenStackNetworkAgentsStep(
             client,
             maas_client,
@@ -1038,6 +1062,18 @@ def configure_cmd(
             manifest,
         ),
     ]
+    if ovn_manager.get_provider() == ovn.OvnProvider.OVN_K8S:
+        # In OVN_K8S mode, dataplane is managed by hypervisor units
+        plan.append(
+            MaasSetHypervisorUnitsOptionsStep(
+                client,
+                maas_client,
+                compute,
+                jhelper,
+                deployment.openstack_machines_model,
+                manifest,
+            ),
+        )
 
     run_plan(plan, console, show_hints)
     dashboard_url = retrieve_dashboard_url(jhelper)
