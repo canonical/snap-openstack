@@ -44,7 +44,7 @@ _GENERIC_CONF_OPTS = {
     "key_file",
     "secret",
     # NGS internal opts.
-    # https://github.com/openstack/networking-generic-switch/blob/stable/2025.1/networking_generic_switch/devices/__init__.py#L28
+    # https://github.com/openstack/networking-generic-switch/blob/stable/2026.1/networking_generic_switch/devices/__init__.py#L28
     "ngs_mac_address",
     "ngs_trunk_ports",
     "ngs_port_default_vlan",

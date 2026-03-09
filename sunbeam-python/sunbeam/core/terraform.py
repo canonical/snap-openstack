@@ -665,7 +665,7 @@ class TerraformHelper:
         """
         try:
             data = json.loads(line)
-        except (json.JSONDecodeError, TypeError):
+        except json.JSONDecodeError, TypeError:
             return None
 
         event_type = data.get("type", "")
@@ -690,7 +690,7 @@ class TerraformHelper:
 
         try:
             timestamp = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
-        except (ValueError, AttributeError):
+        except ValueError, AttributeError:
             timestamp = datetime.now(tz=timezone.utc)
 
         if event_type == "apply_start":

@@ -9,14 +9,18 @@ from sunbeam.versions import (
     JUJU_CHANNEL,
     LXD_CHANNEL,
     OPENSTACK_CHANNEL,
-    SUPPORTED_RELEASE,
+    SUPPORTED_RELEASES,
 )
 
 console = Console()
 
+_supported_check = " && ".join(
+    f"[ $(lsb_release -sc) != '{r}' ]" for r in SUPPORTED_RELEASES
+)
+_supported_list = ", ".join(SUPPORTED_RELEASES)
 
-PREPARE_NODE_TEMPLATE = f"""[ $(lsb_release -sc) != '{SUPPORTED_RELEASE}' ] && \
-{{ echo 'ERROR: Sunbeam deploy only supported on {SUPPORTED_RELEASE}'; exit 1; }}
+PREPARE_NODE_TEMPLATE = f"""{_supported_check} && \
+{{ echo 'ERROR: Sunbeam deploy only supported on {_supported_list}'; exit 1; }}
 
 # :warning: Node Preparation for OpenStack Sunbeam :warning:
 # All of these commands perform privileged operations
