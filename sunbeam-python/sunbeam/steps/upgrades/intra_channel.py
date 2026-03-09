@@ -16,6 +16,8 @@ from sunbeam.core.common import (
 )
 from sunbeam.core.deployment import Deployment, Networks
 from sunbeam.core.juju import (
+    ActionFailedException,
+    ApplicationNotFoundException,
     JujuHelper,
     JujuStepHelper,
     JujuWaitException,
@@ -48,6 +50,27 @@ LOG = logging.getLogger(__name__)
 console = Console()
 
 INFRA_APPS = ["mysql-k8s"]
+
+# Snap-based charm applications that expose a refresh-snap action.
+# These need to be refreshed explicitly after the charm refresh because
+# their snaps are held to prevent spontaneous snapd auto-refreshes.
+SNAP_APPS_MACHINE_MODEL: list[str] = [
+    "openstack-hypervisor",
+    "openstack-network-agents",
+    "cinder-volume",
+    "epa-orchestrator",
+    "manila-data",
+    # consul-client apps deployed by the instance-recovery feature;
+    # up to 3 apps depending on how many networks are in use.
+    "consul-client-management",
+    "consul-client-tenant",
+    "consul-client-storage",
+]
+
+# Snap-based charm applications deployed in the infra model (MAAS only).
+SNAP_APPS_INFRA_MODEL: list[str] = [
+    "sunbeam-clusterd",
+]
 
 
 class LatestInChannel(BaseStep, JujuStepHelper):
@@ -302,6 +325,76 @@ class ReapplyInfraModelConfigStep(BaseStep, JujuStepHelper):
         return Result(ResultType.COMPLETED)
 
 
+class RefreshSnapStep(BaseStep, JujuStepHelper):
+    """Run refresh-snap action on all snap-based charm units.
+
+    This step must run after the charm refresh so that the new refresh-snap
+    action handler is present.  Snaps are held at their current revision by
+    the charm to prevent spontaneous snapd auto-refreshes; this step explicitly
+    triggers a snap refresh on every unit before the Terraform plans are applied.
+    """
+
+    def __init__(self, deployment: Deployment, jhelper: JujuHelper):
+        super().__init__(
+            "Refresh snaps",
+            "Run refresh-snap action on snap-based charm units",
+        )
+        self.deployment = deployment
+        self.jhelper = jhelper
+
+    def _refresh_snap_for_apps(
+        self, apps: list[str], model: str, status: Status | None = None
+    ) -> Result:
+        """Run refresh-snap action on all units of *apps* in *model*."""
+        for app_name in apps:
+            try:
+                application = self.jhelper.get_application(app_name, model)
+            except ApplicationNotFoundException:
+                LOG.debug(
+                    "Application %s not found in %s, skipping snap refresh",
+                    app_name,
+                    model,
+                )
+                continue
+
+            for unit_name in application.units:
+                LOG.debug("Running refresh-snap on %s in %s", unit_name, model)
+                self.update_status(status, f"refreshing snap on {unit_name}")
+                try:
+                    self.jhelper.run_action(
+                        unit_name,
+                        model,
+                        "refresh-snap",
+                        timeout=600,
+                    )
+                except ActionFailedException as e:
+                    LOG.warning("refresh-snap failed on %s: %s", unit_name, e)
+                    return Result(ResultType.FAILED, str(e))
+
+        return Result(ResultType.COMPLETED)
+
+    def run(self, status: Status | None = None) -> Result:
+        """Run refresh-snap on all snap-based charm applications."""
+        result = self._refresh_snap_for_apps(
+            SNAP_APPS_MACHINE_MODEL,
+            self.deployment.openstack_machines_model,
+            status,
+        )
+        if result.result_type == ResultType.FAILED:
+            return result
+
+        if is_maas_deployment(self.deployment):
+            result = self._refresh_snap_for_apps(
+                SNAP_APPS_INFRA_MODEL,
+                self.deployment.infra_model,  # type: ignore[attr-defined]
+                status,
+            )
+            if result.result_type == ResultType.FAILED:
+                return result
+
+        return Result(ResultType.COMPLETED)
+
+
 class LatestInChannelCoordinator(UpgradeCoordinator):
     """Coordinator for refreshing charms in their current channel."""
 
@@ -310,6 +403,7 @@ class LatestInChannelCoordinator(UpgradeCoordinator):
         plan = [
             LatestInChannel(self.deployment, self.jhelper, self.manifest),
             ReapplyInfraModelConfigStep(self.deployment, self.jhelper, self.manifest),
+            RefreshSnapStep(self.deployment, self.jhelper),
             # Microceph introduces new offer urls for rgw and so microceph
             # plan need to be applied before openstack plan
             TerraformInitStep(self.deployment.get_tfhelper("microceph-plan")),
