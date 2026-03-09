@@ -1,13 +1,14 @@
 name: openstack
-base: core24
+base: core26
+build-base: devel
 summary: Dead simple OpenStack installation
 license: Apache-2.0
 description: |
   snap-openstack aims to provide a scalable, simple to deploy OpenStack solution.
-version: "2024.1"
+version: "2026.1"
 
 confinement: strict
-grade: stable
+grade: devel
 
 platforms:
   amd64:
@@ -191,8 +192,8 @@ parts:
       '*': etc/manifests/
     override-prime: |
       craftctl default
-      # For backward compatibility, we symlink 2024.1 manifests to the root manifests dir
-      for manifest in $CRAFT_PRIME/etc/manifests/2024.1/*yml;
+      # For backward compatibility, we symlink 2026.1 manifests to the root manifests dir
+      for manifest in $CRAFT_PRIME/etc/manifests/2026.1/*yml;
       do
         link=$CRAFT_PRIME/etc/manifests/$(basename $manifest)
         [ -e $link ] && rm $link || true
@@ -200,12 +201,10 @@ parts:
       done
 
   sunbeam-and-openstackclients:
-    plugin: python
+    plugin: uv
     source: .
     source-subdir: sunbeam-python/
     build-snaps: [astral-uv]
-    python-requirements:
-      - requirements.txt
     build-packages:
       - libffi-dev
       - libssl-dev
@@ -218,8 +217,8 @@ parts:
       - cargo
     stage-packages:
       - openssh-client
+      - python3-venv
     override-build: |
-      uv export --directory sunbeam-python --extra=openstackclients --frozen --no-hashes --format=requirements-txt -o requirements.txt
       craftctl default
     override-prime: |
       craftctl default

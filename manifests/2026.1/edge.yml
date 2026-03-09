@@ -1,12 +1,10 @@
 core:
   software:
-    juju:
-      bootstrap_args:
-        - --bootstrap-constraints
-        - root-disk=5G
     charms:
       cinder-volume:
         channel: 2026.1/edge
+        config:
+          snap-channel: 2026.1/edge
       cinder-volume-ceph:
         channel: 2026.1/edge
       cinder-k8s:
@@ -40,15 +38,19 @@ core:
       epa-orchestrator:
         channel: 2026.1/edge
       microceph:
-        channel: squid/edge
+        channel: squid/stable
         config:
-          snap-channel: squid/edge
+          snap-channel: squid/stable
       microovn:
+        channel: 26.03/stable
+      openstack-network-agents:
+        channel: 2026.1/edge
+        config:
+          snap-channel: 2026.1/edge
+      microcluster-token-distributor:
         channel: latest/edge
-      mysql-k8s:
-        channel: 8.0/stable
-        storage:
-          database: 2G
+      sunbeam-ovn-proxy:
+        channel: 2026.1/edge
 features:
   baremetal:
     software:
@@ -109,11 +111,6 @@ features:
       charms:
         watcher-k8s:
           channel: 2026.1/edge
-  secrets:
-    software:
-      charms:
-        barbican-k8s:
-          channel: 2026.1/edge
   shared-filesystem:
     software:
       charms:
@@ -122,6 +119,11 @@ features:
         manila-cephfs-k8s:
           channel: 2026.1/edge
         manila-data:
+          channel: 2026.1/edge
+  secrets:
+    software:
+      charms:
+        barbican-k8s:
           channel: 2026.1/edge
   telemetry:
     software:

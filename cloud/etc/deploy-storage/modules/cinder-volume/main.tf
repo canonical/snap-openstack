@@ -24,7 +24,7 @@ resource "juju_application" "cinder-volume" {
     name     = "cinder-volume"
     channel  = var.charm_channel
     revision = var.charm_revision
-    base     = "ubuntu@24.04"
+    base     = "ubuntu@26.04"
   }
 
   config = merge({

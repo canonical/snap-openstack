@@ -229,7 +229,7 @@ class TestDeploySpecificCinderVolumeStep:
         # Mock manifest
         mock_cinder_volume_charm = Mock()
         mock_cinder_volume_charm.config = {"test": "value"}
-        mock_cinder_volume_charm.channel = "2024.1/edge"
+        mock_cinder_volume_charm.channel = "2026.1/edge"
         mock_cinder_volume_charm.revision = 123
         deploy_specific_cinder_volume_step.manifest.core.software.charms = {
             "cinder-volume": mock_cinder_volume_charm
@@ -314,7 +314,7 @@ class TestDeploySpecificCinderVolumeStep:
         # Mock manifest
         mock_cinder_volume_charm = Mock()
         mock_cinder_volume_charm.config = {}
-        mock_cinder_volume_charm.channel = "2024.1/edge"
+        mock_cinder_volume_charm.channel = "2026.1/edge"
         mock_cinder_volume_charm.revision = 123
         basic_manifest.core.software.charms = {
             "cinder-volume": mock_cinder_volume_charm

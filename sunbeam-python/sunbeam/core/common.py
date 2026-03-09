@@ -651,7 +651,7 @@ def infer_version(snap: Snap) -> str:
     try:
         version = str(snap.config.get("deployment.version"))
     except UnknownConfigKey:
-        return "2024.1"
+        return "2026.1"
     return version
 
 
