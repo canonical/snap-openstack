@@ -1,85 +1,87 @@
 core:
   software:
-    juju:
-      bootstrap_args:
-        - --bootstrap-constraints
-        - root-disk=5G
     charms:
       cinder-volume:
-        channel: 2026.1/edge
+        channel: 2026.1/stable
+        config:
+          snap-channel: 2026.1/stable
       cinder-volume-ceph:
-        channel: 2026.1/edge
+        channel: 2026.1/stable
       cinder-k8s:
-        channel: 2026.1/edge
+        channel: 2026.1/stable
       glance-k8s:
-        channel: 2026.1/edge
+        channel: 2026.1/stable
       horizon-k8s:
-        channel: 2026.1/edge
+        channel: 2026.1/stable
       keystone-k8s:
-        channel: 2026.1/edge
+        channel: 2026.1/stable
       neutron-k8s:
-        channel: 2026.1/edge
+        channel: 2026.1/stable
       nova-k8s:
-        channel: 2026.1/edge
+        channel: 2026.1/stable
       openstack-hypervisor:
-        channel: 2026.1/edge
+        channel: 2026.1/stable
         config:
-          snap-channel: 2026.1/edge
+          snap-channel: 2026.1/stable
       ovn-central-k8s:
-        channel: 26.03/edge
+        channel: 26.03/stable
       ovn-relay-k8s:
-        channel: 26.03/edge
+        channel: 26.03/stable
       placement-k8s:
-        channel: 2026.1/edge
+        channel: 2026.1/stable
       sunbeam-clusterd:
-        channel: 2026.1/edge
+        channel: 2026.1/stable
         config:
-          snap-channel: 2026.1/edge
+          snap-channel: 2026.1/stable
       sunbeam-machine:
-        channel: 2026.1/edge
+        channel: 2026.1/stable
       epa-orchestrator:
-        channel: 2026.1/edge
+        channel: 2026.1/stable
       microceph:
-        channel: squid/edge
+        channel: squid/stable
         config:
-          snap-channel: squid/edge
+          snap-channel: squid/stable
       microovn:
+        channel: 26.03/stable
+      openstack-network-agents:
+        channel: 2026.1/stable
+        config:
+          snap-channel: 2026.1/stable
+      microcluster-token-distributor:
         channel: latest/edge
-      mysql-k8s:
-        channel: 8.0/stable
-        storage:
-          database: 2G
+      sunbeam-ovn-proxy:
+        channel: 2026.1/stable
 features:
   baremetal:
     software:
       charms:
         ironic-conductor-k8s:
-          channel: 2026.1/edge
+          channel: 2026.1/stable
         ironic-k8s:
-          channel: 2026.1/edge
+          channel: 2026.1/stable
         nova-ironic-k8s:
-          channel: 2026.1/edge
+          channel: 2026.1/stable
         neutron-baremetal-switch-config-k8s:
-          channel: 2026.1/edge
+          channel: 2026.1/stable
         neutron-generic-switch-config-k8s:
-          channel: 2026.1/edge
+          channel: 2026.1/stable
   caas:
     software:
       charms:
         magnum-k8s:
-          channel: 2026.1/edge
+          channel: 2026.1/stable
   dns:
     software:
       charms:
         designate-bind-k8s:
-          channel: 9/edge
+          channel: 9/stable
         designate-k8s:
-          channel: 2026.1/edge
+          channel: 2026.1/stable
   images-sync:
     software:
       charms:
         openstack-images-sync-k8s:
-          channel: 2026.1/edge
+          channel: 2026.1/stable
   instance-recovery:
     software:
       charms:
@@ -88,54 +90,54 @@ features:
         consul-client:
           channel: 1.19/edge
         masakari-k8s:
-          channel: 2026.1/edge
+          channel: 2026.1/stable
   ldap:
     software:
       charms:
         keystone-ldap-k8s:
-          channel: 2026.1/edge
+          channel: 2026.1/stable
   loadbalancer:
     software:
       charms:
         octavia-k8s:
-          channel: 2026.1/edge
+          channel: 2026.1/stable
   orchestration:
     software:
       charms:
         heat-k8s:
-          channel: 2026.1/edge
+          channel: 2026.1/stable
   resource-optimization:
     software:
       charms:
         watcher-k8s:
-          channel: 2026.1/edge
+          channel: 2026.1/stable
   secrets:
     software:
       charms:
         barbican-k8s:
-          channel: 2026.1/edge
+          channel: 2026.1/stable
   shared-filesystem:
     software:
       charms:
         manila-k8s:
-          channel: 2026.1/edge
+          channel: 2026.1/stable
         manila-cephfs-k8s:
-          channel: 2026.1/edge
+          channel: 2026.1/stable
         manila-data:
-          channel: 2026.1/edge
+          channel: 2026.1/stable
   telemetry:
     software:
       charms:
         aodh-k8s:
-          channel: 2026.1/edge
+          channel: 2026.1/stable
         ceilometer-k8s:
-          channel: 2026.1/edge
+          channel: 2026.1/stable
         gnocchi-k8s:
-          channel: 2026.1/edge
+          channel: 2026.1/stable
         openstack-exporter-k8s:
-          channel: 2026.1/edge
+          channel: 2026.1/stable
   validation:
     software:
       charms:
         tempest-k8s:
-          channel: 2026.1/edge
+          channel: 2026.1/stable

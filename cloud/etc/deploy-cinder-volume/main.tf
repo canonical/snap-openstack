@@ -28,7 +28,7 @@ resource "juju_application" "cinder-volume" {
     name     = "cinder-volume"
     channel  = var.charm_cinder_volume_channel
     revision = var.charm_cinder_volume_revision
-    base     = "ubuntu@24.04"
+    base     = "ubuntu@26.04"
   }
 
   config = merge({
@@ -97,7 +97,7 @@ resource "juju_application" "cinder-volume-ceph" {
     name     = "cinder-volume-ceph"
     channel  = var.charm_cinder_volume_ceph_channel
     revision = var.charm_cinder_volume_ceph_revision
-    base     = "ubuntu@24.04"
+    base     = "ubuntu@26.04"
   }
 
   config            = var.charm_cinder_volume_ceph_config

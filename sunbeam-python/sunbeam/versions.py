@@ -15,19 +15,19 @@ def determine_version() -> str:
         snap = Snap()
         risk = str(snap.config.get("deployment.version"))
     except Exception:
-        risk = "2024.1"
+        risk = "2026.1"
     return risk
 
 
-SUPPORTED_RELEASE = "noble"
+SUPPORTED_RELEASE = "resolute"
 JUJU_CHANNEL = "3.6/stable"
-JUJU_BASE = "ubuntu@24.04"
+JUJU_BASE = "ubuntu@26.04"
 OPENSTACK_CHANNEL = f"{determine_version()}/stable"
-OVN_CHANNEL = "24.03/stable"
+OVN_CHANNEL = "26.03/stable"
 RABBITMQ_CHANNEL = "3.12/stable"
 TRAEFIK_CHANNEL = "latest/stable"
 MICROCEPH_CHANNEL = "squid/stable"
-MICROOVN_CHANNEL = "24.03/stable"
+MICROOVN_CHANNEL = "26.03/stable"
 MYSQL_CHANNEL = "8.0/stable"
 CERT_AUTH_CHANNEL = "1/stable"
 BIND_CHANNEL = "9/stable"

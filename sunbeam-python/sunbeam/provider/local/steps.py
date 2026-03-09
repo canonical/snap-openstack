@@ -771,7 +771,7 @@ class LocalConfigSRIOVStep(BaseStep):
                     "pci-excluded-devices": json.dumps(node_excluded_devices),
                 },
             )
-        except (ActionFailedException, TimeoutError):
+        except ActionFailedException, TimeoutError:
             msg = f"Unable to set hypervisor {name} configuration"
             LOG.error(msg, exc_info=True)
             return Result(ResultType.FAILED, msg)
@@ -983,7 +983,7 @@ class LocalConfigDPDKStep(BaseConfigDPDKStep):
                     "ovs-dpdk-ports": ",".join(self.nics or ""),
                 },
             )
-        except (ActionFailedException, TimeoutError):
+        except ActionFailedException, TimeoutError:
             msg = f"Unable to set hypervisor {name} configuration"
             LOG.error(msg, exc_info=True)
             return Result(ResultType.FAILED, msg)

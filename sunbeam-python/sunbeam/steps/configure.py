@@ -556,7 +556,7 @@ class SetExternalNetworkUnitsOptionsStep(BaseStep, UnitGetterMixin):
                         "bridge-mapping": bridge_mapping,
                     },
                 )
-            except (ActionFailedException, TimeoutError):
+            except ActionFailedException, TimeoutError:
                 _message = f"Unable to set {name!r} configuration"
                 LOG.debug(_message, exc_info=True)
                 return Result(ResultType.FAILED, _message)
