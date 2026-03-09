@@ -9,7 +9,7 @@ variable "application_name" {
 variable "charm_channel" {
   description = "Operator channel for cinder_volume deployment"
   type        = string
-  default     = "2024.1/edge"
+  default     = "2024.1/stable"
 }
 
 variable "charm_revision" {

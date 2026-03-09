@@ -4,7 +4,7 @@
 variable "k8s_channel" {
   description = "Operator channel for k8s deployment"
   type        = string
-  default     = "latest/edge"
+  default     = "1.32/stable"
 }
 
 variable "k8s_revision" {
