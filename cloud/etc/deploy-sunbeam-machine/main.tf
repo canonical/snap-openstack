@@ -25,7 +25,7 @@ resource "juju_application" "sunbeam-machine" {
     name     = "sunbeam-machine"
     channel  = var.charm_channel
     revision = var.charm_revision
-    base    = "ubuntu@24.04"
+    base    = "ubuntu@26.04"
   }
 
   config = var.charm_config
@@ -41,7 +41,7 @@ resource "juju_application" "epa_orchestrator" {
     name     = "epa-orchestrator"
     channel  = var.charm_epa_orchestrator_channel
     revision = var.charm_epa_orchestrator_revision
-    base     = "ubuntu@24.04"
+    base     = "ubuntu@26.04"
   }
 
   config            = var.charm_epa_orchestrator_config

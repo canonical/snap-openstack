@@ -20,7 +20,7 @@ variable "charm_name" {
 variable "charm_base" {
   description = "Base for the Storage charm"
   type        = string
-  default     = "ubuntu@24.04"
+  default     = "ubuntu@26.04"
 }
 
 variable "charm_channel" {
