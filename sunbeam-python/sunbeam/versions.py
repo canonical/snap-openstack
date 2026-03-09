@@ -32,10 +32,9 @@ MYSQL_CHANNEL = "8.0/stable"
 CERT_AUTH_CHANNEL = "1/stable"
 BIND_CHANNEL = "9/stable"
 VAULT_CHANNEL = "1.16/stable"
-CONSUL_CHANNEL = "1.19/edge"
+CONSUL_CHANNEL = "1.19/stable"
 K8S_CHANNEL = "1.32/stable"
 LXD_CHANNEL = "5.21/stable"
-SUNBEAM_EPA_ORCHESTRATOR_CHANNEL = "2024.1/edge"
 CINDER_VOLUME_CHARM = "cinder-volume"
 
 CLUSTER_API_VERSIONS = {
@@ -84,7 +83,7 @@ MACHINE_CHARMS = {
     "self-signed-certificates": CERT_AUTH_CHANNEL,
     CINDER_VOLUME_CHARM: OPENSTACK_CHANNEL,
     "cinder-volume-ceph": OPENSTACK_CHANNEL,
-    "epa-orchestrator": SUNBEAM_EPA_ORCHESTRATOR_CHANNEL,
+    "epa-orchestrator": OPENSTACK_CHANNEL,
 }
 
 
