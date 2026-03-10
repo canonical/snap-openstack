@@ -87,6 +87,21 @@ resource "juju_integration" "cinder-volume-database" {
   }
 }
 
+resource "juju_integration" "cinder-volume-cert-distributor" {
+  count = (var.cert-distributor-offer-url != null) ? 1 : 0
+  model = var.machine_model
+
+  application {
+    name     = juju_application.cinder-volume.name
+    endpoint = "receive-ca-cert"
+  }
+
+  application {
+    offer_url = var.cert-distributor-offer-url
+    endpoint  = "send-ca-cert"
+  }
+}
+
 
 resource "juju_application" "cinder-volume-ceph" {
   name  = "cinder-volume-ceph"

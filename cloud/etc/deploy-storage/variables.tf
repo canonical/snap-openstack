@@ -18,6 +18,7 @@ variable "cinder-volumes" {
     keystone-offer-url             = string
     amqp-offer-url                 = string
     database-offer-url             = string
+    cert-distributor-offer-url     = optional(string)
     enable-telemetry-notifications = bool
   }))
   default = {}

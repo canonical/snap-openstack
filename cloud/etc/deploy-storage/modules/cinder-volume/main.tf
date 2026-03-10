@@ -4,7 +4,7 @@
 terraform {
   required_providers {
     juju = {
-      source  = "juju/juju"
+      source = "juju/juju"
     }
   }
 
@@ -80,5 +80,20 @@ resource "juju_integration" "cinder-volume-database" {
 
   application {
     offer_url = var.database-offer-url
+  }
+}
+
+resource "juju_integration" "cinder-volume-cert-distributor" {
+  count = (var.cert-distributor-offer-url != null) ? 1 : 0
+  model = var.machine_model
+
+  application {
+    name     = juju_application.cinder-volume.name
+    endpoint = "receive-ca-cert"
+  }
+
+  application {
+    offer_url = var.cert-distributor-offer-url
+    endpoint  = "send-ca-cert"
   }
 }

@@ -56,6 +56,7 @@ from sunbeam.steps.cinder_volume import (
     APPLICATION,
     CINDER_VOLUME_APP_TIMEOUT,
     get_mandatory_control_plane_offers,
+    get_optional_control_plane_offers,
 )
 from sunbeam.storage.models import SecretDictField
 from sunbeam.versions import CINDER_VOLUME_CHARM
@@ -734,6 +735,10 @@ class DeploySpecificCinderVolumeStep(BaseStep):
                     "space": self.deployment.get_space(Networks.INTERNAL),
                 },
                 {
+                    "endpoint": "receive-ca-cert",
+                    "space": self.deployment.get_space(Networks.INTERNAL),
+                },
+                {
                     # relation to cinder-api
                     "endpoint": "storage-backend",
                     "space": self.deployment.get_space(Networks.INTERNAL),
@@ -741,6 +746,11 @@ class DeploySpecificCinderVolumeStep(BaseStep):
             ],
         }
         tfvars["cinder-volumes"][application_name].update(self._get_offers())
+        tfvars["cinder-volumes"][application_name].update(
+            get_optional_control_plane_offers(
+                self.deployment.get_tfhelper("openstack-plan")
+            )
+        )
         tfvars["cinder-volumes"][application_name].update(
             self._get_telemetry_notifications_tfvar()
         )

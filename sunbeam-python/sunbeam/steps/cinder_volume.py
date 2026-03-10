@@ -51,6 +51,20 @@ def get_mandatory_control_plane_offers(
     return tfvars
 
 
+def get_optional_control_plane_offers(
+    tfhelper: TerraformHelper,
+) -> dict[str, str | None]:
+    """Get optional control plane offers."""
+    openstack_tf_output = tfhelper.output()
+
+    tfvars = {
+        "cert-distributor-offer-url": openstack_tf_output.get(
+            "cert-distributor-offer-url"
+        ),
+    }
+    return tfvars
+
+
 class DeployCinderVolumeApplicationStep(DeployMachineApplicationStep):
     """Deploy Cinder Volume application using Terraform."""
 
@@ -78,6 +92,7 @@ class DeployCinderVolumeApplicationStep(DeployMachineApplicationStep):
             "Deploying Cinder Volume",
         )
         self._offers: dict[str, str | None] = {}
+        self._optional_offers: dict[str, str | None] = {}
         self.override_tfvars: dict[str, Any] = extra_tfvars or {}
 
     def get_application_timeout(self) -> int:
@@ -98,6 +113,13 @@ class DeployCinderVolumeApplicationStep(DeployMachineApplicationStep):
                 self.deployment.get_tfhelper("openstack-plan")
             )
         return self._offers
+
+    def _get_optional_offers(self):
+        if not self._optional_offers:
+            self._optional_offers = get_optional_control_plane_offers(
+                self.deployment.get_tfhelper("openstack-plan")
+            )
+        return self._optional_offers
 
     def extra_tfvars(self) -> dict:
         """Extra terraform vars to pass to terraform apply."""
@@ -121,6 +143,10 @@ class DeployCinderVolumeApplicationStep(DeployMachineApplicationStep):
                 },
                 {
                     "endpoint": "identity-credentials",
+                    "space": self.deployment.get_space(Networks.INTERNAL),
+                },
+                {
+                    "endpoint": "receive-ca-cert",
                     "space": self.deployment.get_space(Networks.INTERNAL),
                 },
                 {
@@ -175,6 +201,7 @@ class DeployCinderVolumeApplicationStep(DeployMachineApplicationStep):
             if ceph_application_name:
                 tfvars["ceph-application-name"] = ceph_application_name
             tfvars.update(self._get_offers())
+            tfvars.update(self._get_optional_offers())
 
         # Any tfvars that needs override will take precedence from self.override_tfvars
         # Example usage: When telemetry is enabled/disabled, telemetry feature can set

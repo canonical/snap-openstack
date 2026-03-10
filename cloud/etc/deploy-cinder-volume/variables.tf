@@ -83,6 +83,12 @@ variable "database-offer-url" {
   default     = null
 }
 
+variable "cert-distributor-offer-url" {
+  description = "Offer URL for cert distributor"
+  type        = string
+  default     = null
+}
+
 # Microceph is hosted in the same model as cinder-volume-ceph
 variable "ceph-application-name" {
   description = "Ceph application name"

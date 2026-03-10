@@ -186,10 +186,12 @@ class TestDeploySpecificCinderVolumeStep:
         assert step.extra_tfvars == extra_tfvars
 
     @patch("sunbeam.storage.steps.read_config")
+    @patch("sunbeam.storage.steps.get_optional_control_plane_offers")
     @patch("sunbeam.storage.steps.get_mandatory_control_plane_offers")
     def test_run_applies_extra_tfvars(
         self,
         mock_get_offers,
+        mock_get_optional_offers,
         mock_read_config,
         deploy_specific_cinder_volume_step,
         basic_client,
@@ -203,6 +205,9 @@ class TestDeploySpecificCinderVolumeStep:
             "keystone-offer-url": "keystone-url",
             "amqp-offer-url": "amqp-url",
             "database-offer-url": "database-url",
+        }
+        mock_get_optional_offers.return_value = {
+            "cert-distributor-offer-url": "cert-distributor-url",
         }
         basic_client.cluster.list_nodes_by_role.return_value = [{"machineid": "1"}]
 
@@ -253,12 +258,24 @@ class TestDeploySpecificCinderVolumeStep:
             ]
             is True
         )
+        assert (
+            tfvars["cinder-volumes"]["cinder-volume-noha"]["cert-distributor-offer-url"]
+            == "cert-distributor-url"
+        )
+        assert any(
+            binding.get("endpoint") == "receive-ca-cert"
+            for binding in tfvars["cinder-volumes"]["cinder-volume-noha"][
+                "endpoint_bindings"
+            ]
+        )
 
     @patch("sunbeam.storage.steps.read_config")
+    @patch("sunbeam.storage.steps.get_optional_control_plane_offers")
     @patch("sunbeam.storage.steps.get_mandatory_control_plane_offers")
     def test_run_extra_tfvars_precedence(
         self,
         mock_get_offers,
+        mock_get_optional_offers,
         mock_read_config,
         basic_deployment,
         basic_client,
@@ -275,6 +292,9 @@ class TestDeploySpecificCinderVolumeStep:
             "keystone-offer-url": "keystone-url",
             "amqp-offer-url": "amqp-url",
             "database-offer-url": "database-url",
+        }
+        mock_get_optional_offers.return_value = {
+            "cert-distributor-offer-url": "cert-distributor-url",
         }
         basic_client.cluster.list_nodes_by_role.return_value = [{"machineid": "1"}]
 
