@@ -204,6 +204,8 @@ DEPLOY_OPENSTACK_TFVAR_MAP["charms"]["mysql-k8s"]["config-map"] = "mysql-config-
 DEPLOY_OPENSTACK_TFVAR_MAP["charms"]["mysql-k8s"]["storage-map"] = "mysql-storage-map"
 # mysql-k8s storage directive when deployed in single mode
 DEPLOY_OPENSTACK_TFVAR_MAP["charms"]["mysql-k8s"]["storage"] = "mysql-storage"
+# rabbitmq-k8s storage directive
+DEPLOY_OPENSTACK_TFVAR_MAP["charms"]["rabbitmq-k8s"]["storage"] = "rabbitmq-storage"
 # glance-k8s storage directive
 DEPLOY_OPENSTACK_TFVAR_MAP["charms"]["glance-k8s"]["storage"] = "glance-storage"
 
