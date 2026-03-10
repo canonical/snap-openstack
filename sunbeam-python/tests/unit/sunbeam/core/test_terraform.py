@@ -36,6 +36,15 @@ core:
         source: /home/ubuntu/hypervisor-tf
 """
 
+test_manifest_with_rabbitmq_storage = """
+core:
+  software:
+    charms:
+      rabbitmq-k8s:
+        storage:
+          rabbitmq-data: 4G
+"""
+
 
 @pytest.fixture()
 def deployment():
@@ -610,3 +619,70 @@ class TestTerraformHelper:
             applied_tfvars = write_tfvars.call_args.args[0]
             # vault-config is None (common_name removed, more explicit)
             assert applied_tfvars.get("vault-config") is None
+
+    def test_manifest_rabbitmq_storage_maps_to_tfvar(
+        self,
+        mocker,
+        snap,
+        copytree,
+        deployment: Deployment,
+        read_config,
+    ):
+        """Test rabbitmq storage is passed through from manifest to tfvars."""
+        tfplan = "openstack-plan"
+        read_config.return_value = {}
+
+        mocker.patch.object(deployment_mod, "Snap", return_value=snap)
+        mocker.patch.object(manifest_mod, "Snap", return_value=snap)
+        mocker.patch.object(terraform_mod, "Snap", return_value=snap)
+        client = Mock()
+        client.cluster.get_latest_manifest.return_value = {
+            "data": test_manifest_with_rabbitmq_storage
+        }
+        client.cluster.get_config.return_value = "{}"
+        deployment.get_client.return_value = client
+        manifest = deployment.get_manifest()
+
+        tfhelper = deployment.get_tfhelper(tfplan)
+        with (
+            patch.object(tfhelper, "write_tfvars") as write_tfvars,
+            patch.object(tfhelper, "apply"),
+        ):
+            tfhelper.update_tfvars_and_apply_tf(client, manifest, "fake-config", None)
+            applied_tfvars = write_tfvars.call_args.args[0]
+
+            assert applied_tfvars["rabbitmq-storage"] == {"rabbitmq-data": "4G"}
+
+    def test_manifest_rabbitmq_storage_not_preserved_without_manifest(
+        self,
+        mocker,
+        snap,
+        copytree,
+        deployment: Deployment,
+        read_config,
+    ):
+        """Test stale rabbitmq storage is removed when missing from manifest."""
+        tfplan = "openstack-plan"
+        read_config.return_value = {
+            "_computed_keys": [],
+            "rabbitmq-storage": {"rabbitmq-data": "4G"},
+        }
+
+        mocker.patch.object(deployment_mod, "Snap", return_value=snap)
+        mocker.patch.object(manifest_mod, "Snap", return_value=snap)
+        mocker.patch.object(terraform_mod, "Snap", return_value=snap)
+        client = Mock()
+        client.cluster.get_latest_manifest.return_value = {"data": test_manifest}
+        client.cluster.get_config.return_value = "{}"
+        deployment.get_client.return_value = client
+        manifest = deployment.get_manifest()
+
+        tfhelper = deployment.get_tfhelper(tfplan)
+        with (
+            patch.object(tfhelper, "write_tfvars") as write_tfvars,
+            patch.object(tfhelper, "apply"),
+        ):
+            tfhelper.update_tfvars_and_apply_tf(client, manifest, "fake-config", None)
+            applied_tfvars = write_tfvars.call_args.args[0]
+
+            assert "rabbitmq-storage" not in applied_tfvars
