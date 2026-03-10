@@ -52,7 +52,9 @@ CERTIFICATE_FEATURE_KEY = "TlsProvider"
 CA_MANUAL_TLS_CERTIFICATE = "manual-tls-certificates"
 CA_MANUAL_TLS_CERTIFICATE_INTERFACE = "certificates"
 # Time out for keystone to settle once ingress change relation data
-INGRESS_CHANGE_APPLICATION_TIMEOUT = 1800
+# Increased from 1800 to 3600 due to bug
+# https://github.com/canonical/traefik-k8s-operator/issues/612
+INGRESS_CHANGE_APPLICATION_TIMEOUT = 3600
 LOG = logging.getLogger(__name__)
 console = Console()
 
