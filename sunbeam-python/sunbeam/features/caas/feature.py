@@ -189,7 +189,6 @@ class SetupClusterAPI(BaseStep):
 
     def _initialize_or_upgrade_capi(self) -> None:
         cmd = ["clusterctl", "init"]
-        # Upgrade fails due to https://github.com/canonical/cluster-api-k8s/issues/181
         if self.micro_version_changed:
             cmd = ["clusterctl", "upgrade", "apply"]
 
@@ -221,8 +220,8 @@ class SetupClusterAPI(BaseStep):
         """Execute clusterctl init command."""
         # Install ORC CRDs. This is required for CAPO to be running, otherwise the
         # pod will be in crashloopbackoff
-        # https://github.com/kubernetes-sigs/cluster-api-provider-openstack/blob/v0.12.4/docs/book/src/clusteropenstack/configuration.md#orc
-        # https://github.com/kubernetes-sigs/cluster-api-provider-openstack/releases/tag/v0.12.0
+        # https://github.com/kubernetes-sigs/cluster-api-provider-openstack/blob/v0.14.1/docs/book/src/clusteropenstack/configuration.md#orc
+        # https://github.com/kubernetes-sigs/cluster-api-provider-openstack/releases/tag/v0.14.1
         try:
             self._install_orc_crd()
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
@@ -230,8 +229,8 @@ class SetupClusterAPI(BaseStep):
             return Result(ResultType.FAILED, message)
 
         # Initialize clusterctl
-        # https://github.com/kubernetes-sigs/cluster-api/blob/v1.10.5/docs/book/src/clusterctl/commands/init.md
-        # https://github.com/kubernetes-sigs/cluster-api/blob/v1.10.5/docs/book/src/clusterctl/commands/upgrade.md
+        # https://github.com/kubernetes-sigs/cluster-api/blob/v1.12.3/docs/book/src/clusterctl/commands/init.md
+        # https://github.com/kubernetes-sigs/cluster-api/blob/v1.12.3/docs/book/src/clusterctl/commands/upgrade.md
         # Only micro version upgrades are supported and so always pass the specific
         # versions of the components to be upgraded. The reason being there can be
         # breaking changes in minor versions as well and so have to handle properly

@@ -159,7 +159,7 @@ parts:
     plugin: go
     source: https://github.com/kubernetes-sigs/cluster-api
     source-type: git
-    source-tag: "v1.10.5"
+    source-tag: "v1.12.3"
     build-snaps: [go]
     build-environment:
       - CGO_ENABLED: "0"
@@ -171,11 +171,11 @@ parts:
       - bin/clusterctl
 
   # Download OCR resource required by Cluster API OpenStack Provider
-  # For capo 0.12.4, use ocr v1.0.0
-  # https://github.com/kubernetes-sigs/cluster-api-provider-openstack/blob/v0.12.4/docs/book/src/clusteropenstack/configuration.md
+  # For capo 0.14.1, use orc v2.0.3
+  # https://github.com/kubernetes-sigs/cluster-api-provider-openstack/blob/v0.14.1/docs/book/src/clusteropenstack/configuration.md
   cluster-api-resources:
     plugin: dump
-    source: https://github.com/k-orc/openstack-resource-controller/releases/download/v1.0.0/install.yaml
+    source: https://github.com/k-orc/openstack-resource-controller/releases/download/v2.0.3/install.yaml
     source-type: file
     organize:
       install.yaml: etc/cluster-api-resources/crd_orc.yaml

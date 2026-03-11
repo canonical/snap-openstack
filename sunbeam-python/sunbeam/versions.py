@@ -38,11 +38,11 @@ LXD_CHANNEL = "5.21/stable"
 CINDER_VOLUME_CHARM = "cinder-volume"
 
 CLUSTER_API_VERSIONS = {
-    "cluster-api": "v1.10.5",
-    "bootstrap-canonical-kubernetes": "v0.4.2",
-    "control-plane-canonical-kubernetes": "v0.4.2",
-    "infrastructure-openstack": "v0.12.4",
-    "addon-helm": "v0.3.2",
+    "cluster-api": "v1.12.3",
+    "bootstrap-canonical-kubernetes": "v0.6.1",
+    "control-plane-canonical-kubernetes": "v0.6.1",
+    "infrastructure-openstack": "v0.14.1",
+    "addon-helm": "v0.6.1",
 }
 
 # List of charms with default channels
