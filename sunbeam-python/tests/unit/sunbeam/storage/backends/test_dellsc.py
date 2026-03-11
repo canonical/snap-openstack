@@ -42,34 +42,40 @@ class TestDellSCBackend(BaseBackendTests):
         # Verify Dell SC-specific required fields
         required_fields = [
             "san_ip",
-            "san_username",
+            "san_login",
             "san_password",
+            "dell_sc_ssn",
+            "protocol",
         ]
         for field in required_fields:
             assert field in fields, f"Required field {field} not found in config"
 
-    def test_dellsc_protocol_is_optional_literal(self, backend):
-        """Test that protocol field accepts fc or iscsi."""
+    def test_dellsc_protocol_is_required_literal(self, backend):
+        """Test that protocol field is required and accepts fc or iscsi."""
+        from pydantic import ValidationError
+
         config_class = backend.config_type()
         protocol_field = config_class.model_fields.get("protocol")
         assert protocol_field is not None
 
-        # Test config without protocol (optional)
-        config_no_protocol = config_class.model_validate(
-            {
-                "san-ip": "192.168.1.1",
-                "san-username": "admin",
-                "san-password": "secret",
-            }
-        )
-        assert config_no_protocol.protocol is None
+        # Test config without protocol (required)
+        with pytest.raises(ValidationError):
+            config_class.model_validate(
+                {
+                    "san-ip": "192.168.1.1",
+                    "san-login": "admin",
+                    "san-password": "secret",
+                    "dell-sc-ssn": 12345,
+                }
+            )
 
         # Test valid config with fc
         valid_config_fc = config_class.model_validate(
             {
                 "san-ip": "192.168.1.1",
-                "san-username": "admin",
+                "san-login": "admin",
                 "san-password": "secret",
+                "dell-sc-ssn": 12345,
                 "protocol": "fc",
             }
         )
@@ -79,8 +85,9 @@ class TestDellSCBackend(BaseBackendTests):
         valid_config_iscsi = config_class.model_validate(
             {
                 "san-ip": "192.168.1.1",
-                "san-username": "admin",
+                "san-login": "admin",
                 "san-password": "secret",
+                "dell-sc-ssn": 12345,
                 "protocol": "iscsi",
             }
         )
@@ -92,13 +99,13 @@ class TestDellSCBackend(BaseBackendTests):
 
         config_class = backend.config_type()
 
-        # Check san_username is marked as secret
-        username_field = config_class.model_fields.get("san_username")
+        # Check san_login is marked as secret
+        username_field = config_class.model_fields.get("san_login")
         assert username_field is not None
         has_secret_marker = any(
             isinstance(m, SecretDictField) for m in username_field.metadata
         )
-        assert has_secret_marker, "san_username should be marked as secret"
+        assert has_secret_marker, "san_login should be marked as secret"
 
         # Check san_password is marked as secret
         password_field = config_class.model_fields.get("san_password")
@@ -114,13 +121,13 @@ class TestDellSCBackend(BaseBackendTests):
 
         config_class = backend.config_type()
 
-        # Check secondary_san_username is marked as secret
-        sec_user_field = config_class.model_fields.get("secondary_san_username")
+        # Check secondary_san_login is marked as secret
+        sec_user_field = config_class.model_fields.get("secondary_san_login")
         assert sec_user_field is not None
         has_secret_marker = any(
             isinstance(m, SecretDictField) for m in sec_user_field.metadata
         )
-        assert has_secret_marker, "secondary_san_username should be marked as secret"
+        assert has_secret_marker, "secondary_san_login should be marked as secret"
 
         # Check secondary_san_password is marked as secret
         sec_pass_field = config_class.model_fields.get("secondary_san_password")
@@ -138,14 +145,14 @@ class TestDellSCBackend(BaseBackendTests):
         config = config_class.model_validate(
             {
                 "san-ip": "192.168.1.1",
-                "san-username": "admin",
+                "san-login": "admin",
                 "san-password": "secret",
+                "dell-sc-ssn": 12345,
+                "protocol": "fc",
             }
         )
 
         # Verify optional fields default to None
-        assert config.dell_sc_ssn is None
-        assert config.protocol is None
         assert config.volume_backend_name is None
         assert config.backend_availability_zone is None
         assert config.dell_sc_api_port is None
@@ -173,7 +180,7 @@ class TestDellSCBackend(BaseBackendTests):
 
         dual_dsm_fields = [
             "secondary_san_ip",
-            "secondary_san_username",
+            "secondary_san_login",
             "secondary_san_password",
             "secondary_sc_api_port",
         ]
@@ -187,6 +194,7 @@ class TestDellSCBackend(BaseBackendTests):
 
         network_fields = [
             "excluded_domain_ips",
+            "excluded_domain_ip",
             "included_domain_ips",
         ]
         for field in network_fields:
@@ -232,8 +240,9 @@ class TestDellSCConfigValidation:
             config_class.model_validate(
                 {
                     "san-ip": "192.168.1.1",
-                    "san-username": "admin",
+                    "san-login": "admin",
                     "san-password": "secret",
+                    "dell-sc-ssn": 12345,
                     "protocol": "INVALID",
                 }
             )
@@ -247,14 +256,38 @@ class TestDellSCConfigValidation:
         config = config_class.model_validate(
             {
                 "san-ip": "192.168.1.1",
-                "san-username": "admin",
+                "san-login": "admin",
                 "san-password": "secret",
+                "dell-sc-ssn": 12345,
+                "protocol": "fc",
                 "san-thin-provision": True,
                 "dell-sc-verify-cert": False,
             }
         )
         assert config.san_thin_provision is True
         assert config.dell_sc_verify_cert is False
+
+    def test_enable_unsupported_driver_must_be_true(self, dellsc_backend):
+        """Test that enable-unsupported-driver cannot be set to false."""
+        from pydantic import ValidationError
+
+        config_class = dellsc_backend.config_type()
+
+        with pytest.raises(ValidationError) as exc_info:
+            config_class.model_validate(
+                {
+                    "san-ip": "192.168.1.1",
+                    "san-login": "admin",
+                    "san-password": "secret",
+                    "dell-sc-ssn": 12345,
+                    "protocol": "fc",
+                    "enable-unsupported-driver": False,
+                }
+            )
+
+        errors = exc_info.value.errors()
+        assert errors
+        assert errors[0]["loc"] == ("enable-unsupported-driver",)
 
     def test_integer_fields_accept_integer_values(self, dellsc_backend):
         """Test that integer fields accept integer values."""
@@ -263,8 +296,9 @@ class TestDellSCConfigValidation:
         config = config_class.model_validate(
             {
                 "san-ip": "192.168.1.1",
-                "san-username": "admin",
+                "san-login": "admin",
                 "san-password": "secret",
+                "protocol": "fc",
                 "dell-sc-ssn": 12345,
                 "dell-sc-api-port": 3033,
                 "secondary-sc-api-port": 3033,
@@ -285,8 +319,10 @@ class TestDellSCConfigValidation:
         config = config_class.model_validate(
             {
                 "san-ip": "192.168.1.1",
-                "san-username": "admin",
+                "san-login": "admin",
                 "san-password": "secret",
+                "dell-sc-ssn": 12345,
+                "protocol": "fc",
                 "ssh-conn-timeout": 30,
                 "ssh-max-pool-conn": 5,
                 "ssh-min-pool-conn": 1,
@@ -303,16 +339,18 @@ class TestDellSCConfigValidation:
         config = config_class.model_validate(
             {
                 "san-ip": "192.168.1.1",
-                "san-username": "admin",
+                "san-login": "admin",
                 "san-password": "secret",
+                "dell-sc-ssn": 12345,
+                "protocol": "fc",
                 "secondary-san-ip": "192.168.1.2",
-                "secondary-san-username": "admin2",
+                "secondary-san-login": "admin2",
                 "secondary-san-password": "secret2",
                 "secondary-sc-api-port": 3034,
             }
         )
         assert config.secondary_san_ip == "192.168.1.2"
-        assert config.secondary_san_username == "admin2"
+        assert config.secondary_san_login == "admin2"
         assert config.secondary_san_password == "secret2"
         assert config.secondary_sc_api_port == 3034
 
