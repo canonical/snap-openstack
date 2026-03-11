@@ -9,6 +9,7 @@ import pytest
 
 import sunbeam.core.questions
 import sunbeam.features.tls.common as tls
+import sunbeam.features.tls.self_signed as self_signed
 import sunbeam.features.tls.vault as vault
 from sunbeam.core.common import ResultType
 from sunbeam.core.juju import ActionFailedException, LeaderNotFoundException
@@ -544,6 +545,231 @@ class FakeApp:
             self.units = dict(enumerate(units))
         else:
             self.units = units
+
+
+class TestSelfSignedTlsFeature:
+    def test_set_tfvars_on_enable(self, deployment):
+        feature = self_signed.SelfSignedTlsFeature()
+
+        tfvars = feature.set_tfvars_on_enable(
+            deployment,
+            tls.TlsFeatureConfig(endpoints=["public", "rgw"]),
+        )
+
+        assert tfvars == {
+            "traefik-to-tls-provider": "certificate-authority",
+            "enable-tls-for-public-endpoint": True,
+            "enable-tls-for-rgw-endpoint": True,
+        }
+
+    def test_set_tfvars_on_disable(self, deployment):
+        feature = self_signed.SelfSignedTlsFeature()
+        feature.provider_config = Mock(
+            return_value={"provider": feature.name, "endpoints": ["internal"]}
+        )
+
+        tfvars = feature.set_tfvars_on_disable(deployment)
+
+        assert tfvars == {
+            "traefik-to-tls-provider": None,
+            "enable-tls-for-internal-endpoint": False,
+        }
+
+    def test_pre_enable_primary_region_validates_provider_readiness(self, deployment):
+        feature = self_signed.SelfSignedTlsFeature()
+        config = tls.TlsFeatureConfig(endpoints=["public"])
+        deployment.juju_controller = "test-controller"
+        deployment.region_ctrl_juju_controller = None
+
+        with (
+            patch.object(tls.TlsFeature, "pre_enable") as parent_pre_enable,
+            patch.object(self_signed, "JujuHelper") as juju_helper,
+        ):
+            juju_helper.return_value.get_leader_unit.return_value = (
+                "certificate-authority/0"
+            )
+
+            feature.pre_enable(deployment, config, False)
+
+        parent_pre_enable.assert_called_once_with(deployment, config, False)
+        juju_helper.return_value.get_leader_unit.assert_called_once_with(
+            "certificate-authority", "openstack"
+        )
+        juju_helper.return_value.run_action.assert_not_called()
+        assert config.ca is None
+
+    def test_pre_enable_secondary_region_fetches_provider_ca(self, deployment):
+        feature = self_signed.SelfSignedTlsFeature()
+        config = tls.TlsFeatureConfig(endpoints=["public"])
+        deployment.juju_controller = "test-controller"
+        deployment.region_ctrl_juju_controller = Mock()
+
+        with (
+            patch.object(tls.TlsFeature, "pre_enable") as parent_pre_enable,
+            patch.object(self_signed, "JujuHelper") as juju_helper,
+            patch.object(self_signed, "is_certificate_valid", return_value=True),
+        ):
+            juju_helper.return_value.get_leader_unit.return_value = (
+                "certificate-authority/0"
+            )
+            juju_helper.return_value.run_action.return_value = {
+                "ca-certificate": "pem-ca"
+            }
+
+            feature.pre_enable(deployment, config, False)
+
+        parent_pre_enable.assert_called_once_with(deployment, config, False)
+        assert config.ca == encode_base64_as_string("pem-ca")
+
+    def test_pre_enable_raises_when_provider_returns_invalid_ca(self, deployment):
+        feature = self_signed.SelfSignedTlsFeature()
+        config = tls.TlsFeatureConfig(endpoints=["public"])
+        deployment.juju_controller = "test-controller"
+        deployment.region_ctrl_juju_controller = Mock()
+
+        with (
+            patch.object(tls.TlsFeature, "pre_enable"),
+            patch.object(self_signed, "JujuHelper") as juju_helper,
+            patch.object(self_signed, "is_certificate_valid", return_value=False),
+        ):
+            juju_helper.return_value.get_leader_unit.return_value = (
+                "certificate-authority/0"
+            )
+            juju_helper.return_value.run_action.return_value = {
+                "ca-certificate": "pem-ca"
+            }
+
+            with pytest.raises(click.ClickException):
+                feature.pre_enable(deployment, config, False)
+
+    def test_post_enable_primary_region_waits_and_updates_provider_config(
+        self, deployment
+    ):
+        feature = self_signed.SelfSignedTlsFeature()
+        deployment.region_ctrl_juju_controller = None
+        deployment.external_keystone_model = None
+        deployment.get_client.return_value = Mock()
+        deployment.get_client.return_value.cluster.list_nodes_by_role.return_value = []
+        local_jhelper = Mock()
+        deployment.get_juju_helper.return_value = local_jhelper
+        config = tls.TlsFeatureConfig(endpoints=["public"])
+
+        with (
+            patch.object(self_signed, "run_plan") as run_plan,
+            patch.object(self_signed, "update_config") as update_config,
+        ):
+            feature.post_enable(deployment, config, False)
+
+        plan = run_plan.call_args.args[0]
+        assert len(plan) == 1
+        assert isinstance(plan[0], tls.WaitForApplicationsStep)
+        assert plan[0].jhelper is local_jhelper
+        assert plan[0].apps == ["traefik-public", "keystone"]
+        update_config.assert_called_once_with(
+            deployment.get_client(),
+            tls.CERTIFICATE_FEATURE_KEY,
+            {"provider": feature.name, "endpoints": ["public"]},
+        )
+
+    def test_post_enable_secondary_region_splits_local_and_remote_waits(
+        self, deployment
+    ):
+        feature = self_signed.SelfSignedTlsFeature()
+        deployment.region_ctrl_juju_controller = Mock()
+        deployment.region_ctrl_juju_controller.name = "primary-controller"
+        deployment.external_keystone_model = "primary-controller:admin/openstack"
+        deployment.get_region_name.return_value = "RegionTwo"
+        deployment.get_client.return_value = Mock()
+        deployment.get_client.return_value.cluster.list_nodes_by_role.return_value = []
+        local_jhelper = Mock()
+        remote_jhelper = Mock()
+        deployment.get_juju_helper.side_effect = lambda keystone=False: (
+            remote_jhelper if keystone else local_jhelper
+        )
+        config = tls.TlsFeatureConfig(
+            endpoints=["internal"], ca=encode_base64_as_string("pem-ca")
+        )
+
+        with (
+            patch.object(self_signed, "run_plan") as run_plan,
+            patch.object(self_signed, "update_config"),
+        ):
+            feature.post_enable(deployment, config, False)
+
+        plan = run_plan.call_args.args[0]
+        assert isinstance(plan[0], tls.AddCACertsToKeystoneStep)
+        assert plan[0].jhelper is not local_jhelper
+        assert isinstance(plan[1], tls.WaitForApplicationsStep)
+        assert plan[1].jhelper is local_jhelper
+        assert plan[1].apps == ["traefik"]
+        assert isinstance(plan[2], tls.WaitForApplicationsStep)
+        assert plan[2].jhelper is remote_jhelper
+        assert plan[2].apps == ["keystone"]
+
+    def test_post_disable_primary_region_waits_and_clears_provider_config(
+        self, deployment
+    ):
+        feature = self_signed.SelfSignedTlsFeature()
+        deployment.region_ctrl_juju_controller = None
+        deployment.external_keystone_model = None
+        deployment.get_client.return_value.cluster.list_nodes_by_role.return_value = []
+        local_jhelper = Mock()
+        deployment.get_juju_helper.return_value = local_jhelper
+        feature.provider_config = Mock(return_value={"endpoints": ["public"]})
+
+        with (
+            patch.object(self_signed, "run_plan") as run_plan,
+            patch.object(self_signed, "update_config") as update_config,
+        ):
+            feature.post_disable(deployment, False)
+
+        plan = run_plan.call_args.args[0]
+        assert len(plan) == 1
+        assert isinstance(plan[0], tls.WaitForApplicationsStep)
+        assert plan[0].jhelper is local_jhelper
+        assert plan[0].apps == ["traefik-public", "keystone"]
+        update_config.assert_called_once_with(
+            deployment.get_client(),
+            tls.CERTIFICATE_FEATURE_KEY,
+            {},
+        )
+
+    def test_post_disable_secondary_region_splits_local_and_remote_waits(
+        self, deployment
+    ):
+        feature = self_signed.SelfSignedTlsFeature()
+        deployment.region_ctrl_juju_controller = Mock()
+        deployment.region_ctrl_juju_controller.name = "primary-controller"
+        deployment.external_keystone_model = "primary-controller:admin/openstack"
+        deployment.get_region_name.return_value = "RegionTwo"
+        deployment.get_client.return_value = Mock()
+        deployment.get_client.return_value.cluster.list_nodes_by_role.return_value = []
+        local_jhelper = Mock()
+        remote_jhelper = Mock()
+        deployment.get_juju_helper.side_effect = lambda keystone=False: (
+            remote_jhelper if keystone else local_jhelper
+        )
+
+        with (
+            patch.object(tls, "run_plan") as run_plan,
+            patch.object(tls, "update_config") as update_config,
+        ):
+            feature.post_disable(deployment, False)
+
+        plan = run_plan.call_args.args[0]
+        assert isinstance(plan[0], tls.RemoveCACertsFromKeystoneStep)
+        assert plan[0].jhelper is remote_jhelper
+        assert isinstance(plan[1], tls.WaitForApplicationsStep)
+        assert plan[1].jhelper is local_jhelper
+        assert plan[1].apps == ["traefik", "traefik-public"]
+        assert isinstance(plan[2], tls.WaitForApplicationsStep)
+        assert plan[2].jhelper is remote_jhelper
+        assert plan[2].apps == ["keystone"]
+        update_config.assert_called_once_with(
+            deployment.get_client(),
+            tls.CERTIFICATE_FEATURE_KEY,
+            {},
+        )
 
 
 class TestVaultTlsFeatureIsActive:
