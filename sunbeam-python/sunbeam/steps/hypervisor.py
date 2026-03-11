@@ -415,10 +415,11 @@ class ReapplyHypervisorTerraformPlanStep(BaseStep):
         # Wait for more time since parallel node joins will take time
         # for openstack-hypervisor application to get settled
         try:
-            self.jhelper.wait_application_ready(
-                APPLICATION,
+            self.jhelper.wait_until_desired_status(
                 self.model,
-                accepted_status=statuses,
+                [APPLICATION],
+                status=statuses,
+                agent_status=["idle"],
                 timeout=HYPERVISOR_UNIT_TIMEOUT,
             )
         except TimeoutError as e:
