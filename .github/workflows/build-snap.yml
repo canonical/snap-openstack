@@ -161,6 +161,10 @@ jobs:
           sudo $kubectl get nodes -o yaml &> logs/nodes.yaml
           sudo k8s kubectl -n kube-system get CSIStorageCapacity -o yaml &> logs/storage-capacity.yaml
 
+          sudo snap logs -n all openstack-hypervisor &> logs/snap-openstack-hypervisor.log
+          sudo snap logs -n all openstack &> logs/snap-openstack.log
+          sudo snap list &> logs/snap_list.txt
+
           sudo df -h &> logs/df_h.txt
           # if test -f tempest_validation.log; then cp tempest_validation.log logs/; fi
       - name: Upload logs
