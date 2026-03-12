@@ -64,6 +64,12 @@ variable "database-offer-url" {
   default     = null
 }
 
+variable "cert-distributor-offer-url" {
+  description = "Offer URL for cert distributor"
+  type        = string
+  default     = null
+}
+
 variable "enable-telemetry-notifications" {
   description = "Enable telemetry notifications on cinder-volume"
   type        = bool

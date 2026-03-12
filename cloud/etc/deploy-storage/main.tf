@@ -48,5 +48,6 @@ module "cinder-volume" {
   keystone-offer-url             = each.value.keystone-offer-url
   amqp-offer-url                 = each.value.amqp-offer-url
   database-offer-url             = each.value.database-offer-url
+  cert-distributor-offer-url     = each.value.cert-distributor-offer-url
   enable-telemetry-notifications = each.value.enable-telemetry-notifications
 }
