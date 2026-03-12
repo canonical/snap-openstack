@@ -44,7 +44,7 @@ class TestHitachiBackend(BaseBackendTests):
             "hitachi_storage_id",
             "hitachi_pools",
             "san_ip",
-            "san_username",
+            "san_login",
             "san_password",
             "protocol",
         ]
@@ -63,7 +63,7 @@ class TestHitachiBackend(BaseBackendTests):
                 "hitachi-storage-id": "12345",
                 "hitachi-pools": "pool1",
                 "san-ip": "192.168.1.1",
-                "san-username": "admin",
+                "san-login": "admin",
                 "san-password": "secret",
                 "protocol": "fc",
             }
@@ -76,7 +76,7 @@ class TestHitachiBackend(BaseBackendTests):
                 "hitachi-storage-id": "12345",
                 "hitachi-pools": "pool1",
                 "san-ip": "192.168.1.1",
-                "san-username": "admin",
+                "san-login": "admin",
                 "san-password": "secret",
                 "protocol": "iscsi",
             }
@@ -89,13 +89,13 @@ class TestHitachiBackend(BaseBackendTests):
 
         config_class = backend.config_type()
 
-        # Check san_username is marked as secret
-        username_field = config_class.model_fields.get("san_username")
+        # Check san_login is marked as secret
+        username_field = config_class.model_fields.get("san_login")
         assert username_field is not None
         has_secret_marker = any(
             isinstance(m, SecretDictField) for m in username_field.metadata
         )
-        assert has_secret_marker, "san_username should be marked as secret"
+        assert has_secret_marker, "san_login should be marked as secret"
 
         # Check san_password is marked as secret
         password_field = config_class.model_fields.get("san_password")
@@ -137,7 +137,7 @@ class TestHitachiBackend(BaseBackendTests):
                 "hitachi-storage-id": "12345",
                 "hitachi-pools": "pool1",
                 "san-ip": "192.168.1.1",
-                "san-username": "admin",
+                "san-login": "admin",
                 "san-password": "secret",
                 "protocol": "fc",
             }
@@ -196,7 +196,7 @@ class TestHitachiConfigValidation:
                     "hitachi-storage-id": "12345",
                     "hitachi-pools": "pool1",
                     "san-ip": "192.168.1.1",
-                    "san-username": "admin",
+                    "san-login": "admin",
                     "san-password": "secret",
                     "protocol": "INVALID",
                 }
@@ -214,7 +214,7 @@ class TestHitachiConfigValidation:
                 "hitachi-storage-id": "12345",
                 "hitachi-pools": "pool1",
                 "san-ip": "192.168.1.1",
-                "san-username": "admin",
+                "san-login": "admin",
                 "san-password": "secret",
                 "protocol": "fc",
                 "hitachi-copy-speed": 10,
@@ -231,7 +231,7 @@ class TestHitachiConfigValidation:
                 "hitachi-storage-id": "12345",
                 "hitachi-pools": "pool1",
                 "san-ip": "192.168.1.1",
-                "san-username": "admin",
+                "san-login": "admin",
                 "san-password": "secret",
                 "protocol": "fc",
                 "hitachi-discard-zero-page": False,

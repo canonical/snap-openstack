@@ -32,10 +32,10 @@ class HitachiConfig(StorageBackendConfig):
         str, Field(description="Comma-separated list of DP pool names/IDs")
     ]
     san_ip: Annotated[str, Field(description="Hitachi VSP management IP or hostname")]
-    san_username: Annotated[
+    san_login: Annotated[
         str,
-        Field(description="SAN management username"),
-        SecretDictField(field="san-username"),
+        Field(description="SAN management login"),
+        SecretDictField(field="san-login"),
     ]
     san_password: Annotated[
         str,
