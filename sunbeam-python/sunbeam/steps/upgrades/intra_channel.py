@@ -104,6 +104,9 @@ class LatestInChannel(BaseStep, JujuStepHelper):
                 continue
 
             channel_from_manifest = charm_manifest.channel or ""
+            if not channel_from_manifest:
+                # No channel specified in manifest (revision only), skip track check
+                continue
             track_from_manifest = channel_from_manifest.split("/")[0]
             track_from_deployed_app = channel.split("/")[0]
             # Compare tracks

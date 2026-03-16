@@ -602,6 +602,58 @@ class TestIsTrackChanged:
 
         assert result is True
 
+    def test_no_channel_revision_only_returns_false(self):
+        """Returns False when manifest has only a revision (no channel).
+
+        A manifest entry with a pinned revision but no channel should not
+        trigger the track-change check; there is no track to compare.
+        """
+        charm_manifest = Mock()
+        charm_manifest.channel = None
+        charm_manifest.revision = 275
+        self.manifest.core.software.charms = {"traefik-k8s": charm_manifest}
+
+        apps = {"traefik": ("traefik-k8s", "1/stable", 275)}
+        result = self.upgrader.is_track_changed_for_any_charm(apps)
+
+        assert result is False
+
+    def test_no_channel_no_revision_returns_false(self):
+        """Returns False when manifest entry has neither channel nor revision."""
+        charm_manifest = Mock()
+        charm_manifest.channel = None
+        charm_manifest.revision = None
+        self.manifest.core.software.charms = {"traefik-k8s": charm_manifest}
+
+        apps = {"traefik": ("traefik-k8s", "1/stable", 275)}
+        result = self.upgrader.is_track_changed_for_any_charm(apps)
+
+        assert result is False
+
+    def test_mixed_revision_only_and_track_change(self):
+        """Track change is detected even if another app has revision-only manifest.
+
+        When one app has only a revision and another has a mismatched track,
+        the mismatch must still be caught.
+        """
+        traefik_charm = Mock()
+        traefik_charm.channel = None
+        traefik_charm.revision = 275
+        nova_charm = Mock()
+        nova_charm.channel = "2025.1/stable"  # different track from deployed
+        self.manifest.core.software.charms = {
+            "traefik-k8s": traefik_charm,
+            "nova-k8s": nova_charm,
+        }
+
+        apps = {
+            "traefik": ("traefik-k8s", "1/stable", 275),
+            "nova": ("nova-k8s", "2024.1/stable", 100),
+        }
+        result = self.upgrader.is_track_changed_for_any_charm(apps)
+
+        assert result is True
+
 
 class TestLatestInChannelRun:
     """Tests for the LatestInChannel.run() method, including MAAS infra model."""
