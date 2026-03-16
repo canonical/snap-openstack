@@ -256,22 +256,44 @@ def test_add_machine(jhelper, juju):
 
 def test_charm_refresh(jhelper, juju):
     jhelper.charm_refresh("app", "test-model")
-    juju.refresh.assert_called_with("app", channel=None, revision=None)
+    juju.refresh.assert_called_with(
+        "app", channel=None, revision=None, base=None, trust=False
+    )
 
 
 def test_charm_refresh_with_channel(jhelper, juju):
     jhelper.charm_refresh("app", "test-model", channel="2024.1/stable")
-    juju.refresh.assert_called_with("app", channel="2024.1/stable", revision=None)
+    juju.refresh.assert_called_with(
+        "app", channel="2024.1/stable", revision=None, base=None, trust=False
+    )
 
 
 def test_charm_refresh_with_revision(jhelper, juju):
     jhelper.charm_refresh("app", "test-model", revision=123)
-    juju.refresh.assert_called_with("app", channel=None, revision=123)
+    juju.refresh.assert_called_with(
+        "app", channel=None, revision=123, base=None, trust=False
+    )
 
 
 def test_charm_refresh_with_channel_and_revision(jhelper, juju):
     jhelper.charm_refresh("app", "test-model", channel="2024.1/stable", revision=123)
-    juju.refresh.assert_called_with("app", channel="2024.1/stable", revision=123)
+    juju.refresh.assert_called_with(
+        "app", channel="2024.1/stable", revision=123, base=None, trust=False
+    )
+
+
+def test_charm_refresh_with_base(jhelper, juju):
+    jhelper.charm_refresh("app", "test-model", base="ubuntu@22.04")
+    juju.refresh.assert_called_with(
+        "app", channel=None, revision=None, base="ubuntu@22.04", trust=False
+    )
+
+
+def test_charm_refresh_with_trust(jhelper, juju):
+    jhelper.charm_refresh("app", "test-model", trust=True)
+    juju.refresh.assert_called_with(
+        "app", channel=None, revision=None, base=None, trust=True
+    )
 
 
 def test_get_spaces(jhelper):
