@@ -68,7 +68,7 @@ from sunbeam.core.juju import (
 from sunbeam.core.manifest import AddManifestStep
 from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.core.terraform import TerraformInitStep
-from sunbeam.feature_gates import feature_gate_option
+from sunbeam.feature_gates import feature_gate_option, split_roles_enabled
 from sunbeam.provider.base import ProviderBase
 from sunbeam.provider.common.multiregion import connect_to_region_controller
 from sunbeam.provider.maas.client import (
@@ -682,10 +682,10 @@ def deploy(
     )
     nb_region_controllers = len(region_controllers)
 
-    workers = list(set(compute + control + storage + region_controllers))
+    workers = list(set(compute + control + storage + network + region_controllers))
 
     if nb_region_controllers:
-        if nb_control > 0 or nb_compute > 0 or nb_storage > 0:
+        if nb_control > 0 or nb_compute > 0 or nb_storage > 0 or nb_network > 0:
             console.print(
                 "Region controller deployments can only contain region controller "
                 "nodes. Regular control nodes can also act as region controllers. "
@@ -694,6 +694,7 @@ def deploy(
                 f"\n\tcontrol: {len(control)}"
                 f"\n\tcompute: {len(compute)}"
                 f"\n\tstorage: {len(storage)}"
+                f"\n\tnetwork: {len(network)}"
             )
             sys.exit(1)
     elif nb_control < 1 or nb_compute < 1 or nb_storage < 1:
@@ -1022,6 +1023,19 @@ def configure_cmd(
         map(_name_mapper, client.cluster.list_nodes_by_role(RoleTags.NETWORK.value))
     )
     ovn_manager = deployment.get_ovn_manager()
+    # When split-roles is active, all nodes with microovn + network-agents
+    # need the action called. Only network nodes get enable-chassis-as-gw=true;
+    # compute-only and control-only get enable-chassis-as-gw=false.
+    if split_roles_enabled():
+        control = list(
+            map(
+                _name_mapper,
+                client.cluster.list_nodes_by_role(RoleTags.CONTROL.value),
+            )
+        )
+        network_agents_names = list(dict.fromkeys(network + compute + control))
+    else:
+        network_agents_names = network
     plan = [
         AddManifestStep(client, manifest_path),
         JujuLoginStep(deployment.juju_account),
@@ -1056,7 +1070,7 @@ def configure_cmd(
         MaasSetOpenStackNetworkAgentsStep(
             client,
             maas_client,
-            network,
+            network_agents_names,
             jhelper,
             deployment.openstack_machines_model,
             manifest,

@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 from snaphelpers import Snap
 
+from sunbeam.feature_gates import FEATURE_GATES, validate_feature_gate_config
 from sunbeam.log import setup_logging
 
 if TYPE_CHECKING:
@@ -56,6 +57,36 @@ def _read_config(path: Path) -> dict:
         return {}
     with path.open("r") as fp:
         return json.load(fp) or {}
+
+
+def _check_feature_gate_dependencies(
+    gate_key: str,
+    flattened: dict[str, object],
+) -> list[str]:
+    """Check if a feature gate's dependencies are satisfied.
+
+    :param gate_key: the feature gate key to check
+    :param flattened: flattened snap config dict
+    :returns: list of missing dependency keys (empty if all satisfied)
+    """
+    gate_config = FEATURE_GATES.get(gate_key, {})
+    dep_keys = gate_config.get("requires", [])
+    if not isinstance(dep_keys, list):
+        return []
+    missing_deps: list[str] = []
+    for dep_key in dep_keys:
+        # A dependency is satisfied if it's generally available
+        dep_gate_config = FEATURE_GATES.get(dep_key, {})
+        if dep_gate_config.get("generally_available", False):
+            continue
+        flat_key = (
+            dep_key[len("feature.") :] if dep_key.startswith("feature.") else dep_key
+        )
+        dep_value = flattened.get(flat_key, flattened.get(dep_key))
+        dep_enabled = bool(dep_value) if dep_value is not None else False
+        if not dep_enabled:
+            missing_deps.append(dep_key)
+    return missing_deps
 
 
 def sync_feature_gates_from_snap_to_cluster(
@@ -116,6 +147,16 @@ def sync_feature_gates_from_snap_to_cluster(
         for key, value in flattened.items():
             gate_key = key if key.startswith("feature.") else f"feature.{key}"
             enabled_bool = bool(value) if value is not None else False
+
+            # Validate dependencies before enabling a gate
+            if enabled_bool:
+                missing_deps = _check_feature_gate_dependencies(gate_key, flattened)
+                if missing_deps:
+                    LOG.error(
+                        f"Cannot enable '{gate_key}': dependencies not enabled: "
+                        f"{', '.join(missing_deps)}. Enable them first."
+                    )
+                    continue
 
             try:
                 # Check if gate exists in cluster
@@ -209,6 +250,11 @@ def configure(snap: Snap) -> None:
     logging.info("Running configure hook")
 
     _update_default_config(snap)
+
+    # Validate feature gate dependencies before accepting config.
+    # Raises FeatureGateError on violation, causing hook to fail
+    # and snapd to revert the configuration change.
+    validate_feature_gate_config(snap)
 
     # Sync feature gates to cluster database for multi-node consistency
     _sync_feature_gates_to_cluster(snap)

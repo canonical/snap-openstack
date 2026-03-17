@@ -35,6 +35,7 @@ from sunbeam.core.juju import (
     UnitNotFoundException,
 )
 from sunbeam.core.manifest import Manifest
+from sunbeam.feature_gates import split_roles_enabled
 from sunbeam.provider.common import nic_utils
 from sunbeam.steps import hypervisor, microovn
 from sunbeam.steps.cluster_status import ClusterStatusStep
@@ -269,6 +270,15 @@ class LocalSetExternalNetworkUnitsOptionsStep(SetExternalNetworkUnitsOptionsStep
             # If nic is in the preseed assume the user knows what they are doing and
             # bypass validation
             host = self.names[0]
+
+            # When split-roles is active, compute-only nodes (no NETWORK role)
+            # don't need an external NIC or bridge-mapping.
+            if split_roles_enabled():
+                node = self.client.cluster.get_node_info(host)
+                if "network" not in node.get("role", []):
+                    self.bridge_mappings[host] = None
+                    return
+
             physnet_mapping = []
             for physnet, network in preseed.items():
                 nics = network.get("nics")
