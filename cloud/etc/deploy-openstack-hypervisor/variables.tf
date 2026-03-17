@@ -101,3 +101,9 @@ variable "masakari-offer-url" {
   type        = string
   default     = null
 }
+
+variable "barbican-offer-url" {
+  description = "Offer URL for openstack barbican"
+  type        = string
+  default     = null
+}
