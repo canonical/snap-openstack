@@ -1178,7 +1178,25 @@ class EndpointsConfigurationStep(BaseStep):
 
         manifest_configured = False
 
-        if preseed:
+        # Endpoint configuration is opt-in: skip silently unless the manifest
+        # explicitly enables it (configure: true) or provides endpoint values.
+        # This preserves backward compatibility for deployments that don't set
+        # any endpoints config.
+        has_endpoint_values = any(
+            preseed.get(k)
+            for k in ("ingress_internal", "ingress_public", "ingress_rgw")
+        )
+        configure_in_manifest = preseed.get("configure")
+        if (
+            not preseed
+            or configure_in_manifest is False
+            or (configure_in_manifest is None and not has_endpoint_values)
+        ):
+            self.variables = {"configure": False}
+            write_answers(self.client, ENDPOINTS_CONFIG_KEY, self.variables)
+            return
+
+        if has_endpoint_values:
             preseed["configure"] = True
             manifest_configured = True
 

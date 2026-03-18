@@ -42,8 +42,12 @@ def generate_endpoint_preseed_questions(
     Returns:
         List of preseed content lines
     """
+    configure_value = str(variables.get("configure", False)).lower()
     preseed_content = ["    endpoints:"]
-
+    preseed_content.append(
+        "      # Set to true to configure endpoint IP/hostname overrides"
+    )
+    preseed_content.append(f"      configure: {configure_value}")
     for endpoint in INGRESS_ENDPOINT_TYPES:
         questions = endpoint_questions_func(endpoint)
         questions = {

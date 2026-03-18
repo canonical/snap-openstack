@@ -27,6 +27,7 @@ from sunbeam.steps.openstack import (
     DEFAULT_STORAGE_MULTI_DATABASE,
     DEFAULT_STORAGE_SINGLE_DATABASE,
     DeployControlPlaneStep,
+    EndpointsConfigurationStep,
     OpenStackPatchLoadBalancerServicesIPPoolStep,
     OpenStackPatchLoadBalancerServicesIPStep,
     ReapplyOpenStackTerraformPlanStep,
@@ -1093,3 +1094,122 @@ def test_remove_blocked_apps_from_role_both():
     # region controller group
     assert "nova" in result
     assert "glance" in result
+
+
+def _make_manifest_with_endpoints(endpoints_dict):
+    """Build a real Manifest with the given endpoints config dict."""
+    return Manifest.model_validate({"core": {"config": {"endpoints": endpoints_dict}}})
+
+
+class TestEndpointsConfigurationStep:
+    """Tests for the opt-in endpoint configuration prompt logic."""
+
+    def _make_step(self, manifest=None):
+        client = Mock()
+        client.cluster.get_config.side_effect = lambda key: (
+            '{"configure": false}'
+            if key == ENDPOINTS_CONFIG_KEY
+            else (_ for _ in ()).throw(ConfigItemNotFoundException(f"{key} not found"))
+        )
+        return EndpointsConfigurationStep(client, manifest=manifest), client
+
+    # ------------------------------------------------------------------ #
+    # Concrete subclass required because _validate_endpoint is abstract.  #
+    # ------------------------------------------------------------------ #
+    class _ConcreteStep(EndpointsConfigurationStep):
+        def _validate_endpoint(self, endpoint, ip):
+            return True
+
+    def _make_concrete_step(self, manifest=None):
+        client = Mock()
+        client.cluster.get_config.side_effect = ConfigItemNotFoundException("not found")
+        return self._ConcreteStep(client, manifest=manifest), client
+
+    # ------------------------------------------------------------------ #
+    # Backward-compatibility: no endpoints in manifest → skip silently    #
+    # ------------------------------------------------------------------ #
+
+    def test_no_manifest_skips_silently(self):
+        """Without a manifest, prompt() should write configure=False and return."""
+        step, client = self._make_concrete_step(manifest=None)
+        step.prompt()
+
+        client.cluster.update_config.assert_called_once_with(
+            ENDPOINTS_CONFIG_KEY, '{"configure": false}'
+        )
+
+    def test_manifest_without_endpoints_skips_silently(self):
+        """A manifest that has no endpoints section should skip silently."""
+        manifest = Manifest.model_validate({})
+        step, client = self._make_concrete_step(manifest=manifest)
+        step.prompt()
+
+        client.cluster.update_config.assert_called_once_with(
+            ENDPOINTS_CONFIG_KEY, '{"configure": false}'
+        )
+
+    def test_manifest_endpoints_empty_object_skips_silently(self):
+        """endpoints: {} (no keys set) should skip silently."""
+        manifest = _make_manifest_with_endpoints({})
+        step, client = self._make_concrete_step(manifest=manifest)
+        step.prompt()
+
+        client.cluster.update_config.assert_called_once_with(
+            ENDPOINTS_CONFIG_KEY, '{"configure": false}'
+        )
+
+    # ------------------------------------------------------------------ #
+    # Explicit configure: false → skip silently                           #
+    # ------------------------------------------------------------------ #
+
+    def test_manifest_configure_false_skips_silently(self):
+        """configure: false must skip silently even if other keys are present."""
+        manifest = _make_manifest_with_endpoints(
+            {"configure": False, "ingress-internal": {"ip": "10.0.0.1"}}
+        )
+        step, client = self._make_concrete_step(manifest=manifest)
+        step.prompt()
+
+        client.cluster.update_config.assert_called_once_with(
+            ENDPOINTS_CONFIG_KEY, '{"configure": false}'
+        )
+
+    # ------------------------------------------------------------------ #
+    # Explicit configure: true → user is prompted (QuestionBank.ask)      #
+    # ------------------------------------------------------------------ #
+
+    def test_manifest_configure_true_asks_user(self):
+        """configure: true without IP values should prompt the user."""
+        manifest = _make_manifest_with_endpoints({"configure": True})
+        step, client = self._make_concrete_step(manifest=manifest)
+
+        with patch("sunbeam.steps.openstack.QuestionBank") as mock_qb_cls:
+            mock_qb = Mock()
+            mock_qb.configure.ask.return_value = False
+            mock_qb_cls.return_value = mock_qb
+            step.prompt()
+
+        mock_qb.configure.ask.assert_called_once()
+
+    # ------------------------------------------------------------------ #
+    # Endpoint values present, no configure key → auto-configure          #
+    # ------------------------------------------------------------------ #
+
+    def test_manifest_with_ip_values_auto_configures(self):
+        """Providing endpoint IP values without configure key should configure."""
+        manifest = _make_manifest_with_endpoints(
+            {"ingress-internal": {"ip": "10.0.0.1"}}
+        )
+        step, client = self._make_concrete_step(manifest=manifest)
+
+        with patch("sunbeam.steps.openstack.QuestionBank") as mock_qb_cls:
+            mock_qb = Mock()
+            # Simulate user confirming configure=True (preseed forces it True)
+            mock_qb.configure.ask.return_value = True
+            mock_qb.configure_ip.ask.return_value = False
+            mock_qb.configure_hostname.ask.return_value = False
+            mock_qb_cls.return_value = mock_qb
+            step.prompt()
+
+        # preseed["configure"] is forced True → configure.ask returns True
+        mock_qb.configure.ask.assert_called_once()

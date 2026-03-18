@@ -264,6 +264,7 @@ class CoreConfig(pydantic.BaseModel):
             hostname: str | None = None
             ip: pydantic.IPvAnyAddress | None = None
 
+        configure: bool | None = None
         ingress_internal: _Endpoint | None = pydantic.Field(
             None, alias="ingress-internal"
         )
