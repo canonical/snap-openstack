@@ -187,3 +187,17 @@ resource "juju_integration" "hypervisor-masakari" {
     offer_url = var.masakari-offer-url
   }
 }
+
+resource "juju_integration" "hypervisor-barbican" {
+  count = (var.barbican-offer-url != null) ? 1 : 0
+  model = var.machine_model
+
+  application {
+    name     = juju_application.openstack-hypervisor.name
+    endpoint = "barbican-service"
+  }
+
+  application {
+    offer_url = var.barbican-offer-url
+  }
+}

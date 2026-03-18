@@ -11,6 +11,7 @@ from sunbeam.core.common import ResultType
 from sunbeam.core.juju import ApplicationNotFoundException
 from sunbeam.core.terraform import TerraformException
 from sunbeam.steps.hypervisor import (
+    ReapplyHypervisorOptionalIntegrationsStep,
     ReapplyHypervisorTerraformPlanStep,
     RemoveHypervisorUnitStep,
 )
@@ -458,3 +459,21 @@ class TestReapplyHypervisorTerraformPlanStep:
         basic_jhelper.wait_until_desired_status.assert_called_once()
         assert result.result_type == ResultType.FAILED
         assert result.message == "timed out"
+
+
+class TestReapplyHypervisorOptionalIntegrationsStep:
+    def test_tf_apply_extra_args_includes_barbican(self):
+        """Barbican integration target must be in the optional integrations list."""
+        step = ReapplyHypervisorOptionalIntegrationsStep.__new__(
+            ReapplyHypervisorOptionalIntegrationsStep
+        )
+        args = step.tf_apply_extra_args()
+        assert "-target=juju_integration.hypervisor-barbican" in args
+
+    def test_tf_apply_extra_args_includes_masakari(self):
+        """Masakari integration target must still be present after barbican addition."""
+        step = ReapplyHypervisorOptionalIntegrationsStep.__new__(
+            ReapplyHypervisorOptionalIntegrationsStep
+        )
+        args = step.tf_apply_extra_args()
+        assert "-target=juju_integration.hypervisor-masakari" in args

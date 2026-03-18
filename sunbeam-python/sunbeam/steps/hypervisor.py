@@ -208,6 +208,7 @@ class ReapplyHypervisorOptionalIntegrationsStep(DeployHypervisorApplicationStep)
             "-target=juju_integration.hypervisor-ceilometer",
             "-target=juju_integration.hypervisor-cinder-ceph",
             "-target=juju_integration.hypervisor-masakari",
+            "-target=juju_integration.hypervisor-barbican",
         ]
 
 
