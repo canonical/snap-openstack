@@ -42,7 +42,7 @@ class PciAddress:
             self.bus = _parse_bus(bus)
             self.slot = _parse_slot(slot)
             self.function = _parse_function(function)
-        except (KeyError, ValueError):
+        except KeyError, ValueError:
             raise Exception("Invalid address format: %s" % address)
 
 

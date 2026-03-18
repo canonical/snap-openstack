@@ -25,7 +25,7 @@ resource "juju_application" "openstack-hypervisor" {
     name     = "openstack-hypervisor"
     channel  = var.charm_channel
     revision = var.charm_revision
-    base     = "ubuntu@24.04"
+    base     = "ubuntu@26.04"
   }
 
   config = merge({

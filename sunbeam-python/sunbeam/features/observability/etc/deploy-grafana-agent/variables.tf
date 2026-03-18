@@ -29,7 +29,7 @@ variable "opentelemetry-collector-revision" {
 variable "opentelemetry-collector-base" {
   description = "Base to use when deploying opentelemetry collector machine charm"
   type        = string
-  default     = "ubuntu@24.04"
+  default     = "ubuntu@26.04"
 }
 
 variable "opentelemetry-collector-config" {

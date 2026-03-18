@@ -162,7 +162,7 @@ class _BaseStep(abc.ABC, BaseStep, JujuStepHelper):
                 queue=status_queue,
                 status=self.apps_desired_status,
             )
-        except (JujuWaitException, TimeoutError):
+        except JujuWaitException, TimeoutError:
             raise click.ClickException(
                 f"Timed out waiting for {apps} to become active."
             )
@@ -251,7 +251,7 @@ class _DeleteResourcesStep(_BaseStep):
                 OPENSTACK_MODEL,
                 timeout=constants.IRONIC_APP_TIMEOUT,
             )
-        except (JujuWaitException, TimeoutError):
+        except JujuWaitException, TimeoutError:
             raise click.ClickException(
                 f"Timed out waiting for {self.charm_name} to disappear."
             )

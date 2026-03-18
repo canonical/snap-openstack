@@ -169,7 +169,7 @@ class FeatureGateMixin:
                 elif hasattr(self, "name"):
                     if self.name in json.loads(enabled_items):
                         return False  # Not gated, it's enabled
-            except (ConfigItemNotFoundException, ClusterServiceUnavailableException):
+            except ConfigItemNotFoundException, ClusterServiceUnavailableException:
                 pass
 
         # Check snap config (fallback for single-node or unavailable)
@@ -404,7 +404,9 @@ class FeatureGatedChoice(click.Choice):
         # Initialize parent with filtered choices
         super().__init__(enabled_choices, case_sensitive=case_sensitive)
 
-    def get_metavar(self, param: click.Parameter) -> str:
+    def get_metavar(
+        self, param: click.Parameter, ctx: click.Context | None = None
+    ) -> str | None:
         """Get metavar showing all possible choices including gated ones.
 
         This ensures help text shows all choices, even if some are currently
@@ -423,7 +425,9 @@ class FeatureGatedChoice(click.Choice):
             return f"[{choices_str}]  Note: {', '.join(gated_info)}"
         return f"[{choices_str}]"
 
-    def get_missing_message(self, param: click.Parameter) -> str:
+    def get_missing_message(
+        self, param: click.Parameter, ctx: click.Context | None = None
+    ) -> str:
         """Get error message when a gated choice is used but gate is disabled."""
         return (
             f"Invalid value. Available choices: {', '.join(self.choices)}. "

@@ -17,7 +17,7 @@ resource "juju_application" "openstack-network-agents" {
   charm {
     name     = "openstack-network-agents"
     channel  = var.charm_openstack_network_agents_channel
-    base     = "ubuntu@24.04"
+    base     = "ubuntu@26.04"
     revision = var.charm_openstack_network_agents_revision
   }
 
@@ -33,7 +33,7 @@ resource "juju_application" "microcluster-token-distributor" {
   charm {
     name     = "microcluster-token-distributor"
     channel  = var.charm_microcluster_token_distributor_channel
-    base     = "ubuntu@24.04"
+    base     = "ubuntu@26.04"
     revision = var.charm_microcluster_token_distributor_revision
   }
 
@@ -49,7 +49,7 @@ resource "juju_application" "microovn" {
   charm {
     name     = "microovn"
     channel  = var.charm_microovn_channel
-    base     = "ubuntu@24.04"
+    base     = "ubuntu@26.04"
     revision = var.charm_microovn_revision
   }
 
@@ -70,7 +70,7 @@ resource "juju_application" "sunbeam-ovn-proxy" {
   charm {
     name     = "sunbeam-ovn-proxy"
     channel  = var.charm_sunbeam_ovn_proxy_channel
-    base     = "ubuntu@24.04"
+    base     = "ubuntu@26.04"
     revision = var.charm_sunbeam_ovn_proxy_revision
   }
 

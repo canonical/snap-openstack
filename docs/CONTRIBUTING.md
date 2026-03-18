@@ -31,7 +31,7 @@ On the machine where you are going to deploy Sunbeam, you can either:
 - Install in dangerous mode (this is required because it's an unsigned snap package):
 
   ```bash
-  sudo snap install --dangerous openstack_2024.1_amd64.snap
+  sudo snap install --dangerous openstack_2026.1_amd64.snap
   ```
 
 - Use [`snap try`](https://snapcraft.io/docs/snap-try) to install from an unpacked directory, which is useful if you want to make further changes and test them without rebuilding the snap.
@@ -39,7 +39,7 @@ On the machine where you are going to deploy Sunbeam, you can either:
   - Unsquash the snap:
 
     ```bash
-    unsquashfs openstack_2024.1_amd64.snap
+    unsquashfs openstack_2026.1_amd64.snap
     ```
 
   - Run `snap try` to install from the unpacked directory:
