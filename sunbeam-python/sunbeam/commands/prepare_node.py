@@ -156,6 +156,9 @@ if [[ $risk != "stable" ]]; then
         "$risk channel."
     echo "Override by passing a custom manifest with -m/--manifest."
 fi
+
+# Hold the openstack snap to prevent unintended auto-updates
+sudo snap refresh --hold openstack
 """
 
 BOOTSTRAP_TEMPLATE = f"""
