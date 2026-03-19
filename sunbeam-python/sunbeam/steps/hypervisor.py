@@ -379,6 +379,15 @@ class ReapplyHypervisorTerraformPlanStep(BaseStep):
     )
     def run(self, context: StepContext) -> Result:
         """Apply terraform configuration to deploy hypervisor."""
+        # Refresh model related variables
+        self.extra_tfvars["machine_model"] = self.model
+        self.extra_tfvars["machine_model_owner"] = self.jhelper.get_model_owner(
+            self.model
+        )
+        self.extra_tfvars["machine_model_uuid"] = self.jhelper.get_model_uuid(
+            self.model
+        )
+
         # Apply Network configs everytime reapply is called
         network_configs = get_external_network_configs(self.client)
         if "charm_config" not in self.extra_tfvars:
@@ -386,8 +395,8 @@ class ReapplyHypervisorTerraformPlanStep(BaseStep):
 
         if network_configs:
             LOG.debug(
-                "Add external network configs from DemoSetup to extra tfvars: "
-                f"{network_configs}"
+                "Add external network configs from DemoSetup to extra tfvars: %s",
+                network_configs,
             )
             self.extra_tfvars["charm_config"].update(network_configs)
 

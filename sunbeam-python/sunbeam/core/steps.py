@@ -110,7 +110,14 @@ class DeployMachineApplicationStep(BaseStep):
         """Apply terraform configuration to deploy sunbeam machine."""
         try:
             extra_tfvars = self.extra_tfvars()
+
+            # Add Juju model details
             extra_tfvars["machine_model"] = self.model
+            extra_tfvars["machine_model_owner"] = self.jhelper.get_model_owner(
+                self.model
+            )
+            extra_tfvars["machine_model_uuid"] = self.jhelper.get_model_uuid(self.model)
+
             if "machine_ids" not in extra_tfvars:
                 machine_ids: set[str] = set()
                 nodes: list[dict] = []
