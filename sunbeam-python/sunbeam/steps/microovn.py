@@ -121,6 +121,13 @@ class DeployMicroOVNApplicationStep(DeployMachineApplicationStep):
                 "charm_openstack_network_agents_config": {
                     "snap-channel": versions.OPENSTACK_CHANNEL
                 },
+                "openstack_network_agents_endpoint_bindings": [
+                    {"space": self.deployment.get_space(Networks.MANAGEMENT)},
+                    {
+                        "endpoint": "data",
+                        "space": self.deployment.get_space(Networks.DATA),
+                    },
+                ],
             }
         )
 

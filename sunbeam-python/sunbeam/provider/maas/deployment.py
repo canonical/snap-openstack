@@ -88,6 +88,7 @@ def _is_roletag_enabled(tag: RoleTags) -> bool:
 
 ROLE_NETWORK_MAPPING = {
     RoleTags.CONTROL: [
+        Networks.DATA,
         Networks.INTERNAL,
         Networks.MANAGEMENT,
         Networks.PUBLIC,

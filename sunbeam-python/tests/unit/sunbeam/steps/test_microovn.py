@@ -92,6 +92,21 @@ class TestDeployMicroOVNApplicationStep:
         assert "endpoint_bindings" in extra_tfvars
         assert extra_tfvars["ca-offer-url"] == "provider:admin/default.ca"
 
+    def test_extra_tfvars_network_agents_endpoint_bindings(
+        self, deploy_microovn_step, basic_deployment, ovn_manager
+    ):
+        openstack_tfhelper = Mock()
+        openstack_tfhelper.output.return_value = {}
+        basic_deployment.get_tfhelper.return_value = openstack_tfhelper
+        basic_deployment.get_space.side_effect = lambda n: f"space-{n.value}"
+        ovn_manager.get_machines.return_value = []
+
+        extra_tfvars = deploy_microovn_step.extra_tfvars()
+
+        bindings = extra_tfvars["openstack_network_agents_endpoint_bindings"]
+        assert {"space": "space-management"} in bindings
+        assert {"endpoint": "data", "space": "space-data"} in bindings
+
 
 class TestReapplyMicroOVNOptionalIntegrationsStep:
     @pytest.fixture
