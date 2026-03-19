@@ -21,7 +21,11 @@ resource "juju_application" "openstack-network-agents" {
     revision = var.charm_openstack_network_agents_revision
   }
 
-  config = var.charm_openstack_network_agents_config
+  config = merge({
+    use-data-binding = true
+  }, var.charm_openstack_network_agents_config)
+
+  endpoint_bindings = var.openstack_network_agents_endpoint_bindings
 }
 
 resource "juju_application" "microcluster-token-distributor" {

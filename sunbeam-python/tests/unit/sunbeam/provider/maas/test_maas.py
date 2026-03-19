@@ -17,6 +17,7 @@ from sunbeam.core.deployment import Networks
 from sunbeam.core.deployments import DeploymentsConfig
 from sunbeam.core.juju import ControllerNotFoundException
 from sunbeam.provider.maas.deployment import (
+    ROLE_NETWORK_MAPPING,
     MaasDeployment,
     RoleTags,
     StorageTags,
@@ -138,6 +139,18 @@ class TestMachineRolesCheck:
         result = check.run()
         assert result.passed is DiagnosticResultType.SUCCESS
         assert result.details["machine"] == "test_machine"
+
+
+class TestRoleNetworkMapping:
+    def test_control_role_requires_data_network(self):
+        expected = {
+            Networks.DATA,
+            Networks.INTERNAL,
+            Networks.MANAGEMENT,
+            Networks.PUBLIC,
+            Networks.STORAGE,
+        }
+        assert set(ROLE_NETWORK_MAPPING[RoleTags.CONTROL]) == expected
 
 
 class TestMachineNetworkCheck:

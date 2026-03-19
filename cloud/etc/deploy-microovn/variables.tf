@@ -36,6 +36,15 @@ variable "charm_openstack_network_agents_config" {
   default     = {}
 }
 
+variable "openstack_network_agents_endpoint_bindings" {
+  description = "Endpoint bindings for openstack-network-agents (spaces)"
+  type = list(object({
+    endpoint = optional(string)
+    space    = string
+  }))
+  default = null
+}
+
 variable "charm_microcluster_token_distributor_channel" {
   description = "Operator channel for microcluster-token-distributor deployment"
   type        = string
