@@ -100,6 +100,8 @@ K8S_DESTROY_TIMEOUT = 900
 K8S_UNIT_TIMEOUT = 1800  # 30 minutes, adding / removing units can take a long time
 K8S_ENABLE_ADDONS_TIMEOUT = 300  # 5 minutes
 K8SD_SNAP_SOCKET = "/var/snap/k8s/common/var/lib/k8sd/state/control.socket"
+CILIUM_DEVICES_ANNOTATION_KEY = "k8sd/v1alpha1/cilium/devices"
+CILIUM_DEVICES_ANNOTATION_DEFAULT = "br+,bond+,eth+,eno+,ens+,enp+,em+,vlan+"
 
 COREDNS_HPA = {
     "enabled": True,
@@ -262,6 +264,16 @@ class DeployK8SApplicationStep(DeployMachineApplicationStep):
         """Return application timeout."""
         return K8S_APP_TIMEOUT
 
+    def is_skip(self, status: Status | None = None) -> Result:
+        """Determines if the step should be skipped or not."""
+        try:
+            # note(gboutry): validate in the is_skip phase to avoid
+            # failing in the middle of the plan.
+            self._get_k8s_config_tfvars()
+        except SunbeamException as e:
+            return Result(ResultType.FAILED, str(e))
+        return Result(ResultType.COMPLETED)
+
     def _get_loadbalancer_range(self) -> str | None:
         """Return loadbalancer range stored in cluster db."""
         variables = load_answers(self.client, self._ADDONS_CONFIG)
@@ -271,11 +283,28 @@ class DeployK8SApplicationStep(DeployMachineApplicationStep):
         config_tfvars: dict[str, bool | str | None] = {
             "load-balancer-enabled": True,
             "load-balancer-l2-mode": True,
+            "cluster-annotations": (
+                CILIUM_DEVICES_ANNOTATION_KEY + "=" + CILIUM_DEVICES_ANNOTATION_DEFAULT
+            ),
         }
 
         charm_manifest = self.manifest.core.software.charms.get("k8s")
         if charm_manifest and charm_manifest.config:
             config_tfvars.update(charm_manifest.config)
+
+        cluster_annotations = str(config_tfvars.get("cluster-annotations", ""))
+        prefix = CILIUM_DEVICES_ANNOTATION_KEY + "="
+        if prefix in cluster_annotations:
+            after_key = cluster_annotations.split(prefix, 1)[1]
+            tokens = after_key.split()
+            # First token is the devices value; remaining tokens without "="
+            # are stray space-separated device values
+            stray = [t for t in tokens[1:] if "=" not in t]
+            if stray:
+                raise SunbeamException(
+                    "Cilium devices annotation value must be comma-separated,"
+                    f" not space-separated: {prefix}{after_key.strip()}"
+                )
 
         lb_range = self._get_loadbalancer_range()
         if lb_range:
@@ -294,6 +323,10 @@ class DeployK8SApplicationStep(DeployMachineApplicationStep):
         tfvars = {
             "endpoint_bindings": [
                 {"space": self.deployment.get_space(Networks.MANAGEMENT)},
+                {
+                    "endpoint": "cluster",
+                    "space": self.deployment.get_space(Networks.INTERNAL),
+                },
             ],
             "k8s_config": self._get_k8s_config_tfvars(),
         }
@@ -323,12 +356,12 @@ def _get_machines_space_ips(
 class EnsureK8SUnitsTaggedStep(BaseStep):
     """Ensure K8S units get properly tagged.
 
-    This step ensures that evey k8s nodes is tagged with the
+    This step ensures that every k8s node is tagged with the
     HOSTNAME_LABEL, to ensure sunbeam can query the correct nodes
     afterwards.
-    Match is done on management ip address. Node IP in k8s is guaranteed by
-    the cluster space binding, which is always bound to the management
-    space.
+    Match is done on the IP addresses from the space configured as
+    Networks.INTERNAL. Node IP in k8s is guaranteed by the cluster
+    space binding.
     """
 
     def __init__(
@@ -349,18 +382,16 @@ class EnsureK8SUnitsTaggedStep(BaseStep):
         self.fqdn = fqdn
         self.to_update: dict[str, str] = {}
 
-    def _get_management_ips(
+    def _get_cluster_ips(
         self, juju_machine: "jubilant.statustypes.MachineStatus"
     ) -> list[str]:
-        management_space = self.deployment.get_space(Networks.MANAGEMENT)
-        management_networks = self.jhelper.get_space_networks(
-            self.model, management_space
-        )
+        cluster_space = self.deployment.get_space(Networks.INTERNAL)
+        cluster_networks = self.jhelper.get_space_networks(self.model, cluster_space)
 
         return _get_machines_space_ips(
             juju_machine.network_interfaces,
-            management_space,
-            management_networks,
+            cluster_space,
+            cluster_networks,
         )
 
     @tenacity.retry(
@@ -436,18 +467,18 @@ class EnsureK8SUnitsTaggedStep(BaseStep):
                 raise SunbeamException(
                     f"{sunbeam_name!r} not found in Juju, expected id {machine_id!r}"
                 )
-            management_ips = self._get_management_ips(juju_machine)
-            if not management_ips:
-                LOG.debug("No management IPs found for machine %s", machine_id)
-                raise SunbeamException(f"{sunbeam_name!r} has no management IPs")
+            cluster_ips = self._get_cluster_ips(juju_machine)
+            if not cluster_ips:
+                LOG.debug("No cluster IPs found for machine %s", machine_id)
+                raise SunbeamException(f"{sunbeam_name!r} has no cluster IPs")
 
             try:
-                k8s_node = self._find_matching_k8s_node(sunbeam_name, management_ips)
+                k8s_node = self._find_matching_k8s_node(sunbeam_name, cluster_ips)
             except ValueError:
                 LOG.debug(
-                    "No matching k8s node found for %s, management IPs %s",
+                    "No matching k8s node found for %s, cluster IPs %s",
                     sunbeam_name,
-                    management_ips,
+                    cluster_ips,
                 )
                 raise SunbeamException(f"{sunbeam_name} has no matching k8s node")
             except K8SError as e:
