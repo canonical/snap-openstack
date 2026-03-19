@@ -53,12 +53,19 @@ class TestEnableUbuntuProApplicationStep:
         test_token,
         step_context,
     ):
+        basic_jhelper.get_model_owner.return_value = "admin"
+
         result = enable_step.run(step_context)
+
         basic_tfhelper.update_tfvars_and_apply_tf.assert_called_with(
             basic_client,
             basic_manifest,
             tfvar_config=None,
-            override_tfvars={"machine-model": test_model, "token": test_token},
+            override_tfvars={
+                "machine-model": test_model,
+                "machine-model-owner": "admin",
+                "token": test_token,
+            },
             reporter=step_context.reporter,
         )
         basic_jhelper.wait_application_ready.assert_called_once()

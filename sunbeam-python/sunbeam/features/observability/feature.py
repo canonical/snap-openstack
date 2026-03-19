@@ -266,6 +266,9 @@ class DeployObservabilityAgentStep(BaseStep, JujuStepHelper):
         """Execute configuration using terraform."""
         extra_tfvars = {
             "principal-application-model": self.model,
+            "principal-application-model-owner": self.jhelper.get_model_owner(
+                self.model
+            ),
             "observability-agent-integration-apps": INTEGRATION_APPS,
         }
         # Offer URLs from COS are added from feature

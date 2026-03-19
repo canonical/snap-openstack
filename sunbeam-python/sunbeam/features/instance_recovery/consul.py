@@ -99,6 +99,9 @@ class DeployConsulClientStep(BaseStep):
 
         tfvars: dict[str, Any] = {
             "principal-application-model": self.model,
+            "principal-application-model-owner": self.jhelper.get_model_owner(
+                self.model
+            ),
             "principal-application": PRINCIPAL_APP,
             "openstack-state-backend": self.openstack_tfhelper.backend,
             "openstack-state-config": openstack_backend_config,
