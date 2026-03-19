@@ -45,6 +45,9 @@ core:
           snap-channel: squid/edge
       microovn:
         channel: latest/edge
+      rabbitmq-k8s:
+        storage:
+          rabbitmq-data: 1G
       mysql-k8s:
         channel: 8.0/stable
         storage:
