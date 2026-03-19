@@ -9,7 +9,7 @@ variable "application_name" {
 variable "charm_channel" {
   description = "Operator channel for cinder_volume deployment"
   type        = string
-  default     = "2024.1/edge"
+  default     = "2024.1/stable"
 }
 
 variable "charm_revision" {
@@ -60,6 +60,12 @@ variable "amqp-offer-url" {
 
 variable "database-offer-url" {
   description = "Offer URL for database"
+  type        = string
+  default     = null
+}
+
+variable "cert-distributor-offer-url" {
+  description = "Offer URL for cert distributor"
   type        = string
   default     = null
 }

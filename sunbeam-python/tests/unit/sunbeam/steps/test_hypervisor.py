@@ -11,6 +11,7 @@ from sunbeam.core.common import ResultType
 from sunbeam.core.juju import ApplicationNotFoundException
 from sunbeam.core.terraform import TerraformException
 from sunbeam.steps.hypervisor import (
+    ReapplyHypervisorOptionalIntegrationsStep,
     ReapplyHypervisorTerraformPlanStep,
     RemoveHypervisorUnitStep,
 )
@@ -373,6 +374,11 @@ class TestReapplyHypervisorTerraformPlanStep:
         result = reapply_hypervisor_step.run()
 
         basic_tfhelper.update_tfvars_and_apply_tf.assert_called_once()
+        basic_jhelper.wait_until_desired_status.assert_called_once()
+        call_args = basic_jhelper.wait_until_desired_status.call_args
+        assert call_args.args == ("test-model", ["openstack-hypervisor"])
+        assert call_args.kwargs["status"] == ["active", "unknown", "waiting"]
+        assert call_args.kwargs["agent_status"] == ["idle"]
         assert result.result_type == ResultType.COMPLETED
 
     @patch("sunbeam.steps.hypervisor.get_external_network_configs")
@@ -446,10 +452,28 @@ class TestReapplyHypervisorTerraformPlanStep:
         assert result.message == "apply failed..."
 
     def test_run_waiting_timed_out(self, reapply_hypervisor_step, basic_jhelper):
-        basic_jhelper.wait_application_ready.side_effect = TimeoutError("timed out")
+        basic_jhelper.wait_until_desired_status.side_effect = TimeoutError("timed out")
 
         result = reapply_hypervisor_step.run()
 
-        basic_jhelper.wait_application_ready.assert_called_once()
+        basic_jhelper.wait_until_desired_status.assert_called_once()
         assert result.result_type == ResultType.FAILED
         assert result.message == "timed out"
+
+
+class TestReapplyHypervisorOptionalIntegrationsStep:
+    def test_tf_apply_extra_args_includes_barbican(self):
+        """Barbican integration target must be in the optional integrations list."""
+        step = ReapplyHypervisorOptionalIntegrationsStep.__new__(
+            ReapplyHypervisorOptionalIntegrationsStep
+        )
+        args = step.tf_apply_extra_args()
+        assert "-target=juju_integration.hypervisor-barbican" in args
+
+    def test_tf_apply_extra_args_includes_masakari(self):
+        """Masakari integration target must still be present after barbican addition."""
+        step = ReapplyHypervisorOptionalIntegrationsStep.__new__(
+            ReapplyHypervisorOptionalIntegrationsStep
+        )
+        args = step.tf_apply_extra_args()
+        assert "-target=juju_integration.hypervisor-masakari" in args

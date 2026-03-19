@@ -62,9 +62,11 @@ resource "openstack_images_image_v2" "ubuntu" {
   visibility       = "public"
 
   properties = {
-    architecture     = "x86_64"
-    hypervisor_type  = "qemu"
-    hw_firmware_type = "uefi"
+    architecture    = "x86_64"
+    hypervisor_type = "qemu"
+    # TODO (hemanth): workaround for https://bugs.launchpad.net/nova/+bug/2122288
+    # revert back once the fix is released
+    #    hw_firmware_type = "uefi"
   }
 }
 

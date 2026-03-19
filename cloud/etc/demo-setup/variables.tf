@@ -4,11 +4,11 @@
 # External networking
 variable "external_network" {
   type = map(object({
-    cidr             = string
-    gateway          = string
-    range            = string
-    network_type     = string
-    segmentation_id  = number
+    cidr            = string
+    gateway         = string
+    range           = string
+    network_type    = string
+    segmentation_id = number
   }))
 }
 

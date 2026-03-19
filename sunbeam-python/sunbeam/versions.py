@@ -25,25 +25,24 @@ JUJU_BASE = "ubuntu@24.04"
 OPENSTACK_CHANNEL = f"{determine_version()}/stable"
 OVN_CHANNEL = "24.03/stable"
 RABBITMQ_CHANNEL = "3.12/stable"
-TRAEFIK_CHANNEL = "latest/stable"
+TRAEFIK_CHANNEL = "latest/candidate"
 MICROCEPH_CHANNEL = "squid/stable"
 MICROOVN_CHANNEL = "24.03/stable"
 MYSQL_CHANNEL = "8.0/stable"
 CERT_AUTH_CHANNEL = "1/stable"
 BIND_CHANNEL = "9/stable"
 VAULT_CHANNEL = "1.16/stable"
-CONSUL_CHANNEL = "1.19/edge"
+CONSUL_CHANNEL = "1.19/stable"
 K8S_CHANNEL = "1.32/stable"
 LXD_CHANNEL = "5.21/stable"
-SUNBEAM_EPA_ORCHESTRATOR_CHANNEL = "2024.1/edge"
 CINDER_VOLUME_CHARM = "cinder-volume"
 
 CLUSTER_API_VERSIONS = {
-    "cluster-api": "v1.10.5",
-    "bootstrap-canonical-kubernetes": "v0.4.2",
-    "control-plane-canonical-kubernetes": "v0.4.2",
-    "infrastructure-openstack": "v0.12.4",
-    "addon-helm": "v0.3.2",
+    "cluster-api": "v1.12.3",
+    "bootstrap-canonical-kubernetes": "v0.6.1",
+    "control-plane-canonical-kubernetes": "v0.6.1",
+    "infrastructure-openstack": "v0.14.1",
+    "addon-helm": "v0.6.1",
 }
 
 # List of charms with default channels
@@ -84,7 +83,7 @@ MACHINE_CHARMS = {
     "self-signed-certificates": CERT_AUTH_CHANNEL,
     CINDER_VOLUME_CHARM: OPENSTACK_CHANNEL,
     "cinder-volume-ceph": OPENSTACK_CHANNEL,
-    "epa-orchestrator": SUNBEAM_EPA_ORCHESTRATOR_CHANNEL,
+    "epa-orchestrator": OPENSTACK_CHANNEL,
 }
 
 
@@ -205,6 +204,8 @@ DEPLOY_OPENSTACK_TFVAR_MAP["charms"]["mysql-k8s"]["config-map"] = "mysql-config-
 DEPLOY_OPENSTACK_TFVAR_MAP["charms"]["mysql-k8s"]["storage-map"] = "mysql-storage-map"
 # mysql-k8s storage directive when deployed in single mode
 DEPLOY_OPENSTACK_TFVAR_MAP["charms"]["mysql-k8s"]["storage"] = "mysql-storage"
+# rabbitmq-k8s storage directive
+DEPLOY_OPENSTACK_TFVAR_MAP["charms"]["rabbitmq-k8s"]["storage"] = "rabbitmq-storage"
 # glance-k8s storage directive
 DEPLOY_OPENSTACK_TFVAR_MAP["charms"]["glance-k8s"]["storage"] = "glance-storage"
 

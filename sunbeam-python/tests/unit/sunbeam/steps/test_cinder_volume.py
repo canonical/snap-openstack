@@ -128,15 +128,23 @@ class TestDeployCinderVolumeApplicationStep:
         basic_client.cluster.list_nodes_by_role.return_value = ["node1"]
         os_tfhelper.output.return_value = {
             "keystone-offer-url": "keystone-offer",
-            "database-offer-url": "database-offer",
-            "amqp-offer-url": "amqp-offer",
+            "cinder-volume-database-offer-url": "database-offer",
+            "rabbitmq-offer-url": "amqp-offer",
+            "cert-distributor-offer-url": "cert-distributor-offer",
         }
         mceph_tfhelper.output.return_value = {"ceph-application-name": "ceph-app"}
         basic_manifest.get_model.return_value = "openstack"
         tfvars = deploy_cinder_volume_step.extra_tfvars()
         assert tfvars["ceph-application-name"] == "ceph-app"
+        assert tfvars["database-offer-url"] == "database-offer"
+        assert tfvars["amqp-offer-url"] == "amqp-offer"
+        assert tfvars["cert-distributor-offer-url"] == "cert-distributor-offer"
         assert (
             tfvars["charm_cinder_volume_ceph_config"]["ceph-osd-replication-count"] == 1
+        )
+        assert any(
+            binding.get("endpoint") == "receive-ca-cert"
+            for binding in tfvars["endpoint_bindings"]
         )
 
     @patch(
@@ -156,6 +164,11 @@ class TestDeployCinderVolumeApplicationStep:
         get_mandatory_control_plane_offers.assert_not_called()
         assert "ceph-application-name" not in tfvars
         assert "keystone-offer-url" not in tfvars
+        assert "cert-distributor-offer-url" not in tfvars
+        assert any(
+            binding.get("endpoint") == "receive-ca-cert"
+            for binding in tfvars["endpoint_bindings"]
+        )
 
     def test_init_with_extra_tfvars(
         self,

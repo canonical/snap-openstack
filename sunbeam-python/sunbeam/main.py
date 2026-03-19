@@ -22,6 +22,7 @@ from sunbeam.commands import proxy as proxy_cmds
 from sunbeam.commands import sso as sso_cmd
 from sunbeam.commands import utils as utils_cmds
 from sunbeam.core import deployments as deployments_jobs
+from sunbeam.feature_gates import FeatureGateError, validate_feature_gate_config
 from sunbeam.feature_manager import list_feature_gates, list_features
 from sunbeam.provider import commands as provider_cmds
 from sunbeam.utils import CatchGroup, clean_env
@@ -108,6 +109,14 @@ def main():
     logfile = log.prepare_logfile(snap.paths.user_common / "logs", "sunbeam")
     log.setup_root_logging(logfile)
     LOG.debug("command: %s", " ".join(sys.argv))
+
+    # Validate feature gate dependencies early — clean error if misconfigured
+    try:
+        validate_feature_gate_config(snap)
+    except FeatureGateError as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
     cli.add_command(prepare_node_cmds.prepare_node_script)
     cli.add_command(configure_cmds.configure)
     cli.add_command(generate_cloud_config_cmds.cloud_config)

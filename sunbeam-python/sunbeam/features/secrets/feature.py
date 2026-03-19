@@ -3,18 +3,32 @@
 
 import click
 from packaging.version import Version
+from rich.console import Console
 
+from sunbeam.core.common import BaseStep, run_plan
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import JujuHelper
-from sunbeam.core.manifest import CharmManifest, FeatureConfig, SoftwareConfig
+from sunbeam.core.manifest import (
+    AddManifestStep,
+    CharmManifest,
+    FeatureConfig,
+    SoftwareConfig,
+)
 from sunbeam.core.openstack import OPENSTACK_MODEL
+from sunbeam.core.terraform import TerraformInitStep
 from sunbeam.features.interface.v1.base import ConfigType, FeatureRequirement
 from sunbeam.features.interface.v1.openstack import (
+    DisableOpenStackApplicationStep,
+    EnableOpenStackApplicationStep,
     OpenStackControlPlaneFeature,
     TerraformPlanLocation,
 )
+from sunbeam.steps.hypervisor import ReapplyHypervisorTerraformPlanStep
+from sunbeam.steps.juju import RemoveSaasApplicationsStep
 from sunbeam.utils import click_option_show_hints, pass_method_obj
 from sunbeam.versions import OPENSTACK_CHANNEL
+
+console = Console()
 
 
 class SecretsFeature(OpenStackControlPlaneFeature):
@@ -83,6 +97,77 @@ class SecretsFeature(OpenStackControlPlaneFeature):
         if status == "active":
             return True
         return False
+
+    def run_enable_plans(
+        self, deployment: Deployment, config: FeatureConfig, show_hints: bool
+    ) -> None:
+        """Run plans to enable the secrets feature and wire barbican to hypervisor."""
+        tfhelper = deployment.get_tfhelper(self.tfplan)
+        tfhelper_openstack = deployment.get_tfhelper("openstack-plan")
+        tfhelper_hypervisor = deployment.get_tfhelper("hypervisor-plan")
+        jhelper = JujuHelper(deployment.juju_controller)
+        plan1: list[BaseStep] = []
+        if self.user_manifest:
+            plan1.append(AddManifestStep(deployment.get_client(), self.user_manifest))
+        plan1.extend(
+            [
+                TerraformInitStep(tfhelper),
+                EnableOpenStackApplicationStep(
+                    deployment, config, tfhelper, jhelper, self
+                ),
+            ]
+        )
+        run_plan(plan1, console, show_hints)
+
+        openstack_tf_output = tfhelper_openstack.output()
+        extra_tfvars = {
+            "barbican-offer-url": openstack_tf_output.get("barbican-offer-url")
+        }
+        plan2: list[BaseStep] = [
+            TerraformInitStep(tfhelper_hypervisor),
+            ReapplyHypervisorTerraformPlanStep(
+                deployment.get_client(),
+                tfhelper_hypervisor,
+                jhelper,
+                self.manifest,
+                deployment.openstack_machines_model,
+                extra_tfvars=extra_tfvars,
+            ),
+        ]
+        run_plan(plan2, console, show_hints)
+        click.echo(f"OpenStack {self.display_name} application enabled.")
+
+    def run_disable_plans(self, deployment: Deployment, show_hints: bool) -> None:
+        """Run plans to disable the secrets feature and remove barbican from hypervisor.
+
+        Wires down the barbican CMR from the hypervisor before disabling the control
+        plane application.
+        """
+        tfhelper = deployment.get_tfhelper(self.tfplan)
+        tfhelper_hypervisor = deployment.get_tfhelper("hypervisor-plan")
+        jhelper = JujuHelper(deployment.juju_controller)
+        extra_tfvars = {"barbican-offer-url": None}
+        plan: list[BaseStep] = [
+            TerraformInitStep(tfhelper_hypervisor),
+            ReapplyHypervisorTerraformPlanStep(
+                deployment.get_client(),
+                tfhelper_hypervisor,
+                jhelper,
+                self.manifest,
+                deployment.openstack_machines_model,
+                extra_tfvars=extra_tfvars,
+            ),
+            RemoveSaasApplicationsStep(
+                jhelper,
+                deployment.openstack_machines_model,
+                OPENSTACK_MODEL,
+                saas_apps_to_delete=["barbican"],
+            ),
+            TerraformInitStep(tfhelper),
+            DisableOpenStackApplicationStep(deployment, tfhelper, jhelper, self),
+        ]
+        run_plan(plan, console, show_hints)
+        click.echo(f"OpenStack {self.display_name} application disabled.")
 
     def pre_enable(
         self, deployment: Deployment, config: ConfigType, show_hints: bool

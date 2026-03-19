@@ -1,11 +1,14 @@
 # SPDX-FileCopyrightText: 2025 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
-from unittest.mock import Mock
+from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
+from sunbeam.core.common import ResultType
+from sunbeam.core.juju import ActionFailedException
 from sunbeam.steps import configure
+from sunbeam.steps.configure import SetExternalNetworkUnitsOptionsStep
 
 
 class BaseTestUserQuestions:
@@ -120,3 +123,345 @@ class BaseTestSetHypervisorUnitsOptionsStep:
     def test_has_prompts(self):
         step = self.get_step()
         assert step.has_prompts()
+
+
+class _TestableStep(SetExternalNetworkUnitsOptionsStep):
+    APP = "openstack-network-agents"
+    DISPLAY_NAME = "OpenStack Network Agents"
+    ACTION = "set-network-agents-local-settings"
+
+    def get_unit(self, name: str) -> str:
+        raise NotImplementedError
+
+
+class TestSetExternalNetworkUnitsOptionsStepRun:
+    """Tests for SetExternalNetworkUnitsOptionsStep.run()."""
+
+    def _make_step(self, cclient, jhelper, names):
+        step = _TestableStep(
+            client=cclient,
+            names=names,
+            jhelper=jhelper,
+            model="openstack",
+            manifest=MagicMock(),
+        )
+        step.get_unit = MagicMock(return_value="openstack-network-agents/0")
+        return step
+
+    @patch("sunbeam.feature_gates.split_roles_enabled", return_value=False)
+    def test_split_roles_off_with_bridge_mapping(self, mock_split, cclient, jhelper):
+        cclient.cluster.get_node_info.return_value = {
+            "machineid": 1,
+            "role": ["network"],
+        }
+        step = self._make_step(cclient, jhelper, ["node1"])
+        step.bridge_mappings = {"node1": "br-physnet1:physnet1:eth2"}
+
+        result = step.run()
+
+        assert result.result_type == ResultType.COMPLETED
+        jhelper.run_action.assert_called_once_with(
+            "openstack-network-agents/0",
+            "openstack",
+            "set-network-agents-local-settings",
+            action_params={"bridge-mapping": "br-physnet1:physnet1:eth2"},
+        )
+
+    @patch("sunbeam.feature_gates.split_roles_enabled", return_value=False)
+    def test_split_roles_off_no_bridge_mapping_skipped(
+        self, mock_split, cclient, jhelper
+    ):
+        cclient.cluster.get_node_info.return_value = {
+            "machineid": 1,
+            "role": ["network"],
+        }
+        step = self._make_step(cclient, jhelper, ["node1"])
+        step.bridge_mappings = {}
+
+        result = step.run()
+
+        assert result.result_type == ResultType.COMPLETED
+        jhelper.run_action.assert_not_called()
+
+    @patch("sunbeam.feature_gates.split_roles_enabled", return_value=True)
+    def test_split_roles_on_network_node_with_bridge(
+        self, mock_split, cclient, jhelper
+    ):
+        cclient.cluster.get_node_info.return_value = {
+            "machineid": 1,
+            "role": ["network"],
+        }
+        step = self._make_step(cclient, jhelper, ["node1"])
+        step.bridge_mappings = {"node1": "br-physnet1:physnet1:eth2"}
+
+        result = step.run()
+
+        assert result.result_type == ResultType.COMPLETED
+        jhelper.run_action.assert_called_once_with(
+            "openstack-network-agents/0",
+            "openstack",
+            "set-network-agents-local-settings",
+            action_params={
+                "bridge-mapping": "br-physnet1:physnet1:eth2",
+                "enable-chassis-as-gw": True,
+            },
+        )
+
+    @patch("sunbeam.feature_gates.split_roles_enabled", return_value=True)
+    def test_split_roles_on_compute_only_with_bridge(
+        self, mock_split, cclient, jhelper
+    ):
+        """Compute-only: bridge_mapping ignored, only gw=false."""
+        cclient.cluster.get_node_info.return_value = {
+            "machineid": 2,
+            "role": ["compute"],
+        }
+        step = self._make_step(cclient, jhelper, ["node1"])
+        step.bridge_mappings = {"node1": "br-physnet1:physnet1:eth2"}
+
+        result = step.run()
+
+        assert result.result_type == ResultType.COMPLETED
+        jhelper.run_action.assert_called_once_with(
+            "openstack-network-agents/0",
+            "openstack",
+            "set-network-agents-local-settings",
+            action_params={
+                "enable-chassis-as-gw": False,
+            },
+        )
+
+    @patch("sunbeam.feature_gates.split_roles_enabled", return_value=True)
+    def test_split_roles_on_compute_only_no_bridge(self, mock_split, cclient, jhelper):
+        cclient.cluster.get_node_info.return_value = {
+            "machineid": 3,
+            "role": ["compute"],
+        }
+        step = self._make_step(cclient, jhelper, ["node1"])
+        step.bridge_mappings = {}
+
+        result = step.run()
+
+        assert result.result_type == ResultType.COMPLETED
+        jhelper.run_action.assert_called_once_with(
+            "openstack-network-agents/0",
+            "openstack",
+            "set-network-agents-local-settings",
+            action_params={"enable-chassis-as-gw": False},
+        )
+
+    @patch("sunbeam.feature_gates.split_roles_enabled", return_value=True)
+    def test_split_roles_on_control_only_no_bridge(self, mock_split, cclient, jhelper):
+        cclient.cluster.get_node_info.return_value = {
+            "machineid": 4,
+            "role": ["control"],
+        }
+        step = self._make_step(cclient, jhelper, ["node1"])
+        step.bridge_mappings = {}
+
+        result = step.run()
+
+        assert result.result_type == ResultType.COMPLETED
+        jhelper.run_action.assert_called_once_with(
+            "openstack-network-agents/0",
+            "openstack",
+            "set-network-agents-local-settings",
+            action_params={"enable-chassis-as-gw": False},
+        )
+
+    @patch("sunbeam.feature_gates.split_roles_enabled", return_value=True)
+    def test_split_roles_on_control_only_with_bridge_stripped(
+        self, mock_split, cclient, jhelper
+    ):
+        """Control-only node: bridge_mapping ignored even if present."""
+        cclient.cluster.get_node_info.return_value = {
+            "machineid": 4,
+            "role": ["control"],
+        }
+        step = self._make_step(cclient, jhelper, ["node1"])
+        step.bridge_mappings = {"node1": "br-physnet1:physnet1:eth2"}
+
+        result = step.run()
+
+        assert result.result_type == ResultType.COMPLETED
+        jhelper.run_action.assert_called_once_with(
+            "openstack-network-agents/0",
+            "openstack",
+            "set-network-agents-local-settings",
+            action_params={"enable-chassis-as-gw": False},
+        )
+
+    @patch("sunbeam.feature_gates.split_roles_enabled", return_value=True)
+    def test_split_roles_on_compute_network_with_bridge(
+        self, mock_split, cclient, jhelper
+    ):
+        cclient.cluster.get_node_info.return_value = {
+            "machineid": 5,
+            "role": ["compute", "network"],
+        }
+        step = self._make_step(cclient, jhelper, ["node1"])
+        step.bridge_mappings = {"node1": "br-physnet1:physnet1:eth2"}
+
+        result = step.run()
+
+        assert result.result_type == ResultType.COMPLETED
+        jhelper.run_action.assert_called_once_with(
+            "openstack-network-agents/0",
+            "openstack",
+            "set-network-agents-local-settings",
+            action_params={
+                "bridge-mapping": "br-physnet1:physnet1:eth2",
+                "enable-chassis-as-gw": True,
+            },
+        )
+
+    @patch("sunbeam.feature_gates.split_roles_enabled", return_value=True)
+    def test_split_roles_on_multiple_mixed_nodes(self, mock_split, cclient, jhelper):
+        node_info = {
+            "net-node": {"machineid": 1, "role": ["network"]},
+            "compute-node": {"machineid": 2, "role": ["compute"]},
+            "both-node": {"machineid": 3, "role": ["compute", "network"]},
+        }
+        cclient.cluster.get_node_info.side_effect = lambda n: node_info[n]
+
+        units = {
+            "net-node": "openstack-network-agents/0",
+            "compute-node": "openstack-network-agents/1",
+            "both-node": "openstack-network-agents/2",
+        }
+
+        step = self._make_step(
+            cclient, jhelper, ["net-node", "compute-node", "both-node"]
+        )
+        step.get_unit = MagicMock(side_effect=lambda n: units[n])
+        step.bridge_mappings = {
+            "net-node": "br-physnet1:physnet1:eth2",
+            "both-node": "br-physnet2:physnet2:eth3",
+        }
+
+        result = step.run()
+
+        assert result.result_type == ResultType.COMPLETED
+        assert jhelper.run_action.call_count == 3
+        calls = jhelper.run_action.call_args_list
+
+        assert calls[0].args == (
+            "openstack-network-agents/0",
+            "openstack",
+            "set-network-agents-local-settings",
+        )
+        assert calls[0].kwargs == {
+            "action_params": {
+                "bridge-mapping": "br-physnet1:physnet1:eth2",
+                "enable-chassis-as-gw": True,
+            }
+        }
+
+        assert calls[1].args == (
+            "openstack-network-agents/1",
+            "openstack",
+            "set-network-agents-local-settings",
+        )
+        assert calls[1].kwargs == {"action_params": {"enable-chassis-as-gw": False}}
+
+        assert calls[2].args == (
+            "openstack-network-agents/2",
+            "openstack",
+            "set-network-agents-local-settings",
+        )
+        assert calls[2].kwargs == {
+            "action_params": {
+                "bridge-mapping": "br-physnet2:physnet2:eth3",
+                "enable-chassis-as-gw": True,
+            }
+        }
+
+    @patch("sunbeam.feature_gates.split_roles_enabled", return_value=True)
+    def test_action_fails_returns_failed(self, mock_split, cclient, jhelper):
+        cclient.cluster.get_node_info.return_value = {
+            "machineid": 1,
+            "role": ["network"],
+        }
+        jhelper.run_action.side_effect = ActionFailedException("boom")
+        step = self._make_step(cclient, jhelper, ["node1"])
+        step.bridge_mappings = {"node1": "br-physnet1:physnet1:eth2"}
+
+        result = step.run()
+
+        assert result.result_type == ResultType.FAILED
+
+    @patch("sunbeam.feature_gates.split_roles_enabled", return_value=True)
+    def test_split_roles_multi_physnet_different_hosts(
+        self, mock_split, cclient, jhelper
+    ):
+        """Two network nodes each with a different physnet."""
+        node_info = {
+            "net-a": {"machineid": 1, "role": ["network"]},
+            "net-b": {"machineid": 2, "role": ["network"]},
+        }
+        cclient.cluster.get_node_info.side_effect = lambda n: node_info[n]
+        units = {
+            "net-a": "openstack-network-agents/0",
+            "net-b": "openstack-network-agents/1",
+        }
+        step = self._make_step(cclient, jhelper, ["net-a", "net-b"])
+        step.get_unit = MagicMock(side_effect=lambda n: units[n])
+        step.bridge_mappings = {
+            "net-a": "br-physnet1:physnet1:eth2",
+            "net-b": "br-physnet2:physnet2:eth3",
+        }
+
+        result = step.run()
+
+        assert result.result_type == ResultType.COMPLETED
+        assert jhelper.run_action.call_count == 2
+        calls = jhelper.run_action.call_args_list
+        assert calls[0].kwargs == {
+            "action_params": {
+                "bridge-mapping": "br-physnet1:physnet1:eth2",
+                "enable-chassis-as-gw": True,
+            }
+        }
+        assert calls[1].kwargs == {
+            "action_params": {
+                "bridge-mapping": "br-physnet2:physnet2:eth3",
+                "enable-chassis-as-gw": True,
+            }
+        }
+
+    @patch("sunbeam.feature_gates.split_roles_enabled", return_value=False)
+    def test_no_split_roles_multi_physnet_different_hosts(
+        self, mock_split, cclient, jhelper
+    ):
+        """Without split-roles, different physnets still work."""
+        node_info = {
+            "node-a": {"machineid": 1, "role": ["compute", "network"]},
+            "node-b": {"machineid": 2, "role": ["compute", "network"]},
+        }
+        cclient.cluster.get_node_info.side_effect = lambda n: node_info[n]
+        units = {
+            "node-a": "openstack-network-agents/0",
+            "node-b": "openstack-network-agents/1",
+        }
+        step = self._make_step(cclient, jhelper, ["node-a", "node-b"])
+        step.get_unit = MagicMock(side_effect=lambda n: units[n])
+        step.bridge_mappings = {
+            "node-a": "br-physnet1:physnet1:eth2",
+            "node-b": "br-physnet2:physnet2:eth3",
+        }
+
+        result = step.run()
+
+        assert result.result_type == ResultType.COMPLETED
+        assert jhelper.run_action.call_count == 2
+        calls = jhelper.run_action.call_args_list
+        assert calls[0].kwargs == {
+            "action_params": {
+                "bridge-mapping": "br-physnet1:physnet1:eth2",
+            }
+        }
+        assert calls[1].kwargs == {
+            "action_params": {
+                "bridge-mapping": "br-physnet2:physnet2:eth3",
+            }
+        }

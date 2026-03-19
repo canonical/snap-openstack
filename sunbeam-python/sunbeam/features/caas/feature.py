@@ -50,11 +50,19 @@ from sunbeam.versions import CLUSTER_API_VERSIONS, OPENSTACK_CHANNEL
 
 if TYPE_CHECKING:
     import lightkube.core.exceptions as l_exceptions
+    import lightkube.types as l_patch_types
     from lightkube.core import selector
-    from lightkube.resources import apiextensions_v1, core_v1, rbac_authorization_v1
+    from lightkube.resources import (
+        apiextensions_v1,
+        apps_v1,
+        core_v1,
+        rbac_authorization_v1,
+    )
 else:
     l_exceptions = LazyImport("lightkube.core.exceptions")
+    l_patch_types = LazyImport("lightkube.types")
     core_v1 = LazyImport("lightkube.resources.core_v1")
+    apps_v1 = LazyImport("lightkube.resources.apps_v1")
     apiextensions_v1 = LazyImport("lightkube.resources.apiextensions_v1")
     selector = LazyImport("lightkube.core.selector")
     rbac_authorization_v1 = LazyImport("lightkube.resources.rbac_authorization_v1")
@@ -66,6 +74,9 @@ console = Console()
 PROVIDER_WAIT_TIMEOUT = 300  # 5 minutes for each provider
 KUBECONFIG_SECRET_NAME = "kubeconfig"
 MAGNUM_APPLICATION_NAME = "magnum"
+CAAPH_NAMESPACE = "caaph-system"
+CAAPH_DEPLOYMENT = "caaph-controller-manager"
+CAAPH_CONTAINER = "manager"
 
 
 class SetupClusterAPI(BaseStep):
@@ -189,7 +200,6 @@ class SetupClusterAPI(BaseStep):
 
     def _initialize_or_upgrade_capi(self) -> None:
         cmd = ["clusterctl", "init"]
-        # Upgrade fails due to https://github.com/canonical/cluster-api-k8s/issues/181
         if self.micro_version_changed:
             cmd = ["clusterctl", "upgrade", "apply"]
 
@@ -221,8 +231,8 @@ class SetupClusterAPI(BaseStep):
         """Execute clusterctl init command."""
         # Install ORC CRDs. This is required for CAPO to be running, otherwise the
         # pod will be in crashloopbackoff
-        # https://github.com/kubernetes-sigs/cluster-api-provider-openstack/blob/v0.12.4/docs/book/src/clusteropenstack/configuration.md#orc
-        # https://github.com/kubernetes-sigs/cluster-api-provider-openstack/releases/tag/v0.12.0
+        # https://github.com/kubernetes-sigs/cluster-api-provider-openstack/blob/v0.14.1/docs/book/src/clusteropenstack/configuration.md#orc
+        # https://github.com/kubernetes-sigs/cluster-api-provider-openstack/releases/tag/v0.14.1
         try:
             self._install_orc_crd()
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
@@ -230,8 +240,8 @@ class SetupClusterAPI(BaseStep):
             return Result(ResultType.FAILED, message)
 
         # Initialize clusterctl
-        # https://github.com/kubernetes-sigs/cluster-api/blob/v1.10.5/docs/book/src/clusterctl/commands/init.md
-        # https://github.com/kubernetes-sigs/cluster-api/blob/v1.10.5/docs/book/src/clusterctl/commands/upgrade.md
+        # https://github.com/kubernetes-sigs/cluster-api/blob/v1.12.3/docs/book/src/clusterctl/commands/init.md
+        # https://github.com/kubernetes-sigs/cluster-api/blob/v1.12.3/docs/book/src/clusterctl/commands/upgrade.md
         # Only micro version upgrades are supported and so always pass the specific
         # versions of the components to be upgraded. The reason being there can be
         # breaking changes in minor versions as well and so have to handle properly
@@ -244,6 +254,66 @@ class SetupClusterAPI(BaseStep):
         except subprocess.TimeoutExpired as e:
             message = f"Timed out initiating Cluster API components: {str(e)}"
             return Result(ResultType.FAILED, message)
+
+        return Result(ResultType.COMPLETED)
+
+
+class PatchCaaphProxyStep(BaseStep):
+    """Patch caaph-controller-manager deployment with proxy settings."""
+
+    def __init__(self, client: Client, proxy_settings: dict):
+        super().__init__(
+            "Patch caaph proxy settings",
+            "Patch caaph-controller-manager deployment with proxy settings",
+        )
+        self.client = client
+        self.proxy_settings = proxy_settings
+
+    def is_skip(self, status: Status | None = None) -> Result:
+        """Skip if no proxy settings are configured."""
+        if not self.proxy_settings:
+            return Result(ResultType.SKIPPED)
+
+        try:
+            self.kube = get_kube_client(self.client)
+        except KubeClientError as e:
+            LOG.debug("Failed to create k8s client", exc_info=True)
+            return Result(ResultType.FAILED, str(e))
+
+        return Result(ResultType.COMPLETED)
+
+    def run(self, status: Status | None = None) -> Result:
+        """Patch caaph-controller-manager deployment with proxy env vars."""
+        env_vars = [
+            {"name": k, "value": v} for k, v in self.proxy_settings.items() if v
+        ]
+
+        try:
+            self.kube.patch(
+                apps_v1.Deployment,
+                CAAPH_DEPLOYMENT,
+                {
+                    "spec": {
+                        "template": {
+                            "spec": {
+                                "containers": [
+                                    {
+                                        "name": CAAPH_CONTAINER,
+                                        "env": env_vars,
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                },
+                namespace=CAAPH_NAMESPACE,
+                patch_type=l_patch_types.PatchType.STRATEGIC,
+            )
+        except l_exceptions.ApiError as e:
+            LOG.debug(
+                "Failed to patch caaph-controller-manager deployment", exc_info=True
+            )
+            return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.COMPLETED)
 
@@ -670,6 +740,7 @@ class CaasFeature(OpenStackControlPlaneFeature):
         jhelper = JujuHelper(deployment.juju_controller)
         client = deployment.get_client()
         kc_dict = self._get_kubeconfig(client)
+        proxy_settings = deployment.get_proxy_settings()
 
         plan: list[BaseStep] = []
         if self.user_manifest:
@@ -683,6 +754,7 @@ class CaasFeature(OpenStackControlPlaneFeature):
                     deployment.openstack_machines_model,
                     kc_dict,
                 ),
+                PatchCaaphProxyStep(client, proxy_settings),
                 TerraformInitStep(deployment.get_tfhelper(self.tfplan)),
                 # kubeconfig config option is not set at this point of time
                 # and so magnum units will be in blocked state
