@@ -27,7 +27,6 @@ from sunbeam.core.juju import (
     JujuStepHelper,
 )
 from sunbeam.core.manifest import CharmManifest, Manifest
-from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.core.steps import DeployMachineApplicationStep, RemoveMachineUnitsStep
 from sunbeam.core.terraform import (
     TerraformException,
@@ -72,7 +71,6 @@ class DeployMicroOVNApplicationStep(DeployMachineApplicationStep):
             "Deploy MicroOVN",
             "Deploying MicroOVN",
         )
-        self.openstack_model = OPENSTACK_MODEL
         self.ovn_manager = ovn_manager
 
     def get_application_timeout(self) -> int:

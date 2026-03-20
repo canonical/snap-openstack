@@ -24,7 +24,7 @@ def read_config_patch():
     """Patch for read_config function."""
     with patch(
         "sunbeam.steps.hypervisor.read_config",
-        Mock(return_value={"openstack_model": "openstack"}),
+        Mock(return_value={"model": "openstack"}),
     ) as mock:
         yield mock
 
@@ -423,6 +423,10 @@ class TestReapplyHypervisorTerraformPlanStep:
         step = ReapplyHypervisorTerraformPlanStep(
             basic_client, basic_tfhelper, basic_jhelper, basic_manifest, test_model
         )
+
+        basic_jhelper.get_model_owner.return_value = "test-owner"
+        basic_jhelper.get_model_uuid.return_value = "test-uuid"
+
         result = step.run()
 
         basic_tfhelper.update_tfvars_and_apply_tf.assert_called_once()
@@ -437,6 +441,11 @@ class TestReapplyHypervisorTerraformPlanStep:
                 "override_tfvars", {}
             )
         )
+        # expected extra model fields populated by the step
+        expected_override_tfvars["machine_model"] = "test-model"
+        expected_override_tfvars["machine_model_owner"] = "test-owner"
+        expected_override_tfvars["machine_model_uuid"] = "test-uuid"
+
         assert override_tfvars_from_mock_call == expected_override_tfvars
         assert result.result_type == ResultType.COMPLETED
 

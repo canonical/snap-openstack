@@ -93,8 +93,8 @@ variable "token_distributor_machine_ids" {
   default     = []
 }
 
-variable "machine_model" {
-  description = "Model to deploy to"
+variable "machine_model_uuid" {
+  description = "UUID of Juju model to use for deployment"
   type        = string
 }
 

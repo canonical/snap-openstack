@@ -4,21 +4,23 @@
 terraform {
   required_providers {
     juju = {
-      source = "juju/juju"
+      source  = "juju/juju"
+      version = "= 1.3.1"
     }
   }
-
 }
 
+provider "juju" {}
+
 data "juju_model" "machine_model" {
-  name = var.machine_model
+  uuid = var.machine_model_uuid
 }
 
 resource "juju_application" "cinder-volume" {
-  name     = var.application_name
-  model    = data.juju_model.machine_model.name
-  machines = length(var.machine_ids) == 0 ? null : toset(var.machine_ids)
-  units    = length(var.machine_ids) == 0 ? 0 : null
+  name       = var.application_name
+  model_uuid = data.juju_model.machine_model.uuid
+  machines   = length(var.machine_ids) == 0 ? null : toset(var.machine_ids)
+  units      = length(var.machine_ids) == 0 ? 0 : null
 
   charm {
     name     = "cinder-volume"
@@ -37,12 +39,12 @@ resource "juju_application" "cinder-volume" {
 resource "juju_offer" "storage-backend-offer" {
   application_name = juju_application.cinder-volume.name
   endpoints        = ["storage-backend"]
-  model            = data.juju_model.machine_model.name
+  model_uuid       = data.juju_model.machine_model.uuid
 }
 
 resource "juju_integration" "cinder-volume-identity" {
-  count = (var.keystone-offer-url != null) ? 1 : 0
-  model = var.machine_model
+  count      = (var.keystone-offer-url != null) ? 1 : 0
+  model_uuid = data.juju_model.machine_model.uuid
 
   application {
     name     = juju_application.cinder-volume.name
@@ -56,8 +58,8 @@ resource "juju_integration" "cinder-volume-identity" {
 }
 
 resource "juju_integration" "cinder-volume-amqp" {
-  count = (var.amqp-offer-url != null) ? 1 : 0
-  model = var.machine_model
+  count      = (var.amqp-offer-url != null) ? 1 : 0
+  model_uuid = data.juju_model.machine_model.uuid
 
   application {
     name     = juju_application.cinder-volume.name
@@ -70,8 +72,8 @@ resource "juju_integration" "cinder-volume-amqp" {
 }
 
 resource "juju_integration" "cinder-volume-database" {
-  count = (var.database-offer-url != null) ? 1 : 0
-  model = var.machine_model
+  count      = (var.database-offer-url != null) ? 1 : 0
+  model_uuid = data.juju_model.machine_model.uuid
 
   application {
     name     = juju_application.cinder-volume.name
@@ -84,8 +86,8 @@ resource "juju_integration" "cinder-volume-database" {
 }
 
 resource "juju_integration" "cinder-volume-cert-distributor" {
-  count = (var.cert-distributor-offer-url != null) ? 1 : 0
-  model = var.machine_model
+  count      = (var.cert-distributor-offer-url != null) ? 1 : 0
+  model_uuid = data.juju_model.machine_model.uuid
 
   application {
     name     = juju_application.cinder-volume.name

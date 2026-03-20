@@ -263,7 +263,7 @@ class DeployObservabilityAgentStep(BaseStep, JujuStepHelper):
     def run(self, status: Status | None = None) -> Result:
         """Execute configuration using terraform."""
         extra_tfvars = {
-            "principal-application-model": self.model,
+            "principal-application-model-uuid": self.jhelper.get_model_uuid(self.model),
             "observability-agent-integration-apps": INTEGRATION_APPS,
         }
         # Offer URLs from COS are added from feature
@@ -379,7 +379,7 @@ class RemoveObservabilityAgentStep(BaseStep, JujuStepHelper):
             return Result(ResultType.FAILED, str(e))
 
         extra_tfvars = {
-            "principal-application-model": self.model,
+            "principal-application-model-uuid": self.jhelper.get_model_uuid(self.model),
             "observability-agent-integration-apps": [],
         }
         # Offer URLs from COS are added from feature

@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: 2025 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
-variable "model" {
-  description = "Name of the machine model to deploy to"
+variable "model_uuid" {
+  description = "UUID of the Juju model to deploy to"
   type        = string
 }
 

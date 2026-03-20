@@ -418,6 +418,18 @@ class JujuHelper:
         """Get juju model full name along with owner."""
         return self.get_model(model)["name"]
 
+    def get_model_uuid(self, model: str) -> str:
+        """Get juju model UUID."""
+        return self.get_model(model)["model-uuid"]
+
+    def get_model_short_name(self, model: str) -> str:
+        """Get juju model short name."""
+        return self.get_model(model)["short-name"]
+
+    def get_model_owner(self, model: str) -> str:
+        """Get juju model owner."""
+        return self.get_model(model)["owner"]
+
     @tenacity.retry(
         retry=tenacity.retry_if_exception_type(ControllerNotReachableException),
         wait=tenacity.wait_exponential(multiplier=1, min=4, max=10),
