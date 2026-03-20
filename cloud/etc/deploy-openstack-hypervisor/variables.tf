@@ -31,13 +31,8 @@ variable "charm_config" {
   default     = {}
 }
 
-variable "openstack_model" {
-  description = "Name of OpenStack model."
-  type        = string
-}
-
-variable "machine_model" {
-  description = "Name of model to deploy hypervisor into."
+variable "machine_model_uuid" {
+  description = "UUID of Juju model to use for deployment"
   type        = string
 }
 
