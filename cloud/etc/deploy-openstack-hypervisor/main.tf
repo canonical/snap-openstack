@@ -2,11 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 terraform {
-
   required_providers {
     juju = {
       source  = "juju/juju"
-      version = "= 0.23.1"
+      version = "= 1.3.1"
     }
   }
 
@@ -14,12 +13,16 @@ terraform {
 
 provider "juju" {}
 
+data "juju_model" "machine_model" {
+  uuid = var.machine_model_uuid
+}
+
 resource "juju_application" "openstack-hypervisor" {
-  name     = "openstack-hypervisor"
-  trust    = false
-  model    = var.machine_model
-  machines = length(var.machine_ids) == 0 ? null : toset(var.machine_ids)
-  units    = length(var.machine_ids) == 0 ? 0 : null
+  name       = "openstack-hypervisor"
+  trust      = false
+  model_uuid = data.juju_model.machine_model.uuid
+  machines   = length(var.machine_ids) == 0 ? null : toset(var.machine_ids)
+  units      = length(var.machine_ids) == 0 ? 0 : null
 
   charm {
     name     = "openstack-hypervisor"
@@ -37,7 +40,7 @@ resource "juju_application" "openstack-hypervisor" {
 }
 
 resource "juju_integration" "hypervisor-amqp" {
-  model = var.machine_model
+  model_uuid = data.juju_model.machine_model.uuid
 
   application {
     name     = juju_application.openstack-hypervisor.name
@@ -52,8 +55,8 @@ resource "juju_integration" "hypervisor-amqp" {
 resource "juju_integration" "hypervisor-identity" {
   # TODO: make the keystone offer mandatory once the Terraform
   # Juju provider supports cross-controller relations.
-  count = can(coalesce(var.keystone-offer-url)) ? 1 : 0
-  model = var.machine_model
+  count      = can(coalesce(var.keystone-offer-url)) ? 1 : 0
+  model_uuid = data.juju_model.machine_model.uuid
 
   application {
     name     = juju_application.openstack-hypervisor.name
@@ -67,8 +70,8 @@ resource "juju_integration" "hypervisor-identity" {
 }
 
 resource "juju_integration" "hypervisor-cert-distributor" {
-  count = (var.cert-distributor-offer-url != null) ? 1 : 0
-  model = var.machine_model
+  count      = (var.cert-distributor-offer-url != null) ? 1 : 0
+  model_uuid = data.juju_model.machine_model.uuid
 
   application {
     name     = juju_application.openstack-hypervisor.name
@@ -82,8 +85,8 @@ resource "juju_integration" "hypervisor-cert-distributor" {
 }
 
 resource "juju_integration" "hypervisor-certs" {
-  count = (var.ca-offer-url != null) ? 1 : 0
-  model = var.machine_model
+  count      = (var.ca-offer-url != null) ? 1 : 0
+  model_uuid = data.juju_model.machine_model.uuid
 
   application {
     name     = juju_application.openstack-hypervisor.name
@@ -101,9 +104,9 @@ moved {
 }
 
 resource "juju_integration" "hypervisor-ovn" {
-  model = var.machine_model
   # Should be deployed if ovn-relay-offer-url set
-  count = (var.ovn-relay-offer-url != null) ? 1 : 0
+  count      = (var.ovn-relay-offer-url != null) ? 1 : 0
+  model_uuid = data.juju_model.machine_model.uuid
 
   application {
     name     = juju_application.openstack-hypervisor.name
@@ -116,11 +119,9 @@ resource "juju_integration" "hypervisor-ovn" {
 }
 
 resource "juju_integration" "hypervisor-ovn-proxy" {
-  model = var.machine_model
-
   # Shouldn't be deployed if ovn-relay-offer-url is set
-  count = (var.ovn-relay-offer-url == null) ? 1 : 0
-
+  count      = (var.ovn-relay-offer-url == null) ? 1 : 0
+  model_uuid = data.juju_model.machine_model.uuid
   application {
     name     = juju_application.openstack-hypervisor.name
     endpoint = "ovsdb-cms"
@@ -133,8 +134,8 @@ resource "juju_integration" "hypervisor-ovn-proxy" {
 }
 
 resource "juju_integration" "hypervisor-ceilometer" {
-  count = (var.ceilometer-offer-url != null) ? 1 : 0
-  model = var.machine_model
+  count      = (var.ceilometer-offer-url != null) ? 1 : 0
+  model_uuid = data.juju_model.machine_model.uuid
 
   application {
     name     = juju_application.openstack-hypervisor.name
@@ -147,8 +148,8 @@ resource "juju_integration" "hypervisor-ceilometer" {
 }
 
 resource "juju_integration" "hypervisor-cinder-ceph" {
-  count = (var.cinder-volume-ceph-application-name != null) ? 1 : 0
-  model = var.machine_model
+  count      = (var.cinder-volume-ceph-application-name != null) ? 1 : 0
+  model_uuid = data.juju_model.machine_model.uuid
 
   application {
     name     = juju_application.openstack-hypervisor.name
@@ -162,7 +163,7 @@ resource "juju_integration" "hypervisor-cinder-ceph" {
 }
 
 resource "juju_integration" "hypervisor-nova-controller" {
-  model = var.machine_model
+  model_uuid = data.juju_model.machine_model.uuid
 
   application {
     name     = juju_application.openstack-hypervisor.name
@@ -175,8 +176,8 @@ resource "juju_integration" "hypervisor-nova-controller" {
 }
 
 resource "juju_integration" "hypervisor-masakari" {
-  count = (var.masakari-offer-url != null) ? 1 : 0
-  model = var.machine_model
+  count      = (var.masakari-offer-url != null) ? 1 : 0
+  model_uuid = data.juju_model.machine_model.uuid
 
   application {
     name     = juju_application.openstack-hypervisor.name
@@ -189,8 +190,8 @@ resource "juju_integration" "hypervisor-masakari" {
 }
 
 resource "juju_integration" "hypervisor-barbican" {
-  count = (var.barbican-offer-url != null) ? 1 : 0
-  model = var.machine_model
+  count      = (var.barbican-offer-url != null) ? 1 : 0
+  model_uuid = data.juju_model.machine_model.uuid
 
   application {
     name     = juju_application.openstack-hypervisor.name

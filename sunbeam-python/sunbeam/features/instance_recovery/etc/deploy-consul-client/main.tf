@@ -7,7 +7,7 @@ terraform {
   required_providers {
     juju = {
       source  = "juju/juju"
-      version = "= 0.23.1"
+      version = "= 1.3.1"
     }
   }
 }
@@ -26,8 +26,8 @@ module "consul-management" {
   resource-configs  = merge(var.consul-config, lookup(var.consul-config-map, "consul-management", {}))
   endpoint-bindings = lookup(var.consul-endpoint-bindings-map, "consul-management", [])
 
-  principal-application       = var.principal-application
-  principal-application-model = var.principal-application-model
+  principal-application            = var.principal-application
+  principal-application-model-uuid = var.principal-application-model-uuid
 
   consul-cluster-offer-url = try(data.terraform_remote_state.openstack.outputs.consul-management-cluster-offer-url, null)
 }
@@ -41,8 +41,8 @@ module "consul-tenant" {
   resource-configs  = merge(var.consul-config, lookup(var.consul-config-map, "consul-tenant", {}))
   endpoint-bindings = lookup(var.consul-endpoint-bindings-map, "consul-tenant", [])
 
-  principal-application       = var.principal-application
-  principal-application-model = var.principal-application-model
+  principal-application            = var.principal-application
+  principal-application-model-uuid = var.principal-application-model-uuid
 
   consul-cluster-offer-url = try(data.terraform_remote_state.openstack.outputs.consul-tenant-cluster-offer-url, null)
 }
@@ -56,8 +56,8 @@ module "consul-storage" {
   resource-configs  = merge(var.consul-config, lookup(var.consul-config-map, "consul-storage", {}))
   endpoint-bindings = lookup(var.consul-endpoint-bindings-map, "consul-storage", [])
 
-  principal-application       = var.principal-application
-  principal-application-model = var.principal-application-model
+  principal-application            = var.principal-application
+  principal-application-model-uuid = var.principal-application-model-uuid
 
   consul-cluster-offer-url = try(data.terraform_remote_state.openstack.outputs.consul-storage-cluster-offer-url, null)
 }

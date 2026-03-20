@@ -36,7 +36,6 @@ from sunbeam.core.juju import (
     JujuStepHelper,
 )
 from sunbeam.core.manifest import Manifest
-from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.core.openstack_api import remove_hypervisor
 from sunbeam.core.steps import (
     DeployMachineApplicationStep,
@@ -95,7 +94,6 @@ class DeployHypervisorApplicationStep(DeployMachineApplicationStep):
             "Deploying OpenStack Hypervisor",
         )
         self.openstack_tfhelper = openstack_tfhelper
-        self.openstack_model = OPENSTACK_MODEL
         self.cinder_volume_tfhelper = cinder_volume_tfhelper
         self.ovn_manager = deployment.get_ovn_manager()
 
@@ -131,7 +129,6 @@ class DeployHypervisorApplicationStep(DeployMachineApplicationStep):
 
         extra_tfvars.update(
             {
-                "openstack_model": self.openstack_model,
                 "endpoint_bindings": [
                     {"space": self.deployment.get_space(Networks.MANAGEMENT)},
                     {

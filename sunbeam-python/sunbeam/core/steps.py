@@ -113,9 +113,6 @@ class DeployMachineApplicationStep(BaseStep):
 
             # Add Juju model details
             extra_tfvars["machine_model"] = self.model
-            extra_tfvars["machine_model_owner"] = self.jhelper.get_model_owner(
-                self.model
-            )
             extra_tfvars["machine_model_uuid"] = self.jhelper.get_model_uuid(self.model)
 
             if "machine_ids" not in extra_tfvars:
