@@ -25,8 +25,8 @@ variable "charm_config" {
   default     = {}
 }
 
-variable "machine_model" {
-  description = "Name of model to deploy sunbeam-machine into."
+variable "machine_model_uuid" {
+  description = "UUID of Juju model to use for deployment"
   type        = string
 }
 

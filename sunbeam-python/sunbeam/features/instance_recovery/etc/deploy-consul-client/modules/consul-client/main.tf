@@ -7,15 +7,21 @@ terraform {
   required_providers {
     juju = {
       source  = "juju/juju"
-      version = "= 0.23.1"
+      version = "= 1.3.1"
     }
   }
 }
 
+provider "juju" {}
+
+data "juju_model" "principal_application_model" {
+  uuid = var.principal-application-model-uuid
+}
+
 resource "juju_application" "consul-client" {
-  name  = var.name
-  trust = false
-  model = var.principal-application-model
+  name       = var.name
+  trust      = false
+  model_uuid = data.juju_model.principal_application_model.uuid
 
   charm {
     name     = "consul-client"
@@ -30,7 +36,7 @@ resource "juju_application" "consul-client" {
 
 # juju integrate <principal-application>:juju-info consul-client:general-info
 resource "juju_integration" "principal-application-to-consul-client" {
-  model = var.principal-application-model
+  model_uuid = data.juju_model.principal_application_model.uuid
 
   application {
     name     = juju_application.consul-client.name
@@ -45,8 +51,8 @@ resource "juju_integration" "principal-application-to-consul-client" {
 
 # juju integrate <consul-client>:consul-cluster consul-cluster-offer-url
 resource "juju_integration" "consul-client-to-consul-server" {
-  count = var.consul-cluster-offer-url != null ? 1 : 0
-  model = var.principal-application-model
+  count      = var.consul-cluster-offer-url != null ? 1 : 0
+  model_uuid = data.juju_model.principal_application_model.uuid
 
   application {
     name     = juju_application.consul-client.name
@@ -59,7 +65,7 @@ resource "juju_integration" "consul-client-to-consul-server" {
 }
 
 resource "juju_integration" "principal-application-to-consul-client-notify" {
-  model = var.principal-application-model
+  model_uuid = data.juju_model.principal_application_model.uuid
 
   application {
     name     = var.principal-application

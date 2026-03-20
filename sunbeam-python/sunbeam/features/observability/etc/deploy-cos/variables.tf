@@ -5,32 +5,38 @@
 
 variable "model" {
   description = "Name of Juju model to use for deployment"
+  type        = string
   default     = "cos"
 }
 
 variable "cloud" {
   description = "Name of K8S cloud to use for deployment"
+  type        = string
   default     = "k8s"
 }
 
 variable "region" {
   description = "The region of K8S cloud to use for deployment"
+  type        = string
   default     = "localhost"
 }
 
 # https://github.com/juju/terraform-provider-juju/issues/147
 variable "credential" {
   description = "Name of credential to use for deployment"
+  type        = string
   default     = ""
 }
 
 variable "config" {
   description = "Set configuration on model"
+  type        = map(string)
   default     = {}
 }
 
 variable "cos-channel" {
   description = "Operator channel for COS Lite deployment"
+  type        = string
   default     = "latest/stable"
 }
 
@@ -144,30 +150,36 @@ variable "loki-config" {
 
 variable "ingress-scale" {
   description = "Scale of ingress deployment"
+  type        = number
   default     = 1
 }
 
 variable "alertmanager-scale" {
   description = "Scale of alertmanagement deployment"
+  type        = number
   default     = 1
 }
 
 variable "prometheus-scale" {
   description = "Scale of prometheus deployment"
+  type        = number
   default     = 1
 }
 
 variable "grafana-scale" {
   description = "Scale of grafana deployment"
+  type        = number
   default     = 1
 }
 
 variable "catalogue-scale" {
   description = "Scale of catalogue deployment"
+  type        = number
   default     = 1
 }
 
 variable "loki-scale" {
   description = "Scale of loki deployment"
+  type        = number
   default     = 1
 }

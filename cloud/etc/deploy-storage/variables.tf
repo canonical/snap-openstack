@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 variable "model" {
-  description = "UUID of the machine model to deploy to"
+  # note(himax16): Should be renamed to model_uuid
+  description = "UUID of the Juju machine model to deploy into"
   type        = string
 }
 
