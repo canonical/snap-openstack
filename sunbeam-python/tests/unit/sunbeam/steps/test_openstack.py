@@ -23,9 +23,12 @@ from sunbeam.core.manifest import Manifest
 from sunbeam.core.openstack import ENDPOINTS_CONFIG_KEY, REGION_CONFIG_KEY
 from sunbeam.core.terraform import TerraformException
 from sunbeam.steps.openstack import (
+    CONFIG_KEY,
     DATABASE_MEMORY_KEY,
+    DEFAULT_RABBITMQ_STORAGE,
     DEFAULT_STORAGE_MULTI_DATABASE,
     DEFAULT_STORAGE_SINGLE_DATABASE,
+    RABBITMQ_STORAGE_KEY,
     DeployControlPlaneStep,
     OpenStackPatchLoadBalancerServicesIPPoolStep,
     OpenStackPatchLoadBalancerServicesIPStep,
@@ -35,6 +38,7 @@ from sunbeam.steps.openstack import (
     compute_os_api_scale,
     get_database_default_storage_dict,
     get_database_storage_dict,
+    get_rabbitmq_storage_tfvars,
     remove_blocked_apps_from_features,
     remove_blocked_apps_from_ovn_provider,
     remove_blocked_apps_from_role,
@@ -1093,3 +1097,120 @@ def test_remove_blocked_apps_from_role_both():
     # region controller group
     assert "nova" in result
     assert "glance" in result
+
+
+# ---------------------------------------------------------------------------
+# get_rabbitmq_storage_tfvars
+# ---------------------------------------------------------------------------
+
+
+class TestGetRabbitmqStorageTfvars:
+    def test_new_deployment_gets_default(self, read_config, snap):
+        """New deployment (no DB entries) should get the default 4G storage."""
+        client = Mock()
+        read_config.side_effect = ConfigItemNotFoundException("not found")
+        manifest = Manifest()
+
+        result = get_rabbitmq_storage_tfvars(client, manifest)
+
+        assert result == {
+            "rabbitmq-storage": {"rabbitmq-data": DEFAULT_RABBITMQ_STORAGE}
+        }
+
+    def test_existing_deployment_no_change(self, read_config, snap):
+        """Existing deployment without rabbitmq storage should not get a default."""
+        client = Mock()
+
+        def _read_config_side_effect(_client, key):
+            if key == CONFIG_KEY:
+                return {"some": "data"}
+            raise ConfigItemNotFoundException(f"{key} not found")
+
+        read_config.side_effect = _read_config_side_effect
+        manifest = Manifest()
+
+        result = get_rabbitmq_storage_tfvars(client, manifest)
+
+        assert result == {}
+
+    def test_db_value_preserved(self, read_config, snap):
+        """Previously persisted storage value should be used."""
+        client = Mock()
+
+        def _read_config_side_effect(_client, key):
+            if key == RABBITMQ_STORAGE_KEY:
+                return {"rabbitmq-data": "2G"}
+            raise ConfigItemNotFoundException(f"{key} not found")
+
+        read_config.side_effect = _read_config_side_effect
+        manifest = Manifest()
+
+        result = get_rabbitmq_storage_tfvars(client, manifest)
+
+        assert result == {"rabbitmq-storage": {"rabbitmq-data": "2G"}}
+
+    def test_manifest_overrides_db(self, read_config, snap):
+        """Manifest storage value should override DB value."""
+        client = Mock()
+
+        def _read_config_side_effect(_client, key):
+            if key == RABBITMQ_STORAGE_KEY:
+                return {"rabbitmq-data": "2G"}
+            raise ConfigItemNotFoundException(f"{key} not found")
+
+        read_config.side_effect = _read_config_side_effect
+        manifest = Manifest(
+            **{
+                "core": {
+                    "software": {
+                        "charms": {"rabbitmq-k8s": {"storage": {"rabbitmq-data": "8G"}}}
+                    }
+                }
+            }
+        )
+
+        result = get_rabbitmq_storage_tfvars(client, manifest)
+
+        assert result == {"rabbitmq-storage": {"rabbitmq-data": "8G"}}
+
+    def test_manifest_on_new_deployment(self, read_config, snap):
+        """Manifest storage on new deployment should be used."""
+        client = Mock()
+        read_config.side_effect = ConfigItemNotFoundException("not found")
+        manifest = Manifest(
+            **{
+                "core": {
+                    "software": {
+                        "charms": {"rabbitmq-k8s": {"storage": {"rabbitmq-data": "8G"}}}
+                    }
+                }
+            }
+        )
+
+        result = get_rabbitmq_storage_tfvars(client, manifest)
+
+        assert result == {"rabbitmq-storage": {"rabbitmq-data": "8G"}}
+
+    def test_manifest_on_existing_deployment(self, read_config, snap):
+        """Manifest storage on existing deployment should be used."""
+        client = Mock()
+
+        def _read_config_side_effect(_client, key):
+            if key == CONFIG_KEY:
+                return {"some": "data"}
+            raise ConfigItemNotFoundException(f"{key} not found")
+
+        read_config.side_effect = _read_config_side_effect
+        manifest = Manifest(
+            **{
+                "core": {
+                    "software": {
+                        "charms": {"rabbitmq-k8s": {"storage": {"rabbitmq-data": "8G"}}}
+                    }
+                }
+            }
+        )
+
+        result = get_rabbitmq_storage_tfvars(client, manifest)
+
+        assert result == {"rabbitmq-storage": {"rabbitmq-data": "8G"}}

@@ -192,6 +192,9 @@ DEFAULT_STORAGE_SINGLE_DATABASE = "20G"
 # If a service not specified, defaults to 1G
 DEFAULT_STORAGE_MULTI_DATABASE = {"nova": "10G"}
 
+RABBITMQ_STORAGE_KEY = "RabbitmqStorage"
+DEFAULT_RABBITMQ_STORAGE = "4G"
+
 # wait_until_desired_status overlays
 # Traefik is very chatty on every update status hooks, making
 # the wait_until_desired_status very hard to settle.
@@ -499,6 +502,55 @@ def check_database_size_modifications_in_manifest(
     return False
 
 
+def get_rabbitmq_storage_from_manifest(manifest: Manifest) -> dict | None:
+    """Extract rabbitmq-k8s storage from manifest if present."""
+    rabbitmq_manifest = manifest.core.software.charms.get("rabbitmq-k8s")
+    if not rabbitmq_manifest:
+        return None
+    if not rabbitmq_manifest.model_extra:
+        return None
+    storage = rabbitmq_manifest.model_extra.get("storage")
+    if isinstance(storage, dict):
+        return storage
+    return None
+
+
+def get_rabbitmq_storage_tfvars(client: Client, manifest: Manifest) -> dict:
+    """Get terraform variables for rabbitmq storage.
+
+    Returns the rabbitmq-storage tfvar based on priority:
+    1. Manifest value (highest priority)
+    2. Previously persisted value from DB
+    3. Default for new deployments only
+
+    For existing deployments without previously configured storage,
+    returns empty dict to avoid destructive PVC changes on upgrade.
+    """
+    try:
+        storage_from_db = read_config(client, RABBITMQ_STORAGE_KEY)
+    except ConfigItemNotFoundException:
+        storage_from_db = None
+
+    storage_from_manifest = get_rabbitmq_storage_from_manifest(manifest)
+
+    if storage_from_manifest:
+        storage = storage_from_manifest
+    elif storage_from_db:
+        storage = storage_from_db
+    else:
+        # Only set default for new clusters.
+        # Existing clusters (CONFIG_KEY exists) should not get a default
+        # to avoid destructive PVC resize.
+        try:
+            read_config(client, CONFIG_KEY)
+            return {}
+        except ConfigItemNotFoundException:
+            storage = {"rabbitmq-data": DEFAULT_RABBITMQ_STORAGE}
+
+    update_config(client, RABBITMQ_STORAGE_KEY, storage)
+    return {"rabbitmq-storage": storage}
+
+
 def service_scale_function(
     os_api_scale: int, storage_scale: int
 ) -> typing.Callable[[str], int]:
@@ -747,6 +799,7 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
             )
         )
         extra_tfvars.update(self.get_endpoints_tfvars())
+        extra_tfvars.update(get_rabbitmq_storage_tfvars(self.client, self.manifest))
         extra_tfvars.update(
             {
                 "model": self.model,
