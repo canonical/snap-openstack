@@ -49,7 +49,7 @@ from sunbeam.steps.upgrades.base import UpgradeCoordinator, UpgradeFeatures
 LOG = logging.getLogger(__name__)
 console = Console()
 
-INFRA_APPS = ["mysql-k8s"]
+INFRA_APPS = ["mysql-k8s", "vault-k8s"]
 
 # Snap-based charm applications that expose a refresh-snap action.
 # These need to be refreshed explicitly after the charm refresh because
