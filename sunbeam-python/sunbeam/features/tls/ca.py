@@ -51,6 +51,7 @@ from sunbeam.features.tls.common import (
     handle_list_outstanding_csrs,
 )
 from sunbeam.utils import click_option_show_hints, pass_method_obj
+from sunbeam.versions import MANUAL_CERT_AUTH_CHANNEL
 
 LOG = logging.getLogger(__name__)
 console = Console()
@@ -149,7 +150,7 @@ class CaTlsFeature(TlsFeature):
         """Set terraform variables to enable the application."""
         tfvars: dict[str, str | bool] = {
             "traefik-to-tls-provider": CA_MANUAL_TLS_CERTIFICATE,
-            "manual-tls-certificates-channel": "1/stable",
+            "manual-tls-certificates-channel": MANUAL_CERT_AUTH_CHANNEL,
         }
         if "public" in config.endpoints:
             tfvars.update({"enable-tls-for-public-endpoint": True})

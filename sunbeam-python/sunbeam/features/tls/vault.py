@@ -51,6 +51,7 @@ from sunbeam.features.tls.common import (
 )
 from sunbeam.features.vault.feature import VaultCommandFailedException, VaultHelper
 from sunbeam.utils import click_option_show_hints, pass_method_obj
+from sunbeam.versions import MANUAL_CERT_AUTH_CHANNEL
 
 CA_APP_NAME = "vault"
 LOG = logging.getLogger(__name__)
@@ -212,7 +213,7 @@ class VaultTlsFeature(TlsFeature):
         """Set terraform variables to enable the application."""
         tfvars: dict[str, typing.Any] = {
             "traefik-to-tls-provider": CA_APP_NAME,
-            "manual-tls-certificates-channel": "1/stable",
+            "manual-tls-certificates-channel": MANUAL_CERT_AUTH_CHANNEL,
         }
         jhelper = JujuHelper(deployment.juju_controller)
         tfvars.update(self._build_tls_config_maps(jhelper, config.endpoints))
