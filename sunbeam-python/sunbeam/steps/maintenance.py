@@ -121,14 +121,32 @@ class CreateWatcherHostMaintenanceAuditStep(CreateWatcherAuditStepABC):
     name = "Create Watcher Host maintenance audit"
     description = "Create Watcher Host maintenance audit"
 
+    def __init__(
+        self,
+        deployment: Deployment,
+        node: str,
+        disable_live_migration: bool = False,
+        disable_cold_migration: bool = False,
+    ):
+        super().__init__(deployment=deployment, node=node)
+        self.disable_live_migration = disable_live_migration
+        self.disable_cold_migration = disable_cold_migration
+
     def _create_audit(self) -> "watcher.Audit":
         audit_template = watcher_helper.get_enable_maintenance_audit_template(
             client=self.client
         )
+
+        parameters = {
+            "maintenance_node": self.node,
+            "disable_live_migration": self.disable_live_migration,
+            "disable_cold_migration": self.disable_cold_migration,
+        }
+
         return watcher_helper.create_audit(
             client=self.client,
             template=audit_template,
-            parameters={"maintenance_node": self.node},
+            parameters=parameters,
         )
 
 
