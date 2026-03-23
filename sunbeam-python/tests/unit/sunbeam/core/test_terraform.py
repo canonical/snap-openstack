@@ -4,7 +4,7 @@
 import functools
 import json
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
@@ -12,7 +12,12 @@ import sunbeam.core.deployment as deployment_mod
 import sunbeam.core.manifest as manifest_mod
 import sunbeam.core.terraform as terraform_mod
 from sunbeam.core.deployment import Deployment
-from sunbeam.core.terraform import TerraformHelper
+from sunbeam.core.progress import NoOpReporter
+from sunbeam.core.terraform import (
+    TerraformException,
+    TerraformHelper,
+    TerraformStateLockedException,
+)
 from sunbeam.versions import OPENSTACK_CHANNEL
 
 test_manifest = """
@@ -824,3 +829,162 @@ class TestParseTerraformEvent:
         helper = self._make_helper(mocker, snap)
         event = helper._parse_terraform_event("not valid json {{{")
         assert event is None
+
+
+class TestRunTerraformCommand:
+    """Tests for TerraformHelper._run_terraform_command()."""
+
+    def _make_helper(self, mocker, snap, tmp_path):
+        mocker.patch.object(terraform_mod, "Snap", return_value=snap)
+        return TerraformHelper(
+            path=tmp_path,
+            plan="test-plan",
+            tfvar_map={},
+        )
+
+    def test_successful_command_reports_events(self, mocker, snap, tmp_path):
+        helper = self._make_helper(mocker, snap, tmp_path)
+        json_lines = [
+            json.dumps(
+                {
+                    "type": "apply_start",
+                    "@message": "creating",
+                    "@timestamp": "2026-03-23T10:00:01.000Z",
+                    "hook": {"resource": {"addr": "res.a"}, "action": "create"},
+                }
+            )
+            + "\n",
+            json.dumps(
+                {
+                    "type": "apply_complete",
+                    "@message": "created",
+                    "@timestamp": "2026-03-23T10:00:05.000Z",
+                    "hook": {
+                        "resource": {"addr": "res.a"},
+                        "action": "create",
+                        "elapsed_seconds": 4,
+                    },
+                }
+            )
+            + "\n",
+        ]
+
+        mock_process = MagicMock()
+        mock_process.stdout = iter(json_lines)
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 0
+        mock_process.returncode = 0
+
+        reporter = Mock()
+
+        with patch("subprocess.Popen", return_value=mock_process):
+            helper._run_terraform_command(
+                cmd=["terraform", "apply", "-json"],
+                env={},
+                reporter=reporter,
+            )
+
+        assert reporter.report.call_count == 2
+        events = [call.args[0] for call in reporter.report.call_args_list]
+        assert events[0].event_type == "apply_start"
+        assert events[1].event_type == "apply_complete"
+
+    def test_failed_command_raises_terraform_exception(self, mocker, snap, tmp_path):
+        helper = self._make_helper(mocker, snap, tmp_path)
+        mock_process = MagicMock()
+        mock_process.stdout = iter([])
+        mock_process.stderr.read.return_value = "Error: something failed"
+        mock_process.wait.return_value = 1
+        mock_process.returncode = 1
+
+        with (
+            patch("subprocess.Popen", return_value=mock_process),
+            pytest.raises(TerraformException),
+        ):
+            helper._run_terraform_command(
+                cmd=["terraform", "apply", "-json"],
+                env={},
+                reporter=NoOpReporter(),
+            )
+
+    def test_state_lock_from_diagnostic_raises_state_lock_exception(
+        self, mocker, snap, tmp_path
+    ):
+        helper = self._make_helper(mocker, snap, tmp_path)
+        lock_line = (
+            json.dumps(
+                {
+                    "type": "diagnostic",
+                    "@level": "error",
+                    "@message": "Error acquiring the state lock",
+                    "@timestamp": "2026-03-23T10:00:00.000Z",
+                    "diagnostic": {
+                        "severity": "error",
+                        "summary": "Error acquiring the state lock",
+                        "detail": "state blob is already locked",
+                    },
+                }
+            )
+            + "\n"
+        )
+
+        mock_process = MagicMock()
+        mock_process.stdout = iter([lock_line])
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 1
+        mock_process.returncode = 1
+
+        with (
+            patch("subprocess.Popen", return_value=mock_process),
+            pytest.raises(TerraformStateLockedException),
+        ):
+            helper._run_terraform_command(
+                cmd=["terraform", "apply", "-json"],
+                env={},
+                reporter=NoOpReporter(),
+            )
+
+    def test_state_lock_from_stderr_fallback(self, mocker, snap, tmp_path):
+        helper = self._make_helper(mocker, snap, tmp_path)
+        mock_process = MagicMock()
+        mock_process.stdout = iter([])
+        mock_process.stderr.read.return_value = "Error: remote state already locked"
+        mock_process.wait.return_value = 1
+        mock_process.returncode = 1
+
+        with (
+            patch("subprocess.Popen", return_value=mock_process),
+            pytest.raises(TerraformStateLockedException),
+        ):
+            helper._run_terraform_command(
+                cmd=["terraform", "apply", "-json"],
+                env={},
+                reporter=NoOpReporter(),
+            )
+
+    def test_none_reporter_still_works(self, mocker, snap, tmp_path):
+        helper = self._make_helper(mocker, snap, tmp_path)
+        json_line = (
+            json.dumps(
+                {
+                    "type": "apply_start",
+                    "@message": "creating",
+                    "@timestamp": "2026-03-23T10:00:01.000Z",
+                    "hook": {"resource": {"addr": "res.a"}, "action": "create"},
+                }
+            )
+            + "\n"
+        )
+
+        mock_process = MagicMock()
+        mock_process.stdout = iter([json_line])
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 0
+        mock_process.returncode = 0
+
+        with patch("subprocess.Popen", return_value=mock_process):
+            helper._run_terraform_command(
+                cmd=["terraform", "apply", "-json"],
+                env={},
+                reporter=None,
+            )

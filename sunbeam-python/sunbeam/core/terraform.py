@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import subprocess
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from string import Template
@@ -22,7 +23,7 @@ from sunbeam.core.common import (
     update_config,
 )
 from sunbeam.core.manifest import Manifest
-from sunbeam.core.progress import ProgressEvent
+from sunbeam.core.progress import ProgressEvent, ProgressReporter
 from sunbeam.versions import VarMap
 
 LOG = logging.getLogger(__name__)
@@ -756,6 +757,67 @@ class TerraformHelper:
             timestamp=timestamp,
             metadata=data,
         )
+
+    def _run_terraform_command(
+        self,
+        cmd: list[str],
+        env: dict,
+        reporter: ProgressReporter | None = None,
+        timeout: int = TERRAFORM_APPLY_TIMEOUT,
+    ) -> None:
+        """Run a terraform command with JSON streaming.
+
+        Reads stdout line-by-line, parses JSON events, and reports them.
+        Reads stderr in a separate thread to avoid pipe buffer deadlock.
+        """
+        LOG.debug(f"Running command {' '.join(cmd)}, cwd: {self.path}")
+
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            cwd=self.path,
+            env=env,
+        )
+
+        stderr_lines: list[str] = []
+
+        def _read_stderr():
+            if process.stderr is not None:
+                stderr_lines.append(process.stderr.read())
+
+        stderr_thread = threading.Thread(target=_read_stderr, daemon=True)
+        stderr_thread.start()
+
+        state_lock_flag = [False]
+        if process.stdout is None:
+            raise TerraformException("stdout pipe not available")
+        for line in process.stdout:
+            line = line.rstrip("\n")
+            if not line:
+                continue
+            event = self._parse_terraform_event(line, state_lock_flag)
+            if event is not None and reporter is not None:
+                reporter.report(event)
+
+        process.wait(timeout=timeout)
+        stderr_thread.join(timeout=10)
+        stderr_output = "".join(stderr_lines)
+
+        LOG.debug(f"Command finished. returncode={process.returncode}")
+        if stderr_output:
+            LOG.debug(f"stderr: {stderr_output}")
+
+        if process.returncode != 0:
+            if state_lock_flag[0] or "remote state already locked" in stderr_output:
+                raise TerraformStateLockedException(
+                    f"terraform command failed (state locked): {' '.join(cmd)}\n"
+                    f"stderr: {stderr_output}"
+                )
+            raise TerraformException(
+                f"terraform command failed: {' '.join(cmd)}\nstderr: {stderr_output}"
+            )
 
 
 class TerraformInitStep(BaseStep):
