@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import functools
+import json
+from pathlib import Path
 from unittest.mock import Mock, patch
 
 import pytest
@@ -10,6 +12,7 @@ import sunbeam.core.deployment as deployment_mod
 import sunbeam.core.manifest as manifest_mod
 import sunbeam.core.terraform as terraform_mod
 from sunbeam.core.deployment import Deployment
+from sunbeam.core.terraform import TerraformHelper
 from sunbeam.versions import OPENSTACK_CHANNEL
 
 test_manifest = """
@@ -686,3 +689,138 @@ class TestTerraformHelper:
             applied_tfvars = write_tfvars.call_args.args[0]
 
             assert "rabbitmq-storage" not in applied_tfvars
+
+
+class TestParseTerraformEvent:
+    """Tests for TerraformHelper._parse_terraform_event()."""
+
+    def _make_helper(self, mocker, snap):
+        """Create a minimal TerraformHelper for testing."""
+        mocker.patch.object(terraform_mod, "Snap", return_value=snap)
+        return TerraformHelper(
+            path=Path("/tmp/test"),
+            plan="test-plan",
+            tfvar_map={},
+        )
+
+    def test_apply_start_event(self, mocker, snap):
+        helper = self._make_helper(mocker, snap)
+        line = json.dumps(
+            {
+                "@level": "info",
+                "@message": "juju_application.keystone: Creating...",
+                "@timestamp": "2026-03-23T10:00:01.000Z",
+                "type": "apply_start",
+                "hook": {
+                    "resource": {
+                        "addr": "juju_application.keystone",
+                        "resource_type": "juju_application",
+                        "resource_name": "keystone",
+                    },
+                    "action": "create",
+                },
+            }
+        )
+        event = helper._parse_terraform_event(line)
+        assert event is not None
+        assert event.source == "terraform"
+        assert event.event_type == "apply_start"
+        assert "keystone" in event.message
+        assert "creat" in event.message.lower()
+
+    def test_apply_complete_event(self, mocker, snap):
+        helper = self._make_helper(mocker, snap)
+        line = json.dumps(
+            {
+                "@level": "info",
+                "@message": "juju_application.keystone: Creation complete after 4s",
+                "@timestamp": "2026-03-23T10:00:05.000Z",
+                "type": "apply_complete",
+                "hook": {
+                    "resource": {
+                        "addr": "juju_application.keystone",
+                        "resource_type": "juju_application",
+                        "resource_name": "keystone",
+                    },
+                    "action": "create",
+                    "elapsed_seconds": 4,
+                },
+            }
+        )
+        event = helper._parse_terraform_event(line)
+        assert event is not None
+        assert event.event_type == "apply_complete"
+        assert "keystone" in event.message
+        assert "4" in event.message
+
+    def test_apply_errored_event(self, mocker, snap):
+        helper = self._make_helper(mocker, snap)
+        line = json.dumps(
+            {
+                "@level": "error",
+                "@message": "juju_application.keystone: error",
+                "@timestamp": "2026-03-23T10:00:05.000Z",
+                "type": "apply_errored",
+                "hook": {
+                    "resource": {"addr": "juju_application.keystone"},
+                    "action": "create",
+                },
+            }
+        )
+        event = helper._parse_terraform_event(line)
+        assert event is not None
+        assert event.event_type == "apply_errored"
+
+    def test_change_summary_event(self, mocker, snap):
+        helper = self._make_helper(mocker, snap)
+        line = json.dumps(
+            {
+                "@level": "info",
+                "@message": "Apply complete! Resources: 3 added, 1 changed, 0 destroyed.",
+                "@timestamp": "2026-03-23T10:00:06.000Z",
+                "type": "change_summary",
+                "changes": {"add": 3, "change": 1, "import": 0, "remove": 0},
+            }
+        )
+        event = helper._parse_terraform_event(line)
+        assert event is not None
+        assert event.event_type == "change_summary"
+        assert "3 added" in event.message
+
+    def test_diagnostic_state_lock_sets_flag(self, mocker, snap):
+        helper = self._make_helper(mocker, snap)
+        line = json.dumps(
+            {
+                "@level": "error",
+                "@message": "Error acquiring the state lock",
+                "@timestamp": "2026-03-23T10:00:00.000Z",
+                "type": "diagnostic",
+                "diagnostic": {
+                    "severity": "error",
+                    "summary": "Error acquiring the state lock",
+                    "detail": "state blob is already locked",
+                },
+            }
+        )
+        state_lock_detected = [False]
+        event = helper._parse_terraform_event(line, state_lock_flag=state_lock_detected)
+        assert state_lock_detected[0] is True
+        assert event is None
+
+    def test_unrecognized_type_returns_none(self, mocker, snap):
+        helper = self._make_helper(mocker, snap)
+        line = json.dumps(
+            {
+                "@level": "info",
+                "@message": "Planning...",
+                "@timestamp": "2026-03-23T10:00:00.000Z",
+                "type": "planned_change",
+            }
+        )
+        event = helper._parse_terraform_event(line)
+        assert event is None
+
+    def test_invalid_json_returns_none(self, mocker, snap):
+        helper = self._make_helper(mocker, snap)
+        event = helper._parse_terraform_event("not valid json {{{")
+        assert event is None

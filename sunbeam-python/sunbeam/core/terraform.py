@@ -5,7 +5,7 @@ import json
 import logging
 import os
 import subprocess
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from string import Template
 
@@ -22,10 +22,17 @@ from sunbeam.core.common import (
     update_config,
 )
 from sunbeam.core.manifest import Manifest
+from sunbeam.core.progress import ProgressEvent
 from sunbeam.versions import VarMap
 
 LOG = logging.getLogger(__name__)
 TERRAFORM_APPLY_TIMEOUT = 1200  # 20 minutes
+_TF_UI_EVENT_TYPES = {
+    "apply_start",
+    "apply_complete",
+    "apply_errored",
+    "change_summary",
+}
 
 http_backend_template = """
 terraform {
@@ -691,6 +698,64 @@ class TerraformHelper:
                 for _, per_charm_tfvar_map in self.tfvar_map.get("charms", {}).items()
                 for _, tfvar_name in per_charm_tfvar_map.items()
             ]
+
+    def _parse_terraform_event(
+        self, line: str, state_lock_flag: list[bool] | None = None
+    ) -> ProgressEvent | None:
+        """Parse a terraform JSON line into a ProgressEvent.
+
+        Returns None for non-UI-relevant events or unparseable lines.
+        Sets state_lock_flag[0] = True if a state lock diagnostic is detected.
+        """
+        try:
+            data = json.loads(line)
+        except (json.JSONDecodeError, TypeError):
+            return None
+
+        event_type = data.get("type", "")
+
+        if event_type == "diagnostic":
+            diagnostic = data.get("diagnostic", {})
+            summary = diagnostic.get("summary", "")
+            detail = diagnostic.get("detail", "")
+            if "state lock" in summary.lower() or "already locked" in detail.lower():
+                if state_lock_flag is not None:
+                    state_lock_flag[0] = True
+            return None
+
+        if event_type not in _TF_UI_EVENT_TYPES:
+            return None
+
+        hook = data.get("hook", {})
+        resource = hook.get("resource", {})
+        addr = resource.get("addr", "unknown")
+        action = hook.get("action", "unknown")
+        timestamp_str = data.get("@timestamp", "")
+
+        try:
+            timestamp = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+        except (ValueError, AttributeError):
+            timestamp = datetime.now(tz=timezone.utc)
+
+        if event_type == "apply_start":
+            message = f"{addr}: {action}..."
+        elif event_type == "apply_complete":
+            elapsed = hook.get("elapsed_seconds", 0)
+            message = f"{addr}: {action} complete ({elapsed}s)"
+        elif event_type == "apply_errored":
+            message = f"{addr}: {action} errored"
+        elif event_type == "change_summary":
+            message = data.get("@message", "Apply complete.")
+        else:
+            message = data.get("@message", "")
+
+        return ProgressEvent(
+            source="terraform",
+            event_type=event_type,
+            message=message,
+            timestamp=timestamp,
+            metadata=data,
+        )
 
 
 class TerraformInitStep(BaseStep):
