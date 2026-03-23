@@ -201,7 +201,11 @@ class TerraformHelper:
             LOG.warning(e.stderr)
             raise TerraformException(str(e))
 
-    def apply(self, extra_args: list | None = None):
+    def apply(
+        self,
+        extra_args: list | None = None,
+        reporter: ProgressReporter | None = None,
+    ):
         """Terraform apply."""
         os_env = os.environ.copy()
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
@@ -211,37 +215,15 @@ class TerraformHelper:
         if self.env:
             os_env.update(self.env)
 
-        try:
-            cmd = [self.terraform, "apply"]
-            if extra_args:
-                cmd.extend(extra_args)
-            cmd.extend(["-auto-approve", "-no-color"])
-            if self.parallelism is not None:
-                cmd.append(f"-parallelism={self.parallelism}")
-            LOG.debug(
-                f"Running command {' '.join(cmd)}, cwd: {self.path}, tf log: {tf_log}"
-            )
-            process = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                check=True,
-                cwd=self.path,
-                env=os_env,
-                timeout=TERRAFORM_APPLY_TIMEOUT,
-            )
-            LOG.debug(
-                f"Command finished. stdout={process.stdout}, stderr={process.stderr}"
-            )
-        except subprocess.CalledProcessError as e:
-            LOG.error(f"terraform apply failed: {e.output}")
-            LOG.warning(e.stderr)
-            if "remote state already locked" in e.stderr:
-                raise TerraformStateLockedException(str(e))
-            else:
-                raise TerraformException(str(e))
+        cmd = [self.terraform, "apply"]
+        if extra_args:
+            cmd.extend(extra_args)
+        cmd.extend(["-auto-approve", "-no-color", "-json"])
+        if self.parallelism is not None:
+            cmd.append(f"-parallelism={self.parallelism}")
+        self._run_terraform_command(cmd, os_env, reporter=reporter)
 
-    def destroy(self):
+    def destroy(self, reporter: ProgressReporter | None = None):
         """Terraform destroy."""
         os_env = os.environ.copy()
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
@@ -251,32 +233,17 @@ class TerraformHelper:
         if self.env:
             os_env.update(self.env)
 
-        try:
-            cmd = [
-                self.terraform,
-                "destroy",
-                "-auto-approve",
-                "-no-color",
-                "-input=false",
-            ]
-            if self.parallelism is not None:
-                cmd.append(f"-parallelism={self.parallelism}")
-            LOG.debug(f"Running command {' '.join(cmd)}")
-            process = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                check=True,
-                cwd=self.path,
-                env=os_env,
-            )
-            LOG.debug(
-                f"Command finished. stdout={process.stdout}, stderr={process.stderr}"
-            )
-        except subprocess.CalledProcessError as e:
-            LOG.error(f"terraform destroy failed: {e.output}")
-            LOG.warning(e.stderr)
-            raise TerraformException(str(e))
+        cmd = [
+            self.terraform,
+            "destroy",
+            "-auto-approve",
+            "-no-color",
+            "-input=false",
+            "-json",
+        ]
+        if self.parallelism is not None:
+            cmd.append(f"-parallelism={self.parallelism}")
+        self._run_terraform_command(cmd, os_env, reporter=reporter)
 
     def output(self, hide_output: bool = False) -> dict:
         """Terraform output."""
@@ -402,7 +369,7 @@ class TerraformHelper:
             LOG.error(e.stderr)
             raise TerraformException(str(e))
 
-    def sync(self) -> None:
+    def sync(self, reporter: ProgressReporter | None = None) -> None:
         """Sync the running state back to the Terraform state file."""
         os_env = os.environ.copy()
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
@@ -412,23 +379,8 @@ class TerraformHelper:
         if self.env:
             os_env.update(self.env)
 
-        try:
-            cmd = [self.terraform, "apply", "-refresh-only", "-auto-approve"]
-            process = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                check=True,
-                cwd=self.path,
-                env=os_env,
-            )
-            LOG.debug(
-                f"Command finished. stdout={process.stdout}, stderr={process.stderr}"
-            )
-        except subprocess.CalledProcessError as e:
-            LOG.error(f"terraform sync failed: {e.output}")
-            LOG.error(e.stderr)
-            raise TerraformException(str(e))
+        cmd = [self.terraform, "apply", "-refresh-only", "-auto-approve", "-json"]
+        self._run_terraform_command(cmd, os_env, reporter=reporter)
 
     def update_partial_tfvars_and_apply_tf(
         self,
@@ -437,6 +389,7 @@ class TerraformHelper:
         charms: list[str],
         tfvar_config: str | None = None,
         tf_apply_extra_args: list | None = None,
+        reporter: ProgressReporter | None = None,
     ) -> None:
         """Updates tfvars for specific charms and apply the plan.
 
@@ -460,7 +413,7 @@ class TerraformHelper:
 
         self.write_tfvars(updated_tfvars)
         LOG.debug(f"Applying plan {self.plan} with tfvars {updated_tfvars}")
-        self.apply(tf_apply_extra_args)
+        self.apply(tf_apply_extra_args, reporter=reporter)
 
     def update_tfvars_and_apply_tf(
         self,
@@ -469,6 +422,7 @@ class TerraformHelper:
         tfvar_config: str | None = None,
         override_tfvars: dict | None = None,
         tf_apply_extra_args: list | None = None,
+        reporter: ProgressReporter | None = None,
     ) -> None:
         """Updates terraform vars and Apply the terraform.
 
@@ -510,7 +464,7 @@ class TerraformHelper:
 
         self.write_tfvars(updated_tfvars)
         LOG.debug(f"Applying plan {self.plan} with tfvars {updated_tfvars}")
-        self.apply(tf_apply_extra_args)
+        self.apply(tf_apply_extra_args, reporter=reporter)
 
     def _load_and_filter_db_tfvars(
         self, client: Client, tfvar_config: str | None
