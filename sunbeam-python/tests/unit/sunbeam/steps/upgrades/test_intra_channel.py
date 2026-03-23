@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2023 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
+import sys
 from unittest.mock import Mock, call, patch
 
 from sunbeam.core.common import Result, ResultType
@@ -10,6 +11,12 @@ from sunbeam.core.juju import (
     JujuWaitException,
 )
 from sunbeam.core.openstack import OPENSTACK_MODEL
+from sunbeam.steps.k8s import (
+    EnsureCiliumOnCorrectSpaceStep,
+    EnsureDefaultL2AdvertisementMutedStep,
+)
+from sunbeam.steps.openstack import OpenStackPatchLoadBalancerServicesIPPoolStep
+from sunbeam.steps.upgrades.base import UpgradeFeatures
 from sunbeam.steps.upgrades.intra_channel import (
     SNAP_APPS_INFRA_MODEL,
     SNAP_APPS_MACHINE_MODEL,
@@ -831,10 +838,6 @@ class TestLatestInChannelCoordinator:
         )
         plan = coordinator.get_plan()
 
-        from sunbeam.steps.openstack import (
-            OpenStackPatchLoadBalancerServicesIPPoolStep,
-        )
-
         step_types = [type(step) for step in plan]
         assert OpenStackPatchLoadBalancerServicesIPPoolStep not in step_types
 
@@ -854,7 +857,34 @@ class TestLatestInChannelCoordinator:
         mock_maas_steps_module = Mock()
         mock_maas_steps_module.MaasDeployK8SApplicationStep = mock_maas_deploy_k8s_cls
 
-        import sys
+        with patch.dict(
+            sys.modules,
+            {
+                "sunbeam.provider.maas.client": mock_maas_client_module,
+                "sunbeam.provider.maas.steps": mock_maas_steps_module,
+            },
+        ):
+            coordinator = LatestInChannelCoordinator(
+                self.deployment, self.client, self.jhelper, self.manifest
+            )
+            plan = coordinator.get_plan()
+
+        step_types = [type(step) for step in plan]
+        assert OpenStackPatchLoadBalancerServicesIPPoolStep in step_types
+        assert EnsureDefaultL2AdvertisementMutedStep in step_types
+        # MaasDeployK8SApplicationStep was called; its return value is in the plan
+        assert mock_maas_deploy_k8s_cls.return_value in plan
+
+    @patch(f"{_INTRA_CHANNEL}.is_maas_deployment")
+    def test_get_plan_maas_includes_cilium_step(self, mock_is_maas):
+        """MAAS refresh plan must include EnsureCiliumOnCorrectSpaceStep."""
+        mock_is_maas.return_value = True
+        self.deployment.public_api_label = "test-public-api"
+
+        mock_maas_client_module = Mock()
+        mock_maas_client_module.MaasClient.from_deployment.return_value = Mock()
+        mock_maas_steps_module = Mock()
+        mock_maas_steps_module.MaasDeployK8SApplicationStep = Mock()
 
         with patch.dict(
             sys.modules,
@@ -868,16 +898,21 @@ class TestLatestInChannelCoordinator:
             )
             plan = coordinator.get_plan()
 
-        from sunbeam.steps.k8s import EnsureDefaultL2AdvertisementMutedStep
-        from sunbeam.steps.openstack import (
-            OpenStackPatchLoadBalancerServicesIPPoolStep,
+        step_types = [type(step) for step in plan]
+        assert EnsureCiliumOnCorrectSpaceStep in step_types
+
+    @patch(f"{_INTRA_CHANNEL}.is_maas_deployment")
+    def test_get_plan_local_includes_cilium_step(self, mock_is_maas):
+        """Local refresh plan must include EnsureCiliumOnCorrectSpaceStep."""
+        mock_is_maas.return_value = False
+
+        coordinator = LatestInChannelCoordinator(
+            self.deployment, self.client, self.jhelper, self.manifest
         )
+        plan = coordinator.get_plan()
 
         step_types = [type(step) for step in plan]
-        assert OpenStackPatchLoadBalancerServicesIPPoolStep in step_types
-        assert EnsureDefaultL2AdvertisementMutedStep in step_types
-        # MaasDeployK8SApplicationStep was called; its return value is in the plan
-        assert mock_maas_deploy_k8s_cls.return_value in plan
+        assert EnsureCiliumOnCorrectSpaceStep in step_types
 
     @patch(f"{_INTRA_CHANNEL}.is_maas_deployment")
     def test_get_plan_always_includes_core_steps(self, mock_is_maas):
@@ -888,8 +923,6 @@ class TestLatestInChannelCoordinator:
             self.deployment, self.client, self.jhelper, self.manifest
         )
         plan = coordinator.get_plan()
-
-        from sunbeam.steps.upgrades.base import UpgradeFeatures
 
         step_types = [type(step) for step in plan]
         assert LatestInChannel in step_types
