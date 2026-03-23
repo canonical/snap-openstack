@@ -302,9 +302,8 @@ class BaseStep:
         return self.description + " ... "
 
     def update_status(self, context: StepContext, msg: str):
-        """Update status if status is provided."""
-        if context.status is not None:
-            context.status.update(self.status + msg)
+        """Update the Rich status spinner with a message."""
+        context.status.update(self.status + msg)
 
 
 def run_plan(
