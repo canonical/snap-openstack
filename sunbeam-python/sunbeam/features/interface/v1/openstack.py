@@ -28,6 +28,7 @@ from sunbeam.core.common import (
 )
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import (
+    ApplicationStatusOverlay,
     JujuHelper,
     JujuStepHelper,
     JujuWaitException,
@@ -515,12 +516,15 @@ class EnableOpenStackApplicationStep(
         feature: OpenStackControlPlaneFeature,
         app_desired_status: list[str] = ["active"],
         agent_desired_status: list[str] | None = None,
+        overlay: dict[str, ApplicationStatusOverlay] | None = None,
     ) -> None:
         """Constructor for the generic plan.
 
         :param jhelper: Juju helper with loaded juju credentials
         :param feature: Feature that uses this plan to perform callbacks to
                        feature.
+        :param overlay: Per-application status overrides merged with the
+                        default overlay built by build_overlay_dict.
         """
         super().__init__(
             f"Enable OpenStack {feature.display_name}",
@@ -533,6 +537,7 @@ class EnableOpenStackApplicationStep(
         self.feature = feature
         self.app_desired_status = app_desired_status
         self.agent_desired_status = agent_desired_status
+        self.extra_overlay = overlay or {}
         self.model = OPENSTACK_MODEL
 
     def is_skip(self, context: StepContext) -> Result:
@@ -582,6 +587,7 @@ class EnableOpenStackApplicationStep(
         LOG.debug(f"Application monitored for readiness: {apps}")
         status_queue: queue.Queue[str] = queue.Queue()
         task = update_status_background(self, apps, status_queue, context.status)
+        overlay = {**build_overlay_dict(apps), **self.extra_overlay}
         try:
             self.jhelper.wait_until_desired_status(
                 self.model,
@@ -590,7 +596,7 @@ class EnableOpenStackApplicationStep(
                 agent_status=self.agent_desired_status,
                 timeout=self.feature.set_application_timeout_on_enable(self.deployment),
                 queue=status_queue,
-                overlay=build_overlay_dict(apps),
+                overlay=overlay,
             )
         except (JujuWaitException, TimeoutError) as e:
             LOG.warning(str(e))
