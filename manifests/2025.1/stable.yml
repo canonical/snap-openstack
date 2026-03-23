@@ -99,7 +99,11 @@ features:
   loadbalancer:
     software:
       charms:
+        multus:
+          channel: latest/stable
         octavia-k8s:
+          channel: 2025.1/stable
+        openstack-port-cni-k8s:
           channel: 2025.1/stable
   orchestration:
     software:
