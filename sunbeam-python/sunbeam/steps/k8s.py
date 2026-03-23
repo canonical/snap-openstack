@@ -24,6 +24,7 @@ from sunbeam.core.common import (
     ResultType,
     Role,
     Status,
+    StepContext,
     SunbeamException,
     read_config,
     update_config,
@@ -264,7 +265,7 @@ class DeployK8SApplicationStep(DeployMachineApplicationStep):
         """Return application timeout."""
         return K8S_APP_TIMEOUT
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not."""
         try:
             # note(gboutry): validate in the is_skip phase to avoid
@@ -497,7 +498,7 @@ class EnsureK8SUnitsTaggedStep(BaseStep):
 
         return to_update
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -538,7 +539,7 @@ class EnsureK8SUnitsTaggedStep(BaseStep):
 
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Run the step to completion.
 
         Invoked when the step is run and returns a ResultType to indicate
@@ -609,7 +610,7 @@ class AddK8SCloudStep(BaseStep, JujuStepHelper):
         self.cloud_name = f"{deployment.name}{K8S_CLOUD_SUFFIX}"
         self.credential_name = f"{self.cloud_name}{CREDENTIAL_SUFFIX}"
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -623,7 +624,7 @@ class AddK8SCloudStep(BaseStep, JujuStepHelper):
 
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Add k8s cloud to Juju controller."""
         try:
             kubeconfig = read_config(self.client, self._KUBECONFIG)
@@ -646,7 +647,7 @@ class AddK8SCloudInClientStep(BaseStep, JujuStepHelper):
         self.cloud_name = f"{deployment.name}{K8S_CLOUD_SUFFIX}"
         self.credential_name = f"{self.cloud_name}{CREDENTIAL_SUFFIX}"
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -659,7 +660,7 @@ class AddK8SCloudInClientStep(BaseStep, JujuStepHelper):
 
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Add microk8s clouds to Juju controller."""
         try:
             kubeconfig = read_config(self.client, self._KUBECONFIG)
@@ -681,7 +682,7 @@ class UpdateK8SCloudStep(BaseStep, JujuStepHelper):
         self.cloud_name = f"{deployment.name}{K8S_CLOUD_SUFFIX}"
         self.credential_name = f"{self.cloud_name}{CREDENTIAL_SUFFIX}"
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -697,7 +698,7 @@ class UpdateK8SCloudStep(BaseStep, JujuStepHelper):
 
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Add k8s cloud to Juju controller."""
         try:
             kubeconfig = read_config(self.client, self._KUBECONFIG)
@@ -721,7 +722,7 @@ class AddK8SCredentialStep(BaseStep, JujuStepHelper):
         self.cloud_name = f"{deployment.name}{K8S_CLOUD_SUFFIX}"
         self.credential_name = f"{self.cloud_name}{CREDENTIAL_SUFFIX}"
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -742,7 +743,7 @@ class AddK8SCredentialStep(BaseStep, JujuStepHelper):
 
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Add k8s credential to Juju controller."""
         try:
             kubeconfig = read_config(self.client, self._KUBECONFIG)
@@ -771,7 +772,7 @@ class StoreK8SKubeConfigStep(BaseStep, JujuStepHelper):
         self.model = model
         self.deployment = deployment
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -784,7 +785,7 @@ class StoreK8SKubeConfigStep(BaseStep, JujuStepHelper):
 
         return Result(ResultType.SKIPPED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Store K8S config in clusterd."""
         try:
             unit = self.jhelper.get_leader_unit(APPLICATION, self.model)
@@ -958,7 +959,7 @@ class MigrateK8SKubeconfigStep(BaseStep, _CommonK8SStepMixin):
     def _extract_action_result(self, action_result: dict) -> str | None:
         return action_result.get("kubeconfig")
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -995,7 +996,7 @@ class MigrateK8SKubeconfigStep(BaseStep, _CommonK8SStepMixin):
 
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Migrate kubeconfig to another node."""
         try:
             app = self.jhelper.get_application(self._SUBSTRATE, self.model)
@@ -1076,7 +1077,7 @@ class CheckApplicationK8SDistributionStep(BaseStep, _CommonK8SStepMixin):
 
         return app_names
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -1143,7 +1144,7 @@ class CordonK8SUnitStep(BaseStep, _CommonK8SStepMixin):
         self.jhelper = jhelper
         self.model = model
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -1151,9 +1152,9 @@ class CordonK8SUnitStep(BaseStep, _CommonK8SStepMixin):
         """
         return self.skip_checks()
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Cordon the unit."""
-        self.update_status(status, "Cordoning unit")
+        self.update_status(context, "Cordoning unit")
         try:
             cordon(self.kube, self.node)
         except K8SError as e:
@@ -1173,7 +1174,7 @@ class UncordonK8SUnitStep(BaseStep, _CommonK8SStepMixin):
         self.jhelper = jhelper
         self.model = model
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -1181,9 +1182,9 @@ class UncordonK8SUnitStep(BaseStep, _CommonK8SStepMixin):
         """
         return self.skip_checks()
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Uncordon the unit."""
-        self.update_status(status, "Uncordoning unit")
+        self.update_status(context, "Uncordoning unit")
         try:
             uncordon(self.kube, self.node)
         except K8SError as e:
@@ -1211,7 +1212,7 @@ class DrainK8SUnitStep(BaseStep, _CommonK8SStepMixin):
         self.model = model
         self.remove_pvc = remove_pvc
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -1232,16 +1233,16 @@ class DrainK8SUnitStep(BaseStep, _CommonK8SStepMixin):
         if pods_for_eviction:
             raise ValueError("Pods are still evicting")
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Drain the unit."""
-        self.update_status(status, "Evicting workloads")
+        self.update_status(context, "Evicting workloads")
         try:
             drain(self.kube, self.node, remove_pvc=self.remove_pvc)
         except K8SError as e:
             LOG.debug("Failed to drain unit", exc_info=True)
             return Result(ResultType.FAILED, str(e))
 
-        self.update_status(status, "Waiting for workloads to leave")
+        self.update_status(context, "Waiting for workloads to leave")
         self._wait_for_evicted_pods(self.kube, self.node)
 
         return Result(ResultType.COMPLETED)
@@ -1418,7 +1419,7 @@ class EnsureL2AdvertisementByHostStep(BaseStep):
             f"Node {node['name']} has no interface in {network.name} space"
         )
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -1500,7 +1501,7 @@ class EnsureL2AdvertisementByHostStep(BaseStep):
                 raise tenacity.TryAgain("Trying to patch again")
             raise
 
-    def run(self, status: Status | None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Run the step to completion.
 
         Invoked when the step is run and returns a ResultType to indicate
@@ -1583,7 +1584,7 @@ class EnsureDefaultL2AdvertisementMutedStep(BaseStep):
             }
         ]
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -1619,7 +1620,7 @@ class EnsureDefaultL2AdvertisementMutedStep(BaseStep):
 
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Run the step to completion.
 
         Invoked when the step is run and returns a ResultType to indicate
@@ -1677,7 +1678,7 @@ class PatchCoreDNSStep(BaseStep):
         """Determine replica count for coredns."""
         return 1 if control_nodes < 3 else 3
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -1716,7 +1717,7 @@ class PatchCoreDNSStep(BaseStep):
 
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Run the step to completion.
 
         Invoked when the step is run and returns a ResultType to indicate
@@ -1795,7 +1796,7 @@ class PatchServiceExternalTrafficStep(BaseStep):
         self.service_name = service_name
         self.namespace = namespace
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -1819,7 +1820,7 @@ class PatchServiceExternalTrafficStep(BaseStep):
             return Result(ResultType.FAILED, str(e))
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Run the step to completion."""
         try:
             service = self.kube.get(core_v1.Service, name=self.service_name)

@@ -3,7 +3,7 @@
 
 import logging
 
-from sunbeam.core.common import BaseStep, Result, ResultType, Status
+from sunbeam.core.common import BaseStep, Result, ResultType, StepContext
 from sunbeam.core.juju import (
     ApplicationNotFoundException,
     JujuHelper,
@@ -36,7 +36,7 @@ class DeployCertificatesProviderApplicationStep(BaseStep):
         self.model = model
         self.app = APPLICATION
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Check whether or not to deploy tls operator."""
         try:
             self.jhelper.get_application(self.app, self.model)
@@ -44,9 +44,9 @@ class DeployCertificatesProviderApplicationStep(BaseStep):
             return Result(ResultType.COMPLETED)
         return Result(ResultType.SKIPPED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Deploy sunbeam clusterd to infra machines."""
-        self.update_status(status, "fetching infra machines")
+        self.update_status(context, "fetching infra machines")
         clusterd_machines = self.jhelper.get_machines(self.model)
         machines = list(clusterd_machines.keys())
 
@@ -55,7 +55,7 @@ class DeployCertificatesProviderApplicationStep(BaseStep):
 
         # Deploy on first controller machine
         machines = machines[:1]
-        self.update_status(status, "deploying application")
+        self.update_status(context, "deploying application")
         charm_manifest: CharmManifest = self.manifest.core.software.charms[CHARM]
         self.jhelper.deploy(
             APPLICATION,

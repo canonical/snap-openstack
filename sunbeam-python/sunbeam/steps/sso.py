@@ -14,7 +14,6 @@ from typing import (
 import click
 import requests
 from rich.console import Console
-from rich.status import Status
 
 from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import (
@@ -25,6 +24,7 @@ from sunbeam.core.common import (
     BaseStep,
     Result,
     ResultType,
+    StepContext,
     read_config,
     update_config,
     update_status_background,
@@ -329,7 +329,7 @@ class RemoveExternalProviderStep(BaseStep, JujuStepHelper):
             raise ValueError(f"Invalid protocol {provider_proto}")
         self._proto = provider_proto
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Apply terraform configuration to deploy openstack application."""
         tfvars = _safe_get_tfvars(self.client)
         cfg = safe_get_sso_config(self.client)
@@ -452,7 +452,7 @@ class UpdateExternalProviderStep(BaseStep, JujuStepHelper):
             )
         return validate_fn(data)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Apply terraform configuration to deploy openstack application."""
         tfvars = _safe_get_tfvars(self.client)
         cfg = safe_get_sso_config(self.client)
@@ -497,7 +497,7 @@ class UpdateExternalProviderStep(BaseStep, JujuStepHelper):
         charm_name = f"keystone-idp-{self._proto}-{self._provider_name}"
         apps = ["keystone", "horizon", charm_name]
         app_queue: queue.Queue[str] = queue.Queue()
-        task = update_status_background(self, apps, app_queue, status)
+        task = update_status_background(self, apps, app_queue, context.status)
         try:
             self.jhelper.wait_until_active(
                 OPENSTACK_MODEL,
@@ -560,7 +560,7 @@ class _BaseProviderStep(BaseStep, JujuStepHelper):
         """Returns true if the step has prompts that it can ask the user."""
         return True
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -716,7 +716,7 @@ class _BaseExternalProviderStep(_BaseProviderStep):
             raise click.ClickException("invalid state for provider step")
         return cfg
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         tfvars = _safe_get_tfvars(self.client)
         cfg = safe_get_sso_config(self.client)
 
@@ -759,7 +759,7 @@ class _BaseExternalProviderStep(_BaseProviderStep):
         charm_name = f"keystone-idp-{self._proto}-{self._provider_name}"
         apps = ["keystone", "horizon", charm_name]
         app_queue: queue.Queue[str] = queue.Queue()
-        task = update_status_background(self, apps, app_queue, status)
+        task = update_status_background(self, apps, app_queue, context.status)
         try:
             self.jhelper.wait_until_active(
                 OPENSTACK_MODEL,
@@ -945,7 +945,7 @@ class AddCanonicalProviderStep(_BaseProviderStep):
         variables["cert_offer"] = self._cert_offer
         return variables
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Run configure steps."""
         cfg = safe_get_sso_config(self.client)
 
@@ -1136,7 +1136,7 @@ class ValidateIdentityManifest(BaseStep):
         """
         return False
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -1150,7 +1150,7 @@ class ValidateIdentityManifest(BaseStep):
 
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Run the step to completion.
 
         Invoked when the step is run and returns a ResultType to indicate
@@ -1226,7 +1226,7 @@ class DeployIdentityProvidersStep(BaseStep, JujuStepHelper):
         """
         return False
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -1251,7 +1251,7 @@ class DeployIdentityProvidersStep(BaseStep, JujuStepHelper):
 
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Run the step to completion.
 
         Invoked when the step is run and returns a ResultType to indicate
@@ -1286,7 +1286,7 @@ class DeployIdentityProvidersStep(BaseStep, JujuStepHelper):
             return Result(ResultType.FAILED, str(e))
 
         app_queue: queue.Queue[str] = queue.Queue()
-        task = update_status_background(self, apps, app_queue, status)
+        task = update_status_background(self, apps, app_queue, context.status)
         try:
             self.jhelper.wait_until_active(
                 OPENSTACK_MODEL,
@@ -1363,7 +1363,7 @@ class SetKeystoneSAMLCertAndKeyStep(BaseStep, JujuStepHelper):
         self.x509_cert = x509_cert
         self.x509_key = x509_key
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -1418,7 +1418,7 @@ class SetKeystoneSAMLCertAndKeyStep(BaseStep, JujuStepHelper):
         cert_details = self._cert_and_key_from_manifest()
         return cert_details
 
-    def run(self, status: Status | None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Run the step to completion.
 
         Invoked when the step is run and returns a ResultType to indicate

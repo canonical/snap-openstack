@@ -32,25 +32,27 @@ def question_bank():
 
 
 class TestUserOpenRCStep:
-    def test_is_skip_with_demo(self, tmpdir, cclient, tfhelper, load_answers):
+    def test_is_skip_with_demo(
+        self, tmpdir, cclient, tfhelper, load_answers, step_context
+    ):
         outfile = tmpdir + "/" + "openrc"
         load_answers.return_value = {"user": {"run_demo_setup": True}}
         step = configure.UserOpenRCStep(
             cclient, tfhelper, "http://keystone:5000", "3", None, outfile
         )
-        result = step.is_skip()
+        result = step.is_skip(step_context)
         assert result.result_type == ResultType.COMPLETED
 
-    def test_is_skip(self, tmpdir, cclient, tfhelper, load_answers):
+    def test_is_skip(self, tmpdir, cclient, tfhelper, load_answers, step_context):
         outfile = tmpdir + "/" + "openrc"
         load_answers.return_value = {"user": {"run_demo_setup": False}}
         step = configure.UserOpenRCStep(
             cclient, tfhelper, "http://keystone:5000", "3", None, outfile
         )
-        result = step.is_skip()
+        result = step.is_skip(step_context)
         assert result.result_type == ResultType.SKIPPED
 
-    def test_run(self, tmpdir, cclient, tfhelper):
+    def test_run(self, tmpdir, cclient, tfhelper, step_context):
         outfile = tmpdir + "/" + "openrc"
         creds = {
             "OS_USERNAME": "user1",
@@ -63,7 +65,7 @@ class TestUserOpenRCStep:
         auth_url = "http://keystone:5000"
         auth_version = 3
         step = configure.UserOpenRCStep(cclient, tfhelper, auth_url, "3", None, outfile)
-        step.run()
+        step.run(step_context)
         with open(outfile, "r") as f:
             contents = f.read()
         expect = f"""# openrc for {creds["OS_USERNAME"]}
@@ -100,44 +102,44 @@ class TestRetrieveAdminCredentials:
 
 
 class TestDemoSetup:
-    def test_is_skip_demo_setup(self, cclient, tfhelper, load_answers):
+    def test_is_skip_demo_setup(self, cclient, tfhelper, load_answers, step_context):
         load_answers.return_value = {"user": {"run_demo_setup": True}}
         step = configure.DemoSetup(cclient, tfhelper, Path("/tmp/dummy"))
-        result = step.is_skip()
+        result = step.is_skip(step_context)
         assert result.result_type == ResultType.COMPLETED
 
-    def test_is_skip(self, cclient, tfhelper, load_answers):
+    def test_is_skip(self, cclient, tfhelper, load_answers, step_context):
         load_answers.return_value = {"user": {"run_demo_setup": False}}
         step = configure.DemoSetup(cclient, tfhelper, Path("/tmp/dummy"))
-        result = step.is_skip()
+        result = step.is_skip(step_context)
         assert result.result_type == ResultType.SKIPPED
 
-    def test_run(self, cclient, tfhelper, load_answers):
+    def test_run(self, cclient, tfhelper, load_answers, step_context):
         answer_data = {"user": {"foo": "bar"}}
         load_answers.return_value = answer_data
         step = configure.DemoSetup(cclient, tfhelper, Path("/tmp/dummy"))
-        result = step.run()
+        result = step.run(step_context)
         tfhelper.write_tfvars.assert_called_once_with(answer_data, Path("/tmp/dummy"))
         assert result.result_type == ResultType.COMPLETED
 
-    def test_run_fail(self, cclient, tfhelper, load_answers):
+    def test_run_fail(self, cclient, tfhelper, load_answers, step_context):
         answer_data = {"user": {"foo": "bar"}}
         load_answers.return_value = answer_data
         tfhelper.apply.side_effect = TerraformException("Bad terraform")
         step = configure.DemoSetup(cclient, tfhelper, Path("/tmp/dummy"))
-        result = step.run()
+        result = step.run(step_context)
         assert result.result_type == ResultType.FAILED
 
 
 class TestTerraformDemoInitStep:
-    def test_is_skip_demo_setup(self, cclient, tfhelper, load_answers):
+    def test_is_skip_demo_setup(self, cclient, tfhelper, load_answers, step_context):
         load_answers.return_value = {"user": {"run_demo_setup": True}}
         step = configure.TerraformDemoInitStep(cclient, tfhelper)
-        result = step.is_skip()
+        result = step.is_skip(step_context)
         assert result.result_type == ResultType.COMPLETED
 
-    def test_is_skip(self, cclient, tfhelper, load_answers):
+    def test_is_skip(self, cclient, tfhelper, load_answers, step_context):
         load_answers.return_value = {"user": {"run_demo_setup": False}}
         step = configure.TerraformDemoInitStep(cclient, tfhelper)
-        result = step.is_skip()
+        result = step.is_skip(step_context)
         assert result.result_type == ResultType.SKIPPED

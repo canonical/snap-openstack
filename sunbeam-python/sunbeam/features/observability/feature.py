@@ -16,7 +16,6 @@ from pathlib import Path
 import click
 from packaging.version import Version
 from rich.console import Console
-from rich.status import Status
 
 from sunbeam.clusterd.service import (
     ClusterServiceUnavailableException,
@@ -31,6 +30,7 @@ from sunbeam.core.common import (
     BaseStep,
     Result,
     ResultType,
+    StepContext,
     convert_proxy_to_model_configs,
     read_config,
     run_plan,
@@ -132,7 +132,7 @@ class DeployObservabilityStackStep(BaseStep, JujuStepHelper):
         self.model = OBSERVABILITY_MODEL
         self.cloud = K8SHelper.get_cloud(deployment.name)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Execute configuration using terraform."""
         f_manifest = self.manifest.get_feature(self.feature.name.split(".")[-1])
         if f_manifest is not None:
@@ -153,7 +153,7 @@ class DeployObservabilityStackStep(BaseStep, JujuStepHelper):
         }
 
         try:
-            self.update_status(status, "deploying services")
+            self.update_status(context, "deploying services")
             self.tfhelper.update_tfvars_and_apply_tf(
                 self.deployment.get_client(),
                 self.manifest,
@@ -167,7 +167,7 @@ class DeployObservabilityStackStep(BaseStep, JujuStepHelper):
         apps = self.jhelper.get_application_names(self.model)
         LOG.debug(f"Application monitored for readiness: {apps}")
         status_queue: queue.Queue[str] = queue.Queue()
-        task = update_status_background(self, apps, status_queue, status)
+        task = update_status_background(self, apps, status_queue, context.status)
         try:
             self.jhelper.wait_until_active(
                 self.model,
@@ -208,7 +208,7 @@ class UpdateObservabilityModelConfigStep(BaseStep, JujuStepHelper):
         self.model = OBSERVABILITY_MODEL
         self.cloud = K8SHelper.get_cloud(deployment.name)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Execute configuration using terraform."""
         proxy_settings = self.deployment.get_proxy_settings()
         model_config = convert_proxy_to_model_configs(proxy_settings)
@@ -260,7 +260,7 @@ class DeployObservabilityAgentStep(BaseStep, JujuStepHelper):
         self.client = self.deployment.get_client()
         self.model = self.deployment.openstack_machines_model
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Execute configuration using terraform."""
         extra_tfvars = {
             "principal-application-model": self.model,
@@ -272,7 +272,7 @@ class DeployObservabilityAgentStep(BaseStep, JujuStepHelper):
         )
 
         try:
-            self.update_status(status, "deploying services")
+            self.update_status(context, "deploying services")
             self.tfhelper.update_tfvars_and_apply_tf(
                 self.client,
                 self.manifest,
@@ -318,7 +318,7 @@ class RemoveObservabilityStackStep(BaseStep, JujuStepHelper):
         self.model = OBSERVABILITY_MODEL
         self.cloud = K8SHelper.get_cloud(deployment.name)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Execute configuration using terraform."""
         try:
             self.tfhelper.destroy()
@@ -359,7 +359,7 @@ class RemoveObservabilityAgentStep(BaseStep, JujuStepHelper):
         self.client = deployment.get_client()
         self.model = deployment.openstack_machines_model
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Execute configuration using terraform."""
         try:
             self.tfhelper.destroy()
@@ -441,7 +441,7 @@ class IntegrateRemoteCosOffersStep(BaseStep, JujuStepHelper):
             ("opentelemetry-collector:send-loki-logs", self.feature.loki_offer_url),
         ]
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Execute integrations using external offers."""
         for model in [
             OPENSTACK_MODEL,
@@ -514,7 +514,7 @@ class RemoveRemoteCosOffersStep(BaseStep, JujuStepHelper):
 
         return relations
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Execute integrations using external offers."""
         for model in [
             OPENSTACK_MODEL,

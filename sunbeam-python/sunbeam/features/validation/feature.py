@@ -14,11 +14,10 @@ from croniter import croniter
 from packaging.version import Version
 from rich import box
 from rich.console import Console
-from rich.status import Status
 from rich.table import Column, Table
 
 from sunbeam.clusterd.client import Client
-from sunbeam.core.common import BaseStep, Result, ResultType, run_plan
+from sunbeam.core.common import BaseStep, Result, ResultType, StepContext, run_plan
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import (
     ActionFailedException,
@@ -215,7 +214,7 @@ class ConfigureValidationStep(BaseStep):
         self.tfvar_config = tfvar_config
         self.deployment = deployment
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Execute step using terraform."""
         try:
             # See ValidationFeature.manifest_attributes_tfvar_map

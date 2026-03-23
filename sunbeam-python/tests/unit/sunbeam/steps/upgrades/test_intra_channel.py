@@ -656,7 +656,7 @@ class TestIsTrackChanged:
 
 
 class TestLatestInChannelRun:
-    """Tests for the LatestInChannel.run() method, including MAAS infra model."""
+    """Tests for LatestInChannel.run(step_context), including MAAS infra model."""
 
     def setup_method(self):
         """Set up test fixtures."""
@@ -670,7 +670,9 @@ class TestLatestInChannelRun:
         self.upgrader = LatestInChannel(self.deployment, self.jhelper, self.manifest)
 
     @patch(f"{_INTRA_CHANNEL}.is_maas_deployment")
-    def test_run_local_deployment_does_not_refresh_infra_model(self, mock_is_maas):
+    def test_run_local_deployment_does_not_refresh_infra_model(
+        self, mock_is_maas, step_context
+    ):
         """Local deployment should NOT discover or refresh infra model apps."""
         mock_is_maas.return_value = False
 
@@ -683,21 +685,23 @@ class TestLatestInChannelRun:
         )
         self.upgrader.refresh_apps = Mock(return_value=Result(ResultType.COMPLETED))
 
-        result = self.upgrader.run()
+        result = self.upgrader.run(step_context)
 
         assert result.result_type == ResultType.COMPLETED
         # get_charm_deployed_versions called only for k8s and machines models
         assert self.upgrader.get_charm_deployed_versions.call_count == 2
         # refresh_apps called only for k8s and machines models
         assert self.upgrader.refresh_apps.call_count == 2
-        self.upgrader.refresh_apps.assert_any_call(k8s_apps, "openstack", None)
+        self.upgrader.refresh_apps.assert_any_call(k8s_apps, "openstack", step_context)
         self.upgrader.refresh_apps.assert_any_call(
-            machine_apps, "openstack-machines", None
+            machine_apps, "openstack-machines", step_context
         )
 
     @patch(f"{_INTRA_CHANNEL}.is_maas_deployment")
     def test_run_maas_deployment_discovers_and_refreshes_infra_model(
-        self, mock_is_maas
+        self,
+        mock_is_maas,
+        step_context,
     ):
         """MAAS deployment should discover and refresh infra model apps."""
         mock_is_maas.return_value = True
@@ -716,7 +720,7 @@ class TestLatestInChannelRun:
         )
         self.upgrader.refresh_apps = Mock(return_value=Result(ResultType.COMPLETED))
 
-        result = self.upgrader.run()
+        result = self.upgrader.run(step_context)
 
         assert result.result_type == ResultType.COMPLETED
         # get_charm_deployed_versions called for infra, k8s, AND machines models
@@ -724,14 +728,18 @@ class TestLatestInChannelRun:
         self.upgrader.get_charm_deployed_versions.assert_any_call("openstack-infra")
         # refresh_apps called for all 3 models: infra, k8s, machines
         assert self.upgrader.refresh_apps.call_count == 3
-        self.upgrader.refresh_apps.assert_any_call(infra_apps, "openstack-infra", None)
-        self.upgrader.refresh_apps.assert_any_call(k8s_apps, "openstack", None)
         self.upgrader.refresh_apps.assert_any_call(
-            machine_apps, "openstack-machines", None
+            infra_apps, "openstack-infra", step_context
+        )
+        self.upgrader.refresh_apps.assert_any_call(k8s_apps, "openstack", step_context)
+        self.upgrader.refresh_apps.assert_any_call(
+            machine_apps, "openstack-machines", step_context
         )
 
     @patch(f"{_INTRA_CHANNEL}.is_maas_deployment")
-    def test_run_maas_infra_apps_included_in_track_check(self, mock_is_maas):
+    def test_run_maas_infra_apps_included_in_track_check(
+        self, mock_is_maas, step_context
+    ):
         """MAAS infra model apps should be included in track change detection."""
         mock_is_maas.return_value = True
         self.deployment.infra_model = "openstack-infra"
@@ -752,13 +760,15 @@ class TestLatestInChannelRun:
         manifest_charm.channel = "2024.1/stable"
         self.manifest.core.software.charms = {"sunbeam-clusterd": manifest_charm}
 
-        result = self.upgrader.run()
+        result = self.upgrader.run(step_context)
 
         assert result.result_type == ResultType.FAILED
         assert "upgrade-release" in result.message
 
     @patch(f"{_INTRA_CHANNEL}.is_maas_deployment")
-    def test_run_maas_infra_refresh_failure_halts_execution(self, mock_is_maas):
+    def test_run_maas_infra_refresh_failure_halts_execution(
+        self, mock_is_maas, step_context
+    ):
         """If infra model refresh fails, the run should return failure."""
         mock_is_maas.return_value = True
         self.deployment.infra_model = "openstack-infra"
@@ -779,7 +789,7 @@ class TestLatestInChannelRun:
             return_value=Result(ResultType.FAILED, "infra refresh timed out")
         )
 
-        result = self.upgrader.run()
+        result = self.upgrader.run(step_context)
 
         assert result.result_type == ResultType.FAILED
         assert "infra refresh timed out" in result.message
@@ -787,7 +797,9 @@ class TestLatestInChannelRun:
         assert self.upgrader.refresh_apps.call_count == 1
 
     @patch(f"{_INTRA_CHANNEL}.is_maas_deployment")
-    def test_run_maas_k8s_failure_skips_machines_refresh(self, mock_is_maas):
+    def test_run_maas_k8s_failure_skips_machines_refresh(
+        self, mock_is_maas, step_context
+    ):
         """If k8s model refresh fails, machines refresh is skipped."""
         mock_is_maas.return_value = True
         self.deployment.infra_model = "openstack-infra"
@@ -811,14 +823,14 @@ class TestLatestInChannelRun:
             ]
         )
 
-        result = self.upgrader.run()
+        result = self.upgrader.run(step_context)
 
         assert result.result_type == ResultType.FAILED
         # refresh_apps called for infra (ok) then k8s (fail), machines skipped
         assert self.upgrader.refresh_apps.call_count == 2
 
     @patch(f"{_INTRA_CHANNEL}.is_maas_deployment")
-    def test_run_maas_empty_infra_model_is_handled(self, mock_is_maas):
+    def test_run_maas_empty_infra_model_is_handled(self, mock_is_maas, step_context):
         """MAAS with no apps in infra model should still succeed."""
         mock_is_maas.return_value = True
         self.deployment.infra_model = "openstack-infra"
@@ -833,7 +845,7 @@ class TestLatestInChannelRun:
         )
         self.upgrader.refresh_apps = Mock(return_value=Result(ResultType.COMPLETED))
 
-        result = self.upgrader.run()
+        result = self.upgrader.run(step_context)
 
         assert result.result_type == ResultType.COMPLETED
         # refresh_apps called for infra (empty), k8s, machines
@@ -943,22 +955,22 @@ class TestReapplyInfraModelConfigStep:
         self.manifest = Mock()
 
     @patch(f"{_INTRA_CHANNEL}.is_maas_deployment")
-    def test_is_skip_local_deployment(self, mock_is_maas):
+    def test_is_skip_local_deployment(self, mock_is_maas, step_context):
         """Local deployment should skip this step."""
         mock_is_maas.return_value = False
         step = ReapplyInfraModelConfigStep(self.deployment, self.jhelper, self.manifest)
-        result = step.is_skip()
+        result = step.is_skip(step_context)
         assert result.result_type == ResultType.SKIPPED
 
     @patch(f"{_INTRA_CHANNEL}.is_maas_deployment")
-    def test_is_skip_maas_deployment(self, mock_is_maas):
+    def test_is_skip_maas_deployment(self, mock_is_maas, step_context):
         """MAAS deployment should not skip this step."""
         mock_is_maas.return_value = True
         step = ReapplyInfraModelConfigStep(self.deployment, self.jhelper, self.manifest)
-        result = step.is_skip()
+        result = step.is_skip(step_context)
         assert result.result_type == ResultType.COMPLETED
 
-    def test_run_applies_manifest_config(self):
+    def test_run_applies_manifest_config(self, step_context):
         """Config from manifest is applied to infra model apps."""
         clusterd_manifest = Mock()
         clusterd_manifest.config = {"snap-channel": "2024.1/stable", "debug": "true"}
@@ -976,7 +988,7 @@ class TestReapplyInfraModelConfigStep:
         self.manifest.core.software.charms.get = Mock(side_effect=get_charm)
 
         step = ReapplyInfraModelConfigStep(self.deployment, self.jhelper, self.manifest)
-        result = step.run()
+        result = step.run(step_context)
 
         assert result.result_type == ResultType.COMPLETED
         assert self.jhelper.set_app_config.call_count == 2
@@ -991,7 +1003,7 @@ class TestReapplyInfraModelConfigStep:
             {"ca-common-name": "sunbeam"},
         )
 
-    def test_run_skips_app_with_no_manifest_config(self):
+    def test_run_skips_app_with_no_manifest_config(self, step_context):
         """Apps without manifest config are skipped."""
         clusterd_manifest = Mock()
         clusterd_manifest.config = None  # No config
@@ -1009,7 +1021,7 @@ class TestReapplyInfraModelConfigStep:
         self.manifest.core.software.charms.get = Mock(side_effect=get_charm)
 
         step = ReapplyInfraModelConfigStep(self.deployment, self.jhelper, self.manifest)
-        result = step.run()
+        result = step.run(step_context)
 
         assert result.result_type == ResultType.COMPLETED
         # Only tls-operator config applied
@@ -1019,17 +1031,17 @@ class TestReapplyInfraModelConfigStep:
             {"ca-common-name": "sunbeam"},
         )
 
-    def test_run_skips_app_not_in_manifest(self):
+    def test_run_skips_app_not_in_manifest(self, step_context):
         """Apps not in manifest are skipped."""
         self.manifest.core.software.charms.get = Mock(return_value=None)
 
         step = ReapplyInfraModelConfigStep(self.deployment, self.jhelper, self.manifest)
-        result = step.run()
+        result = step.run(step_context)
 
         assert result.result_type == ResultType.COMPLETED
         self.jhelper.set_app_config.assert_not_called()
 
-    def test_run_empty_config_dict_skipped(self):
+    def test_run_empty_config_dict_skipped(self, step_context):
         """Apps with empty config dict are skipped."""
         clusterd_manifest = Mock()
         clusterd_manifest.config = {}  # Empty dict is falsy
@@ -1037,7 +1049,7 @@ class TestReapplyInfraModelConfigStep:
         self.manifest.core.software.charms.get = Mock(return_value=clusterd_manifest)
 
         step = ReapplyInfraModelConfigStep(self.deployment, self.jhelper, self.manifest)
-        result = step.run()
+        result = step.run(step_context)
 
         assert result.result_type == ResultType.COMPLETED
         self.jhelper.set_app_config.assert_not_called()
@@ -1061,7 +1073,7 @@ class TestRefreshSnapStep:
     # _refresh_snap_for_apps
     # ------------------------------------------------------------------
 
-    def test_skips_app_not_deployed(self):
+    def test_skips_app_not_deployed(self, step_context):
         """Application not found in model is silently skipped."""
         self.jhelper.get_application.side_effect = ApplicationNotFoundException(
             "not found"
@@ -1069,13 +1081,13 @@ class TestRefreshSnapStep:
         step = RefreshSnapStep(self.deployment, self.jhelper)
 
         result = step._refresh_snap_for_apps(
-            ["openstack-hypervisor"], "openstack-machines"
+            ["openstack-hypervisor"], "openstack-machines", step_context
         )
 
         assert result.result_type == ResultType.COMPLETED
         self.jhelper.run_action.assert_not_called()
 
-    def test_runs_action_on_all_units(self):
+    def test_runs_action_on_all_units(self, step_context):
         """refresh-snap is called once per unit for each app."""
         self.jhelper.get_application.return_value = self._make_application(
             ["openstack-hypervisor/0", "openstack-hypervisor/1"]
@@ -1083,7 +1095,7 @@ class TestRefreshSnapStep:
         step = RefreshSnapStep(self.deployment, self.jhelper)
 
         result = step._refresh_snap_for_apps(
-            ["openstack-hypervisor"], "openstack-machines"
+            ["openstack-hypervisor"], "openstack-machines", step_context
         )
 
         assert result.result_type == ResultType.COMPLETED
@@ -1093,7 +1105,7 @@ class TestRefreshSnapStep:
                 unit, "openstack-machines", "refresh-snap", timeout=600
             )
 
-    def test_returns_failed_when_action_fails(self):
+    def test_returns_failed_when_action_fails(self, step_context):
         """A failed action on any unit returns FAILED immediately."""
         self.jhelper.get_application.return_value = self._make_application(
             ["openstack-hypervisor/0", "openstack-hypervisor/1"]
@@ -1102,7 +1114,7 @@ class TestRefreshSnapStep:
         step = RefreshSnapStep(self.deployment, self.jhelper)
 
         result = step._refresh_snap_for_apps(
-            ["openstack-hypervisor"], "openstack-machines"
+            ["openstack-hypervisor"], "openstack-machines", step_context
         )
 
         assert result.result_type == ResultType.FAILED
@@ -1110,7 +1122,7 @@ class TestRefreshSnapStep:
         # Stopped after first unit failure
         assert self.jhelper.run_action.call_count == 1
 
-    def test_multiple_apps_all_refreshed(self):
+    def test_multiple_apps_all_refreshed(self, step_context):
         """All apps in the list have refresh-snap run on their units."""
 
         def get_app(name, model):
@@ -1120,13 +1132,15 @@ class TestRefreshSnapStep:
         step = RefreshSnapStep(self.deployment, self.jhelper)
 
         result = step._refresh_snap_for_apps(
-            ["openstack-hypervisor", "cinder-volume"], "openstack-machines"
+            ["openstack-hypervisor", "cinder-volume"],
+            "openstack-machines",
+            step_context,
         )
 
         assert result.result_type == ResultType.COMPLETED
         assert self.jhelper.run_action.call_count == 2
 
-    def test_partial_deployment_skips_missing_apps(self):
+    def test_partial_deployment_skips_missing_apps(self, step_context):
         """Apps not deployed are skipped; deployed apps are still refreshed."""
 
         def get_app(name, model):
@@ -1138,7 +1152,9 @@ class TestRefreshSnapStep:
         step = RefreshSnapStep(self.deployment, self.jhelper)
 
         result = step._refresh_snap_for_apps(
-            ["openstack-hypervisor", "cinder-volume"], "openstack-machines"
+            ["openstack-hypervisor", "cinder-volume"],
+            "openstack-machines",
+            step_context,
         )
 
         assert result.result_type == ResultType.COMPLETED
@@ -1147,11 +1163,11 @@ class TestRefreshSnapStep:
             "openstack-hypervisor/0", "openstack-machines", "refresh-snap", timeout=600
         )
 
-    def test_empty_app_list_returns_completed(self):
+    def test_empty_app_list_returns_completed(self, step_context):
         """Empty app list does nothing and returns COMPLETED."""
         step = RefreshSnapStep(self.deployment, self.jhelper)
 
-        result = step._refresh_snap_for_apps([], "openstack-machines")
+        result = step._refresh_snap_for_apps([], "openstack-machines", step_context)
 
         assert result.result_type == ResultType.COMPLETED
         self.jhelper.get_application.assert_not_called()
@@ -1161,13 +1177,13 @@ class TestRefreshSnapStep:
     # ------------------------------------------------------------------
 
     @patch(f"{_INTRA_CHANNEL}.is_maas_deployment")
-    def test_run_local_refreshes_machine_model_only(self, mock_is_maas):
+    def test_run_local_refreshes_machine_model_only(self, mock_is_maas, step_context):
         """Local deployment refreshes only the machines model."""
         mock_is_maas.return_value = False
         self.jhelper.get_application.side_effect = ApplicationNotFoundException("x")
         step = RefreshSnapStep(self.deployment, self.jhelper)
 
-        result = step.run()
+        result = step.run(step_context)
 
         assert result.result_type == ResultType.COMPLETED
         # All calls are for the machines model
@@ -1175,7 +1191,7 @@ class TestRefreshSnapStep:
             assert c.args[1] == "openstack-machines"
 
     @patch(f"{_INTRA_CHANNEL}.is_maas_deployment")
-    def test_run_maas_also_refreshes_infra_model(self, mock_is_maas):
+    def test_run_maas_also_refreshes_infra_model(self, mock_is_maas, step_context):
         """MAAS deployment also refreshes the infra model apps."""
         mock_is_maas.return_value = True
         self.deployment.infra_model = "openstack-infra"
@@ -1189,14 +1205,14 @@ class TestRefreshSnapStep:
         self.jhelper.get_application.side_effect = get_app
         step = RefreshSnapStep(self.deployment, self.jhelper)
 
-        result = step.run()
+        result = step.run(step_context)
 
         assert result.result_type == ResultType.COMPLETED
         assert "openstack-machines" in called_models
         assert "openstack-infra" in called_models
 
     @patch(f"{_INTRA_CHANNEL}.is_maas_deployment")
-    def test_run_machine_failure_halts_before_infra(self, mock_is_maas):
+    def test_run_machine_failure_halts_before_infra(self, mock_is_maas, step_context):
         """Failure in machines model prevents infra model refresh."""
         mock_is_maas.return_value = True
         self.deployment.infra_model = "openstack-infra"
@@ -1207,7 +1223,7 @@ class TestRefreshSnapStep:
         self.jhelper.run_action.side_effect = ActionFailedException("disk full")
         step = RefreshSnapStep(self.deployment, self.jhelper)
 
-        result = step.run()
+        result = step.run(step_context)
 
         assert result.result_type == ResultType.FAILED
         assert "disk full" in result.message
@@ -1220,7 +1236,7 @@ class TestRefreshSnapStep:
         assert infra_calls == []
 
     @patch(f"{_INTRA_CHANNEL}.is_maas_deployment")
-    def test_run_uses_correct_snap_app_lists(self, mock_is_maas):
+    def test_run_uses_correct_snap_app_lists(self, mock_is_maas, step_context):
         """run() passes SNAP_APPS_MACHINE_MODEL and SNAP_APPS_INFRA_MODEL."""
         mock_is_maas.return_value = True
         self.deployment.infra_model = "openstack-infra"
@@ -1236,7 +1252,7 @@ class TestRefreshSnapStep:
 
         self.jhelper.get_application.side_effect = get_app
         step = RefreshSnapStep(self.deployment, self.jhelper)
-        step.run()
+        step.run(step_context)
 
         assert set(queried["openstack-machines"]) == set(SNAP_APPS_MACHINE_MODEL)
         assert set(queried["openstack-infra"]) == set(SNAP_APPS_INFRA_MODEL)

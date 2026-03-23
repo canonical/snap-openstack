@@ -18,12 +18,12 @@ import queue
 from typing import Any
 
 from rich.console import Console
-from rich.status import Status
 
 from sunbeam.core.common import (
     BaseStep,
     Result,
     ResultType,
+    StepContext,
     update_config,
     update_status_background,
 )
@@ -200,11 +200,11 @@ class DeployConsulClientStep(BaseStep):
         tfvars["consul-endpoint-bindings-map"] = consul_endpoint_bindings_map
         return tfvars
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Execute configuration using terraform."""
         extra_tfvars = self._get_tfvars()
         try:
-            self.update_status(status, "deploying services")
+            self.update_status(context, "deploying services")
             self.tfhelper.update_tfvars_and_apply_tf(
                 self.client,
                 self.manifest,
@@ -218,7 +218,7 @@ class DeployConsulClientStep(BaseStep):
         apps = ConsulFeature.set_consul_client_application_names(self.deployment)
         LOG.debug(f"Application monitored for readiness: {apps}")
         status_queue: queue.Queue[str] = queue.Queue()
-        task = update_status_background(self, apps, status_queue, status)
+        task = update_status_background(self, apps, status_queue, context.status)
         try:
             self.jhelper.wait_until_desired_status(
                 self.model,
@@ -254,7 +254,7 @@ class RemoveConsulClientStep(BaseStep):
         self.client = deployment.get_client()
         self.model = deployment.openstack_machines_model
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Execute configuration using terraform."""
         try:
             self.tfhelper.destroy()

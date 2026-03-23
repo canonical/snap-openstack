@@ -184,69 +184,79 @@ def edge_manifest(mocker, snap_conf):
 
 
 class TestAddManifestStep:
-    def test_is_skip(self, tmpdir, snap_conf, edge_manifest):
+    def test_is_skip(self, tmpdir, snap_conf, edge_manifest, step_context):
         # Manifest in cluster DB different from user provided manifest
         client = Mock()
         client.cluster.get_latest_manifest.return_value = {"data": "charms: {}"}
         manifest_file = tmpdir.mkdir("manifests").join("test_manifest.yaml")
         manifest_file.write(test_manifest)
         step = manifest_mod.AddManifestStep(client, manifest_file)
-        result = step.is_skip()
+        result = step.is_skip(step_context)
 
         assert result.result_type == ResultType.COMPLETED
 
-    def test_is_skip_apply_same_manifest(self, tmpdir, snap_conf, edge_manifest):
+    def test_is_skip_apply_same_manifest(
+        self, tmpdir, snap_conf, edge_manifest, step_context
+    ):
         # Manifest in cluster DB same as user provided manifest
         client = Mock()
         client.cluster.get_latest_manifest.return_value = {"data": test_manifest}
         manifest_file = tmpdir.mkdir("manifests").join("test_manifest.yaml")
         manifest_file.write(test_manifest)
         step = manifest_mod.AddManifestStep(client, manifest_file)
-        result = step.is_skip()
+        result = step.is_skip(step_context)
 
         assert result.result_type == ResultType.SKIPPED
 
-    def test_is_skip_clear(self, snap_conf, edge_manifest):
+    def test_is_skip_clear(self, snap_conf, edge_manifest, step_context):
         # Manifest in cluster DB same as user provided manifest
         client = Mock()
         client.cluster.get_latest_manifest.return_value = {"data": test_manifest}
         step = manifest_mod.AddManifestStep(client, clear=True)
-        result = step.is_skip()
+        result = step.is_skip(step_context)
 
         assert step.manifest_content == manifest_mod.EMPTY_MANIFEST
         assert result.result_type == ResultType.COMPLETED
 
-    def test_is_skip_no_manifest_apply_same(self, snap_conf, edge_manifest):
+    def test_is_skip_no_manifest_apply_same(
+        self, snap_conf, edge_manifest, step_context
+    ):
         # Manifest in cluster DB same as user provided manifest
         empty_manifest_str = yaml.safe_dump(manifest_mod.EMPTY_MANIFEST)
         client = Mock()
         client.cluster.get_latest_manifest.return_value = {"data": empty_manifest_str}
         step = manifest_mod.AddManifestStep(client)
-        result = step.is_skip()
+        result = step.is_skip(step_context)
 
         assert result.result_type == ResultType.SKIPPED
 
-    def test_is_skip_no_connection_to_clusterdb(self, snap_conf, edge_manifest):
+    def test_is_skip_no_connection_to_clusterdb(
+        self, snap_conf, edge_manifest, step_context
+    ):
         client = Mock()
         client.cluster.get_latest_manifest.side_effect = (
             ClusterServiceUnavailableException("Cluster unavailable..")
         )
         step = manifest_mod.AddManifestStep(client, clear=True)
-        result = step.is_skip()
+        result = step.is_skip(step_context)
 
         assert result.result_type == ResultType.FAILED
 
-    def test_is_skip_with_no_manifest_in_db(self, snap_conf, edge_manifest):
+    def test_is_skip_with_no_manifest_in_db(
+        self, snap_conf, edge_manifest, step_context
+    ):
         client = Mock()
         client.cluster.get_latest_manifest.side_effect = ManifestItemNotFoundException(
             "Manifest Item not found."
         )
         step = manifest_mod.AddManifestStep(client, clear=True)
-        result = step.is_skip()
+        result = step.is_skip(step_context)
 
         assert result.result_type == ResultType.COMPLETED
 
-    def test_is_skip_no_manifest_risk_edge(self, snap_conf, edge_manifest):
+    def test_is_skip_no_manifest_risk_edge(
+        self, snap_conf, edge_manifest, step_context
+    ):
         snap_conf.config.get.side_effect = lambda key: {
             "deployment.risk": "edge",
             "deployment.version": "2024.1",
@@ -256,46 +266,48 @@ class TestAddManifestStep:
             "Manifest Item not found."
         )
         step = manifest_mod.AddManifestStep(client)
-        result = step.is_skip()
+        result = step.is_skip(step_context)
 
         manifest_mod.embedded_manifest_path.assert_called_once_with(
             snap_conf, "2024.1", "edge"
         )
         assert result.result_type == ResultType.COMPLETED
 
-    def test_run(self, tmpdir, snap_conf, edge_manifest):
+    def test_run(self, tmpdir, snap_conf, edge_manifest, step_context):
         client = Mock()
         client.cluster.get_latest_manifest.return_value = {"data": "charms: {}"}
         manifest_file = tmpdir.mkdir("manifests").join("test_manifest.yaml")
         manifest_file.write(test_manifest)
         step = manifest_mod.AddManifestStep(client, manifest_file)
         step.manifest_content = yaml.safe_load(test_manifest)
-        result = step.run()
+        result = step.run(step_context)
 
         client.cluster.add_manifest.assert_called_once_with(
             data=yaml.safe_dump(step.manifest_content)
         )
         assert result.result_type == ResultType.COMPLETED
 
-    def test_run_with_no_manifest(self, snap_conf, edge_manifest):
+    def test_run_with_no_manifest(self, snap_conf, edge_manifest, step_context):
         client = Mock()
         step = manifest_mod.AddManifestStep(client)
         step.manifest_content = manifest_mod.EMPTY_MANIFEST
-        result = step.run()
+        result = step.run(step_context)
 
         client.cluster.add_manifest.assert_called_once_with(
             data=yaml.safe_dump(manifest_mod.EMPTY_MANIFEST)
         )
         assert result.result_type == ResultType.COMPLETED
 
-    def test_run_with_no_connection_to_clusterdb(self, snap_conf, edge_manifest):
+    def test_run_with_no_connection_to_clusterdb(
+        self, snap_conf, edge_manifest, step_context
+    ):
         client = Mock()
         client.cluster.add_manifest.side_effect = ClusterServiceUnavailableException(
             "Cluster unavailable.."
         )
         step = manifest_mod.AddManifestStep(client)
         step.manifest_content = manifest_mod.EMPTY_MANIFEST
-        result = step.run()
+        result = step.run(step_context)
 
         client.cluster.add_manifest.assert_called_once_with(
             data=yaml.safe_dump(manifest_mod.EMPTY_MANIFEST)

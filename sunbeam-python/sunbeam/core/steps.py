@@ -6,7 +6,6 @@ import logging
 import typing
 
 import tenacity
-from rich.status import Status
 
 from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import (
@@ -17,6 +16,7 @@ from sunbeam.core.common import (
     Result,
     ResultType,
     Role,
+    StepContext,
     convert_retry_failure_as_result,
     read_config,
     roles_to_str_list,
@@ -106,7 +106,7 @@ class DeployMachineApplicationStep(BaseStep):
         retry=tenacity.retry_if_exception_type(TerraformStateLockedException),
         retry_error_callback=convert_retry_failure_as_result,
     )
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Apply terraform configuration to deploy sunbeam machine."""
         try:
             extra_tfvars = self.extra_tfvars()
@@ -190,7 +190,7 @@ class RemoveMachineUnitsStep(BaseStep):
         """Return unit timeout in seconds."""
         return 600  # 10 minutes
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -229,14 +229,14 @@ class RemoveMachineUnitsStep(BaseStep):
 
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Remove unit from machine application on Juju model."""
         try:
-            self.update_status(status, "Removing units")
+            self.update_status(context, "Removing units")
             for unit in self.units_to_remove:
                 LOG.debug(f"Removing unit {unit} from application {self.application}")
                 self.jhelper.remove_unit(self.application, unit, self.model)
-            self.update_status(status, "Waiting for units to be removed")
+            self.update_status(context, "Waiting for units to be removed")
             self.jhelper.wait_units_gone(
                 list(self.units_to_remove), self.model, self.get_unit_timeout()
             )
@@ -300,7 +300,7 @@ class DestroyMachineApplicationStep(BaseStep):
             self.applications, self.model, timeout=timeout
         )
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -329,7 +329,7 @@ class DestroyMachineApplicationStep(BaseStep):
         retry=tenacity.retry_if_exception_type(TerraformStateLockedException),
         retry_error_callback=convert_retry_failure_as_result,
     )
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Destroy machine application using Terraform."""
         if self._has_tf_resources:
             try:
@@ -440,7 +440,7 @@ class PatchLoadBalancerServicesIPStep(BaseStep, abc.ABC):
                 return self._get_service(service_name, find_lb=False)
             raise e
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -539,7 +539,7 @@ class PatchLoadBalancerServicesIPStep(BaseStep, abc.ABC):
         LOG.info("All services already have IP annotations — skipping step")
         return Result(ResultType.SKIPPED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Patch LoadBalancer services annotations with LB IP."""
         for service_name in self.services():
             try:
@@ -745,7 +745,7 @@ class PatchLoadBalancerServicesIPPoolStep(BaseStep, abc.ABC):
                 f" is not updated to {pool_name}"
             )
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -771,7 +771,7 @@ class PatchLoadBalancerServicesIPPoolStep(BaseStep, abc.ABC):
 
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None = None) -> Result:  # noqa: C901
+    def run(self, context: StepContext) -> Result:  # noqa: C901
         """Patch LoadBalancer services annotations with LB IP pool."""
         for service_name in self.services():
             try:
@@ -924,7 +924,7 @@ class CreateLoadBalancerIPPoolsStep(BaseStep, abc.ABC):
             if e.status.code != 404:
                 raise
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Create Loadbalancer IPPool."""
         try:
             self.kubeconfig = read_config(self.client, K8SHelper.get_kubeconfig_key())

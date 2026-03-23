@@ -20,7 +20,7 @@ from sunbeam.core.common import (
     BaseStep,
     Result,
     ResultType,
-    Status,
+    StepContext,
     convert_proxy_to_model_configs,
     run_plan,
     update_config,
@@ -332,7 +332,7 @@ class PromptForProxyStep(BaseStep):
         """
         return True
 
-    def run(self, status: Status | None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Run the step to completion.
 
         Invoked when the step is run and returns a ResultType to indicate

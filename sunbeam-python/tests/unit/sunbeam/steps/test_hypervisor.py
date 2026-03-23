@@ -50,7 +50,12 @@ class TestRemoveHypervisorUnitStep:
         )
 
     def test_is_skip(
-        self, remove_hypervisor_step, basic_client, basic_jhelper, read_config_patch
+        self,
+        remove_hypervisor_step,
+        basic_client,
+        basic_jhelper,
+        read_config_patch,
+        step_context,
     ):
         id = "1"
         basic_client.cluster.get_node_info.return_value = {"machineid": id}
@@ -59,7 +64,7 @@ class TestRemoveHypervisorUnitStep:
         )
         basic_jhelper.run_action.return_value = {"results": {"result": []}}
 
-        result = remove_hypervisor_step.is_skip()
+        result = remove_hypervisor_step.is_skip(step_context)
 
         basic_client.cluster.get_node_info.assert_called_once()
         basic_jhelper.get_application.assert_called_once()
@@ -73,6 +78,7 @@ class TestRemoveHypervisorUnitStep:
         test_model,
         basic_deployment,
         read_config_patch,
+        step_context,
     ):
         basic_client.cluster.get_node_info.side_effect = NodeNotExistInClusterException(
             "Node missing..."
@@ -85,7 +91,7 @@ class TestRemoveHypervisorUnitStep:
             test_name,
             test_model,
         )
-        result = step.is_skip()
+        result = step.is_skip(step_context)
 
         basic_client.cluster.get_node_info.assert_called_once()
         assert result.result_type == ResultType.SKIPPED
@@ -98,6 +104,7 @@ class TestRemoveHypervisorUnitStep:
         test_model,
         basic_deployment,
         read_config_patch,
+        step_context,
     ):
         basic_jhelper.get_application.side_effect = ApplicationNotFoundException(
             "Application missing..."
@@ -110,7 +117,7 @@ class TestRemoveHypervisorUnitStep:
             test_name,
             test_model,
         )
-        result = step.is_skip()
+        result = step.is_skip(step_context)
 
         basic_jhelper.get_application.assert_called_once()
         assert result.result_type == ResultType.SKIPPED
@@ -123,6 +130,7 @@ class TestRemoveHypervisorUnitStep:
         test_model,
         basic_deployment,
         read_config_patch,
+        step_context,
     ):
         basic_client.cluster.get_node_info.return_value = {}
         basic_jhelper.get_application.return_value = Mock(units={})
@@ -134,7 +142,7 @@ class TestRemoveHypervisorUnitStep:
             test_name,
             test_model,
         )
-        result = step.is_skip()
+        result = step.is_skip(step_context)
 
         basic_client.cluster.get_node_info.assert_called_once()
         basic_jhelper.get_application.assert_called_once()
@@ -148,6 +156,7 @@ class TestRemoveHypervisorUnitStep:
         test_model,
         basic_deployment,
         read_config_patch,
+        step_context,
     ):
         basic_client.cluster.get_node_info.return_value = {"machineid": "1"}
         basic_jhelper.get_application.return_value = Mock(
@@ -161,7 +170,7 @@ class TestRemoveHypervisorUnitStep:
             test_name,
             test_model,
         )
-        result = step.is_skip()
+        result = step.is_skip(step_context)
         assert result.result_type == ResultType.FAILED
 
     @patch("sunbeam.steps.hypervisor.remove_hypervisor")
@@ -174,6 +183,7 @@ class TestRemoveHypervisorUnitStep:
         test_model,
         basic_deployment,
         read_config_patch,
+        step_context,
     ):
         step = RemoveHypervisorUnitStep(
             basic_client,
@@ -183,7 +193,7 @@ class TestRemoveHypervisorUnitStep:
             test_model,
         )
         step.unit = "unit/1"
-        result = step.run()
+        result = step.run(step_context)
         assert result.result_type == ResultType.COMPLETED
         remove_hypervisor.assert_called_once_with(
             basic_jhelper, basic_deployment, "test-0"
@@ -199,6 +209,7 @@ class TestRemoveHypervisorUnitStep:
         test_model,
         basic_deployment,
         read_config_patch,
+        step_context,
     ):
         step = RemoveHypervisorUnitStep(
             basic_client,
@@ -207,7 +218,7 @@ class TestRemoveHypervisorUnitStep:
             test_name,
             test_model,
         )
-        result = step.run()
+        result = step.run(step_context)
         assert result.result_type == ResultType.FAILED
         assert not remove_hypervisor.called
 
@@ -221,6 +232,7 @@ class TestRemoveHypervisorUnitStep:
         test_model,
         basic_deployment,
         read_config_patch,
+        step_context,
     ):
         basic_jhelper.run_action.return_value = {"result": json.dumps(["1", "2"])}
         step = RemoveHypervisorUnitStep(
@@ -232,7 +244,7 @@ class TestRemoveHypervisorUnitStep:
             True,
         )
         step.unit = "unit/1"
-        result = step.run()
+        result = step.run(step_context)
         assert result.result_type == ResultType.COMPLETED
         remove_hypervisor.assert_called_once_with(
             basic_jhelper, basic_deployment, "test-0"
@@ -248,6 +260,7 @@ class TestRemoveHypervisorUnitStep:
         test_model,
         basic_deployment,
         read_config_patch,
+        step_context,
     ):
         basic_jhelper.run_action.return_value = {"result": "[]"}
         basic_jhelper.remove_unit.side_effect = ApplicationNotFoundException(
@@ -262,7 +275,7 @@ class TestRemoveHypervisorUnitStep:
             test_model,
         )
         step.unit = "unit/1"
-        result = step.run()
+        result = step.run(step_context)
 
         basic_jhelper.remove_unit.assert_called_once()
         assert result.result_type == ResultType.FAILED
@@ -278,6 +291,7 @@ class TestRemoveHypervisorUnitStep:
         test_model,
         basic_deployment,
         read_config_patch,
+        step_context,
     ):
         basic_jhelper.run_action.return_value = {"result": "[]"}
         basic_jhelper.wait_application_ready.side_effect = TimeoutError("timed out")
@@ -290,7 +304,7 @@ class TestRemoveHypervisorUnitStep:
             test_model,
         )
         step.unit = "unit/1"
-        result = step.run()
+        result = step.run(step_context)
 
         basic_jhelper.wait_application_ready.assert_called_once()
         assert result.result_type == ResultType.FAILED
@@ -355,23 +369,28 @@ class TestReapplyHypervisorTerraformPlanStep:
         get_network_config_patch,
         get_pci_whitelist_config_patch,
         get_dpdk_config_patch,
+        step_context,
     ):
         basic_client.cluster.list_nodes_by_role.return_value = ["node-1"]
         step = ReapplyHypervisorTerraformPlanStep(
             basic_client, basic_tfhelper, basic_jhelper, basic_manifest, test_model
         )
-        result = step.is_skip()
+        result = step.is_skip(step_context)
 
         assert result.result_type == ResultType.COMPLETED
 
     def test_run_pristine_installation(
-        self, reapply_hypervisor_step, basic_jhelper, basic_tfhelper
+        self,
+        reapply_hypervisor_step,
+        basic_jhelper,
+        basic_tfhelper,
+        step_context,
     ):
         basic_jhelper.get_application.side_effect = ApplicationNotFoundException(
             "not found"
         )
 
-        result = reapply_hypervisor_step.run()
+        result = reapply_hypervisor_step.run(step_context)
 
         basic_tfhelper.update_tfvars_and_apply_tf.assert_called_once()
         basic_jhelper.wait_until_desired_status.assert_called_once()
@@ -395,6 +414,7 @@ class TestReapplyHypervisorTerraformPlanStep:
         basic_manifest,
         test_model,
         read_config_patch,
+        step_context,
     ):
         # This is a case where external network configs are already added
         # and Reapply terraform plan is called.
@@ -423,7 +443,7 @@ class TestReapplyHypervisorTerraformPlanStep:
         step = ReapplyHypervisorTerraformPlanStep(
             basic_client, basic_tfhelper, basic_jhelper, basic_manifest, test_model
         )
-        result = step.run()
+        result = step.run(step_context)
 
         basic_tfhelper.update_tfvars_and_apply_tf.assert_called_once()
 
@@ -440,21 +460,25 @@ class TestReapplyHypervisorTerraformPlanStep:
         assert override_tfvars_from_mock_call == expected_override_tfvars
         assert result.result_type == ResultType.COMPLETED
 
-    def test_run_tf_apply_failed(self, reapply_hypervisor_step, basic_tfhelper):
+    def test_run_tf_apply_failed(
+        self, reapply_hypervisor_step, basic_tfhelper, step_context
+    ):
         basic_tfhelper.update_tfvars_and_apply_tf.side_effect = TerraformException(
             "apply failed..."
         )
 
-        result = reapply_hypervisor_step.run()
+        result = reapply_hypervisor_step.run(step_context)
 
         basic_tfhelper.update_tfvars_and_apply_tf.assert_called_once()
         assert result.result_type == ResultType.FAILED
         assert result.message == "apply failed..."
 
-    def test_run_waiting_timed_out(self, reapply_hypervisor_step, basic_jhelper):
+    def test_run_waiting_timed_out(
+        self, reapply_hypervisor_step, basic_jhelper, step_context
+    ):
         basic_jhelper.wait_until_desired_status.side_effect = TimeoutError("timed out")
 
-        result = reapply_hypervisor_step.run()
+        result = reapply_hypervisor_step.run(step_context)
 
         basic_jhelper.wait_until_desired_status.assert_called_once()
         assert result.result_type == ResultType.FAILED

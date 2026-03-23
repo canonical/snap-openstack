@@ -12,7 +12,6 @@ import httpx
 import yaml
 from packaging.version import Version
 from rich.console import Console
-from rich.status import Status
 from snaphelpers import Snap
 
 from sunbeam.clusterd.client import Client
@@ -21,6 +20,7 @@ from sunbeam.core.common import (
     BaseStep,
     Result,
     ResultType,
+    StepContext,
     get_step_message,
     read_config,
     run_plan,
@@ -101,7 +101,7 @@ class SetupClusterAPI(BaseStep):
         self.kubeconfig = kubeconfig
         self.micro_version_changed = False
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -227,7 +227,7 @@ class SetupClusterAPI(BaseStep):
             )
             subprocess.run(cmd, check=True, timeout=360, capture_output=True)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Execute clusterctl init command."""
         # Install ORC CRDs. This is required for CAPO to be running, otherwise the
         # pod will be in crashloopbackoff
@@ -269,7 +269,7 @@ class PatchCaaphProxyStep(BaseStep):
         self.client = client
         self.proxy_settings = proxy_settings
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Skip if no proxy settings are configured."""
         if not self.proxy_settings:
             return Result(ResultType.SKIPPED)
@@ -282,7 +282,7 @@ class PatchCaaphProxyStep(BaseStep):
 
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Patch caaph-controller-manager deployment with proxy env vars."""
         env_vars = [
             {"name": k, "value": v} for k, v in self.proxy_settings.items() if v
@@ -349,7 +349,7 @@ class CreateKubeConfigSecretStep(BaseStep):
     def _grant_access_to_magnum(self, secret: str):
         self.jhelper.grant_secret(OPENSTACK_MODEL, secret, MAGNUM_APPLICATION_NAME)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Get juju secret from manifest or create a new one."""
         manifest = self.deployment.get_manifest()
         feature_manifest = manifest.get_feature(self.feature_name)
@@ -392,7 +392,7 @@ class DeleteKubeConfigSecretStep(BaseStep):
         self.deployment = deployment
         self.jhelper = jhelper
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Skip if juju secret kubeconfig is set by user via manifest."""
         manifest = self.deployment.get_manifest()
         feature_manifest = manifest.get_feature(self.feature_name)
@@ -407,7 +407,7 @@ class DeleteKubeConfigSecretStep(BaseStep):
 
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Delete juju secret."""
         try:
             self.jhelper.remove_secret(OPENSTACK_MODEL, KUBECONFIG_SECRET_NAME)
@@ -560,7 +560,7 @@ class DeleteClusterAPI(BaseStep):
                 rbac_authorization_v1.ClusterRoleBinding, clusterrolebinding
             )
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Delete Cluster API components."""
         try:
             self.kube = get_kube_client(self.client)

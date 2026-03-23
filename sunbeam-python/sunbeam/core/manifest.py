@@ -22,7 +22,7 @@ from sunbeam.core.common import (
     BaseStep,
     Result,
     ResultType,
-    Status,
+    StepContext,
     infer_risk,
     infer_version,
 )
@@ -492,7 +492,7 @@ class AddManifestStep(BaseStep):
         self.manifest_content = None
         self.snap = Snap()
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Skip if the user provided manifest and the latest from db are same."""
         risk = infer_risk(self.snap)
         version = infer_version(self.snap)
@@ -530,7 +530,7 @@ class AddManifestStep(BaseStep):
 
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Write manifest to cluster db."""
         try:
             id = self.client.cluster.add_manifest(

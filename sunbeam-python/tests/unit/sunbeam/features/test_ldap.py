@@ -51,21 +51,21 @@ class TestAddLDAPDomainStep:
         self.charm_config = {"domain-name": "dom1"}
         self.feature = FakeLDAPFeature()
 
-    def test_is_skip(self):
+    def test_is_skip(self, step_context):
         step = AddLDAPDomainStep(Mock(), Mock(), self.jhelper, self.feature, {})
-        result = step.is_skip()
+        result = step.is_skip(step_context)
         assert result.result_type == ResultType.COMPLETED
 
     def test_has_prompts(self):
         step = AddLDAPDomainStep(Mock(), Mock(), self.jhelper, self.feature, {})
         assert not step.has_prompts()
 
-    def test_enable_first_domain(self, read_config, update_config, snap):
+    def test_enable_first_domain(self, read_config, update_config, snap, step_context):
         read_config.return_value = {}
         step = AddLDAPDomainStep(
             Mock(), Mock(), self.jhelper, self.feature, self.charm_config
         )
-        result = step.run()
+        result = step.run(step_context)
         step.tfhelper.write_tfvars.assert_called_with(
             {
                 "ldap-apps": {"dom1": {"domain-name": "dom1"}},
@@ -74,14 +74,14 @@ class TestAddLDAPDomainStep:
         step.tfhelper.apply.assert_called_once_with()
         assert result.result_type == ResultType.COMPLETED
 
-    def test_enable_second_domain(self, read_config, update_config, snap):
+    def test_enable_second_domain(self, read_config, update_config, snap, step_context):
         read_config.return_value = {
             "ldap-apps": {"dom1": {"domain-name": "dom1"}},
         }
         step = AddLDAPDomainStep(
             Mock(), Mock(), self.jhelper, self.feature, {"domain-name": "dom2"}
         )
-        result = step.run()
+        result = step.run(step_context)
         step.tfhelper.write_tfvars.assert_called_with(
             {
                 "ldap-apps": {
@@ -93,24 +93,28 @@ class TestAddLDAPDomainStep:
         step.tfhelper.apply.assert_called_once_with()
         assert result.result_type == ResultType.COMPLETED
 
-    def test_enable_tf_apply_failed(self, read_config, update_config, snap):
+    def test_enable_tf_apply_failed(
+        self, read_config, update_config, snap, step_context
+    ):
         read_config.return_value = {}
         step = AddLDAPDomainStep(
             Mock(), Mock(), self.jhelper, self.feature, self.charm_config
         )
         step.tfhelper.apply.side_effect = TerraformException("apply failed...")
-        result = step.run()
+        result = step.run(step_context)
         step.tfhelper.apply.assert_called_once()
         assert result.result_type == ResultType.FAILED
         assert result.message == "apply failed..."
 
-    def test_enable_waiting_timed_out(self, read_config, update_config, snap):
+    def test_enable_waiting_timed_out(
+        self, read_config, update_config, snap, step_context
+    ):
         self.jhelper.wait_until_active.side_effect = TimeoutError("timed out")
         read_config.return_value = {}
         step = AddLDAPDomainStep(
             Mock(), Mock(), self.jhelper, self.feature, self.charm_config
         )
-        result = step.run()
+        result = step.run(step_context)
         step.tfhelper.write_tfvars.assert_called_with(
             {
                 "ldap-apps": {"dom1": {"domain-name": "dom1"}},
@@ -127,35 +131,37 @@ class TestDisableLDAPDomainStep:
         self.charm_config = {"domain-name": "dom1"}
         self.feature = FakeLDAPFeature()
 
-    def test_is_skip(self):
+    def test_is_skip(self, step_context):
         step = DisableLDAPDomainStep(Mock(), Mock(), self.jhelper, self.feature, "dom1")
-        result = step.is_skip()
+        result = step.is_skip(step_context)
         assert result.result_type == ResultType.COMPLETED
 
     def test_has_prompts(self):
         step = DisableLDAPDomainStep(Mock(), Mock(), self.jhelper, self.feature, "dom1")
         assert not step.has_prompts()
 
-    def test_disable(self, read_config, update_config, snap):
+    def test_disable(self, read_config, update_config, snap, step_context):
         read_config.return_value = {
             "ldap-channel": "2023.2/edge",
             "ldap-apps": {"dom1": {"domain-name": "dom1"}},
         }
         step = DisableLDAPDomainStep(Mock(), Mock(), self.jhelper, self.feature, "dom1")
-        step.run()
+        step.run(step_context)
         step.tfhelper.write_tfvars.assert_called_with(
             {"ldap-channel": "2023.2/edge", "ldap-apps": {}}
         )
         step.tfhelper.apply.assert_called_once_with()
 
-    def test_disable_tf_apply_failed(self, read_config, update_config, snap):
+    def test_disable_tf_apply_failed(
+        self, read_config, update_config, snap, step_context
+    ):
         read_config.return_value = {
             "ldap-channel": "2023.2/edge",
             "ldap-apps": {"dom1": {"domain-name": "dom1"}},
         }
         step = DisableLDAPDomainStep(Mock(), Mock(), self.jhelper, self.feature, "dom1")
         step.tfhelper.apply.side_effect = TerraformException("apply failed...")
-        result = step.run()
+        result = step.run(step_context)
         step.tfhelper.write_tfvars.assert_called_with(
             {"ldap-channel": "2023.2/edge", "ldap-apps": {}}
         )
@@ -163,13 +169,13 @@ class TestDisableLDAPDomainStep:
         assert result.result_type == ResultType.FAILED
         assert result.message == "apply failed..."
 
-    def test_disable_wrong_domain(self, read_config, update_config, snap):
+    def test_disable_wrong_domain(self, read_config, update_config, snap, step_context):
         read_config.return_value = {
             "ldap-channel": "2023.2/edge",
             "ldap-apps": {"dom1": {"domain-name": "dom1"}},
         }
         step = DisableLDAPDomainStep(Mock(), Mock(), self.jhelper, self.feature, "dom2")
-        result = step.run()
+        result = step.run(step_context)
         assert result.result_type == ResultType.FAILED
         assert result.message == "Domain not found"
 
@@ -180,11 +186,11 @@ class TestUpdateLDAPDomainStep:
         self.charm_config = {"domain-name": "dom1"}
         self.feature = FakeLDAPFeature()
 
-    def test_is_skip(self):
+    def test_is_skip(self, step_context):
         step = UpdateLDAPDomainStep(
             Mock(), self.jhelper, self.feature, self.charm_config
         )
-        result = step.is_skip()
+        result = step.is_skip(step_context)
         assert result.result_type == ResultType.COMPLETED
 
     def test_has_prompts(self):
@@ -193,7 +199,7 @@ class TestUpdateLDAPDomainStep:
         )
         assert not step.has_prompts()
 
-    def test_update_domain(self, read_config, update_config, snap):
+    def test_update_domain(self, read_config, update_config, snap, step_context):
         read_config.return_value = {
             "ldap-channel": "2023.2/edge",
             "ldap-apps": {"dom1": {"domain-name": "dom1"}},
@@ -201,7 +207,7 @@ class TestUpdateLDAPDomainStep:
         step = UpdateLDAPDomainStep(
             Mock(), self.jhelper, self.feature, self.charm_config
         )
-        result = step.run()
+        result = step.run(step_context)
         step.tfhelper.write_tfvars.assert_called_with(
             {
                 "ldap-channel": "2023.2/edge",
@@ -211,7 +217,7 @@ class TestUpdateLDAPDomainStep:
         step.tfhelper.apply.assert_called_once_with()
         assert result.result_type == ResultType.COMPLETED
 
-    def test_update_wrong_domain(self, read_config, update_config, snap):
+    def test_update_wrong_domain(self, read_config, update_config, snap, step_context):
         read_config.return_value = {
             "ldap-channel": "2023.2/edge",
             "ldap-apps": {"dom1": {"domain-name": "dom1"}},
@@ -219,11 +225,11 @@ class TestUpdateLDAPDomainStep:
         step = UpdateLDAPDomainStep(
             Mock(), self.jhelper, self.feature, {"domain-name": "dom2"}
         )
-        result = step.run()
+        result = step.run(step_context)
         assert result.result_type == ResultType.FAILED
         assert result.message == "Domain not found"
 
-    def test_tf_apply_failed(self, read_config, update_config, snap):
+    def test_tf_apply_failed(self, read_config, update_config, snap, step_context):
         read_config.return_value = {
             "ldap-channel": "2023.2/edge",
             "ldap-apps": {"dom1": {"domain-name": "dom1"}},
@@ -232,12 +238,14 @@ class TestUpdateLDAPDomainStep:
             Mock(), self.jhelper, self.feature, self.charm_config
         )
         step.tfhelper.apply.side_effect = TerraformException("apply failed...")
-        result = step.run()
+        result = step.run(step_context)
         step.tfhelper.apply.assert_called_once_with()
         assert result.result_type == ResultType.FAILED
         assert result.message == "apply failed..."
 
-    def test_update_waiting_timed_out(self, read_config, update_config, snap):
+    def test_update_waiting_timed_out(
+        self, read_config, update_config, snap, step_context
+    ):
         read_config.return_value = {
             "ldap-channel": "2023.2/edge",
             "ldap-apps": {"dom1": {"domain-name": "dom1"}},
@@ -247,7 +255,7 @@ class TestUpdateLDAPDomainStep:
         )
         self.jhelper.wait_until_active.side_effect = TimeoutError("timed out")
         step.tfhelper.apply.side_effect = TerraformException("apply failed...")
-        result = step.run()
+        result = step.run(step_context)
         step.tfhelper.apply.assert_called_once_with()
         assert result.result_type == ResultType.FAILED
         assert result.message == "apply failed..."

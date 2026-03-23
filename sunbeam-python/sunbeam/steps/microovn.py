@@ -5,7 +5,6 @@ import logging
 from typing import Any
 
 import tenacity
-from rich.status import Status
 from snaphelpers import Snap, UnknownConfigKey
 
 from sunbeam import versions
@@ -18,6 +17,7 @@ from sunbeam.core.common import (
     BaseStep,
     Result,
     ResultType,
+    StepContext,
     convert_retry_failure_as_result,
 )
 from sunbeam.core.deployment import Deployment, Networks
@@ -182,7 +182,7 @@ class ReapplyMicroOVNTerraformPlanStep(BaseStep):
         self.ovn_manager = ovn_manager
         self.extra_tfvars = extra_tfvars or {}
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -200,7 +200,7 @@ class ReapplyMicroOVNTerraformPlanStep(BaseStep):
         retry=tenacity.retry_if_exception_type(TerraformStateLockedException),
         retry_error_callback=convert_retry_failure_as_result,
     )
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Apply terraform configuration to deploy MicroOVN."""
         # Apply Network configs everytime reapply is called
         network_configs = get_external_network_configs(self.client)
@@ -283,7 +283,7 @@ class EnableMicroOVNStep(BaseStep, JujuStepHelper):
         self.unit: str | None = None
         self.machine_id = ""
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -314,7 +314,7 @@ class EnableMicroOVNStep(BaseStep, JujuStepHelper):
             return Result(ResultType.SKIPPED)
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Enable MicroOVN service on node."""
         if not self.unit:
             return Result(ResultType.FAILED, "Unit not found on machine")
@@ -370,7 +370,7 @@ class SetOvnProviderStep(BaseStep):
             pass
         return ovn.DEFAULT_PROVIDER
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -402,7 +402,7 @@ class SetOvnProviderStep(BaseStep):
         self.wanted_provider = snap_value
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Set OVN provider in deployment configuration to the desired provider."""
         if self.wanted_provider is None:
             return Result(ResultType.FAILED, "Invalid state, wanted_provider is None")

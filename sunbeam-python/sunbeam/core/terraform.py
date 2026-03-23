@@ -9,12 +9,18 @@ from datetime import datetime
 from pathlib import Path
 from string import Template
 
-from rich.status import Status
 from snaphelpers import Snap
 
 from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import ConfigItemNotFoundException
-from sunbeam.core.common import BaseStep, Result, ResultType, read_config, update_config
+from sunbeam.core.common import (
+    BaseStep,
+    Result,
+    ResultType,
+    StepContext,
+    read_config,
+    update_config,
+)
 from sunbeam.core.manifest import Manifest
 from sunbeam.versions import VarMap
 
@@ -696,7 +702,7 @@ class TerraformInitStep(BaseStep):
         )
         self.tfhelper = tfhelper
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -704,7 +710,7 @@ class TerraformInitStep(BaseStep):
         """
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Initialise Terraform configuration from provider mirror,."""
         try:
             self.tfhelper.init()

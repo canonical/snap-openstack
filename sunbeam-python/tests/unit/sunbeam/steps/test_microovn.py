@@ -150,62 +150,74 @@ class TestEnableMicroOVNStep:
         """Create EnableMicroOVNStep instance for testing."""
         return EnableMicroOVNStep(basic_client, test_node, basic_jhelper, test_model)
 
-    def test_is_skip_node_not_exist(self, basic_client, enable_microovn_step):
+    def test_is_skip_node_not_exist(
+        self, basic_client, enable_microovn_step, step_context
+    ):
         basic_client.cluster.get_node_info.side_effect = NodeNotExistInClusterException(
             "Node does not exist"
         )
 
-        result = enable_microovn_step.is_skip()
+        result = enable_microovn_step.is_skip(step_context)
 
         assert result.result_type == ResultType.SKIPPED
 
     def test_is_skip_application_not_found(
-        self, basic_client, basic_jhelper, enable_microovn_step
+        self,
+        basic_client,
+        basic_jhelper,
+        enable_microovn_step,
+        step_context,
     ):
         basic_client.cluster.get_node_info.return_value = {"machineid": "1"}
         basic_jhelper.get_application.side_effect = ApplicationNotFoundException(
             "Application not found"
         )
 
-        result = enable_microovn_step.is_skip()
+        result = enable_microovn_step.is_skip(step_context)
 
         assert result.result_type == ResultType.SKIPPED
         assert result.message == "microovn application has not been deployed yet"
 
     def test_is_skip_unit_not_on_machine(
-        self, basic_client, basic_jhelper, enable_microovn_step
+        self,
+        basic_client,
+        basic_jhelper,
+        enable_microovn_step,
+        step_context,
     ):
         basic_client.cluster.get_node_info.return_value = {"machineid": "1"}
         basic_jhelper.get_application.return_value = Mock(
             units={"microovn/0": Mock(machine="2")}
         )
 
-        result = enable_microovn_step.is_skip()
+        result = enable_microovn_step.is_skip(step_context)
 
         assert result.result_type == ResultType.SKIPPED
 
-    def test_is_skip_success(self, basic_client, basic_jhelper, enable_microovn_step):
+    def test_is_skip_success(
+        self, basic_client, basic_jhelper, enable_microovn_step, step_context
+    ):
         basic_client.cluster.get_node_info.return_value = {"machineid": "1"}
         basic_jhelper.get_application.return_value = Mock(
             units={"microovn/0": Mock(machine="1")}
         )
 
-        result = enable_microovn_step.is_skip()
+        result = enable_microovn_step.is_skip(step_context)
 
         assert result.result_type == ResultType.COMPLETED
         assert enable_microovn_step.unit == "microovn/0"
 
-    def test_run_success(self, enable_microovn_step):
+    def test_run_success(self, enable_microovn_step, step_context):
         enable_microovn_step.unit = "microovn/0"
 
-        result = enable_microovn_step.run()
+        result = enable_microovn_step.run(step_context)
 
         assert result.result_type == ResultType.COMPLETED
 
-    def test_run_no_unit(self, enable_microovn_step):
+    def test_run_no_unit(self, enable_microovn_step, step_context):
         enable_microovn_step.unit = None
 
-        result = enable_microovn_step.run()
+        result = enable_microovn_step.run(step_context)
 
         assert result.result_type == ResultType.FAILED
         assert result.message == "Unit not found on machine"
@@ -233,20 +245,26 @@ class TestReapplyMicroOVNTerraformPlanStep:
         )
 
     def test_is_skip_skipped_when_no_matching_nodes(
-        self, reapply_microovn_terraform_step, basic_client
+        self,
+        reapply_microovn_terraform_step,
+        basic_client,
+        step_context,
     ):
         basic_client.cluster.list_nodes_by_role.return_value = []
 
-        result = reapply_microovn_terraform_step.is_skip()
+        result = reapply_microovn_terraform_step.is_skip(step_context)
 
         assert result.result_type == ResultType.SKIPPED
 
     def test_is_skip_completed_when_matching_nodes(
-        self, reapply_microovn_terraform_step, basic_client
+        self,
+        reapply_microovn_terraform_step,
+        basic_client,
+        step_context,
     ):
         basic_client.cluster.list_nodes_by_role.return_value = [{"name": "node-1"}]
 
-        result = reapply_microovn_terraform_step.is_skip()
+        result = reapply_microovn_terraform_step.is_skip(step_context)
 
         assert result.result_type == ResultType.COMPLETED
 
@@ -256,12 +274,13 @@ class TestReapplyMicroOVNTerraformPlanStep:
         basic_tfhelper,
         basic_jhelper,
         basic_client,
+        step_context,
     ):
         with patch(
             "sunbeam.steps.microovn.get_external_network_configs",
             return_value={"external-bridge-address": "10.0.0.1/24"},
         ):
-            result = reapply_microovn_terraform_step.run()
+            result = reapply_microovn_terraform_step.run(step_context)
 
         assert result.result_type == ResultType.COMPLETED
         basic_tfhelper.update_tfvars_and_apply_tf.assert_called_once()
@@ -342,17 +361,17 @@ class TestSetOvnProviderStep:
             assert "ovn.provider" in str(exc_info.value)
             assert "Valid values are:" in str(exc_info.value)
 
-    def test_is_skip(self, basic_client):
+    def test_is_skip(self, basic_client, step_context):
         """Test is_skip method."""
         step = SetOvnProviderStep(basic_client, Mock())
         with patch.object(step, "get_config_from_snap") as mock_get_config:
             mock_get_config.return_value = ovn.OvnProvider.OVN_K8S
             with patch("sunbeam.core.ovn.load_provider_config") as mock_load:
                 mock_load.return_value = ovn.OvnConfig(provider=ovn.OvnProvider.OVN_K8S)
-                result = step.is_skip()
+                result = step.is_skip(step_context)
                 assert result.result_type == ResultType.SKIPPED
 
-    def test_is_skip_not_bootstrapped(self, basic_client):
+    def test_is_skip_not_bootstrapped(self, basic_client, step_context):
         step = SetOvnProviderStep(basic_client, Mock())
         with patch.object(step, "get_config_from_snap") as mock_get_config:
             mock_get_config.return_value = ovn.OvnProvider.MICROOVN
@@ -362,10 +381,10 @@ class TestSetOvnProviderStep:
                     basic_client.cluster, "check_sunbeam_bootstrapped"
                 ) as mock_bootstrapped:
                     mock_bootstrapped.return_value = False
-                    result = step.is_skip()
+                    result = step.is_skip(step_context)
                     assert result.result_type == ResultType.COMPLETED
 
-    def test_is_skip_bootstrapped_change_provider(self, basic_client):
+    def test_is_skip_bootstrapped_change_provider(self, basic_client, step_context):
         step = SetOvnProviderStep(basic_client, Mock())
         with patch.object(step, "get_config_from_snap") as mock_get_config:
             mock_get_config.return_value = ovn.OvnProvider.MICROOVN
@@ -375,21 +394,21 @@ class TestSetOvnProviderStep:
                     basic_client.cluster, "check_sunbeam_bootstrapped"
                 ) as mock_bootstrapped:
                     mock_bootstrapped.return_value = True
-                    result = step.is_skip()
+                    result = step.is_skip(step_context)
                     assert result.result_type == ResultType.FAILED
 
-    def test_is_skip_invalid_provider(self, basic_client):
+    def test_is_skip_invalid_provider(self, basic_client, step_context):
         """Test is_skip returns FAILED when invalid provider is configured."""
         step = SetOvnProviderStep(basic_client, Mock())
         with patch.object(step, "get_config_from_snap") as mock_get_config:
             mock_get_config.side_effect = ValueError(
                 "Invalid value 'bad-provider' for ovn.provider. Valid values are: ovn-k8s, microovn"
             )
-            result = step.is_skip()
+            result = step.is_skip(step_context)
             assert result.result_type == ResultType.FAILED
             assert "Invalid value 'bad-provider'" in result.message
 
-    def test_run(self, basic_client):
+    def test_run(self, basic_client, step_context):
         """Test run method."""
         step = SetOvnProviderStep(basic_client, Mock())
         step.wanted_provider = ovn.OvnProvider.OVN_K8S
@@ -397,7 +416,7 @@ class TestSetOvnProviderStep:
             mock_config = ovn.OvnConfig(provider=None)
             mock_load.return_value = mock_config
             with patch("sunbeam.core.ovn.write_provider_config") as mock_write:
-                result = step.run()
+                result = step.run(step_context)
                 assert result.result_type == ResultType.COMPLETED
                 mock_write.assert_called_once_with(basic_client, mock_config)
                 assert mock_config.provider == ovn.OvnProvider.OVN_K8S

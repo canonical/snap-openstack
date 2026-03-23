@@ -7,7 +7,6 @@ import traceback
 import typing
 
 import tenacity
-from rich.status import Status
 
 from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import (
@@ -24,6 +23,7 @@ from sunbeam.core.common import (
     Result,
     ResultType,
     Role,
+    StepContext,
     convert_retry_failure_as_result,
     read_config,
     update_config,
@@ -235,7 +235,7 @@ class RemoveHypervisorUnitStep(BaseStep, JujuStepHelper):
         self.unit: str | None = None
         self.machine_id = ""
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -293,7 +293,7 @@ class RemoveHypervisorUnitStep(BaseStep, JujuStepHelper):
             tfvars.update({"machine_ids": machine_ids})
             update_config(self.client, CONFIG_KEY, tfvars)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Remove unit from openstack-hypervisor application on Juju model."""
         if not self.unit:
             return Result(ResultType.FAILED, "Unit not found on machine")
@@ -360,7 +360,7 @@ class ReapplyHypervisorTerraformPlanStep(BaseStep):
         self.model = model
         self.extra_tfvars = extra_tfvars
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -377,7 +377,7 @@ class ReapplyHypervisorTerraformPlanStep(BaseStep):
         retry=tenacity.retry_if_exception_type(TerraformStateLockedException),
         retry_error_callback=convert_retry_failure_as_result,
     )
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Apply terraform configuration to deploy hypervisor."""
         # Apply Network configs everytime reapply is called
         network_configs = get_external_network_configs(self.client)
@@ -479,7 +479,7 @@ class EnableHypervisorStep(BaseStep, JujuStepHelper):
         self.unit: str | None = None
         self.machine_id = ""
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -510,7 +510,7 @@ class EnableHypervisorStep(BaseStep, JujuStepHelper):
             return Result(ResultType.SKIPPED)
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Enable hypervisor service on node."""
         if not self.unit:
             return Result(ResultType.FAILED, "Unit not found on machine")

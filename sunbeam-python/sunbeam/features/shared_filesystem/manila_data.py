@@ -4,13 +4,11 @@
 import logging
 from typing import Any
 
-from rich.status import Status
-
 from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import (
     ConfigItemNotFoundException,
 )
-from sunbeam.core.common import Result, ResultType, read_config
+from sunbeam.core.common import Result, ResultType, StepContext, read_config
 from sunbeam.core.deployment import Deployment, Networks
 from sunbeam.core.juju import (
     JujuHelper,
@@ -165,7 +163,7 @@ class DestroyManilaDataApplicationStep(DestroyMachineApplicationStep):
         """Return application timeout in seconds."""
         return MANILA_DATA_APP_TIMEOUT
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Destroy Manila Data application."""
         # note(gboutry):this is a workaround for
         # https://github.com/juju/terraform-provider-juju/issues/473
@@ -186,4 +184,4 @@ class DestroyManilaDataApplicationStep(DestroyMachineApplicationStep):
                         f"Failed to remove resource {resource} from state",
                     )
 
-        return super().run(status)
+        return super().run(context)

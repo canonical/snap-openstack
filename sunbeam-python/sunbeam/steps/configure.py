@@ -14,7 +14,13 @@ from rich.console import Console
 import sunbeam.core.questions
 from sunbeam import utils
 from sunbeam.clusterd.client import Client
-from sunbeam.core.common import BaseStep, Result, ResultType, Status, validate_ip_range
+from sunbeam.core.common import (
+    BaseStep,
+    Result,
+    ResultType,
+    StepContext,
+    validate_ip_range,
+)
 from sunbeam.core.juju import ActionFailedException, JujuHelper, JujuStepHelper
 from sunbeam.core.manifest import Manifest
 
@@ -447,7 +453,7 @@ class BaseUserQuestions(BaseStep):
             self.client, CLOUD_CONFIG_SECTION, self.variables
         )
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Run the step to completion."""
         return Result(ResultType.COMPLETED)
 
@@ -536,14 +542,14 @@ class SetExternalNetworkUnitsOptionsStep(BaseStep, UnitGetterMixin):
             mapping_parts.append(f"{self._create_bridge_name(physnet)}:{physnet}:{nic}")
         return " ".join(mapping_parts)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Apply individual unit settings."""
         from sunbeam.feature_gates import split_roles_enabled
 
         split_roles = split_roles_enabled()
 
         for name in self.names:
-            self.update_status(status, f"setting configuration for {name}")
+            self.update_status(context, f"setting configuration for {name}")
             bridge_mapping = self.bridge_mappings.get(name)
             node = self.client.cluster.get_node_info(name)
             node_roles = node.get("role", [])

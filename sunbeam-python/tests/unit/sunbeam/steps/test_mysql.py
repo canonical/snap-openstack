@@ -89,32 +89,38 @@ class TestMySQLCharmUpgradeStep:
         ],
     )
     def test_step_is_noop_if_state_already_passed(
-        self, step, method_name, target_state
+        self, step, method_name, target_state, step_context
     ):
         step.state = target_state
-        getattr(step, method_name)()
+        getattr(step, method_name)(step_context)
 
         assert step.state == target_state
 
-    def test_is_skip_application_not_deployed(self, step, basic_jhelper):
+    def test_is_skip_application_not_deployed(self, step, basic_jhelper, step_context):
         basic_jhelper.get_application.side_effect = ApplicationNotFoundException()
 
-        result = step.is_skip()
+        result = step.is_skip(step_context)
         assert result.result_type == ResultType.SKIPPED
 
     def test_is_skip_revision_pinned_in_manifest(
-        self, step, basic_jhelper, basic_manifest
+        self,
+        step,
+        basic_jhelper,
+        basic_manifest,
+        step_context,
     ):
         basic_jhelper.get_application.return_value = Mock(charm_rev=255, base=None)
         basic_manifest.core.software.charms.get.return_value = Mock(
             revision=255, channel="8.0/stable"
         )
 
-        result = step.is_skip()
+        result = step.is_skip(step_context)
 
         assert result.result_type == ResultType.SKIPPED
 
-    def test_is_skip_channel_track_mismatch(self, step, basic_jhelper, basic_manifest):
+    def test_is_skip_channel_track_mismatch(
+        self, step, basic_jhelper, basic_manifest, step_context
+    ):
         basic_jhelper.get_application.return_value = Mock(
             charm_rev=255, base=None, charm_channel="8.0/stable"
         )
@@ -122,21 +128,23 @@ class TestMySQLCharmUpgradeStep:
             revision=None, channel="9.0/stable"
         )
 
-        result = step.is_skip()
+        result = step.is_skip(step_context)
 
         assert result.result_type == ResultType.SKIPPED
 
-    def test_is_skip_already_latest(self, step, basic_jhelper):
+    def test_is_skip_already_latest(self, step, basic_jhelper, step_context):
         app = Mock(charm_rev=343, base=None)
         basic_jhelper.get_application.return_value = app
         basic_jhelper.get_available_charm_revision.return_value = 343
         basic_jhelper.show_unit.return_value = {}
 
-        result = step.is_skip()
+        result = step.is_skip(step_context)
 
         assert result.result_type == ResultType.SKIPPED
 
-    def test_is_skip_out_of_band_upgrade(self, step, basic_jhelper, basic_client):
+    def test_is_skip_out_of_band_upgrade(
+        self, step, basic_jhelper, basic_client, step_context
+    ):
         app = Mock(charm_rev=255, base=None)
         basic_jhelper.get_application.return_value = app
         basic_jhelper.get_available_charm_revision.return_value = 343
@@ -148,11 +156,13 @@ class TestMySQLCharmUpgradeStep:
                 }
             ]
         }
-        result = step.is_skip()
+        result = step.is_skip(step_context)
 
         assert result.result_type == ResultType.SKIPPED
 
-    def test_is_skip_upgrade_needed(self, step, basic_jhelper, basic_manifest):
+    def test_is_skip_upgrade_needed(
+        self, step, basic_jhelper, basic_manifest, step_context
+    ):
         charm_manifest = Mock(revision=None, channel="8.0/stable")
         basic_manifest.core.software.charms.get.return_value = charm_manifest
         app = Mock(charm_rev=255, charm_channel="8.0/stable", base=None)
@@ -160,7 +170,7 @@ class TestMySQLCharmUpgradeStep:
         basic_jhelper.get_available_charm_revision.return_value = 343
         basic_jhelper.show_unit.return_value = {}
 
-        result = step.is_skip()
+        result = step.is_skip(step_context)
 
         assert result.result_type == ResultType.COMPLETED
 
@@ -175,21 +185,23 @@ class TestMySQLCharmUpgradeStep:
     def test_target_scale_for_upgrade(self, step, original_scale, expected_target):
         assert step._target_scale_for_upgrade(original_scale) == expected_target
 
-    def test_record_original_state_revision_and_scale(self, step, basic_jhelper):
+    def test_record_original_state_revision_and_scale(
+        self, step, basic_jhelper, step_context
+    ):
         app = Mock(charm_rev=255, scale=3)
         basic_jhelper.get_application.return_value = app
 
-        step.record_original_state()
+        step.record_original_state(step_context)
 
         assert step.original_revision == 255
         assert step.original_scale == 3
         assert step.state == MySQLUpgradeState.ORIGINAL_STATE_RECORDED
 
-    def test_scale_up_happy_path(self, step, basic_jhelper):
+    def test_scale_up_happy_path(self, step, basic_jhelper, step_context):
         step.original_scale = 2
         basic_jhelper.wait_until_active.return_value = None
 
-        step.scale_up()
+        step.scale_up(step_context)
 
         basic_jhelper.scale_application.assert_called_once_with(
             step.model, step.application, 3
@@ -197,45 +209,45 @@ class TestMySQLCharmUpgradeStep:
         basic_jhelper.wait_until_active.assert_called_once()
         assert step.state == MySQLUpgradeState.SCALED_UP
 
-    def test_scale_up_juju_failure(self, step, basic_jhelper):
+    def test_scale_up_juju_failure(self, step, basic_jhelper, step_context):
         step.original_scale = 2
         basic_jhelper.scale_application.return_value = None
         basic_jhelper.wait_until_active.side_effect = TimeoutError()
 
         with pytest.raises(SunbeamException) as exc:
-            step.scale_up()
+            step.scale_up(step_context)
         assert "timed out" in str(exc).lower()
 
-    def test_run_precheck_happy_path(self, step, basic_jhelper):
+    def test_run_precheck_happy_path(self, step, basic_jhelper, step_context):
         basic_jhelper.get_leader_unit.return_value = "mysql/0"
 
-        step.run_precheck()
+        step.run_precheck(step_context)
 
         basic_jhelper.run_action.assert_called_once_with(
             "mysql/0", step.model, "pre-upgrade-check"
         )
         assert step.state == MySQLUpgradeState.PRECHECK_DONE
 
-    def test_run_precheck_no_leader(self, step, basic_jhelper):
+    def test_run_precheck_no_leader(self, step, basic_jhelper, step_context):
         basic_jhelper.get_leader_unit.side_effect = LeaderNotFoundException()
 
         with pytest.raises(SunbeamException) as exc:
-            step.run_precheck()
+            step.run_precheck(step_context)
 
         assert "unable to determine leader" in str(exc).lower()
 
-    def test_refresh_and_wait_highest(self, step, basic_jhelper):
+    def test_refresh_and_wait_highest(self, step, basic_jhelper, step_context):
         app = Mock(units=["mysql/0", "mysql/1"])
         basic_jhelper.get_application.return_value = app
         step._wait_for_highest_upgrade = Mock()
 
-        step.refresh_and_wait_highest()
+        step.refresh_and_wait_highest(step_context)
 
         basic_jhelper.charm_refresh.assert_called_once()
         step._wait_for_highest_upgrade.assert_called_once_with("mysql/1")
         assert step.state == MySQLUpgradeState.HIGHEST_UNIT_UPGRADED
 
-    def test_wait_for_highest_upgrade_timeout(self, step, basic_jhelper):
+    def test_wait_for_highest_upgrade_timeout(self, step, basic_jhelper, step_context):
         app = Mock(units=["mysql/0", "mysql/1"])
         basic_jhelper.get_application.return_value = app
 
@@ -243,41 +255,43 @@ class TestMySQLCharmUpgradeStep:
         step.state = MySQLUpgradeState.SCALED_UP
 
         with pytest.raises(SunbeamException) as exc:
-            step.refresh_and_wait_highest()
+            step.refresh_and_wait_highest(step_context)
         assert "timed out" in str(exc).lower()
 
-    def test_resume_upgrade(self, step, basic_jhelper):
+    def test_resume_upgrade(self, step, basic_jhelper, step_context):
         basic_jhelper.get_leader_unit.return_value = "mysql/0"
 
-        step.resume_upgrade()
+        step.resume_upgrade(step_context)
 
         basic_jhelper.run_action.assert_called_once_with(
             "mysql/0", step.model, "resume-upgrade", {}
         )
         assert step.state == MySQLUpgradeState.UPGRADE_RESUMED
 
-    def test_wait_until_active_timeout_rollback_hint(self, step, basic_jhelper):
+    def test_wait_until_active_timeout_rollback_hint(
+        self, step, basic_jhelper, step_context
+    ):
         step.original_revision = 255
         basic_jhelper.wait_until_active.side_effect = TimeoutError()
 
         with pytest.raises(SunbeamException) as exc:
-            step.wait_until_active()
+            step.wait_until_active(step_context)
 
         assert "rollback" in str(exc).lower()
 
-    def test_scale_back_skipped_when_original_scale_unknown(self, step):
+    def test_scale_back_skipped_when_original_scale_unknown(self, step, step_context):
         step.original_scale = None
 
-        step.scale_back()
+        step.scale_back(step_context)
 
         assert step.state != MySQLUpgradeState.SCALED_BACK
 
-    def test_scale_back_success(self, step, basic_jhelper):
+    def test_scale_back_success(self, step, basic_jhelper, step_context):
         step.original_scale = 2
         app = Mock(scale=3)
         basic_jhelper.get_application.return_value = app
 
-        step.scale_back()
+        step.scale_back(step_context)
 
         basic_jhelper.scale_application.assert_called_once_with(
             step.model, step.application, 2

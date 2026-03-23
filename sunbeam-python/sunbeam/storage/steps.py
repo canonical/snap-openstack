@@ -14,7 +14,6 @@ from typing import TYPE_CHECKING, Any, Callable
 import pydantic
 import tenacity
 from rich.console import Console
-from rich.status import Status
 
 from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import (
@@ -26,6 +25,7 @@ from sunbeam.core.common import (
     Result,
     ResultType,
     Role,
+    StepContext,
     friendly_terraform_lock_retry_callback,
     read_config,
     update_config,
@@ -130,7 +130,7 @@ class ValidateStoragePrerequisitesStep(BaseStep):
                 ResultType.FAILED, f"Failed to check Juju authentication: {e}"
             )
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Validate storage backend prerequisites."""
         try:
             # 0. Check Juju authentication first
@@ -391,7 +391,7 @@ class BaseStorageBackendDeployStep(BaseStep):
             f"(attempt {retry_state.attempt_number}/5)"
         ),
     )
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Deploy the storage backend using Terraform."""
         # Ensure fresh Juju credentials and Terraform env before applying
         try:
@@ -526,7 +526,7 @@ class BaseStorageBackendDestroyStep(BaseStep):
             f"(attempt {retry_state.attempt_number}/5)"
         ),
     )
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Run the destroy step atomically.
 
         This step removes the backend from the Terraform configuration
@@ -643,7 +643,7 @@ class DeploySpecificCinderVolumeStep(BaseStep):
         self._offers: dict[str, str | None] | None = None
         self.extra_tfvars: dict = extra_tfvars or {}
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determine if the step should be skipped.
 
         Returns:
@@ -678,7 +678,7 @@ class DeploySpecificCinderVolumeStep(BaseStep):
             )
         }
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Deploy the specific cinder-volume application."""
         try:
             tfvars = read_config(self.client, self.backend_instance.tfvar_config_key)
@@ -826,7 +826,7 @@ class DestroySpecificCinderVolumeStep(BaseStep):
         self.backend_instance = backend_instance
         self.model = model
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determine if the step should be skipped.
 
         Returns:
@@ -849,7 +849,7 @@ class DestroySpecificCinderVolumeStep(BaseStep):
 
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Destroy the specific cinder-volume application."""
         try:
             tfvars = read_config(self.client, self.backend_instance.tfvar_config_key)

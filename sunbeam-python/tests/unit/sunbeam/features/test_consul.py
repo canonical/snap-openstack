@@ -187,18 +187,26 @@ class TestDeployConsulClientStep:
             result["consul-config-map"]["consul-storage"]["enable-health-check"] is True
         )
 
-    def test_run(self, deployment, tfhelper, jhelper, consulfeature, manifest):
+    def test_run(
+        self, deployment, tfhelper, jhelper, consulfeature, manifest, step_context
+    ):
         step = consul_feature.DeployConsulClientStep(
             deployment, tfhelper, tfhelper, jhelper, manifest
         )
-        result = step.run()
+        result = step.run(step_context)
 
         tfhelper.update_tfvars_and_apply_tf.assert_called_once()
         jhelper.wait_until_desired_status.assert_called_once()
         assert result.result_type == ResultType.COMPLETED
 
     def test_run_tf_apply_failed(
-        self, deployment, tfhelper, jhelper, consulfeature, manifest
+        self,
+        deployment,
+        tfhelper,
+        jhelper,
+        consulfeature,
+        manifest,
+        step_context,
     ):
         tfhelper.update_tfvars_and_apply_tf.side_effect = TerraformException(
             "apply failed..."
@@ -206,7 +214,7 @@ class TestDeployConsulClientStep:
         step = consul_feature.DeployConsulClientStep(
             deployment, tfhelper, tfhelper, jhelper, manifest
         )
-        result = step.run()
+        result = step.run(step_context)
 
         tfhelper.update_tfvars_and_apply_tf.assert_called_once()
         jhelper.wait_until_desired_status.assert_not_called()
@@ -214,14 +222,20 @@ class TestDeployConsulClientStep:
         assert result.message == "apply failed..."
 
     def test_run_waiting_timed_out(
-        self, deployment, tfhelper, jhelper, consulfeature, manifest
+        self,
+        deployment,
+        tfhelper,
+        jhelper,
+        consulfeature,
+        manifest,
+        step_context,
     ):
         jhelper.wait_until_desired_status.side_effect = TimeoutError("timed out")
 
         step = consul_feature.DeployConsulClientStep(
             deployment, tfhelper, tfhelper, jhelper, manifest
         )
-        result = step.run()
+        result = step.run(step_context)
 
         tfhelper.update_tfvars_and_apply_tf.assert_called_once()
         jhelper.wait_until_desired_status.assert_called_once()
@@ -230,30 +244,34 @@ class TestDeployConsulClientStep:
 
 
 class TestRemoveConsulClientStep:
-    def test_run(self, deployment, tfhelper, jhelper, update_config):
+    def test_run(self, deployment, tfhelper, jhelper, update_config, step_context):
         step = consul_feature.RemoveConsulClientStep(deployment, tfhelper, jhelper)
-        result = step.run()
+        result = step.run(step_context)
 
         tfhelper.destroy.assert_called_once()
         jhelper.wait_application_gone.assert_called_once()
         assert result.result_type == ResultType.COMPLETED
 
-    def test_run_tf_destroy_failed(self, deployment, tfhelper, jhelper, update_config):
+    def test_run_tf_destroy_failed(
+        self, deployment, tfhelper, jhelper, update_config, step_context
+    ):
         tfhelper.destroy.side_effect = TerraformException("destroy failed...")
 
         step = consul_feature.RemoveConsulClientStep(deployment, tfhelper, jhelper)
-        result = step.run()
+        result = step.run(step_context)
 
         tfhelper.destroy.assert_called_once()
         jhelper.wait_application_gone.assert_not_called()
         assert result.result_type == ResultType.FAILED
         assert result.message == "destroy failed..."
 
-    def test_run_waiting_timed_out(self, deployment, tfhelper, jhelper, update_config):
+    def test_run_waiting_timed_out(
+        self, deployment, tfhelper, jhelper, update_config, step_context
+    ):
         jhelper.wait_application_gone.side_effect = TimeoutError("timed out")
 
         step = consul_feature.RemoveConsulClientStep(deployment, tfhelper, jhelper)
-        result = step.run()
+        result = step.run(step_context)
 
         tfhelper.destroy.assert_called_once()
         jhelper.wait_application_gone.assert_called_once()

@@ -11,11 +11,10 @@ import click
 import pydantic
 from packaging.version import Version
 from rich.console import Console
-from rich.status import Status
 from snaphelpers import Snap
 
 from sunbeam.clusterd.client import Client
-from sunbeam.core.common import BaseStep, Result, ResultType, run_plan
+from sunbeam.core.common import BaseStep, Result, ResultType, StepContext, run_plan
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import JujuHelper, JujuStepHelper
 from sunbeam.core.manifest import (
@@ -74,7 +73,7 @@ class EnableUbuntuProApplicationStep(BaseStep, JujuStepHelper):
         """Returns true if the step has prompts that it can ask the user."""
         return False
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -82,7 +81,7 @@ class EnableUbuntuProApplicationStep(BaseStep, JujuStepHelper):
         """
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Apply terraform configuration to deploy ubuntu-pro."""
         extra_tfvars = {"machine-model": self.model, "token": self.token}
         try:
@@ -142,7 +141,7 @@ class DisableUbuntuProApplicationStep(BaseStep, JujuStepHelper):
         """Returns true if the step has prompts that it can ask the user."""
         return False
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -150,7 +149,7 @@ class DisableUbuntuProApplicationStep(BaseStep, JujuStepHelper):
         """
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Apply terraform configuration to disable ubuntu-pro."""
         extra_tfvars = {"token": ""}
         try:

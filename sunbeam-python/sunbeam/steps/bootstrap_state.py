@@ -3,10 +3,8 @@
 
 import logging
 
-from rich.status import Status
-
 from sunbeam.clusterd.client import Client
-from sunbeam.core.common import BaseStep, Result, ResultType
+from sunbeam.core.common import BaseStep, Result, ResultType, StepContext
 
 LOG = logging.getLogger(__name__)
 
@@ -18,7 +16,7 @@ class SetBootstrapped(BaseStep):
         super().__init__("Mark bootstrapped", "Mark deployment bootstrapped")
         self.client = client
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Set deployment as bootstrapped in clusterd."""
         LOG.debug("Setting deployment as bootstrapped")
         self.client.cluster.set_sunbeam_bootstrapped()

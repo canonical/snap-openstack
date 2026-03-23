@@ -3,10 +3,8 @@
 
 import logging
 
-from rich.status import Status
-
 from sunbeam.clusterd.client import Client
-from sunbeam.core.common import BaseStep, Result, ResultType
+from sunbeam.core.common import BaseStep, Result, ResultType, StepContext
 
 LOG = logging.getLogger(__name__)
 
@@ -32,7 +30,7 @@ class SyncFeatureGatesToCluster(BaseStep):
         )
         self.client = client
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Sync feature gates from snap configuration to cluster database."""
         LOG.debug("Syncing snap config feature gates to cluster database")
 

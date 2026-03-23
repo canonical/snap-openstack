@@ -7,7 +7,6 @@ from typing import Any
 
 import tenacity
 from rich.console import Console
-from rich.status import Status
 
 from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import NodeNotExistInClusterException
@@ -17,6 +16,7 @@ from sunbeam.core.common import (
     Result,
     ResultType,
     Role,
+    StepContext,
     SunbeamException,
     read_config,
 )
@@ -354,7 +354,7 @@ class ConfigureMicrocephOSDStep(BaseStep):
         """
         return True
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -375,7 +375,7 @@ class ConfigureMicrocephOSDStep(BaseStep):
 
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Configure local disks on microceph."""
         failed = False
         action_params: dict[str, Any] = {"device-id": self.disks}
@@ -435,7 +435,7 @@ class SetCephMgrPoolSizeStep(BaseStep):
         self.model = model
         self.storage_nodes: list[dict] = []
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -447,7 +447,7 @@ class SetCephMgrPoolSizeStep(BaseStep):
 
         return Result(ResultType.SKIPPED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Set ceph mgr pool size."""
         try:
             pools = [
@@ -505,7 +505,7 @@ class CheckMicrocephDistributionStep(BaseStep):
         self.model = model
         self.force = force
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -585,7 +585,7 @@ class DestroyMicrocephApplicationStep(DestroyMachineApplicationStep):
         """Return application timeout in seconds."""
         return MICROCEPH_APP_TIMEOUT
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Destroy microceph application."""
         # note(gboutry):this is a workaround for
         # https://github.com/juju/terraform-provider-juju/issues/473
@@ -606,4 +606,4 @@ class DestroyMicrocephApplicationStep(DestroyMachineApplicationStep):
                         f"Failed to remove resource {resource} from state",
                     )
 
-        return super().run(status)
+        return super().run(context)

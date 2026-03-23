@@ -5,11 +5,15 @@ import json
 import logging
 from enum import StrEnum
 
-from rich.status import Status
-
 from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import ConfigItemNotFoundException
-from sunbeam.core.common import BaseStep, Result, ResultType, SunbeamException
+from sunbeam.core.common import (
+    BaseStep,
+    Result,
+    ResultType,
+    StepContext,
+    SunbeamException,
+)
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import (
     MODEL_DELAY,
@@ -186,7 +190,7 @@ class MySQLCharmUpgradeStep(BaseStep, JujuStepHelper):
             target += 1
         return target
 
-    def record_original_state(self, status: Status | None = None):
+    def record_original_state(self, context: StepContext):
         """Record original deployed revision and scale before triggering refresh."""
         if self.state >= MySQLUpgradeState.ORIGINAL_STATE_RECORDED:
             return
@@ -200,7 +204,7 @@ class MySQLCharmUpgradeStep(BaseStep, JujuStepHelper):
         )
         self._set_state(MySQLUpgradeState.ORIGINAL_STATE_RECORDED)
 
-    def scale_up(self, status: Status | None = None):
+    def scale_up(self, context: StepContext):
         """Scale up mysql-k8s to the next higher odd number before upgrade."""
         if self.state >= MySQLUpgradeState.SCALED_UP:
             return
@@ -216,7 +220,7 @@ class MySQLCharmUpgradeStep(BaseStep, JujuStepHelper):
         try:
             self.jhelper.scale_application(self.model, self.application, target)
             self.update_status(
-                status,
+                context,
                 "Preparing mysql for upgrade. "
                 f"Scaling up application to {target} units...",
             )
@@ -238,7 +242,7 @@ class MySQLCharmUpgradeStep(BaseStep, JujuStepHelper):
                 "to retry the upgrade."
             ) from exc
 
-    def run_precheck(self, status: Status | None = None):
+    def run_precheck(self, context: StepContext):
         """Run pre-upgrade check on mysql application leader."""
         if self.state >= MySQLUpgradeState.PRECHECK_DONE:
             return
@@ -246,7 +250,7 @@ class MySQLCharmUpgradeStep(BaseStep, JujuStepHelper):
         try:
             leader = self.jhelper.get_leader_unit(self.application, self.model)
             self.update_status(
-                status, f"Running pre-upgrade check on {self.application} leader..."
+                context, f"Running pre-upgrade check on {self.application} leader..."
             )
             self.jhelper.run_action(leader, self.model, "pre-upgrade-check")
             self._set_state(MySQLUpgradeState.PRECHECK_DONE)
@@ -282,7 +286,7 @@ class MySQLCharmUpgradeStep(BaseStep, JujuStepHelper):
                 _wait, juju, delay=MODEL_DELAY, timeout=UPGRADE_HIGHEST_UNIT_TIMEOUT
             )
 
-    def refresh_and_wait_highest(self, status: Status | None = None):
+    def refresh_and_wait_highest(self, context: StepContext):
         """Juju refresh application and wait for highest ordinal unit.
 
         Wait for highest unit to complete upgrade.
@@ -293,7 +297,7 @@ class MySQLCharmUpgradeStep(BaseStep, JujuStepHelper):
         try:
             highest = self._get_highest_unit()
             self.update_status(
-                status, f"Waiting for highest unit {highest} to complete upgrade..."
+                context, f"Waiting for highest unit {highest} to complete upgrade..."
             )
             self.jhelper.charm_refresh(self.application, self.model)
             self._wait_for_highest_upgrade(highest)
@@ -313,14 +317,15 @@ class MySQLCharmUpgradeStep(BaseStep, JujuStepHelper):
                 " to retry the upgrade",
             ) from exc
 
-    def resume_upgrade(self, status: Status | None = None):
+    def resume_upgrade(self, context: StepContext):
         """Run resume-upgrade action on mysql application leader."""
         if self.state >= MySQLUpgradeState.UPGRADE_RESUMED:
             return
 
         try:
             self.update_status(
-                status, f"Running resume-upgrade action on {self.application} leader..."
+                context,
+                f"Running resume-upgrade action on {self.application} leader...",
             )
             leader = self.jhelper.get_leader_unit(self.application, self.model)
             self.jhelper.run_action(leader, self.model, "resume-upgrade", {})
@@ -340,14 +345,14 @@ class MySQLCharmUpgradeStep(BaseStep, JujuStepHelper):
                 " to retry resume-upgrade",
             ) from exc
 
-    def wait_until_active(self, status: Status | None = None):
+    def wait_until_active(self, context: StepContext):
         """Wait until all mysql units are active after resume-upgrade."""
         if self.state >= MySQLUpgradeState.UNITS_SETTLED:
             return
 
         try:
             self.update_status(
-                status,
+                context,
                 f"Waiting for {self.application} units to complete upgrade and "
                 "settle to active...",
             )
@@ -376,7 +381,7 @@ class MySQLCharmUpgradeStep(BaseStep, JujuStepHelper):
                 f"{hint}"
             ) from exc
 
-    def scale_back(self, status: Status | None = None):
+    def scale_back(self, context: StepContext):
         """Scale back mysql-k8s to the original scale before upgrade started.
 
         Failing at this step logs a warning but does not fail the overall upgrade.
@@ -389,7 +394,7 @@ class MySQLCharmUpgradeStep(BaseStep, JujuStepHelper):
                 f"{self.application} scale-back skipped: original scale is unknown"
             )
             LOG.warning(message)
-            self.update_status(status, message)
+            self.update_status(context, message)
             return
 
         app = self.jhelper.get_application(self.application, self.model)
@@ -403,11 +408,11 @@ class MySQLCharmUpgradeStep(BaseStep, JujuStepHelper):
                 f"Cluster scale does not match upgrade assumptions."
             )
             LOG.warning(message)
-            self.update_status(status, message)
+            self.update_status(context, message)
             return
         try:
             self.update_status(
-                status,
+                context,
                 f"{self.application} units completed upgrade. "
                 f"Scaling back to original scale {self.original_scale}...",
             )
@@ -422,7 +427,7 @@ class MySQLCharmUpgradeStep(BaseStep, JujuStepHelper):
                 f"{self.original_scale} failed: {str(exc)}",
             )
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -520,7 +525,7 @@ class MySQLCharmUpgradeStep(BaseStep, JujuStepHelper):
 
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Run mysql-k8s charm upgrade steps."""
         persisted = load_upgrade_state(self.client)
         state_name = persisted.get("state", MySQLUpgradeState.INIT.name)
@@ -534,13 +539,13 @@ class MySQLCharmUpgradeStep(BaseStep, JujuStepHelper):
         LOG.debug("Starting from mysql upgrade state: %s", self.state.name)
 
         try:
-            self.record_original_state(status)
-            self.scale_up(status)
-            self.run_precheck(status)
-            self.refresh_and_wait_highest(status)
-            self.resume_upgrade(status)
-            self.wait_until_active(status)
-            self.scale_back(status)
+            self.record_original_state(context)
+            self.scale_up(context)
+            self.run_precheck(context)
+            self.refresh_and_wait_highest(context)
+            self.resume_upgrade(context)
+            self.wait_until_active(context)
+            self.scale_back(context)
 
             # reset state after successful upgrade
             self._reset_state()

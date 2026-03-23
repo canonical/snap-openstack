@@ -8,7 +8,6 @@ import queue
 import click
 from rich import box
 from rich.console import Console
-from rich.status import Status
 from rich.table import Column, Table
 
 from sunbeam.clusterd.service import (
@@ -18,6 +17,7 @@ from sunbeam.core.common import (
     BaseStep,
     Result,
     ResultType,
+    StepContext,
     read_config,
     update_status_background,
 )
@@ -58,7 +58,7 @@ class RunSetTempUrlSecretStep(BaseStep, JujuStepHelper):
         self.model = OPENSTACK_MODEL
         self.apps = apps
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Run the set-temp-url-secret action on ironic-conductor apps."""
         try:
             for app in self.apps:
@@ -81,7 +81,7 @@ class RunSetTempUrlSecretStep(BaseStep, JujuStepHelper):
 
         LOG.debug(f"Application monitored for readiness: {self.apps}")
         status_queue: queue.Queue[str] = queue.Queue()
-        task = update_status_background(self, self.apps, status_queue, status)
+        task = update_status_background(self, self.apps, status_queue, context.status)
         try:
             self.jhelper.wait_until_active(
                 self.model,
@@ -119,7 +119,7 @@ class _BaseStep(abc.ABC, BaseStep, JujuStepHelper):
         self.jhelper = JujuHelper(self.deployment.juju_controller)
         self.apps_desired_status = apps_desired_status
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Execute step."""
         try:
             self._run()

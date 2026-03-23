@@ -10,7 +10,6 @@ import typing
 
 import tenacity
 from rich.console import Console
-from rich.status import Status
 
 import sunbeam.steps.microceph as microceph
 from sunbeam.clusterd.client import Client
@@ -21,6 +20,7 @@ from sunbeam.core.common import (
     BaseStep,
     Result,
     ResultType,
+    StepContext,
     SunbeamException,
     convert_proxy_to_model_configs,
     convert_retry_failure_as_result,
@@ -669,13 +669,13 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
             self.external_keystone_model, self.is_region_controller
         )
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
                 ResultType.COMPLETED or ResultType.FAILED otherwise
         """
-        self.update_status(status, "determining appropriate configuration")
+        self.update_status(context, "determining appropriate configuration")
         try:
             previous_config = read_config(self.client, TOPOLOGY_KEY)
             self.database = previous_config.get("database", DEFAULT_DATABASE_TOPOLOGY)
@@ -714,7 +714,7 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
         retry=tenacity.retry_if_exception_type(TerraformStateLockedException),
         retry_error_callback=convert_retry_failure_as_result,
     )
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Execute configuration using terraform."""
         # TODO(jamespage):
         # This needs to evolve to add support for things like:
@@ -725,12 +725,12 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
             {"topology": self.topology, "database": self.database},
         )
 
-        self.update_status(status, "fetching cluster nodes")
+        self.update_status(context, "fetching cluster nodes")
         control_nodes = self.client.cluster.list_nodes_by_role("control")
         storage_nodes = self.client.cluster.list_nodes_by_role("storage")
         region_controllers = self.client.cluster.list_nodes_by_role("region_controller")
 
-        self.update_status(status, "computing deployment sizing")
+        self.update_status(context, "computing deployment sizing")
         model_config = convert_proxy_to_model_configs(self.proxy_settings)
         model_config.update({"workload-storage": K8SHelper.get_default_storageclass()})
         os_api_scale = compute_os_api_scale(
@@ -795,7 +795,7 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
                     #   f"{m}.cert-distributor",
                 }
             )
-        self.update_status(status, "deploying services")
+        self.update_status(context, "deploying services")
         try:
             self.tfhelper.update_tfvars_and_apply_tf(
                 self.client,
@@ -817,7 +817,7 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
 
         LOG.debug(f"Applications monitored for readiness: {apps}")
         status_queue: queue.Queue[str] = queue.Queue()
-        task = update_status_background(self, apps, status_queue, status)
+        task = update_status_background(self, apps, status_queue, context.status)
         try:
             self.jhelper.wait_until_active(
                 self.model,
@@ -958,10 +958,10 @@ class ReapplyOpenStackTerraformPlanStep(BaseStep, JujuStepHelper):
 
         return updates
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Reapply Terraform plan if there are changes in tfvars."""
         try:
-            self.update_status(status, "deploying services")
+            self.update_status(context, "deploying services")
             override_tfvars = self._get_extra_tfvars_from_manifest()
 
             # Add storage tfvars for backward compatiblity
@@ -1006,7 +1006,7 @@ class ReapplyOpenStackTerraformPlanStep(BaseStep, JujuStepHelper):
             LOG.debug("Could not fetch pre-wait status", exc_info=True)
         LOG.debug(f"Pre-wait workload status for {self.model}: {pre_status}")
         status_queue: queue.Queue[str] = queue.Queue()
-        task = update_status_background(self, apps, status_queue, status)
+        task = update_status_background(self, apps, status_queue, context.status)
         try:
             self.jhelper.wait_until_active(
                 self.model,
@@ -1047,7 +1047,7 @@ class UpdateOpenStackModelConfigStep(BaseStep):
         self.manifest = manifest
         self.model_config = model_config
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Apply model configs to openstack terraform plan."""
         try:
             self.model_config.update(
@@ -1135,7 +1135,7 @@ class PromptRegionStep(BaseStep):
         """
         return True
 
-    def run(self, status: Status | None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Run the step to completion.
 
         Invoked when the step is run and returns a ResultType to indicate
@@ -1415,7 +1415,7 @@ class PromptDatabaseTopologyStep(BaseStep):
         """
         return True
 
-    def run(self, status: Status | None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Run the step to completion.
 
         Invoked when the step is run and returns a ResultType to indicate
@@ -1445,7 +1445,7 @@ class DestroyControlPlaneStep(BaseStep):
         self._has_tf_resources = False
         self._has_juju_resources = False
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -1464,7 +1464,7 @@ class DestroyControlPlaneStep(BaseStep):
 
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Run the step to completion.
 
         Invoked when the step is run and returns a ResultType to indicate

@@ -24,7 +24,7 @@ from sunbeam.clusterd.service import (
     URLNotFoundException,
 )
 from sunbeam.core import questions
-from sunbeam.core.common import BaseStep, Result, ResultType, Status
+from sunbeam.core.common import BaseStep, Result, ResultType, StepContext
 from sunbeam.core.juju import (
     ApplicationNotFoundException,
     JujuController,
@@ -73,7 +73,7 @@ class ClusterInitStep(BaseStep):
         self.client = client
         self.management_cidr = management_cidr
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -94,7 +94,7 @@ class ClusterInitStep(BaseStep):
 
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Bootstrap sunbeam cluster."""
         try:
             ip = utils.get_local_ip_by_cidr(self.management_cidr)
@@ -181,7 +181,7 @@ class AskManagementCidrStep(BaseStep):
         """
         return True
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Determine the management CIDR."""
         return Result(
             ResultType.COMPLETED, self.variables["bootstrap"]["management_cidr"]
@@ -199,7 +199,7 @@ class SaveManagementCidrStep(BaseStep):
         self.client = client
         self.management_cidr = management_cidr
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -215,7 +215,7 @@ class SaveManagementCidrStep(BaseStep):
             return Result(ResultType.SKIPPED)
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Save the management CIDR in clusterd."""
         bootstrap = self.variables.get("bootstrap", {})
         bootstrap["management_cidr"] = self.management_cidr
@@ -240,7 +240,7 @@ class ClusterAddNodeStep(BaseStep):
         self.node_name = name
         self.client = client
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -266,7 +266,7 @@ class ClusterAddNodeStep(BaseStep):
 
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Add node to sunbeam cluster."""
         try:
             token = self.client.cluster.add_node(name=self.node_name)
@@ -297,7 +297,7 @@ class ClusterJoinNodeStep(BaseStep):
         self.ip = host_address
         self.fqdn = fqdn
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -317,7 +317,7 @@ class ClusterJoinNodeStep(BaseStep):
 
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Join node to sunbeam cluster."""
         try:
             self.client.cluster.join_node(
@@ -340,7 +340,7 @@ class ClusterListNodeStep(BaseStep):
         super().__init__("List nodes of Cluster", "Listing nodes in Sunbeam cluster")
         self.client = client
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """List nodes in the sunbeam cluster."""
         try:
             members = self.client.cluster.get_cluster_members()
@@ -377,7 +377,7 @@ class ClusterUpdateNodeStep(BaseStep):
         self.role = role
         self.machine_id = machine_id
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Update Node info."""
         try:
             self.client.cluster.update_node_info(
@@ -399,7 +399,7 @@ class ClusterRemoveNodeStep(BaseStep):
         self.node_name = name
         self.client = client
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Remove node from sunbeam cluster."""
         try:
             self.client.cluster.remove_node(self.node_name)
@@ -485,7 +485,7 @@ class PromptCheckNodeExistStep(BaseStep):
             LOG.debug(e)
             self.cluster_unavailable = True
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Continue operation if user agrees."""
         if self.cluster_unavailable:
             return Result(ResultType.FAILED, "Sunbeam Cluster service is unavailable.")
@@ -519,7 +519,7 @@ class ClusterAddJujuUserStep(BaseStep):
         self.token = token
         self.client = client
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -536,7 +536,7 @@ class ClusterAddJujuUserStep(BaseStep):
 
         return Result(ResultType.SKIPPED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Add node to sunbeam cluster."""
         try:
             self.client.cluster.add_juju_user(self.username, self.token)
@@ -559,7 +559,7 @@ class ClusterUpdateJujuUserStep(BaseStep):
         self.token = token
         self.client = client
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -582,7 +582,7 @@ class ClusterUpdateJujuUserStep(BaseStep):
 
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Update juju user in sunbeam cluster."""
         try:
             self.client.cluster.update_juju_user(self.username, self.token)
@@ -647,7 +647,7 @@ class ClusterUpdateJujuControllerStep(BaseStep, JujuStepHelper):
         )
         return filtered_ips or ips
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -684,7 +684,7 @@ class ClusterUpdateJujuControllerStep(BaseStep, JujuStepHelper):
 
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Save controller in sunbeam cluster."""
         juju_controller = JujuController(
             name=self.controller,
@@ -721,7 +721,7 @@ class DeploySunbeamClusterdApplicationStep(BaseStep):
         self.model = model
         self.app = APPLICATION
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Check wheter or not to deploy sunbeam-clusterd."""
         try:
             self.jhelper.get_application(self.app, self.model)
@@ -732,19 +732,19 @@ class DeploySunbeamClusterdApplicationStep(BaseStep):
 
         return Result(ResultType.SKIPPED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Deploy sunbeam clusterd to infra machines."""
-        self.update_status(status, "fetching infra machines")
+        self.update_status(context, "fetching infra machines")
         infra_machines = self.jhelper.get_machines(self.model)
         machines = list(infra_machines.keys())
 
-        self.update_status(status, "computing number of units for sunbeam-clusterd")
+        self.update_status(context, "computing number of units for sunbeam-clusterd")
         num_machines = len(machines)
         if num_machines == 0:
             return Result(ResultType.FAILED, f"No machines found in {self.model} model")
 
         num_units = num_machines
-        self.update_status(status, "deploying application")
+        self.update_status(context, "deploying application")
         charm_manifest: CharmManifest = self.manifest.core.software.charms[
             "sunbeam-clusterd"
         ]
