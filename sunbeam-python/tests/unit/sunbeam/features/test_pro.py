@@ -59,6 +59,7 @@ class TestEnableUbuntuProApplicationStep:
             basic_manifest,
             tfvar_config=None,
             override_tfvars={"machine-model": test_model, "token": test_token},
+            reporter=step_context.reporter,
         )
         basic_jhelper.wait_application_ready.assert_called_once()
         assert result.result_type == ResultType.COMPLETED
@@ -108,6 +109,7 @@ class TestDisableUbuntuProApplicationStep:
             basic_manifest,
             tfvar_config=None,
             override_tfvars={"token": ""},
+            reporter=step_context.reporter,
         )
         assert result.result_type == ResultType.COMPLETED
 

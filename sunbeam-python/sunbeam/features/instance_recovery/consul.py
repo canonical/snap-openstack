@@ -210,6 +210,7 @@ class DeployConsulClientStep(BaseStep):
                 self.manifest,
                 tfvar_config=self._CONFIG,
                 override_tfvars=extra_tfvars,
+                reporter=context.reporter,
             )
         except (TerraformException, TerraformStateLockedException) as e:
             LOG.exception("Error deploying consul client")
@@ -257,7 +258,7 @@ class RemoveConsulClientStep(BaseStep):
     def run(self, context: StepContext) -> Result:
         """Execute configuration using terraform."""
         try:
-            self.tfhelper.destroy()
+            self.tfhelper.destroy(reporter=context.reporter)
         except TerraformException as e:
             LOG.exception("Error destroying consul client")
             return Result(ResultType.FAILED, str(e))

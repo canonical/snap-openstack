@@ -189,6 +189,7 @@ class TestBaremetalFeature:
                 "neutron-baremetal-switch-config",
                 "neutron-generic-switch-config",
             ],
+            reporter=ANY,
         )
 
         # RunSetTempUrlSecretStep calls.
@@ -218,6 +219,7 @@ class TestBaremetalFeature:
         mock_shards_apply.assert_any_call(
             expected_items,
             ["nova-ironic-foo", "nova-ironic-lish"],
+            reporter=ANY,
         )
 
         # DeployIronicConductorGroupsStep call.
@@ -234,6 +236,7 @@ class TestBaremetalFeature:
         mock_conductors_apply.assert_any_call(
             expected_items,
             ["ironic-conductor-foo", "ironic-conductor-lish"],
+            reporter=ANY,
         )
 
     def test_set_tfvars_on_enable(self, deployment):

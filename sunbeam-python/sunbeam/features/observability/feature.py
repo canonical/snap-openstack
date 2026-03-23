@@ -159,6 +159,7 @@ class DeployObservabilityStackStep(BaseStep, JujuStepHelper):
                 self.manifest,
                 tfvar_config=self._CONFIG,
                 override_tfvars=extra_tfvars,
+                reporter=context.reporter,
             )
         except (TerraformException, TerraformStateLockedException) as e:
             LOG.exception("Error deploying Observability Stack")
@@ -227,6 +228,7 @@ class UpdateObservabilityModelConfigStep(BaseStep, JujuStepHelper):
                 tfvar_config=self._CONFIG,
                 override_tfvars=extra_tfvars,
                 tf_apply_extra_args=["-target=juju_model.cos"],
+                reporter=context.reporter,
             )
         except (TerraformException, TerraformStateLockedException) as e:
             LOG.exception("Error updating Observability Model config")
@@ -278,6 +280,7 @@ class DeployObservabilityAgentStep(BaseStep, JujuStepHelper):
                 self.manifest,
                 tfvar_config=self._CONFIG,
                 override_tfvars=extra_tfvars,
+                reporter=context.reporter,
             )
         except (TerraformException, TerraformStateLockedException) as e:
             LOG.exception("Error deploying observability agent")
@@ -321,7 +324,7 @@ class RemoveObservabilityStackStep(BaseStep, JujuStepHelper):
     def run(self, context: StepContext) -> Result:
         """Execute configuration using terraform."""
         try:
-            self.tfhelper.destroy()
+            self.tfhelper.destroy(reporter=context.reporter)
         except TerraformException as e:
             LOG.exception("Error destroying Observability Stack")
             return Result(ResultType.FAILED, str(e))
@@ -362,7 +365,7 @@ class RemoveObservabilityAgentStep(BaseStep, JujuStepHelper):
     def run(self, context: StepContext) -> Result:
         """Execute configuration using terraform."""
         try:
-            self.tfhelper.destroy()
+            self.tfhelper.destroy(reporter=context.reporter)
         except TerraformException as e:
             LOG.exception("Error destroying observability agent")
             return Result(ResultType.FAILED, str(e))

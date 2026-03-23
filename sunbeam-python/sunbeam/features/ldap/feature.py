@@ -94,7 +94,7 @@ class DisableLDAPDomainStep(BaseStep, JujuStepHelper):
         update_config(self.client, config_key, tfvars)
 
         try:
-            self.tfhelper.apply()
+            self.tfhelper.apply(reporter=context.reporter)
         except TerraformException as e:
             return Result(ResultType.FAILED, str(e))
 
@@ -162,7 +162,7 @@ class UpdateLDAPDomainStep(BaseStep, JujuStepHelper):
         update_config(self.client, config_key, tfvars)
 
         try:
-            self.tfhelper.apply()
+            self.tfhelper.apply(reporter=context.reporter)
         except TerraformException as e:
             return Result(ResultType.FAILED, str(e))
         charm_name = "keystone-ldap-{}".format(self.charm_config["domain-name"])
@@ -232,7 +232,7 @@ class AddLDAPDomainStep(BaseStep, JujuStepHelper):
         update_config(self.client, config_key, tfvars)
 
         try:
-            self.tfhelper.apply()
+            self.tfhelper.apply(reporter=context.reporter)
         except TerraformException as e:
             return Result(ResultType.FAILED, str(e))
         charm_name = "keystone-ldap-{}".format(self.charm_config["domain-name"])

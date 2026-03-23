@@ -122,7 +122,7 @@ class _BaseStep(abc.ABC, BaseStep, JujuStepHelper):
     def run(self, context: StepContext) -> Result:
         """Execute step."""
         try:
-            self._run()
+            self._run(reporter=context.reporter)
         except Exception as ex:
             LOG.exception(str(ex))
             return Result(ResultType.FAILED, str(ex))
@@ -130,7 +130,7 @@ class _BaseStep(abc.ABC, BaseStep, JujuStepHelper):
         return Result(ResultType.COMPLETED)
 
     @abc.abstractmethod
-    def _run(self) -> None:
+    def _run(self, reporter=None) -> None:
         pass
 
     def _get_tfvars(self) -> dict:
@@ -143,12 +143,14 @@ class _BaseStep(abc.ABC, BaseStep, JujuStepHelper):
         self,
         tfvars: dict,
         apps: list[str],
+        reporter=None,
     ) -> None:
         self.tfhelper.update_tfvars_and_apply_tf(
             self.client,
             self.manifest,
             tfvar_config=self.config_key,
             override_tfvars=tfvars,
+            reporter=reporter,
         )
         LOG.debug(f"Applications monitored for readiness: {apps}")
         status_queue: queue.Queue[str] = queue.Queue()
@@ -192,7 +194,7 @@ class _DeployResourcesStep(_BaseStep):
         self.charm_name_prefix = charm_name_prefix
         self.replace = replace
 
-    def _run(self) -> None:
+    def _run(self, reporter=None) -> None:
         tfvars = self._get_tfvars()
         current_items = tfvars.get(self.tfvars_key, {})
 
@@ -207,7 +209,7 @@ class _DeployResourcesStep(_BaseStep):
         tfvars[self.tfvars_key] = current_items
 
         apps = [f"{self.charm_name_prefix}-{suffix}" for suffix in self.items.keys()]
-        self._apply_tfvars(tfvars, apps)
+        self._apply_tfvars(tfvars, apps, reporter=reporter)
 
         click.echo(f"Resource(s) {apps} added.")
 
@@ -229,7 +231,7 @@ class _DeleteResourcesStep(_BaseStep):
         self.item = item
         self.charm_name = charm_name
 
-    def _run(self) -> None:
+    def _run(self, reporter=None) -> None:
         tfvars = self._get_tfvars()
         items = tfvars.get(self.tfvars_key, {})
         if self.item not in items:
@@ -242,6 +244,7 @@ class _DeleteResourcesStep(_BaseStep):
             self.manifest,
             tfvar_config=self.config_key,
             override_tfvars=tfvars,
+            reporter=reporter,
         )
 
         LOG.debug(f"Waiting for application to disappear: {self.charm_name}")
@@ -262,7 +265,7 @@ class _DeleteResourcesStep(_BaseStep):
 class _ListResourcesStep(_BaseStep):
     """List resources."""
 
-    def _run(self) -> None:
+    def _run(self, reporter=None) -> None:
         """List resources."""
         tfvars = self._get_tfvars()
         items = tfvars.get(self.tfvars_key, {})
@@ -417,7 +420,7 @@ class UpdateSwitchConfigSecretsStep(_BaseStep):
         )
         self.switch_configs = switch_configs
 
-    def _run(self) -> None:
+    def _run(self, reporter=None) -> None:
         """Update juju secrets containing switch configs."""
         tfvars = self._get_tfvars()
         conf_secrets = tfvars.get(self.tfvars_key, {})
@@ -447,7 +450,7 @@ class UpdateSwitchConfigSecretsStep(_BaseStep):
         if self.switch_configs.generic:
             apps.append("neutron-generic-switch-config")
 
-        self._apply_tfvars(tfvars, apps)
+        self._apply_tfvars(tfvars, apps, reporter=reporter)
 
     def _remove_secrets(self, secrets_list: list[str]):
         for secret in secrets_list:
@@ -512,7 +515,7 @@ class AddSwitchConfigStep(_BaseStep):
     def _switch_config_secret_name(self):
         return f"switch-config-{self.name}"
 
-    def _run(self) -> None:
+    def _run(self, reporter=None) -> None:
         secret_name = self._switch_config_secret_name
         if self.jhelper.secret_exists(OPENSTACK_MODEL, secret_name):
             raise click.ClickException(f"Secret {secret_name} already exists.")
@@ -549,7 +552,7 @@ class AddSwitchConfigStep(_BaseStep):
         conf_secrets[self.protocol] = secret_list
         tfvars[tfvars_key] = conf_secrets
 
-        self._apply_tfvars(tfvars, [self.config_charm, "neutron"])
+        self._apply_tfvars(tfvars, [self.config_charm, "neutron"], reporter=reporter)
 
 
 class UpdateSwitchConfigStep(_BaseStep):
@@ -582,7 +585,7 @@ class UpdateSwitchConfigStep(_BaseStep):
     def _switch_config_secret_name(self):
         return f"switch-config-{self.name}"
 
-    def _run(self) -> None:
+    def _run(self, reporter=None) -> None:
         secret_name = self._switch_config_secret_name
         if not self.jhelper.secret_exists(OPENSTACK_MODEL, secret_name):
             raise click.ClickException(f"Secret {secret_name} does not exist.")
@@ -624,7 +627,7 @@ class DeleteSwitchConfigStep(_BaseStep):
     def _switch_config_secret_name(self):
         return f"switch-config-{self.name}"
 
-    def _run(self) -> None:
+    def _run(self, reporter=None) -> None:
         secret_name = self._switch_config_secret_name
 
         try:
@@ -663,6 +666,7 @@ class DeleteSwitchConfigStep(_BaseStep):
         self._apply_tfvars(
             tfvars,
             [config_charm, "neutron"],
+            reporter=reporter,
         )
 
 
@@ -682,7 +686,7 @@ class ListSwitchConfigsStep(_BaseStep):
             constants.NEUTRON_SWITCH_CONF_SECRETS_TFVAR,
         )
 
-    def _run(self) -> None:
+    def _run(self, reporter=None) -> None:
         """List resources."""
         tfvars = self._get_tfvars()
         items = tfvars.get(self.tfvars_key, {})

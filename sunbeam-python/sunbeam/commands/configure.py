@@ -290,7 +290,7 @@ class DemoSetup(BaseStep):
         )
         self.tfhelper.write_tfvars(self.variables, self.answer_file)
         try:
-            self.tfhelper.apply()
+            self.tfhelper.apply(reporter=context.reporter)
             return Result(ResultType.COMPLETED)
         except TerraformException as e:
             LOG.exception("Error configuring cloud")

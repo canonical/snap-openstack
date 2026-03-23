@@ -90,6 +90,7 @@ class EnableUbuntuProApplicationStep(BaseStep, JujuStepHelper):
                 self.manifest,
                 tfvar_config=None,
                 override_tfvars=extra_tfvars,
+                reporter=context.reporter,
             )
         except (TerraformException, TerraformStateLockedException) as e:
             return Result(ResultType.FAILED, str(e))
@@ -158,6 +159,7 @@ class DisableUbuntuProApplicationStep(BaseStep, JujuStepHelper):
                 self.manifest,
                 tfvar_config=None,
                 override_tfvars=extra_tfvars,
+                reporter=context.reporter,
             )
         except TerraformException as e:
             return Result(ResultType.FAILED, str(e))

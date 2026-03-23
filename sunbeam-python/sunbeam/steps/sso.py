@@ -347,7 +347,7 @@ class RemoveExternalProviderStep(BaseStep, JujuStepHelper):
         update_config(self.client, SSO_CONFIG_KEY, cfg)
 
         try:
-            self.tfhelper.apply()
+            self.tfhelper.apply(reporter=context.reporter)
         except TerraformException as e:
             return Result(ResultType.FAILED, str(e))
 
@@ -490,7 +490,7 @@ class UpdateExternalProviderStep(BaseStep, JujuStepHelper):
         self.tfhelper.write_tfvars(tfvars)
         update_config(self.client, CONFIG_KEY, tfvars)
         try:
-            self.tfhelper.apply()
+            self.tfhelper.apply(reporter=context.reporter)
         except TerraformException as e:
             return Result(ResultType.FAILED, str(e))
 
@@ -749,7 +749,7 @@ class _BaseExternalProviderStep(_BaseProviderStep):
 
         self.tfhelper.write_tfvars(tfvars)
         try:
-            self.tfhelper.apply()
+            self.tfhelper.apply(reporter=context.reporter)
         except TerraformException as e:
             return Result(ResultType.FAILED, f"Failed to apply terraform plan {e}")
 
@@ -1281,7 +1281,7 @@ class DeployIdentityProvidersStep(BaseStep, JujuStepHelper):
         update_config(self.client, CONFIG_KEY, tfvars)
 
         try:
-            self.tfhelper.apply()
+            self.tfhelper.apply(reporter=context.reporter)
         except TerraformException as e:
             return Result(ResultType.FAILED, str(e))
 
@@ -1492,7 +1492,7 @@ class SetKeystoneSAMLCertAndKeyStep(BaseStep, JujuStepHelper):
         update_config(self.client, CONFIG_KEY, tfvars)
         self.tfhelper.write_tfvars(tfvars)
         try:
-            self.tfhelper.apply()
+            self.tfhelper.apply(reporter=context.reporter)
         except TerraformException as e:
             return Result(ResultType.FAILED, str(e))
 

@@ -236,6 +236,7 @@ class ConfigureValidationStep(BaseStep):
                 self.manifest,
                 tfvar_config=self.tfvar_config,
                 override_tfvars=override_tfvars,
+                reporter=context.reporter,
             )
         except (TerraformException, TerraformStateLockedException) as e:
             LOG.exception("Error configuring validation feature.")

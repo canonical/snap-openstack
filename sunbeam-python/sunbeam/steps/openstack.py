@@ -802,6 +802,7 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
                 self.manifest,
                 tfvar_config=self._CONFIG,
                 override_tfvars=extra_tfvars,
+                reporter=context.reporter,
             )
         except TerraformException as e:
             LOG.exception("Error configuring cloud")
@@ -973,6 +974,7 @@ class ReapplyOpenStackTerraformPlanStep(BaseStep, JujuStepHelper):
                 self.manifest,
                 tfvar_config=self._CONFIG,
                 override_tfvars=override_tfvars,
+                reporter=context.reporter,
             )
         except TerraformException as e:
             LOG.exception("Error reconfiguring cloud")
@@ -1060,6 +1062,7 @@ class UpdateOpenStackModelConfigStep(BaseStep):
                 tfvar_config=self._CONFIG,
                 override_tfvars=override_tfvars,
                 tf_apply_extra_args=["-target=juju_model.sunbeam"],
+                reporter=context.reporter,
             )
             return Result(ResultType.COMPLETED)
         except TerraformException as e:
@@ -1473,7 +1476,7 @@ class DestroyControlPlaneStep(BaseStep):
         """
         if self._has_tf_resources:
             try:
-                self.tfhelper.destroy()
+                self.tfhelper.destroy(reporter=context.reporter)
             except TerraformException as e:
                 LOG.exception("Error destroying cloud")
                 return Result(ResultType.FAILED, str(e))

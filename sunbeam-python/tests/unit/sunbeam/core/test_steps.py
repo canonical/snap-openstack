@@ -84,6 +84,7 @@ class TestDeployMachineApplicationStep:
             tfvar_config=tfconfig,
             override_tfvars={"machine_ids": machines, "machine_model": model},
             tf_apply_extra_args=[],
+            reporter=step_context.reporter,
         )
         assert result.result_type == ResultType.COMPLETED
 

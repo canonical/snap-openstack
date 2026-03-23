@@ -137,6 +137,7 @@ class DeployMachineApplicationStep(BaseStep):
                 tfvar_config=self.config,
                 override_tfvars=extra_tfvars,
                 tf_apply_extra_args=self.tf_apply_extra_args(),
+                reporter=context.reporter,
             )
         except TerraformException as e:
             return Result(ResultType.FAILED, str(e))
@@ -341,6 +342,7 @@ class DestroyMachineApplicationStep(BaseStep):
                         "machine_model": self.model,
                     },
                     tf_apply_extra_args=["-input=false", "-destroy"],
+                    reporter=context.reporter,
                 )
             except TerraformException as e:
                 return Result(ResultType.FAILED, str(e))

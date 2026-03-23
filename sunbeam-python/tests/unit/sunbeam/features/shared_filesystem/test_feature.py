@@ -97,6 +97,7 @@ class TestSharedFilesystemFeature:
             tfvar_config=manila_data.CONFIG_KEY,
             override_tfvars={"machine_model": "foo"},
             tf_apply_extra_args=["-input=false", "-destroy"],
+            reporter=ANY,
         )
         jhelper.wait_application_gone.assert_any_call(
             ["manila-data"], "foo", timeout=ANY
@@ -110,6 +111,7 @@ class TestSharedFilesystemFeature:
             manila._manifest,
             tfvar_config="TerraformVarsOpenstack",
             override_tfvars=extra_tfvars,
+            reporter=ANY,
         )
         jhelper.wait_application_gone.assert_any_call(
             manila.set_application_names(deployment), "openstack", timeout=ANY

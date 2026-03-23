@@ -473,6 +473,7 @@ class UpgradeOpenStackApplicationStep(BaseStep, JujuStepHelper):
                 self.feature.manifest,
                 charms,
                 config,
+                reporter=context.reporter,
             )
         except TerraformException as e:
             LOG.exception(f"Error upgrading feature {self.feature.name}")
@@ -568,6 +569,7 @@ class EnableOpenStackApplicationStep(
                 self.feature.manifest,
                 tfvar_config=config_key,
                 override_tfvars=extra_tfvars,
+                reporter=context.reporter,
             )
         except (TerraformException, TerraformStateLockedException) as e:
             return Result(ResultType.FAILED, str(e))
@@ -653,7 +655,7 @@ class DisableOpenStackApplicationStep(
         try:
             if self.feature.tf_plan_location == TerraformPlanLocation.FEATURE_REPO:
                 # Just destroy the terraform plan
-                self.tfhelper.destroy()
+                self.tfhelper.destroy(reporter=context.reporter)
                 delete_config(self.deployment.get_client(), config_key)
             else:
                 # Update terraform variables to disable the application
@@ -666,6 +668,7 @@ class DisableOpenStackApplicationStep(
                     self.feature.manifest,
                     tfvar_config=config_key,
                     override_tfvars=extra_tfvars,
+                    reporter=context.reporter,
                 )
         except (TerraformException, TerraformStateLockedException) as e:
             return Result(ResultType.FAILED, str(e))

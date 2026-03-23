@@ -116,7 +116,11 @@ class BaseUpgrade(BaseStep, JujuStepHelper):
         )
         try:
             tfhelper.update_partial_tfvars_and_apply_tf(
-                self.client, self.manifest, charms, config
+                self.client,
+                self.manifest,
+                charms,
+                config,
+                reporter=context.reporter if context else None,
             )
         except TerraformException as e:
             LOG.exception("Error upgrading cloud")

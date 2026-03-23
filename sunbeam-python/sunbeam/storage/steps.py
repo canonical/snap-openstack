@@ -431,6 +431,7 @@ class BaseStorageBackendDeployStep(BaseStep):
                 self.manifest,
                 tfvar_config=self.backend_instance.tfvar_config_key,
                 override_tfvars=tfvars,
+                reporter=context.reporter,
             )
         except TerraformStateLockedException as e:
             # Bubble up to trigger retry
@@ -574,6 +575,7 @@ class BaseStorageBackendDestroyStep(BaseStep):
                 self.manifest,
                 tfvar_config=self.backend_instance.tfvar_config_key,
                 override_tfvars=tfvars,
+                reporter=context.reporter,
             )
         except TerraformStateLockedException as e:
             # Bubble up to trigger retry
@@ -765,6 +767,7 @@ class DeploySpecificCinderVolumeStep(BaseStep):
                 self.manifest,
                 tfvar_config=self.backend_instance.tfvar_config_key,
                 override_tfvars=tfvars,
+                reporter=context.reporter,
             )
         except Exception as e:
             LOG.error(
@@ -866,6 +869,7 @@ class DestroySpecificCinderVolumeStep(BaseStep):
                 self.manifest,
                 tfvar_config=self.backend_instance.tfvar_config_key,
                 override_tfvars=tfvars,
+                reporter=context.reporter,
             )
         except Exception as e:
             LOG.error(

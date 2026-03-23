@@ -409,6 +409,7 @@ class ReapplyHypervisorTerraformPlanStep(BaseStep):
                 self.manifest,
                 tfvar_config=self._CONFIG,
                 override_tfvars=self.extra_tfvars,
+                reporter=context.reporter,
             )
         except TerraformException as e:
             return Result(ResultType.FAILED, str(e))

@@ -104,6 +104,7 @@ class TestBaremetalCommands:
             ironic._manifest,
             tfvar_config=OPENSTACK_TERRAFORM_VARS,
             override_tfvars=expected_tfvars,
+            reporter=step_context.reporter,
         )
 
     @patch.object(steps, "JujuHelper")
@@ -145,6 +146,7 @@ class TestBaremetalCommands:
             ironic._manifest,
             tfvar_config=OPENSTACK_TERRAFORM_VARS,
             override_tfvars=expected_tfvars,
+            reporter=step_context.reporter,
         )
 
         jhelper = mock_JujuHelper.return_value
@@ -180,6 +182,7 @@ class TestBaremetalCommands:
             ironic._manifest,
             tfvar_config=OPENSTACK_TERRAFORM_VARS,
             override_tfvars=expected_tfvars,
+            reporter=step_context.reporter,
         )
 
         jhelper = mock_JujuHelper.return_value
@@ -247,6 +250,7 @@ class TestBaremetalCommands:
             ironic._manifest,
             tfvar_config=OPENSTACK_TERRAFORM_VARS,
             override_tfvars=expected_tfvars,
+            reporter=step_context.reporter,
         )
 
     @patch.object(steps, "JujuHelper")
@@ -294,6 +298,7 @@ class TestBaremetalCommands:
             ironic._manifest,
             tfvar_config=OPENSTACK_TERRAFORM_VARS,
             override_tfvars=expected_tfvars,
+            reporter=step_context.reporter,
         )
 
         jhelper = mock_JujuHelper.return_value
@@ -368,6 +373,7 @@ class TestBaremetalCommands:
             ironic._manifest,
             tfvar_config=OPENSTACK_TERRAFORM_VARS,
             override_tfvars=expected_tfvars,
+            reporter=step_context.reporter,
         )
 
         jhelper.wait_until_desired_status.assert_called_once_with(
@@ -510,6 +516,7 @@ class TestBaremetalCommands:
             ironic._manifest,
             tfvar_config=OPENSTACK_TERRAFORM_VARS,
             override_tfvars=expected_tfvars,
+            reporter=step_context.reporter,
         )
 
         jhelper.wait_until_desired_status.assert_called_once_with(
