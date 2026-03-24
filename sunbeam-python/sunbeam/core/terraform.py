@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2023 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
+import contextlib
 import json
 import logging
 import os
@@ -747,13 +748,17 @@ class TerraformHelper:
         state_lock_flag = [False]
         if process.stdout is None:
             raise TerraformException("stdout pipe not available")
-        for line in process.stdout:
-            line = line.rstrip("\n")
-            if not line:
-                continue
-            event = self._parse_terraform_event(line, state_lock_flag)
-            if event is not None and reporter is not None:
-                reporter.report(event)
+
+        with contextlib.ExitStack() as stack:
+            if reporter is not None and hasattr(reporter, "__enter__"):
+                stack.enter_context(reporter)  # type: ignore[arg-type]
+            for line in process.stdout:
+                line = line.rstrip("\n")
+                if not line:
+                    continue
+                event = self._parse_terraform_event(line, state_lock_flag)
+                if event is not None and reporter is not None:
+                    reporter.report(event)
 
         process.wait(timeout=timeout)
         stderr_thread.join(timeout=10)

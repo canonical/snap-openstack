@@ -65,6 +65,19 @@ class CompositeProgressReporter:
     def __init__(self, *reporters: ProgressReporter):
         self.reporters = reporters
 
+    def __enter__(self) -> "CompositeProgressReporter":
+        """Enter the context manager for all reporters."""
+        for reporter in self.reporters:
+            if hasattr(reporter, "__enter__"):
+                reporter.__enter__()  # type: ignore[union-attr]
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        """Exit the context manager for all reporters."""
+        for reporter in self.reporters:
+            if hasattr(reporter, "__exit__"):
+                reporter.__exit__(*args)  # type: ignore[union-attr]
+
     def report(self, event: ProgressEvent) -> None:
         """Report a progress event to all registered reporters."""
         for reporter in self.reporters:
@@ -72,12 +85,28 @@ class CompositeProgressReporter:
 
 
 class RichProgressReporter:
-    """Displays a 3-line rolling window of events above the Rich spinner."""
+    """Displays a 3-line rolling window of events above the Rich spinner.
+
+    Use as a context manager to automatically clear the event lines when done::
+
+        with RichProgressReporter(status, base_message) as reporter:
+            reporter.report(event)
+        # event lines are cleared, spinner shows only the base message
+    """
 
     def __init__(self, status: Status, base_message: str, max_lines: int = 3):
         self._status = status
         self._base_message = base_message
         self._recent_events: deque[str] = deque(maxlen=max_lines)
+
+    def __enter__(self) -> "RichProgressReporter":
+        """Enter the context manager."""
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        """Reset the Live display to just the Status spinner."""
+        self._recent_events.clear()
+        self._status._live.update(self._status)
 
     def report(self, event: ProgressEvent) -> None:
         """Report a progress event by updating the Rich status display."""

@@ -135,3 +135,20 @@ class TestRichProgressReporter:
         )
         reporter.report(event)
         status._live.update.assert_called_once()
+
+    def test_context_manager_clears_events(self):
+        status = Mock()
+        with RichProgressReporter(status, base_message="Deploying...") as reporter:
+            event = ProgressEvent(
+                source="terraform",
+                event_type="apply_start",
+                message="keystone: creating...",
+                timestamp=datetime.now(tz=timezone.utc),
+                metadata={},
+            )
+            reporter.report(event)
+            assert len(reporter._recent_events) == 1
+        # After exiting, events are cleared and live display reset to Status
+        assert len(reporter._recent_events) == 0
+        last_call = status._live.update.call_args
+        assert last_call.args[0] is status
