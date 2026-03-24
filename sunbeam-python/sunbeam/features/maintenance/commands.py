@@ -111,6 +111,8 @@ class EnableMaintenance(MaintenanceCommand):
         stop_osds: bool = False,
         allow_downtime: bool = False,
         enable_ceph_crush_rebalancing: bool = False,
+        disable_live_migration: bool = False,
+        disable_cold_migration: bool = False,
     ):
         self.node = node
         self.deployment = deployment
@@ -119,6 +121,8 @@ class EnableMaintenance(MaintenanceCommand):
         self.stop_osds = stop_osds
         self.allow_downtime = allow_downtime
         self.enable_ceph_crush_rebalancing = enable_ceph_crush_rebalancing
+        self.disable_live_migration = disable_live_migration
+        self.disable_cold_migration = disable_cold_migration
 
         self.model = deployment.openstack_machines_model
         self.client = deployment.get_client()
@@ -299,6 +303,8 @@ class EnableMaintenance(MaintenanceCommand):
                 CreateWatcherHostMaintenanceAuditStep(
                     deployment=self.deployment,
                     node=self.node,
+                    disable_live_migration=self.disable_live_migration,
+                    disable_cold_migration=self.disable_cold_migration,
                 )
             )
 
@@ -606,6 +612,18 @@ class DisableMaintenance(MaintenanceCommand):
     is_flag=True,
     default=False,
 )
+@click.option(
+    "--disable-migration",
+    help=(
+        "Disable migration during maintenance (both, live, cold)."
+        " If not specified, defaults to Watcher's defaults (both False)"
+        " If specified without value, defaults to 'both' (both True)"
+    ),
+    type=click.Choice(["both", "live", "cold"]),
+    default=None,
+    is_flag=False,
+    flag_value="both",
+)
 @click_option_show_hints
 @pass_method_obj
 def enable(
@@ -617,6 +635,7 @@ def enable(
     enable_ceph_crush_rebalancing,
     stop_osds,
     allow_downtime,
+    disable_migration,
     show_hints: bool = False,
 ) -> None:
     """Enable maintenance mode for node."""
@@ -627,6 +646,14 @@ def enable(
         show_hints=show_hints,
     )
 
+    # Default to Watcher's defaults (both False) when not specified
+    if not disable_migration:
+        disable_live_migration = False
+        disable_cold_migration = False
+    else:
+        disable_live_migration = disable_migration in ["both", "live"]
+        disable_cold_migration = disable_migration in ["both", "cold"]
+
     enable_maintenance = EnableMaintenance(
         node,
         deployment,
@@ -635,6 +662,8 @@ def enable(
         stop_osds=stop_osds,
         allow_downtime=allow_downtime,
         enable_ceph_crush_rebalancing=enable_ceph_crush_rebalancing,
+        disable_live_migration=disable_live_migration,
+        disable_cold_migration=disable_cold_migration,
     )
 
     enable_maintenance(console, show_hints, dry_run)

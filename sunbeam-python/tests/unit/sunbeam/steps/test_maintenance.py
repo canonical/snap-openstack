@@ -151,7 +151,10 @@ class TestMicroCephActionStep:
 
 
 class TestCreateWatcherHostMaintenanceAuditStep:
-    def test_create_audit(self, mock_watcher_helper, mock_watcher_client):
+    def test_create_audit_default_migration_params(
+        self, mock_watcher_helper, mock_watcher_client
+    ):
+        """Test _create_audit with default migration parameters (both False)"""
         step = CreateWatcherHostMaintenanceAuditStep(Mock(), "fake-node")
         result = step._create_audit()
         assert result == mock_watcher_helper.create_audit.return_value
@@ -161,7 +164,36 @@ class TestCreateWatcherHostMaintenanceAuditStep:
         mock_watcher_helper.create_audit.assert_called_once_with(
             client=mock_watcher_client,
             template=mock_watcher_helper.get_enable_maintenance_audit_template.return_value,
-            parameters={"maintenance_node": "fake-node"},
+            parameters={
+                "maintenance_node": "fake-node",
+                "disable_live_migration": False,
+                "disable_cold_migration": False,
+            },
+        )
+
+    def test_create_audit_with_custom_migration_params(
+        self, mock_watcher_helper, mock_watcher_client
+    ):
+        """Test _create_audit with custom migration parameters."""
+        step = CreateWatcherHostMaintenanceAuditStep(
+            Mock(),
+            "fake-node",
+            disable_live_migration=True,
+            disable_cold_migration=False,
+        )
+        result = step._create_audit()
+        assert result == mock_watcher_helper.create_audit.return_value
+        mock_watcher_helper.get_enable_maintenance_audit_template.assert_called_once_with(
+            client=mock_watcher_client
+        )
+        mock_watcher_helper.create_audit.assert_called_once_with(
+            client=mock_watcher_client,
+            template=mock_watcher_helper.get_enable_maintenance_audit_template.return_value,
+            parameters={
+                "maintenance_node": "fake-node",
+                "disable_live_migration": True,
+                "disable_cold_migration": False,
+            },
         )
 
 
