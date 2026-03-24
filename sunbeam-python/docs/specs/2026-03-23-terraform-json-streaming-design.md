@@ -60,10 +60,12 @@ Python logger at DEBUG level. No filtering — every event type is logged.
 
 **`RichProgressReporter`**: Maintains a 3-line `collections.deque` of recent event
 messages. On each `report()`, builds a Rich `Group` renderable containing the rolling
-window lines as `Text` objects followed by the spinner's original status message, and
-passes it to `Status.update()`. This renders the 3 most recent events as static lines
-above the animated spinner. Receives the `Status` object and the step's base status
-message at construction time.
+window lines as `Text` objects followed by the `Status` object itself (which renders
+the spinner + step name), and passes it to `Status._live.update()`. By updating the
+underlying `Live` display directly instead of calling `Status.update()`, the event
+lines render above the spinner line rather than having the spinner appear on the first
+event line. Receives the `Status` object and the step's base status message at
+construction time.
 
 Example terminal output:
 ```
