@@ -83,5 +83,8 @@ class RichProgressReporter:
         """Report a progress event by updating the Rich status display."""
         self._recent_events.append(event.message)
         lines = [Text(f"  {msg}", style="dim") for msg in self._recent_events]
-        renderable = Group(*lines, self._base_message)
-        self._status.update(renderable)
+        # Update the Live display directly so event lines render ABOVE the
+        # spinner.  Status.update() would place the spinner on the first line
+        # of the Group; by setting _live's renderable to Group(lines, status)
+        # the Status renderable (spinner + text) appears on the last line.
+        self._status._live.update(Group(*lines, self._status))

@@ -91,7 +91,7 @@ class TestCompositeProgressReporter:
 
 
 class TestRichProgressReporter:
-    def test_single_event_updates_status(self):
+    def test_single_event_updates_live(self):
         status = Mock()
         reporter = RichProgressReporter(status, base_message="Deploying ... ")
         event = ProgressEvent(
@@ -102,7 +102,7 @@ class TestRichProgressReporter:
             metadata={},
         )
         reporter.report(event)
-        status.update.assert_called_once()
+        status._live.update.assert_called_once()
 
     def test_rolling_window_keeps_last_3(self):
         status = Mock()
@@ -116,7 +116,7 @@ class TestRichProgressReporter:
                 metadata={},
             )
             reporter.report(event)
-        assert status.update.call_count == 5
+        assert status._live.update.call_count == 5
         assert len(reporter._recent_events) == 3
         messages = list(reporter._recent_events)
         assert messages[0] == "resource-2: creating..."
@@ -134,4 +134,4 @@ class TestRichProgressReporter:
             metadata={},
         )
         reporter.report(event)
-        status.update.assert_called_once()
+        status._live.update.assert_called_once()
