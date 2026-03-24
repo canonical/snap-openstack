@@ -67,6 +67,12 @@ lines render above the spinner line rather than having the spinner appear on the
 event line. Receives the `Status` object and the step's base status message at
 construction time.
 
+Supports context manager usage: on exit, clears the event deque and resets the
+`Live` display to just the `Status` spinner. `_run_terraform_command()` uses
+`contextlib.ExitStack` to enter the reporter if it supports context management,
+so event lines are automatically cleaned up when terraform finishes — before the
+step moves to the next phase (e.g., juju wait).
+
 Example terminal output:
 ```
   juju_application.nova-compute: creating...
