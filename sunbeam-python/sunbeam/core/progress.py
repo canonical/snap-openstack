@@ -85,7 +85,10 @@ class CompositeProgressReporter:
 
 
 class RichProgressReporter:
-    """Displays a 3-line rolling window of events above the Rich spinner.
+    """Displays a rolling window of events below the Rich spinner.
+
+    The spinner + step name stays on the first line, with dim event lines
+    rendered below it. Uses only the public Status.update() API.
 
     Use as a context manager to automatically clear the event lines when done::
 
@@ -104,16 +107,12 @@ class RichProgressReporter:
         return self
 
     def __exit__(self, *args: object) -> None:
-        """Reset the Live display to just the Status spinner."""
+        """Reset the status to just the base message."""
         self._recent_events.clear()
-        self._status._live.update(self._status)
+        self._status.update(self._base_message)
 
     def report(self, event: ProgressEvent) -> None:
         """Report a progress event by updating the Rich status display."""
         self._recent_events.append(event.message)
         lines = [Text(f"  {msg}", style="dim") for msg in self._recent_events]
-        # Update the Live display directly so event lines render ABOVE the
-        # spinner.  Status.update() would place the spinner on the first line
-        # of the Group; by setting _live's renderable to Group(lines, status)
-        # the Status renderable (spinner + text) appears on the last line.
-        self._status._live.update(Group(*lines, self._status))
+        self._status.update(Group(Text(self._base_message), *lines))

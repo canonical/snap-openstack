@@ -59,26 +59,24 @@ class ProgressReporter(Protocol):
 Python logger at DEBUG level. No filtering — every event type is logged.
 
 **`RichProgressReporter`**: Maintains a 3-line `collections.deque` of recent event
-messages. On each `report()`, builds a Rich `Group` renderable containing the rolling
-window lines as `Text` objects followed by the `Status` object itself (which renders
-the spinner + step name), and passes it to `Status._live.update()`. By updating the
-underlying `Live` display directly instead of calling `Status.update()`, the event
-lines render above the spinner line rather than having the spinner appear on the first
-event line. Receives the `Status` object and the step's base status message at
-construction time.
+messages. On each `report()`, builds a Rich `Group` renderable containing the base
+message as a `Text` followed by dim-styled event lines, and passes it to
+`Status.update()`. The spinner renders on the first line (the base message), with
+event lines below it. Uses only the public Rich API. Receives the `Status` object
+and the step's base status message at construction time.
 
 Supports context manager usage: on exit, clears the event deque and resets the
-`Live` display to just the `Status` spinner. `_run_terraform_command()` uses
-`contextlib.ExitStack` to enter the reporter if it supports context management,
+status to just the base message via `Status.update()`. `_run_terraform_command()`
+uses `contextlib.ExitStack` to enter the reporter if it supports context management,
 so event lines are automatically cleaned up when terraform finishes — before the
 step moves to the next phase (e.g., juju wait).
 
 Example terminal output:
 ```
+⠋ Deploying OpenStack ...
   juju_application.nova-compute: creating...
   juju_application.keystone: created (4.2s)
   juju_application.glance: creating...
-⠋ Deploying OpenStack ...
 ```
 
 **Filtering responsibility**: Each event source (terraform, future juju) is responsible
