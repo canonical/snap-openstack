@@ -2,28 +2,26 @@
 # SPDX-License-Identifier: Apache-2.0
 
 terraform {
-
   required_providers {
     juju = {
       source  = "juju/juju"
-      version = "= 0.23.1"
+      version = "= 1.3.1"
     }
   }
-
 }
 
 provider "juju" {}
 
 data "juju_model" "machine_model" {
-  name = var.machine_model
+  uuid = var.machine_model_uuid
 }
 
 resource "juju_application" "microceph" {
-  name     = "microceph"
-  trust    = true
-  model    = data.juju_model.machine_model.name
-  machines = length(var.machine_ids) == 0 ? null : toset(var.machine_ids)
-  units    = length(var.machine_ids) == 0 ? 0 : null
+  name       = "microceph"
+  trust      = true
+  model_uuid = data.juju_model.machine_model.uuid
+  machines   = length(var.machine_ids) == 0 ? null : toset(var.machine_ids)
+  units      = length(var.machine_ids) == 0 ? 0 : null
 
   charm {
     name     = "microceph"
@@ -43,7 +41,7 @@ resource "juju_offer" "microceph_offer" {
   name             = "microceph"
   application_name = juju_application.microceph.name
   endpoints        = ["ceph"]
-  model            = data.juju_model.machine_model.name
+  model_uuid       = data.juju_model.machine_model.uuid
 }
 
 # juju_offer.microceph_ceph_nfs_offer will be created
@@ -51,7 +49,7 @@ resource "juju_offer" "microceph_ceph_nfs_offer" {
   name             = "microceph-ceph-nfs"
   application_name = juju_application.microceph.name
   endpoints        = ["ceph-nfs"]
-  model            = data.juju_model.machine_model.name
+  model_uuid       = data.juju_model.machine_model.uuid
 }
 
 # juju_offer.microceph_ceph_rgw_offer will be created
@@ -59,12 +57,12 @@ resource "juju_offer" "microceph_ceph_rgw_offer" {
   name             = "microceph-ceph-rgw"
   application_name = juju_application.microceph.name
   endpoints        = ["ceph-rgw-ready"]
-  model            = data.juju_model.machine_model.name
+  model_uuid       = data.juju_model.machine_model.uuid
 }
 
 resource "juju_integration" "microceph-identity" {
-  count = (var.keystone-endpoints-offer-url != null) ? 1 : 0
-  model = var.machine_model
+  count      = (var.keystone-endpoints-offer-url != null) ? 1 : 0
+  model_uuid = data.juju_model.machine_model.uuid
 
   application {
     name     = juju_application.microceph.name
@@ -78,8 +76,8 @@ resource "juju_integration" "microceph-identity" {
 }
 
 resource "juju_integration" "microceph-traefik-rgw" {
-  count = (var.ingress-rgw-offer-url != null) ? 1 : 0
-  model = var.machine_model
+  count      = (var.ingress-rgw-offer-url != null) ? 1 : 0
+  model_uuid = data.juju_model.machine_model.uuid
 
   application {
     name     = juju_application.microceph.name
@@ -92,8 +90,8 @@ resource "juju_integration" "microceph-traefik-rgw" {
 }
 
 resource "juju_integration" "microceph-cert-distributor" {
-  count = (var.cert-distributor-offer-url != null) ? 1 : 0
-  model = var.machine_model
+  count      = (var.cert-distributor-offer-url != null) ? 1 : 0
+  model_uuid = data.juju_model.machine_model.uuid
 
   application {
     name     = juju_application.microceph.name

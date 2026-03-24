@@ -201,7 +201,7 @@ class TerraformHelper:
             cmd = [self.terraform, "apply"]
             if extra_args:
                 cmd.extend(extra_args)
-            cmd.extend(["-auto-approve", "-no-color"])
+            cmd.extend(["-input=false", "-auto-approve", "-no-color"])
             if self.parallelism is not None:
                 cmd.append(f"-parallelism={self.parallelism}")
             LOG.debug(

@@ -2,22 +2,24 @@
 # SPDX-License-Identifier: Apache-2.0
 
 terraform {
-
   required_providers {
     juju = {
       source  = "juju/juju"
-      version = "= 0.23.1"
+      version = "= 1.3.1"
     }
   }
-
 }
 
 provider "juju" {}
 
+data "juju_model" "machine_model" {
+  uuid = var.machine_model_uuid
+}
+
 resource "juju_application" "ubuntu_pro" {
-  count = var.token != "" ? 1 : 0
-  name  = "ubuntu-pro"
-  model = var.machine-model
+  count      = var.token != "" ? 1 : 0
+  name       = "ubuntu-pro"
+  model_uuid = data.juju_model.machine_model.uuid
 
   charm {
     name    = "ubuntu-advantage"
@@ -31,8 +33,8 @@ resource "juju_application" "ubuntu_pro" {
 }
 
 resource "juju_integration" "juju_info" {
-  count = var.token != "" ? 1 : 0
-  model = var.machine-model
+  count      = var.token != "" ? 1 : 0
+  model_uuid = data.juju_model.machine_model.uuid
 
   application {
     name     = "sunbeam-machine"

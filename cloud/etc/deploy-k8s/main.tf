@@ -2,27 +2,25 @@
 # SPDX-License-Identifier: Apache-2.0
 
 terraform {
-
   required_providers {
     juju = {
       source  = "juju/juju"
-      version = "= 0.23.1"
+      version = "= 1.3.1"
     }
   }
-
 }
 
 provider "juju" {}
 
 data "juju_model" "machine_model" {
-  name = var.machine_model
+  uuid = var.machine_model_uuid
 }
 
 resource "juju_application" "k8s" {
-  name     = "k8s"
-  model    = data.juju_model.machine_model.name
-  machines = length(var.machine_ids) == 0 ? null : toset(var.machine_ids)
-  units    = length(var.machine_ids) == 0 ? 0 : null
+  name       = "k8s"
+  model_uuid = data.juju_model.machine_model.uuid
+  machines   = length(var.machine_ids) == 0 ? null : toset(var.machine_ids)
+  units      = length(var.machine_ids) == 0 ? 0 : null
 
   charm {
     name     = "k8s"
@@ -31,6 +29,6 @@ resource "juju_application" "k8s" {
     base     = "ubuntu@24.04"
   }
 
-  config = var.k8s_config
+  config            = var.k8s_config
   endpoint_bindings = var.endpoint_bindings
 }

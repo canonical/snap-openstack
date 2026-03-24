@@ -19,14 +19,9 @@ variable "charm-manila-data-config" {
   default     = {}
 }
 
-variable "charm_manila_data_config" {
-  description = "Operator config for manila_data deployment"
-  type        = map(string)
-  default     = {}
-}
-
 variable "manila-data-channel" {
   description = "Manila Data snap channel to deploy, not the operator channel"
+  type        = string
   default     = "2024.1/edge"
 }
 
@@ -36,8 +31,8 @@ variable "machine_ids" {
   default     = []
 }
 
-variable "machine_model" {
-  description = "Model to deploy to"
+variable "machine_model_uuid" {
+  description = "UUID of Juju model to deploy manila_data into"
   type        = string
 }
 

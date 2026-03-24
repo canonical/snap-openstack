@@ -36,7 +36,6 @@ from sunbeam.core.juju import (
     JujuStepHelper,
 )
 from sunbeam.core.manifest import Manifest
-from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.core.openstack_api import remove_hypervisor
 from sunbeam.core.steps import (
     DeployMachineApplicationStep,
@@ -95,7 +94,6 @@ class DeployHypervisorApplicationStep(DeployMachineApplicationStep):
             "Deploying OpenStack Hypervisor",
         )
         self.openstack_tfhelper = openstack_tfhelper
-        self.openstack_model = OPENSTACK_MODEL
         self.cinder_volume_tfhelper = cinder_volume_tfhelper
         self.ovn_manager = deployment.get_ovn_manager()
 
@@ -131,7 +129,6 @@ class DeployHypervisorApplicationStep(DeployMachineApplicationStep):
 
         extra_tfvars.update(
             {
-                "openstack_model": self.openstack_model,
                 "endpoint_bindings": [
                     {"space": self.deployment.get_space(Networks.MANAGEMENT)},
                     {
@@ -379,6 +376,15 @@ class ReapplyHypervisorTerraformPlanStep(BaseStep):
     )
     def run(self, status: Status | None = None) -> Result:
         """Apply terraform configuration to deploy hypervisor."""
+        # Refresh model related variables
+        self.extra_tfvars["machine_model"] = self.model
+        self.extra_tfvars["machine_model_owner"] = self.jhelper.get_model_owner(
+            self.model
+        )
+        self.extra_tfvars["machine_model_uuid"] = self.jhelper.get_model_uuid(
+            self.model
+        )
+
         # Apply Network configs everytime reapply is called
         network_configs = get_external_network_configs(self.client)
         if "charm_config" not in self.extra_tfvars:
@@ -386,8 +392,8 @@ class ReapplyHypervisorTerraformPlanStep(BaseStep):
 
         if network_configs:
             LOG.debug(
-                "Add external network configs from DemoSetup to extra tfvars: "
-                f"{network_configs}"
+                "Add external network configs from DemoSetup to extra tfvars: %s",
+                network_configs,
             )
             self.extra_tfvars["charm_config"].update(network_configs)
 
