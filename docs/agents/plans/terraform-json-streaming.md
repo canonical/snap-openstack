@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3, Rich (Status, Group, Text), subprocess.Popen, threading (for stderr), collections.deque, json, typing.Protocol
 
-**Spec:** `docs/superpowers/specs/2026-03-23-terraform-json-streaming-design.md`
+**Spec:** `docs/agents/specs/terraform-json-streaming-design.md`
 
 **Test runner:** `cd sunbeam-python && uv run --frozen --isolated --extra=dev python -m pytest -vv tests/unit`
 
