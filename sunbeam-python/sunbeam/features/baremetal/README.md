@@ -24,15 +24,15 @@ features:
     software:
       charms:
         ironic-conductor-k8s:
-          channel: 2025.1/edge
+          channel: 2026.1/edge
         ironic-k8s:
-          channel: 2025.1/edge
+          channel: 2026.1/edge
         nova-ironic-k8s:
-          channel: 2025.1/edge
+          channel: 2026.1/edge
         neutron-baremetal-switch-config-k8s:
-          channel: 2025.1/edge
+          channel: 2026.1/edge
         neutron-generic-switch-config-k8s:
-          channel: 2025.1/edge
+          channel: 2026.1/edge
     config:
       shards: ["foo", "lish"]
       conductor-groups: ["foo", "lish"]
@@ -71,7 +71,7 @@ For the switch configurations, the following restrictions apply:
 
 - The `key_filename` and `key_file` config options base file paths must be `/etc/neutron/sshkeys`.
 - The files referenced in `key_filename` or `key_file` as seen above will require those files to be defined as additional files as well.
-- Unknown fields in the switch configurations are not allowed. See [netconf configuration options](https://docs.openstack.org/networking-baremetal/2025.1/configuration/ml2/device_drivers/netconf-openconfig.html) or [generic switch configuration](https://docs.openstack.org/networking-generic-switch/2025.1/configuration.html)
+- Unknown fields in the switch configurations are not allowed. See [netconf configuration options](https://docs.openstack.org/networking-baremetal/2026.1/configuration/ml2/device_drivers/netconf-openconfig.html) or [generic switch configuration](https://docs.openstack.org/networking-generic-switch/2026.1/configuration.html)
 - For `generic` switch configurations, the `device_type` field is mandatory.
 
 After the feature is enabled, you can use the `sunbeam baremetal` subcommand to manage the deployed `nova-ironic` shards, Ironic Conductor groups, and Neutron switch configurations.

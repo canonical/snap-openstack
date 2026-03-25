@@ -24,7 +24,7 @@ def pytest_addoption(parser):
         "--openstack-snap-channel",
         action="store",
         help="The snap channel used when installing the Openstack snap.",
-        default="2024.1/edge",
+        default="2026.1/edge",
     )
     parser.addoption(
         "--sriov-interface-name",

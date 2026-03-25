@@ -39,7 +39,7 @@ class TestLatestInChannel:
         """Test refresh when charm has no manifest entry."""
         # Setup
         apps = {
-            "nova": ("nova-k8s", "2024.1/stable", 123),
+            "nova": ("nova-k8s", "2026.1/stable", 123),
         }
         model = "openstack"
 
@@ -61,13 +61,13 @@ class TestLatestInChannel:
         """Test refresh when manifest has channel and revision."""
         # Setup
         apps = {
-            "nova": ("nova-k8s", "2024.1/stable", 123),
+            "nova": ("nova-k8s", "2026.1/stable", 123),
         }
         model = "openstack"
 
         # Manifest charm with channel and revision
         manifest_charm = Mock()
-        manifest_charm.channel = "2024.1/stable"
+        manifest_charm.channel = "2026.1/stable"
         manifest_charm.revision = 150
         self.manifest.core.software.charms = {"nova-k8s": manifest_charm}
 
@@ -81,7 +81,7 @@ class TestLatestInChannel:
         self.jhelper.charm_refresh.assert_called_once_with(
             "nova",
             model,
-            channel="2024.1/stable",
+            channel="2026.1/stable",
             revision=150,
         )
         assert result.result_type == ResultType.COMPLETED
@@ -90,13 +90,13 @@ class TestLatestInChannel:
         """Test refresh when manifest has only channel (no revision)."""
         # Setup
         apps = {
-            "nova": ("nova-k8s", "2024.1/stable", 123),
+            "nova": ("nova-k8s", "2026.1/stable", 123),
         }
         model = "openstack"
 
         # Manifest charm with channel but no revision
         manifest_charm = Mock()
-        manifest_charm.channel = "2024.1/stable"
+        manifest_charm.channel = "2026.1/stable"
         manifest_charm.revision = None
         self.manifest.core.software.charms = {"nova-k8s": manifest_charm}
 
@@ -110,7 +110,7 @@ class TestLatestInChannel:
         self.jhelper.charm_refresh.assert_called_once_with(
             "nova",
             model,
-            channel="2024.1/stable",
+            channel="2026.1/stable",
             revision=None,
         )
         assert result.result_type == ResultType.COMPLETED
@@ -119,15 +119,15 @@ class TestLatestInChannel:
         """Test refresh with multiple apps, some in manifest, some not."""
         # Setup
         apps = {
-            "nova": ("nova-k8s", "2024.1/stable", 123),
-            "neutron": ("neutron-k8s", "2024.1/stable", 456),
-            "cinder": ("cinder-k8s", "2024.1/stable", 789),
+            "nova": ("nova-k8s", "2026.1/stable", 123),
+            "neutron": ("neutron-k8s", "2026.1/stable", 456),
+            "cinder": ("cinder-k8s", "2026.1/stable", 789),
         }
         model = "openstack"
 
         # Only nova in manifest
         manifest_charm = Mock()
-        manifest_charm.channel = "2024.1/candidate"
+        manifest_charm.channel = "2026.1/candidate"
         manifest_charm.revision = 200
         self.manifest.core.software.charms = {"nova-k8s": manifest_charm}
 
@@ -144,7 +144,7 @@ class TestLatestInChannel:
         calls = self.jhelper.charm_refresh.call_args_list
 
         # Nova should be called with manifest config
-        assert call("nova", model, channel="2024.1/candidate", revision=200) in calls
+        assert call("nova", model, channel="2026.1/candidate", revision=200) in calls
 
         # Neutron and Cinder should be called without channel/revision
         assert call("neutron", model) in calls
@@ -156,7 +156,7 @@ class TestLatestInChannel:
         """Test refresh when charm is in feature manifest, not core."""
         # Setup
         apps = {
-            "barbican": ("barbican-k8s", "2024.1/stable", 123),
+            "barbican": ("barbican-k8s", "2026.1/stable", 123),
         }
         model = "openstack"
 
@@ -166,7 +166,7 @@ class TestLatestInChannel:
         # In feature manifest
         feature_manifest = Mock()
         manifest_charm = Mock()
-        manifest_charm.channel = "2024.1/stable"
+        manifest_charm.channel = "2026.1/stable"
         manifest_charm.revision = 100
         feature_manifest.software.charms = {"barbican-k8s": manifest_charm}
         self.manifest.get_features.return_value = [("barbican", feature_manifest)]
@@ -181,7 +181,7 @@ class TestLatestInChannel:
         self.jhelper.charm_refresh.assert_called_once_with(
             "barbican",
             model,
-            channel="2024.1/stable",
+            channel="2026.1/stable",
             revision=100,
         )
         assert result.result_type == ResultType.COMPLETED
@@ -190,7 +190,7 @@ class TestLatestInChannel:
         """Test refresh for machine model apps."""
         # Setup
         apps = {
-            "nova-compute": ("nova-compute", "2024.1/stable", 123),
+            "nova-compute": ("nova-compute", "2026.1/stable", 123),
         }
         model = "openstack-machines"
 
@@ -214,7 +214,7 @@ class TestLatestInChannel:
         """Test refresh fails when timeout occurs for k8s apps."""
         # Setup
         apps = {
-            "nova": ("nova-k8s", "2024.1/stable", 123),
+            "nova": ("nova-k8s", "2026.1/stable", 123),
         }
         model = OPENSTACK_MODEL
 
@@ -237,7 +237,7 @@ class TestLatestInChannel:
         """Test refresh fails when timeout occurs for machine apps."""
         # Setup
         apps = {
-            "nova-compute": ("nova-compute", "2024.1/stable", 123),
+            "nova-compute": ("nova-compute", "2026.1/stable", 123),
         }
         model = "openstack-machines"
 
@@ -258,7 +258,7 @@ class TestLatestInChannel:
 
     def test_refresh_apps_pre_refresh_status_fetched(self):
         """Test that pre-refresh status is fetched before charm_refresh calls."""
-        apps = {"nova": ("nova-k8s", "2024.1/stable", 123)}
+        apps = {"nova": ("nova-k8s", "2026.1/stable", 123)}
         model = OPENSTACK_MODEL
         self.manifest.core.software.charms = {}
 
@@ -286,7 +286,7 @@ class TestLatestInChannel:
 
     def test_refresh_apps_status_snapshot_exception_graceful(self):
         """Test graceful degradation when snapshot_workload_status raises."""
-        apps = {"nova": ("nova-k8s", "2024.1/stable", 123)}
+        apps = {"nova": ("nova-k8s", "2026.1/stable", 123)}
         model = OPENSTACK_MODEL
         self.manifest.core.software.charms = {}
 
@@ -539,10 +539,10 @@ class TestIsTrackChanged:
     def test_same_track_returns_false(self):
         """Returns False when manifest and deployed tracks match."""
         charm_manifest = Mock()
-        charm_manifest.channel = "2024.1/stable"
+        charm_manifest.channel = "2026.1/stable"
         self.manifest.core.software.charms = {"nova-k8s": charm_manifest}
 
-        apps = {"nova": ("nova-k8s", "2024.1/edge", 123)}
+        apps = {"nova": ("nova-k8s", "2026.1/edge", 123)}
         result = self.upgrader.is_track_changed_for_any_charm(apps)
 
         assert result is False
@@ -550,10 +550,10 @@ class TestIsTrackChanged:
     def test_different_track_returns_true(self):
         """Returns True when manifest track differs from deployed track."""
         charm_manifest = Mock()
-        charm_manifest.channel = "2025.1/stable"
+        charm_manifest.channel = "2026.1/stable"
         self.manifest.core.software.charms = {"nova-k8s": charm_manifest}
 
-        apps = {"nova": ("nova-k8s", "2024.1/stable", 123)}
+        apps = {"nova": ("nova-k8s", "2025.1/stable", 123)}
         result = self.upgrader.is_track_changed_for_any_charm(apps)
 
         assert result is True
@@ -563,7 +563,7 @@ class TestIsTrackChanged:
         self.manifest.core.software.charms = {}
         self.manifest.get_features.return_value = []
 
-        apps = {"nova": ("nova-k8s", "2024.1/stable", 123)}
+        apps = {"nova": ("nova-k8s", "2026.1/stable", 123)}
         result = self.upgrader.is_track_changed_for_any_charm(apps)
 
         assert result is False
@@ -574,11 +574,11 @@ class TestIsTrackChanged:
 
         feature_manifest = Mock()
         charm_manifest = Mock()
-        charm_manifest.channel = "2025.1/stable"
+        charm_manifest.channel = "2026.1/stable"
         feature_manifest.software.charms = {"barbican-k8s": charm_manifest}
         self.manifest.get_features.return_value = [("barbican", feature_manifest)]
 
-        apps = {"barbican": ("barbican-k8s", "2024.1/stable", 123)}
+        apps = {"barbican": ("barbican-k8s", "2025.1/stable", 123)}
         result = self.upgrader.is_track_changed_for_any_charm(apps)
 
         assert result is True
@@ -586,17 +586,17 @@ class TestIsTrackChanged:
     def test_one_app_differs_returns_true(self):
         """Returns True on first track mismatch even if others are the same."""
         nova_charm = Mock()
-        nova_charm.channel = "2024.1/stable"
+        nova_charm.channel = "2026.1/stable"
         glance_charm = Mock()
-        glance_charm.channel = "2025.1/stable"  # different track
+        glance_charm.channel = "2026.1/stable"
         self.manifest.core.software.charms = {
             "nova-k8s": nova_charm,
             "glance-k8s": glance_charm,
         }
 
         apps = {
-            "nova": ("nova-k8s", "2024.1/stable", 1),
-            "glance": ("glance-k8s", "2024.1/stable", 2),
+            "nova": ("nova-k8s", "2025.1/stable", 1),
+            "glance": ("glance-k8s", "2025.1/stable", 2),
         }
         result = self.upgrader.is_track_changed_for_any_charm(apps)
 
@@ -676,8 +676,8 @@ class TestLatestInChannelRun:
         """Local deployment should NOT discover or refresh infra model apps."""
         mock_is_maas.return_value = False
 
-        k8s_apps = {"nova": ("nova-k8s", "2024.1/stable", 123)}
-        machine_apps = {"sunbeam-machine": ("sunbeam-machine", "2024.1/stable", 10)}
+        k8s_apps = {"nova": ("nova-k8s", "2026.1/stable", 123)}
+        machine_apps = {"sunbeam-machine": ("sunbeam-machine", "2026.1/stable", 10)}
 
         # Call order: k8s, machines (no infra for local)
         self.upgrader.get_charm_deployed_versions = Mock(
@@ -707,10 +707,10 @@ class TestLatestInChannelRun:
         mock_is_maas.return_value = True
         self.deployment.infra_model = "openstack-infra"
 
-        k8s_apps = {"nova": ("nova-k8s", "2024.1/stable", 123)}
-        machine_apps = {"sunbeam-machine": ("sunbeam-machine", "2024.1/stable", 10)}
+        k8s_apps = {"nova": ("nova-k8s", "2026.1/stable", 123)}
+        machine_apps = {"sunbeam-machine": ("sunbeam-machine", "2026.1/stable", 10)}
         infra_apps = {
-            "sunbeam-clusterd": ("sunbeam-clusterd", "2024.1/stable", 5),
+            "sunbeam-clusterd": ("sunbeam-clusterd", "2026.1/stable", 5),
             "tls-operator": ("self-signed-certificates", "latest/stable", 20),
         }
 
@@ -744,7 +744,7 @@ class TestLatestInChannelRun:
         mock_is_maas.return_value = True
         self.deployment.infra_model = "openstack-infra"
 
-        k8s_apps = {"nova": ("nova-k8s", "2024.1/stable", 123)}
+        k8s_apps = {"nova": ("nova-k8s", "2025.1/stable", 123)}
         machine_apps = {}
         infra_apps = {
             "sunbeam-clusterd": ("sunbeam-clusterd", "2025.1/stable", 5),
@@ -757,7 +757,7 @@ class TestLatestInChannelRun:
 
         # Simulate track change detected (manifest track differs from deployed)
         manifest_charm = Mock()
-        manifest_charm.channel = "2024.1/stable"
+        manifest_charm.channel = "2026.1/stable"
         self.manifest.core.software.charms = {"sunbeam-clusterd": manifest_charm}
 
         result = self.upgrader.run(step_context)
@@ -773,10 +773,10 @@ class TestLatestInChannelRun:
         mock_is_maas.return_value = True
         self.deployment.infra_model = "openstack-infra"
 
-        k8s_apps = {"nova": ("nova-k8s", "2024.1/stable", 123)}
-        machine_apps = {"sunbeam-machine": ("sunbeam-machine", "2024.1/stable", 10)}
+        k8s_apps = {"nova": ("nova-k8s", "2026.1/stable", 123)}
+        machine_apps = {"sunbeam-machine": ("sunbeam-machine", "2026.1/stable", 10)}
         infra_apps = {
-            "sunbeam-clusterd": ("sunbeam-clusterd", "2024.1/stable", 5),
+            "sunbeam-clusterd": ("sunbeam-clusterd", "2026.1/stable", 5),
         }
 
         # Call order: infra, k8s, machines
@@ -804,10 +804,10 @@ class TestLatestInChannelRun:
         mock_is_maas.return_value = True
         self.deployment.infra_model = "openstack-infra"
 
-        k8s_apps = {"nova": ("nova-k8s", "2024.1/stable", 123)}
-        machine_apps = {"sunbeam-machine": ("sunbeam-machine", "2024.1/stable", 10)}
+        k8s_apps = {"nova": ("nova-k8s", "2026.1/stable", 123)}
+        machine_apps = {"sunbeam-machine": ("sunbeam-machine", "2026.1/stable", 10)}
         infra_apps = {
-            "sunbeam-clusterd": ("sunbeam-clusterd", "2024.1/stable", 5),
+            "sunbeam-clusterd": ("sunbeam-clusterd", "2026.1/stable", 5),
         }
 
         # Call order: infra, k8s, machines
@@ -835,7 +835,7 @@ class TestLatestInChannelRun:
         mock_is_maas.return_value = True
         self.deployment.infra_model = "openstack-infra"
 
-        k8s_apps = {"nova": ("nova-k8s", "2024.1/stable", 123)}
+        k8s_apps = {"nova": ("nova-k8s", "2026.1/stable", 123)}
         machine_apps = {}
         infra_apps = {}  # empty infra model
 
@@ -973,7 +973,7 @@ class TestReapplyInfraModelConfigStep:
     def test_run_applies_manifest_config(self, step_context):
         """Config from manifest is applied to infra model apps."""
         clusterd_manifest = Mock()
-        clusterd_manifest.config = {"snap-channel": "2024.1/stable", "debug": "true"}
+        clusterd_manifest.config = {"snap-channel": "2026.1/stable", "debug": "true"}
 
         certs_manifest = Mock()
         certs_manifest.config = {"ca-common-name": "sunbeam"}
@@ -995,7 +995,7 @@ class TestReapplyInfraModelConfigStep:
         self.jhelper.set_app_config.assert_any_call(
             "sunbeam-clusterd",
             "openstack-infra",
-            {"snap-channel": "2024.1/stable", "debug": "true"},
+            {"snap-channel": "2026.1/stable", "debug": "true"},
         )
         self.jhelper.set_app_config.assert_any_call(
             "tls-operator",

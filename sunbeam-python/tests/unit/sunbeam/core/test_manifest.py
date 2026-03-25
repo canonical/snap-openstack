@@ -79,7 +79,7 @@ test_manifest_incorrect_terraform_key = {
 def snap_conf(snap, mocker):
     snap.config.get.side_effect = lambda key: {
         "deployment.risk": "stable",
-        "deployment.version": "2024.1",
+        "deployment.version": "2026.1",
     }.get(key, None)
     mocker.patch.object(manifest_mod, "Snap", return_value=snap)
     return snap
@@ -259,7 +259,7 @@ class TestAddManifestStep:
     ):
         snap_conf.config.get.side_effect = lambda key: {
             "deployment.risk": "edge",
-            "deployment.version": "2024.1",
+            "deployment.version": "2026.1",
         }.get(key, None)
         client = Mock()
         client.cluster.get_latest_manifest.side_effect = ManifestItemNotFoundException(
@@ -269,7 +269,7 @@ class TestAddManifestStep:
         result = step.is_skip(step_context)
 
         manifest_mod.embedded_manifest_path.assert_called_once_with(
-            snap_conf, "2024.1", "edge"
+            snap_conf, "2026.1", "edge"
         )
         assert result.result_type == ResultType.COMPLETED
 
