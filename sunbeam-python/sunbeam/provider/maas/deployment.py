@@ -114,9 +114,7 @@ ROLE_NETWORK_MAPPING = {
     RoleTags.NETWORK: [
         Networks.INTERNAL,
         Networks.MANAGEMENT,
-        Networks.PUBLIC,
         Networks.DATA,
-        Networks.STORAGE,
     ],
     RoleTags.JUJU_CONTROLLER: [
         Networks.MANAGEMENT,

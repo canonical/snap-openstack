@@ -152,6 +152,13 @@ class TestRoleNetworkMapping:
         }
         assert set(ROLE_NETWORK_MAPPING[RoleTags.CONTROL]) == expected
 
+    def test_network_role_does_not_require_public_or_storage(self):
+        """Network role nodes (OVN gateways) only need internal, management and data."""
+        mapping = set(ROLE_NETWORK_MAPPING[RoleTags.NETWORK])
+        assert Networks.PUBLIC not in mapping
+        assert Networks.STORAGE not in mapping
+        assert mapping == {Networks.INTERNAL, Networks.MANAGEMENT, Networks.DATA}
+
 
 class TestMachineNetworkCheck:
     def test_run_with_incomplete_network_mapping(self, mocker):
