@@ -19,7 +19,11 @@ from sunbeam.core.k8s import (
     METALLB_ALLOCATED_POOL_ANNOTATION,
     METALLB_IP_ANNOTATION,
 )
-from sunbeam.core.manifest import Manifest
+from sunbeam.core.manifest import (
+    Manifest,
+    check_storage_modifications_in_manifest,
+    load_stored_tfvars,
+)
 from sunbeam.core.openstack import ENDPOINTS_CONFIG_KEY, REGION_CONFIG_KEY
 from sunbeam.core.terraform import TerraformException
 from sunbeam.steps.openstack import (
@@ -291,6 +295,7 @@ class TestDeployControlPlaneStep:
         step_context,
     ):
         snap_mock().config.get.return_value = "k8s"
+        basic_tfhelper.tfvar_map = {"charms": {}}
         step = DeployControlPlaneStep(
             deployment_with_client,
             basic_tfhelper,
@@ -306,6 +311,55 @@ class TestDeployControlPlaneStep:
             result = step.is_skip(step_context)
 
         assert result.result_type == ResultType.COMPLETED
+
+    def test_is_skip_fails_on_storage_modification(
+        self,
+        deployment_with_client,
+        basic_tfhelper,
+        basic_jhelper,
+        config_mock,
+        snap_patch,
+        snap_mock,
+        step_context,
+    ):
+        snap_mock().config.get.return_value = "k8s"
+        basic_tfhelper.tfvar_map = {
+            "charms": {
+                "rabbitmq-k8s": {"storage": "rabbitmq-storage"},
+            }
+        }
+        manifest = Manifest(
+            **{
+                "core": {
+                    "software": {
+                        "charms": {"rabbitmq-k8s": {"storage": {"rabbitmq-data": "8G"}}}
+                    }
+                }
+            }
+        )
+        step = DeployControlPlaneStep(
+            deployment_with_client,
+            basic_tfhelper,
+            basic_jhelper,
+            manifest,
+            TOPOLOGY,
+            MODEL,
+        )
+        mock_config = Mock(
+            return_value={
+                "topology": "single",
+                "database": "single",
+                "rabbitmq-storage": {"rabbitmq-data": "4G"},
+            }
+        )
+        with (
+            patch("sunbeam.steps.openstack.read_config", mock_config),
+            patch("sunbeam.core.manifest.read_config", mock_config),
+        ):
+            result = step.is_skip(step_context)
+
+        assert result.result_type == ResultType.FAILED
+        assert "rabbitmq-storage" in result.message
 
 
 @pytest.fixture
@@ -990,6 +1044,12 @@ def read_config():
         yield p
 
 
+@pytest.fixture()
+def manifest_read_config():
+    with patch("sunbeam.core.manifest.read_config") as p:
+        yield p
+
+
 @pytest.mark.parametrize(
     "many_mysql,clusterdb_configs,manifest,expected_storage",
     [
@@ -1220,8 +1280,8 @@ class TestGetRabbitmqStorageTfvars:
 
         assert result == {"rabbitmq-storage": {"rabbitmq-data": "2G"}}
 
-    def test_manifest_overrides_db(self, read_config, snap):
-        """Manifest storage value should override DB value."""
+    def test_manifest_does_not_override_db(self, read_config, snap):
+        """Manifest storage value cannot override persisted DB value."""
         client = Mock()
 
         def _read_config_side_effect(_client, key):
@@ -1242,7 +1302,7 @@ class TestGetRabbitmqStorageTfvars:
 
         result = get_rabbitmq_storage_tfvars(client, manifest)
 
-        assert result == {"rabbitmq-storage": {"rabbitmq-data": "8G"}}
+        assert result == {"rabbitmq-storage": {"rabbitmq-data": "2G"}}
 
     def test_manifest_on_new_deployment(self, read_config, snap):
         """Manifest storage on new deployment should be used."""
@@ -1262,8 +1322,8 @@ class TestGetRabbitmqStorageTfvars:
 
         assert result == {"rabbitmq-storage": {"rabbitmq-data": "8G"}}
 
-    def test_manifest_on_existing_deployment(self, read_config, snap):
-        """Manifest storage on existing deployment should be used."""
+    def test_manifest_on_existing_deployment_ignored(self, read_config, snap):
+        """Manifest storage on existing deployment without prior value is ignored."""
         client = Mock()
 
         def _read_config_side_effect(_client, key):
@@ -1284,4 +1344,487 @@ class TestGetRabbitmqStorageTfvars:
 
         result = get_rabbitmq_storage_tfvars(client, manifest)
 
-        assert result == {"rabbitmq-storage": {"rabbitmq-data": "8G"}}
+        assert result == {}
+
+
+# ---------------------------------------------------------------------------
+# load_stored_tfvars
+# ---------------------------------------------------------------------------
+
+
+class TestLoadStoredTfvars:
+    def test_no_config_found(self, manifest_read_config, snap):
+        """Returns empty dict when no config keys exist."""
+        client = Mock()
+        manifest_read_config.side_effect = ConfigItemNotFoundException("not found")
+
+        result = load_stored_tfvars(client, [CONFIG_KEY])
+
+        assert result == {}
+
+    def test_single_key(self, manifest_read_config, snap):
+        """Loads tfvars from a single config key."""
+        client = Mock()
+        manifest_read_config.return_value = {
+            "rabbitmq-storage": {"rabbitmq-data": "4G"},
+            "_computed_keys": ["rabbitmq-storage"],
+        }
+
+        result = load_stored_tfvars(client, [CONFIG_KEY])
+
+        assert result == {"rabbitmq-storage": {"rabbitmq-data": "4G"}}
+        assert "_computed_keys" not in result
+
+    def test_extra_key_adds_new_subkeys(self, manifest_read_config, snap):
+        """Extra config key contributes new sub-keys only."""
+        client = Mock()
+
+        def _side_effect(_client, key):
+            if key == CONFIG_KEY:
+                return {"mysql-storage-map": {"nova": {"database": "10G"}}}
+            if key == "TerraformVarsDns":
+                return {
+                    "mysql-storage-map": {
+                        "nova": {"database": "10G"},
+                        "designate": {"database": "1G"},
+                    }
+                }
+            raise ConfigItemNotFoundException(f"{key} not found")
+
+        manifest_read_config.side_effect = _side_effect
+
+        result = load_stored_tfvars(client, [CONFIG_KEY, "TerraformVarsDns"])
+
+        assert result == {
+            "mysql-storage-map": {
+                "nova": {"database": "10G"},
+                "designate": {"database": "1G"},
+            }
+        }
+
+    def test_canonical_key_preferred(self, manifest_read_config, snap):
+        """CONFIG_KEY (first) values are not overwritten by extra keys."""
+        client = Mock()
+
+        def _side_effect(_client, key):
+            if key == CONFIG_KEY:
+                return {"mysql-storage-map": {"nova": {"database": "10G"}}}
+            if key == "TerraformVarsDns":
+                return {"mysql-storage-map": {"nova": {"database": "99G"}}}
+            raise ConfigItemNotFoundException(f"{key} not found")
+
+        manifest_read_config.side_effect = _side_effect
+
+        result = load_stored_tfvars(client, [CONFIG_KEY, "TerraformVarsDns"])
+
+        assert result["mysql-storage-map"]["nova"] == {"database": "10G"}
+
+    def test_missing_extra_key_ignored(self, manifest_read_config, snap):
+        """Missing extra config keys are silently skipped."""
+        client = Mock()
+
+        def _side_effect(_client, key):
+            if key == CONFIG_KEY:
+                return {"rabbitmq-storage": {"rabbitmq-data": "4G"}}
+            raise ConfigItemNotFoundException(f"{key} not found")
+
+        manifest_read_config.side_effect = _side_effect
+
+        result = load_stored_tfvars(client, [CONFIG_KEY, "NonExistent"])
+
+        assert result == {"rabbitmq-storage": {"rabbitmq-data": "4G"}}
+
+    def test_non_dict_stored_value_kept(self, manifest_read_config, snap):
+        """Non-dict stored values are kept as-is (no merge attempted)."""
+        client = Mock()
+        manifest_read_config.return_value = {
+            "rabbitmq-storage": "corrupted-string",
+        }
+
+        result = load_stored_tfvars(client, [CONFIG_KEY])
+
+        assert result == {"rabbitmq-storage": "corrupted-string"}
+
+
+# ---------------------------------------------------------------------------
+# Manifest.find_charm
+# ---------------------------------------------------------------------------
+
+
+class TestGetCharmManifest:
+    def test_found_in_core(self, snap):
+        """Charm found in core section."""
+        manifest = Manifest(
+            **{
+                "core": {
+                    "software": {
+                        "charms": {"rabbitmq-k8s": {"storage": {"rabbitmq-data": "4G"}}}
+                    }
+                }
+            }
+        )
+
+        result = manifest.find_charm("rabbitmq-k8s")
+
+        assert result is not None
+        assert result.model_extra["storage"] == {"rabbitmq-data": "4G"}
+
+    def test_fallback_to_feature(self, snap):
+        """Charm not in core falls back to feature sections."""
+        manifest = Manifest(
+            **{
+                "core": {"software": {"charms": {}}},
+                "features": {
+                    "dns": {
+                        "software": {
+                            "charms": {
+                                "rabbitmq-k8s": {"storage": {"rabbitmq-data": "8G"}}
+                            }
+                        }
+                    }
+                },
+            }
+        )
+
+        result = manifest.find_charm("rabbitmq-k8s")
+
+        assert result is not None
+        assert result.model_extra["storage"] == {"rabbitmq-data": "8G"}
+
+    def test_not_found(self, snap):
+        """Returns None when charm is not in core or any feature."""
+        manifest = Manifest()
+
+        result = manifest.find_charm("nonexistent-k8s")
+
+        assert result is None
+
+    def test_core_preferred_over_feature(self, snap):
+        """Core section is used even if feature also defines the charm."""
+        manifest = Manifest(
+            **{
+                "core": {
+                    "software": {
+                        "charms": {"rabbitmq-k8s": {"storage": {"rabbitmq-data": "4G"}}}
+                    }
+                },
+                "features": {
+                    "dns": {
+                        "software": {
+                            "charms": {
+                                "rabbitmq-k8s": {"storage": {"rabbitmq-data": "99G"}}
+                            }
+                        }
+                    }
+                },
+            }
+        )
+
+        result = manifest.find_charm("rabbitmq-k8s")
+
+        assert result is not None
+        assert result.model_extra["storage"] == {"rabbitmq-data": "4G"}
+
+
+# ---------------------------------------------------------------------------
+# check_storage_modifications_in_manifest
+# ---------------------------------------------------------------------------
+
+TFVAR_MAP_WITH_STORAGE = {
+    "charms": {
+        "mysql-k8s": {
+            "channel": "mysql-channel",
+            "storage": "mysql-storage",
+            "storage-map": "mysql-storage-map",
+        },
+        "rabbitmq-k8s": {
+            "channel": "rabbitmq-channel",
+            "storage": "rabbitmq-storage",
+        },
+        "glance-k8s": {
+            "channel": "glance-channel",
+            "storage": "glance-storage",
+        },
+    },
+}
+
+
+class TestCheckStorageModificationsInManifest:
+    def test_no_stored_config(self, manifest_read_config, snap):
+        """No previous deployment means no modifications."""
+        client = Mock()
+        manifest_read_config.side_effect = ConfigItemNotFoundException("not found")
+        manifest = Manifest(
+            **{
+                "core": {
+                    "software": {
+                        "charms": {"rabbitmq-k8s": {"storage": {"rabbitmq-data": "8G"}}}
+                    }
+                }
+            }
+        )
+
+        result = check_storage_modifications_in_manifest(
+            client, manifest, TFVAR_MAP_WITH_STORAGE, CONFIG_KEY
+        )
+
+        assert result == []
+
+    def test_no_manifest_storage(self, manifest_read_config, snap):
+        """No storage in manifest means no modifications."""
+        client = Mock()
+        manifest_read_config.return_value = {
+            "rabbitmq-storage": {"rabbitmq-data": "4G"},
+        }
+        manifest = Manifest()
+
+        result = check_storage_modifications_in_manifest(
+            client, manifest, TFVAR_MAP_WITH_STORAGE, CONFIG_KEY
+        )
+
+        assert result == []
+
+    def test_matching_values(self, manifest_read_config, snap):
+        """Manifest matches stored values — no modification."""
+        client = Mock()
+        manifest_read_config.return_value = {
+            "rabbitmq-storage": {"rabbitmq-data": "4G"},
+            "mysql-storage": {"database": "20G"},
+        }
+        manifest = Manifest(
+            **{
+                "core": {
+                    "software": {
+                        "charms": {
+                            "rabbitmq-k8s": {"storage": {"rabbitmq-data": "4G"}},
+                            "mysql-k8s": {"storage": {"database": "20G"}},
+                        }
+                    }
+                }
+            }
+        )
+
+        result = check_storage_modifications_in_manifest(
+            client, manifest, TFVAR_MAP_WITH_STORAGE, CONFIG_KEY
+        )
+
+        assert result == []
+
+    def test_modified_storage_detected(self, manifest_read_config, snap):
+        """Changed storage value is detected."""
+        client = Mock()
+        manifest_read_config.return_value = {
+            "rabbitmq-storage": {"rabbitmq-data": "4G"},
+        }
+        manifest = Manifest(
+            **{
+                "core": {
+                    "software": {
+                        "charms": {"rabbitmq-k8s": {"storage": {"rabbitmq-data": "8G"}}}
+                    }
+                }
+            }
+        )
+
+        result = check_storage_modifications_in_manifest(
+            client, manifest, TFVAR_MAP_WITH_STORAGE, CONFIG_KEY
+        )
+
+        assert result == ["rabbitmq-storage"]
+
+    def test_modified_storage_map_detected(self, manifest_read_config, snap):
+        """Changed storage-map entry is detected."""
+        client = Mock()
+        manifest_read_config.return_value = {
+            "mysql-storage-map": {
+                "nova": {"database": "10G"},
+                "cinder": {"database": "1G"},
+            },
+        }
+        manifest = Manifest(
+            **{
+                "core": {
+                    "software": {
+                        "charms": {
+                            "mysql-k8s": {
+                                "storage-map": {
+                                    "nova": {"database": "20G"},
+                                    "cinder": {"database": "1G"},
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        )
+
+        result = check_storage_modifications_in_manifest(
+            client, manifest, TFVAR_MAP_WITH_STORAGE, CONFIG_KEY
+        )
+
+        assert result == ["mysql-storage-map"]
+
+    def test_new_service_in_storage_map_allowed(self, manifest_read_config, snap):
+        """Adding a new service to storage-map is allowed."""
+        client = Mock()
+        manifest_read_config.return_value = {
+            "mysql-storage-map": {"nova": {"database": "10G"}},
+        }
+        manifest = Manifest(
+            **{
+                "core": {
+                    "software": {
+                        "charms": {
+                            "mysql-k8s": {
+                                "storage-map": {
+                                    "nova": {"database": "10G"},
+                                    "cinder": {"database": "1G"},
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        )
+
+        result = check_storage_modifications_in_manifest(
+            client, manifest, TFVAR_MAP_WITH_STORAGE, CONFIG_KEY
+        )
+
+        assert result == []
+
+    def test_multiple_charms_modified(self, manifest_read_config, snap):
+        """Modifications across multiple charms are all reported."""
+        client = Mock()
+        manifest_read_config.return_value = {
+            "rabbitmq-storage": {"rabbitmq-data": "4G"},
+            "mysql-storage": {"database": "20G"},
+        }
+        manifest = Manifest(
+            **{
+                "core": {
+                    "software": {
+                        "charms": {
+                            "rabbitmq-k8s": {"storage": {"rabbitmq-data": "8G"}},
+                            "mysql-k8s": {"storage": {"database": "40G"}},
+                        }
+                    }
+                }
+            }
+        )
+
+        result = check_storage_modifications_in_manifest(
+            client, manifest, TFVAR_MAP_WITH_STORAGE, CONFIG_KEY
+        )
+
+        assert "rabbitmq-storage" in result
+        assert "mysql-storage" in result
+
+    def test_first_time_storage_allowed(self, manifest_read_config, snap):
+        """Charm with no stored storage allows manifest value."""
+        client = Mock()
+        manifest_read_config.return_value = {
+            "mysql-storage": {"database": "20G"},
+        }
+        manifest = Manifest(
+            **{
+                "core": {
+                    "software": {
+                        "charms": {"rabbitmq-k8s": {"storage": {"rabbitmq-data": "8G"}}}
+                    }
+                }
+            }
+        )
+
+        result = check_storage_modifications_in_manifest(
+            client, manifest, TFVAR_MAP_WITH_STORAGE, CONFIG_KEY
+        )
+
+        assert result == []
+
+    def test_non_dict_manifest_storage_ignored(self, manifest_read_config, snap):
+        """Non-dict storage value in manifest is silently skipped."""
+        client = Mock()
+        manifest_read_config.return_value = {
+            "rabbitmq-storage": {"rabbitmq-data": "4G"},
+        }
+        manifest = Manifest(
+            **{
+                "core": {
+                    "software": {"charms": {"rabbitmq-k8s": {"storage": "not-a-dict"}}}
+                }
+            }
+        )
+
+        result = check_storage_modifications_in_manifest(
+            client, manifest, TFVAR_MAP_WITH_STORAGE, CONFIG_KEY
+        )
+
+        assert result == []
+
+    def test_non_dict_stored_value_ignored(self, manifest_read_config, snap):
+        """Non-dict stored value for a storage key does not crash."""
+        client = Mock()
+        manifest_read_config.return_value = {
+            "rabbitmq-storage": "corrupted-string-value",
+        }
+        manifest = Manifest(
+            **{
+                "core": {
+                    "software": {
+                        "charms": {"rabbitmq-k8s": {"storage": {"rabbitmq-data": "8G"}}}
+                    }
+                }
+            }
+        )
+
+        result = check_storage_modifications_in_manifest(
+            client, manifest, TFVAR_MAP_WITH_STORAGE, CONFIG_KEY
+        )
+
+        assert result == []
+
+    def test_both_storage_and_storage_map_modified(self, manifest_read_config, snap):
+        """Both storage and storage-map on same charm are reported."""
+        client = Mock()
+        manifest_read_config.return_value = {
+            "mysql-storage": {"database": "20G"},
+            "mysql-storage-map": {"nova": {"database": "10G"}},
+        }
+        manifest = Manifest(
+            **{
+                "core": {
+                    "software": {
+                        "charms": {
+                            "mysql-k8s": {
+                                "storage": {"database": "40G"},
+                                "storage-map": {"nova": {"database": "20G"}},
+                            }
+                        }
+                    }
+                }
+            }
+        )
+
+        result = check_storage_modifications_in_manifest(
+            client, manifest, TFVAR_MAP_WITH_STORAGE, CONFIG_KEY
+        )
+
+        assert "mysql-storage" in result
+        assert "mysql-storage-map" in result
+
+    def test_charm_not_in_manifest(self, manifest_read_config, snap):
+        """Charms in tfvar_map but absent from manifest cause no issues."""
+        client = Mock()
+        manifest_read_config.return_value = {
+            "rabbitmq-storage": {"rabbitmq-data": "4G"},
+            "mysql-storage": {"database": "20G"},
+            "glance-storage": {"local-data": "50G"},
+        }
+        manifest = Manifest()
+
+        result = check_storage_modifications_in_manifest(
+            client, manifest, TFVAR_MAP_WITH_STORAGE, CONFIG_KEY
+        )
+
+        assert result == []

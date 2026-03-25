@@ -40,7 +40,7 @@ from sunbeam.core.juju import (
     build_pre_status_overlay,
 )
 from sunbeam.core.k8s import CREDENTIAL_SUFFIX, K8SHelper
-from sunbeam.core.manifest import Manifest
+from sunbeam.core.manifest import Manifest, check_storage_modifications_in_manifest
 from sunbeam.core.openstack import (
     DEFAULT_REGION,
     ENDPOINTS_CONFIG_KEY,
@@ -473,35 +473,6 @@ def write_database_storage_dict(client: Client, storage_dict: dict[str, str]):
     update_config(client, DATABASE_STORAGE_KEY, storage_dict)
 
 
-def check_database_size_modifications_in_manifest(
-    client: Client, manifest: Manifest, many_mysql: bool
-) -> bool:
-    """Database sizes are immutable in manifest and cannot be updated.
-
-    Check for modifications in database storage sizes in manifest.
-    Return True if there are modifications.
-
-    Raises ValueError if the storage sizes are not in proper format.
-    """
-    storage_dict_from_manifest = get_database_storage_from_manifest(
-        manifest, many_mysql
-    )
-
-    try:
-        storage_dict_from_db = read_config(client, DATABASE_STORAGE_KEY)
-    except ConfigItemNotFoundException:
-        storage_dict_from_db = {}
-
-    # User can update manifest to add storage for features at later point
-    # of time during enablement of feature.
-    # So compare for storages if service exists in both the dicts.
-    for service, storage in storage_dict_from_manifest.items():
-        if (storage_ := storage_dict_from_db.get(service)) and storage != storage_:
-            return True
-
-    return False
-
-
 def get_rabbitmq_storage_from_manifest(manifest: Manifest) -> dict | None:
     """Extract rabbitmq-k8s storage from manifest if present."""
     rabbitmq_manifest = manifest.core.software.charms.get("rabbitmq-k8s")
@@ -519,8 +490,9 @@ def get_rabbitmq_storage_tfvars(client: Client, manifest: Manifest) -> dict:
     """Get terraform variables for rabbitmq storage.
 
     Returns the rabbitmq-storage tfvar based on priority:
-    1. Manifest value (highest priority)
-    2. Previously persisted value from DB
+    1. Previously persisted value from DB (if exists, manifest cannot change it
+       due to the immutability check in is_skip)
+    2. Manifest value for new deployments
     3. Default for new deployments only
 
     For existing deployments without previously configured storage,
@@ -531,21 +503,20 @@ def get_rabbitmq_storage_tfvars(client: Client, manifest: Manifest) -> dict:
     except ConfigItemNotFoundException:
         storage_from_db = None
 
-    storage_from_manifest = get_rabbitmq_storage_from_manifest(manifest)
-
-    if storage_from_manifest:
-        storage = storage_from_manifest
-    elif storage_from_db:
+    if storage_from_db:
         storage = storage_from_db
     else:
-        # Only set default for new clusters.
-        # Existing clusters (CONFIG_KEY exists) should not get a default
-        # to avoid destructive PVC resize.
+        # No previously stored value.  Only set storage for new clusters.
+        # Existing clusters (CONFIG_KEY exists) must not receive a storage
+        # value to avoid destructive PVC resize.
         try:
             read_config(client, CONFIG_KEY)
             return {}
         except ConfigItemNotFoundException:
-            storage = {"rabbitmq-data": DEFAULT_RABBITMQ_STORAGE}
+            storage_from_manifest = get_rabbitmq_storage_from_manifest(manifest)
+            storage = storage_from_manifest or {
+                "rabbitmq-data": DEFAULT_RABBITMQ_STORAGE
+            }
 
     update_config(client, RABBITMQ_STORAGE_KEY, storage)
     return {"rabbitmq-storage": storage}
@@ -742,21 +713,18 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
             self.topology = determined_topology
         LOG.debug(f"topology {self.topology}")
 
-        # Check for database size modifications in manifest
-        # TODO: Force flag to update storage sizes once resize database on k8s
+        # Check for storage size modifications in manifest
+        # TODO: Force flag to update storage sizes once resize on k8s
         # is figured out
-        try:
-            many_mysql = self.database == "multi"
-            database_size_changed = check_database_size_modifications_in_manifest(
-                self.client, self.manifest, many_mysql
+        modified = check_storage_modifications_in_manifest(
+            self.client, self.manifest, self.tfhelper.tfvar_map, CONFIG_KEY
+        )
+        if modified:
+            return Result(
+                ResultType.FAILED,
+                "Storage sizes are immutable and cannot be modified"
+                f" in manifest: {', '.join(modified)}",
             )
-            if database_size_changed:
-                return Result(
-                    ResultType.FAILED,
-                    "Storage sizes are immutable and cannot be modified in manifest",
-                )
-        except ValueError as e:
-            return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.COMPLETED)
 

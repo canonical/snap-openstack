@@ -16,6 +16,7 @@ from sunbeam import utils
 from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import (
     ClusterServiceUnavailableException,
+    ConfigItemNotFoundException,
     ManifestItemNotFoundException,
 )
 from sunbeam.core.common import (
@@ -25,10 +26,11 @@ from sunbeam.core.common import (
     StepContext,
     infer_risk,
     infer_version,
+    read_config,
 )
 
 # from sunbeam.feature_manager import FeatureManager
-from sunbeam.versions import MANIFEST_CHARM_VERSIONS, TERRAFORM_DIR_NAMES
+from sunbeam.versions import MANIFEST_CHARM_VERSIONS, TERRAFORM_DIR_NAMES, VarMap
 
 LOG = logging.getLogger(__name__)
 EMPTY_MANIFEST: dict[str, dict] = {"core": {"charms": {}, "terraform": {}}}
@@ -480,6 +482,94 @@ class Manifest(pydantic.BaseModel):
                     feature_or_group_manifest.software.validate_against_default(
                         other_manifest.software
                     )
+
+
+def load_stored_tfvars(client: Client, config_keys: list[str]) -> dict:
+    """Load and merge stored tfvars from multiple config keys.
+
+    The first key in *config_keys* is treated as the canonical source.
+    Extra sources only contribute new sub-keys (e.g. a feature config
+    may have service entries not yet in the canonical config).
+    """
+    stored_tfvars: dict = {}
+    for key in config_keys:
+        try:
+            config = read_config(client, key)
+        except ConfigItemNotFoundException:
+            continue
+        for k, v in config.items():
+            if k == "_computed_keys":
+                continue
+            if k not in stored_tfvars:
+                stored_tfvars[k] = v
+            elif isinstance(v, dict) and isinstance(stored_tfvars[k], dict):
+                for sub_k, sub_v in v.items():
+                    if sub_k not in stored_tfvars[k]:
+                        stored_tfvars[k][sub_k] = sub_v
+    return stored_tfvars
+
+
+def check_storage_modifications_in_manifest(
+    client: Client,
+    manifest: Manifest,
+    tfvar_map: VarMap,
+    tfvar_config_key: str,
+    extra_tfvar_config_keys: list[str] | None = None,
+) -> list[str]:
+    """Check for immutable storage size modifications in manifest.
+
+    Due to Juju limitations, PVC sizes cannot be resized after deployment.
+    This function checks all charms' ``storage`` and ``storage-map`` fields
+    in the manifest against previously stored tfvar values.
+
+    Stored values are read from *tfvar_config_key* and any additional config
+    keys provided by the caller (e.g. a feature's own tfvar config key).
+
+    Only keys present in **both** the manifest and the stored config are
+    compared, so adding storage for a newly enabled service is allowed.
+
+    Note: this check can only protect against modifications to values that
+    were previously persisted. If a charm's storage was never stored (e.g.
+    an old deployment predating storage tracking for that charm), changes
+    to that charm's storage in the manifest will not be caught here.
+
+    Returns a list of modified tfvar names (empty means no modifications).
+    """
+    config_keys = [tfvar_config_key]
+    if extra_tfvar_config_keys:
+        config_keys.extend(extra_tfvar_config_keys)
+
+    stored_tfvars = load_stored_tfvars(client, config_keys)
+    if not stored_tfvars:
+        return []
+
+    modified = []
+    charms_map = tfvar_map.get("charms", {})
+
+    for charm_name, attr_map in charms_map.items():
+        charm_manifest = manifest.find_charm(charm_name)
+        if not charm_manifest or not charm_manifest.model_extra:
+            continue
+
+        for attr_name in ("storage", "storage-map"):
+            tfvar_name = attr_map.get(attr_name)
+            if not tfvar_name:
+                continue
+
+            manifest_value = charm_manifest.model_extra.get(attr_name)
+            if not manifest_value or not isinstance(manifest_value, dict):
+                continue
+
+            stored_value = stored_tfvars.get(tfvar_name)
+            if not stored_value or not isinstance(stored_value, dict):
+                continue
+
+            for key, val in manifest_value.items():
+                if key in stored_value and stored_value[key] != val:
+                    modified.append(tfvar_name)
+                    break
+
+    return modified
 
 
 class AddManifestStep(BaseStep):

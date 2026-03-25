@@ -46,6 +46,7 @@ core:
       microovn:
         channel: latest/edge
       rabbitmq-k8s:
+        channel: 3.12/edge
         storage:
           rabbitmq-data: 1G
       mysql-k8s:
