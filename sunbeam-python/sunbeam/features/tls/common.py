@@ -47,6 +47,7 @@ from sunbeam.features.interface.v1.openstack import (
     WaitForApplicationsStep,
 )
 from sunbeam.utils import pass_method_obj
+from sunbeam.versions import MANUAL_CERT_AUTH_CHANNEL
 
 CERTIFICATE_FEATURE_KEY = "TlsProvider"
 CA_MANUAL_TLS_CERTIFICATE = "manual-tls-certificates"
@@ -106,7 +107,7 @@ class TlsFeature(OpenStackControlPlaneFeature):
         return SoftwareConfig(
             charms={
                 "manual-tls-certificates": CharmManifest(
-                    channel="latest/stable",
+                    channel=MANUAL_CERT_AUTH_CHANNEL,
                 )
             }
         )
