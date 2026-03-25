@@ -1291,6 +1291,7 @@ class JujuHelper:
                     f"Timed out while waiting for model {model!r} to be gone"
                 )
             time.sleep(MODEL_DELAY)
+            self.get_model.cache_clear()
 
     def wait_units_gone(
         self,
