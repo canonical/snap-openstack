@@ -7,6 +7,9 @@ from unittest.mock import MagicMock, Mock, patch
 import pytest
 from snaphelpers import Snap, SnapConfig, SnapServices
 
+from sunbeam.core.common import StepContext
+from sunbeam.core.progress import NoOpReporter
+
 
 @pytest.fixture(autouse=True)
 def snap_env(tmp_path: Path, mocker):
@@ -195,3 +198,9 @@ def tfhelper():
 def manifest():
     """Manifest mock."""
     return MagicMock()
+
+
+@pytest.fixture
+def step_context():
+    """StepContext for tests with a mock Status and NoOpReporter."""
+    return StepContext(status=Mock(), reporter=NoOpReporter())

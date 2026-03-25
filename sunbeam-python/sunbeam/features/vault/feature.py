@@ -14,7 +14,6 @@ import click
 import yaml
 from packaging.version import Version
 from rich.console import Console
-from rich.status import Status
 from rich.table import Table
 
 from sunbeam.clusterd.service import (
@@ -29,6 +28,7 @@ from sunbeam.core.common import (
     BaseStep,
     Result,
     ResultType,
+    StepContext,
     SunbeamException,
     get_step_message,
     get_step_result,
@@ -209,7 +209,7 @@ class VaultInitStep(BaseStep):
         self.key_shares = key_shares
         self.key_threshold = key_threshold
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -235,7 +235,7 @@ class VaultInitStep(BaseStep):
 
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Runs the step.
 
         :return: ResultType.COMPLETED or ResultType.FAILED
@@ -293,7 +293,7 @@ class VaultUnsealStep(BaseStep):
 
         return threshold - progress
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Runs the step.
 
         Run vault unseal command on leader unit if it is sealed.
@@ -400,7 +400,7 @@ class AuthorizeVaultCharmStep(BaseStep, JujuStepHelper):
         self.token = token
         self.tmp_secret_name = VAULT_SECRET_FOR_AUTHORIZATION
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Runs the step.
 
         :return: ResultType.COMPLETED or ResultType.FAILED
@@ -469,7 +469,7 @@ class VaultStatusStep(BaseStep):
         self.jhelper = jhelper
         self.vhelper = VaultHelper(jhelper)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Runs the step.
 
         :return: ResultType.COMPLETED or ResultType.FAILED

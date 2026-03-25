@@ -123,7 +123,7 @@ class TestVaultHelper:
 
 
 class TestVaultInitStep:
-    def test_is_skip(self):
+    def test_is_skip(self, step_context):
         vault_status = {"initialized": False}
 
         jhelper = Mock()
@@ -131,11 +131,11 @@ class TestVaultInitStep:
         step.vhelper = MagicMock()
         step.vhelper.get_vault_status.return_value = vault_status
 
-        result = step.is_skip()
+        result = step.is_skip(step_context)
 
         assert result.result_type == ResultType.COMPLETED
 
-    def test_is_skip_when_already_initialized(self):
+    def test_is_skip_when_already_initialized(self, step_context):
         vault_status = {"initialized": True}
 
         jhelper = Mock()
@@ -143,11 +143,11 @@ class TestVaultInitStep:
         step.vhelper = MagicMock()
         step.vhelper.get_vault_status.return_value = vault_status
 
-        result = step.is_skip()
+        result = step.is_skip(step_context)
 
         assert result.result_type == ResultType.SKIPPED
 
-    def test_is_skip_when_vault_leader_not_found(self):
+    def test_is_skip_when_vault_leader_not_found(self, step_context):
         error_message = "Vault leader not found"
         jhelper = Mock()
         step = VaultInitStep(jhelper, 1, 1)
@@ -156,12 +156,12 @@ class TestVaultInitStep:
             error_message
         )
 
-        result = step.is_skip()
+        result = step.is_skip(step_context)
 
         assert result.result_type == ResultType.FAILED
         assert result.message == error_message
 
-    def test_run(self):
+    def test_run(self, step_context):
         vault_cmd_output = {
             "unseal_keys_b64": [
                 "fake-unseal-key-1",
@@ -182,12 +182,12 @@ class TestVaultInitStep:
         step.vhelper = MagicMock()
         step.vhelper.initialize_vault.return_value = vault_cmd_output
 
-        result = step.run()
+        result = step.run(step_context)
 
         assert result.result_type == ResultType.COMPLETED
         result.message = json.dumps(vault_cmd_output)
 
-    def test_run_when_vault_command_failed(self):
+    def test_run_when_vault_command_failed(self, step_context):
         error_message = "Vault command execution failed."
         jhelper = Mock()
         step = VaultInitStep(jhelper, 1, 1)
@@ -197,7 +197,7 @@ class TestVaultInitStep:
             error_message
         )
 
-        result = step.run()
+        result = step.run(step_context)
 
         assert result.result_type == ResultType.FAILED
         assert result.message == error_message
@@ -235,7 +235,10 @@ class TestVaultUnsealStep:
         ],
     )
     def test_run_when_leader_unit_is_sealed(
-        self, vault_unseal_status, expected_message
+        self,
+        vault_unseal_status,
+        expected_message,
+        step_context,
     ):
         unseal_key = "fake-unseal-key"
         vault_status = {"sealed": True}
@@ -250,7 +253,7 @@ class TestVaultUnsealStep:
         step.vhelper.get_vault_status.return_value = vault_status
         step.vhelper.unseal_vault.return_value = vault_unseal_status
 
-        result = step.run()
+        result = step.run(step_context)
 
         assert result.result_type == ResultType.COMPLETED
         assert result.message == expected_message
@@ -321,7 +324,10 @@ class TestVaultUnsealStep:
         ],
     )
     def test_run_when_leader_unit_is_unsealed(
-        self, vault_unseal_status_per_unit, expected_message
+        self,
+        vault_unseal_status_per_unit,
+        expected_message,
+        step_context,
     ):
         unseal_key = "fake-unseal-key"
         vault_leader_status = {"sealed": False}
@@ -336,12 +342,12 @@ class TestVaultUnsealStep:
         step.vhelper.get_vault_status.return_value = vault_leader_status
         step.vhelper.unseal_vault.side_effect = vault_unseal_status_per_unit
 
-        result = step.run()
+        result = step.run(step_context)
 
         assert result.result_type == ResultType.COMPLETED
         assert result.message == expected_message
 
-    def test_run_single_vault_unit(self):
+    def test_run_single_vault_unit(self, step_context):
         unseal_key = "fake-unseal-key"
         vault_status = {"sealed": True}
         self._set_mock_units()
@@ -359,14 +365,14 @@ class TestVaultUnsealStep:
         step.vhelper.get_vault_status.return_value = vault_status
         step.vhelper.unseal_vault.return_value = vault_unseal_status
 
-        result = step.run()
+        result = step.run(step_context)
 
         assert result.result_type == ResultType.COMPLETED
         assert result.message == expected_message
 
 
 class TestAuthorizeVaultCharmStep:
-    def test_run(self):
+    def test_run(self, step_context):
         token = "fake_root_token"
         vault_cmd_output = {"auth": {"client_token": "fake_token"}}
 
@@ -381,7 +387,7 @@ class TestAuthorizeVaultCharmStep:
         step.vhelper = MagicMock()
         step.vhelper.create_token.return_value = vault_cmd_output
 
-        result = step.run()
+        result = step.run(step_context)
 
         jhelper.get_secret_by_name.assert_called_once()
         jhelper.add_secret.assert_called_once()
@@ -390,7 +396,7 @@ class TestAuthorizeVaultCharmStep:
         jhelper.run_action.assert_called_once()
         assert result.result_type == ResultType.COMPLETED
 
-    def test_run_when_leader_not_found(self):
+    def test_run_when_leader_not_found(self, step_context):
         error_message = "Vault leader not found"
         token = "fake_root_token"
 
@@ -399,7 +405,7 @@ class TestAuthorizeVaultCharmStep:
 
         step = AuthorizeVaultCharmStep(jhelper, token)
 
-        result = step.run()
+        result = step.run(step_context)
 
         jhelper.get_secret_by_name.assert_not_called()
         jhelper.add_secret.assert_not_called()
@@ -409,7 +415,7 @@ class TestAuthorizeVaultCharmStep:
         assert result.result_type == ResultType.FAILED
         assert result.message == error_message
 
-    def test_run_when_vault_command_failed(self):
+    def test_run_when_vault_command_failed(self, step_context):
         error_message = "Vault command execution failed."
         token = "fake_root_token"
         # vault_cmd_output = {"auth": {"client_token": "fake_token"}}
@@ -429,7 +435,7 @@ class TestAuthorizeVaultCharmStep:
             error_message
         )
 
-        result = step.run()
+        result = step.run(step_context)
 
         jhelper.get_secret_by_name.assert_not_called()
         jhelper.add_secret.assert_not_called()
@@ -439,7 +445,7 @@ class TestAuthorizeVaultCharmStep:
         assert result.result_type == ResultType.FAILED
         assert result.message == error_message
 
-    def test_run_when_action_command_failed(self):
+    def test_run_when_action_command_failed(self, step_context):
         error_message = "Vault authorize action failed."
         token = "fake_root_token"
         vault_cmd_output = {"auth": {"client_token": "fake_token"}}
@@ -455,7 +461,7 @@ class TestAuthorizeVaultCharmStep:
         step.vhelper = MagicMock()
         step.vhelper.create_token.return_value = vault_cmd_output
 
-        result = step.run()
+        result = step.run(step_context)
 
         jhelper.get_secret_by_name.assert_called_once()
         jhelper.add_secret.assert_called_once()
@@ -465,7 +471,7 @@ class TestAuthorizeVaultCharmStep:
         assert result.result_type == ResultType.FAILED
         assert result.message == error_message
 
-    def test_run_when_secret_already_exists(self):
+    def test_run_when_secret_already_exists(self, step_context):
         token = "fake_root_token"
         vault_cmd_output = {"auth": {"client_token": "fake_token"}}
 
@@ -480,7 +486,7 @@ class TestAuthorizeVaultCharmStep:
         step.vhelper = MagicMock()
         step.vhelper.create_token.return_value = vault_cmd_output
 
-        result = step.run()
+        result = step.run(step_context)
 
         jhelper.get_secret_by_name.assert_called_once()
         jhelper.add_secret.assert_called_once()
@@ -500,7 +506,7 @@ class TestVaultStatusStep:
             "vault/2": MagicMock(),
         }
 
-    def test_run(self):
+    def test_run(self, step_context):
         vault_status = {"initialized": True, "sealed": False}
         self._set_mock_units()
 
@@ -511,7 +517,7 @@ class TestVaultStatusStep:
         step.vhelper = MagicMock()
         step.vhelper.get_vault_status.return_value = vault_status
 
-        result = step.run()
+        result = step.run(step_context)
 
         expected_vault_status = {}
         for unit in self.units:
@@ -519,7 +525,7 @@ class TestVaultStatusStep:
         assert result.result_type == ResultType.COMPLETED
         assert result.message == json.dumps(expected_vault_status)
 
-    def test_run_timedout(self):
+    def test_run_timedout(self, step_context):
         error_message = "timed out"
         self._set_mock_units()
 
@@ -530,7 +536,7 @@ class TestVaultStatusStep:
         step.vhelper = MagicMock()
         step.vhelper.get_vault_status.side_effect = TimeoutError(error_message)
 
-        result = step.run()
+        result = step.run(step_context)
 
         assert result.result_type == ResultType.FAILED
         assert result.message == error_message

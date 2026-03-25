@@ -21,7 +21,7 @@ from sunbeam.core.common import (
     BaseStep,
     Result,
     ResultType,
-    Status,
+    StepContext,
     run_plan,
 )
 from sunbeam.core.deployment import Deployment
@@ -61,7 +61,7 @@ class GenerateCloudConfigStep(BaseStep):
             cloudfile = Path(home) / ".config" / "openstack" / "clouds.yaml"
         self.cloudfile = cloudfile
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -82,7 +82,7 @@ class GenerateCloudConfigStep(BaseStep):
         else:
             return Result(ResultType.SKIPPED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Generate cloud-config yaml for cloud access."""
         try:
             if self.is_admin:

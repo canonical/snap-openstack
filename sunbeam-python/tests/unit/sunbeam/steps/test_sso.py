@@ -108,9 +108,9 @@ class BaseExternalProviderTest:
             self.charm_config,
         )
 
-    def test_is_skip(self):
+    def test_is_skip(self, step_context):
         step = self._get_step()
-        result = step.is_skip()
+        result = step.is_skip(step_context)
         assert result.result_type == ResultType.COMPLETED
 
     def test_has_prompts(self):
@@ -133,7 +133,13 @@ class BaseExternalProviderTest:
         step._questions["client_secret"].ask.assert_called_once()
 
     def test_run_success(
-        self, read_config, update_config, mock_requests_get, load_answers, write_answers
+        self,
+        read_config,
+        update_config,
+        mock_requests_get,
+        load_answers,
+        write_answers,
+        step_context,
     ):
         set_json, mock_get = mock_requests_get
         set_json(self.fake_oidc_doc)
@@ -141,7 +147,7 @@ class BaseExternalProviderTest:
 
         step = self._get_step()
         step.prompt()
-        result = step.run()
+        result = step.run(step_context)
 
         assert result.result_type == ResultType.COMPLETED
         mock_get.assert_called_once()
@@ -258,9 +264,9 @@ class BaseSAML2ProviderTest:
             self.charm_config,
         )
 
-    def test_is_skip(self):
+    def test_is_skip(self, step_context):
         step = self._get_step()
-        result = step.is_skip()
+        result = step.is_skip(step_context)
         assert result.result_type == ResultType.COMPLETED
 
     def test_has_prompts(self):
@@ -284,7 +290,9 @@ class BaseSAML2ProviderTest:
                 step.prompt()
             step._questions["app_id"].ask.assert_called_once()
 
-    def test_run_success(self, read_config, update_config, load_answers, write_answers):
+    def test_run_success(
+        self, read_config, update_config, load_answers, write_answers, step_context
+    ):
         with patch("requests.get") as mock_get:
             mock_response = Mock()
             mock_response.raise_for_status.return_value = None
@@ -295,7 +303,7 @@ class BaseSAML2ProviderTest:
 
             step = self._get_step()
             step.prompt()
-            result = step.run()
+            result = step.run(step_context)
 
             assert result.result_type == ResultType.COMPLETED
             mock_get.assert_called_once()
@@ -392,7 +400,9 @@ class TestGenericSAML2Provider(BaseSAML2ProviderTest):
             step.prompt()
         step._questions["metadata_url"].ask.assert_called_once()
 
-    def test_run_success(self, read_config, update_config, load_answers, write_answers):
+    def test_run_success(
+        self, read_config, update_config, load_answers, write_answers, step_context
+    ):
         # Mock the SAML2 validation to avoid the bytes/string issue in tempfile
         with (
             patch("requests.get") as mock_get,
@@ -416,7 +426,7 @@ class TestGenericSAML2Provider(BaseSAML2ProviderTest):
             )  # Non-empty to pass all(cfg.values()) check
             step._questions["label"].ask = Mock(return_value="Test Label")
             step.prompt()
-            result = step.run()
+            result = step.run(step_context)
 
             assert result.result_type == ResultType.COMPLETED
 
@@ -432,7 +442,7 @@ class TestCanonicalProvider:
 
 
 class TestRemoveExternalProviderStep:
-    def test_remove_provider(self, read_config, update_config):
+    def test_remove_provider(self, read_config, update_config, step_context):
         deployment = Mock()
         mock_client = Mock()
         mock_client.cluster.update_config = Mock()
@@ -459,7 +469,7 @@ class TestRemoveExternalProviderStep:
             "openid",
         )
         step.tfhelper = tfhelper
-        result = step.run()
+        result = step.run(step_context)
         assert result.result_type == ResultType.COMPLETED
         update_config.assert_any_call(
             mock_client, "SSOFeatureConfigKey", {"openid": {}, "saml2": {}}
@@ -472,7 +482,7 @@ class TestRemoveExternalProviderStep:
 
 
 class TestUpdateExternalProviderStep:
-    def test_update_provider(self, read_config, update_config):
+    def test_update_provider(self, read_config, update_config, step_context):
         deployment = Mock()
         deployment.get_client.return_value = "client"
         deployment.get_tfhelper.return_value = Mock()
@@ -502,7 +512,7 @@ class TestUpdateExternalProviderStep:
             secrets,
         )
         step.tfhelper = Mock()
-        result = step.run()
+        result = step.run(step_context)
         assert result.result_type == ResultType.COMPLETED
         update_config.assert_any_call(
             "client",
@@ -516,7 +526,9 @@ class TestUpdateExternalProviderStep:
         )
         step.tfhelper.apply.assert_called_once()
 
-    def test_update_saml2_provider_has_no_secrets(self, read_config, update_config):
+    def test_update_saml2_provider_has_no_secrets(
+        self, read_config, update_config, step_context
+    ):
         deployment = Mock()
         deployment.get_client.return_value = "client"
         deployment.get_tfhelper.return_value = Mock()
@@ -549,10 +561,10 @@ class TestUpdateExternalProviderStep:
             secrets,
         )
         step.tfhelper = Mock()
-        result = step.run()
+        result = step.run(step_context)
         assert result.result_type == ResultType.COMPLETED
 
-    def test_remove_saml2_provider(self, read_config, update_config):
+    def test_remove_saml2_provider(self, read_config, update_config, step_context):
         deployment = Mock()
         mock_client = Mock()
         mock_client.cluster.update_config = Mock()
@@ -579,7 +591,7 @@ class TestUpdateExternalProviderStep:
             "saml2",
         )
         step.tfhelper = tfhelper
-        result = step.run()
+        result = step.run(step_context)
         assert result.result_type == ResultType.COMPLETED
         update_config.assert_any_call(
             mock_client, "SSOFeatureConfigKey", {"openid": {}, "saml2": {}}
@@ -616,19 +628,19 @@ class TestSetKeystoneSAMLCertAndKeyStep:
         with patch("builtins.open", mock_open):
             yield cert_content, key_content
 
-    def test_skip_when_no_manifest_or_files(self):
+    def test_skip_when_no_manifest_or_files(self, step_context):
         step = SetKeystoneSAMLCertAndKeyStep(
             self.deployment, self.tfhelper, self.jhelper
         )
-        result = step.is_skip()
+        result = step.is_skip(step_context)
         assert result.result_type == ResultType.SKIPPED
 
-    def test_skip_when_manifest_has_no_saml2_x509(self):
+    def test_skip_when_manifest_has_no_saml2_x509(self, step_context):
         self.manifest.core.config.identity = None
         step = SetKeystoneSAMLCertAndKeyStep(
             self.deployment, self.tfhelper, self.jhelper, self.manifest
         )
-        result = step.is_skip()
+        result = step.is_skip(step_context)
         assert result.result_type == ResultType.SKIPPED
 
     def test_has_no_prompts(self):
@@ -643,7 +655,12 @@ class TestSetKeystoneSAMLCertAndKeyStep:
 
     @patch("sunbeam.steps.sso.cert_and_key_match")
     def test_run_with_files_success(
-        self, mock_cert_match, read_config, update_config, mock_open_files
+        self,
+        mock_cert_match,
+        read_config,
+        update_config,
+        mock_open_files,
+        step_context,
     ):
         cert_content, key_content = mock_open_files
         mock_cert_match.return_value = True
@@ -666,7 +683,7 @@ class TestSetKeystoneSAMLCertAndKeyStep:
             x509_key="/path/to/key.pem",
         )
 
-        result = step.run(status=None)
+        result = step.run(step_context)
         assert result.result_type == ResultType.COMPLETED
 
         # Verify certificate validation was called
@@ -683,7 +700,9 @@ class TestSetKeystoneSAMLCertAndKeyStep:
         self.tfhelper.apply.assert_called_once()
 
     @patch("sunbeam.steps.sso.cert_and_key_match")
-    def test_run_cert_key_mismatch_fails(self, mock_cert_match, mock_open_files):
+    def test_run_cert_key_mismatch_fails(
+        self, mock_cert_match, mock_open_files, step_context
+    ):
         mock_cert_match.return_value = False
 
         step = SetKeystoneSAMLCertAndKeyStep(
@@ -695,9 +714,9 @@ class TestSetKeystoneSAMLCertAndKeyStep:
         )
 
         with pytest.raises(ValueError, match="Certificate .* is not derived from"):
-            step.run(status=None)
+            step.run(step_context)
 
-    def test_run_file_read_error_fails(self):
+    def test_run_file_read_error_fails(self, step_context):
         step = SetKeystoneSAMLCertAndKeyStep(
             self.deployment,
             self.tfhelper,
@@ -706,12 +725,17 @@ class TestSetKeystoneSAMLCertAndKeyStep:
             x509_key="/nonexistent/key.pem",
         )
 
-        result = step.run(status=None)
+        result = step.run(step_context)
         assert result.result_type == ResultType.FAILED
 
     @patch("sunbeam.steps.sso.cert_and_key_match")
     def test_run_updates_existing_secret(
-        self, mock_cert_match, read_config, update_config, mock_open_files
+        self,
+        mock_cert_match,
+        read_config,
+        update_config,
+        mock_open_files,
+        step_context,
     ):
         cert_content, key_content = mock_open_files
         mock_cert_match.return_value = True
@@ -741,7 +765,7 @@ class TestSetKeystoneSAMLCertAndKeyStep:
             x509_key="/path/to/key.pem",
         )
 
-        result = step.run(status=None)
+        result = step.run(step_context)
         assert result.result_type == ResultType.COMPLETED
 
         # Should update the existing secret, not create a new one
@@ -752,7 +776,7 @@ class TestSetKeystoneSAMLCertAndKeyStep:
         update_call = self.jhelper.update_secret.call_args
         assert update_call[1]["data"]["certificate"] == cert_content
 
-    def test_run_with_manifest_success(self, read_config, update_config):
+    def test_run_with_manifest_success(self, read_config, update_config, step_context):
         # Setup manifest with SAML2 x509 config
         self.manifest.core.config.identity.saml2_x509.certificate = "/path/to/cert.pem"
         self.manifest.core.config.identity.saml2_x509.key = "/path/to/key.pem"
@@ -788,5 +812,5 @@ class TestSetKeystoneSAMLCertAndKeyStep:
                 self.deployment, self.tfhelper, self.jhelper, self.manifest
             )
 
-            result = step.run(status=None)
+            result = step.run(step_context)
             assert result.result_type == ResultType.COMPLETED

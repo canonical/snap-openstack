@@ -191,28 +191,32 @@ class TestDestroyManilaDataApplicationStep:
             == MANILA_DATA_APP_TIMEOUT
         )
 
-    def test_run_state_list_failed(self, destroy_manila_data_step, basic_tfhelper):
+    def test_run_state_list_failed(
+        self, destroy_manila_data_step, basic_tfhelper, step_context
+    ):
         basic_tfhelper.state_list.side_effect = TerraformException("expected")
 
-        result = destroy_manila_data_step.run()
+        result = destroy_manila_data_step.run(step_context)
 
         assert result.result_type == ResultType.FAILED
         basic_tfhelper.state_list.assert_called_once_with()
 
-    def test_run_state_rm_failed(self, destroy_manila_data_step, basic_tfhelper):
+    def test_run_state_rm_failed(
+        self, destroy_manila_data_step, basic_tfhelper, step_context
+    ):
         basic_tfhelper.state_list.return_value = ["db-integration"]
         basic_tfhelper.state_rm.side_effect = TerraformException("expected")
 
-        result = destroy_manila_data_step.run()
+        result = destroy_manila_data_step.run(step_context)
 
         assert result.result_type == ResultType.FAILED
         basic_tfhelper.state_list.assert_called_once_with()
         basic_tfhelper.state_rm.assert_called_once_with("db-integration")
 
-    def test_run(self, destroy_manila_data_step, basic_tfhelper):
+    def test_run(self, destroy_manila_data_step, basic_tfhelper, step_context):
         basic_tfhelper.state_list.return_value = ["db-integration", "other"]
 
-        result = destroy_manila_data_step.run()
+        result = destroy_manila_data_step.run(step_context)
 
         assert result.result_type == ResultType.COMPLETED
         basic_tfhelper.state_list.assert_called_once_with()

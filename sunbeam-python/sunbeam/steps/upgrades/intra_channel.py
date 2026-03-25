@@ -5,13 +5,13 @@ import logging
 import queue
 
 from rich.console import Console
-from rich.status import Status
 
 from sunbeam.clusterd.client import Client
 from sunbeam.core.common import (
     BaseStep,
     Result,
     ResultType,
+    StepContext,
     update_status_background,
 )
 from sunbeam.core.deployment import Deployment, Networks
@@ -86,7 +86,7 @@ class LatestInChannel(BaseStep, JujuStepHelper):
         self.jhelper = jhelper
         self.manifest = manifest
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Step can be skipped if nothing needs refreshing."""
         return Result(ResultType.COMPLETED)
 
@@ -124,7 +124,7 @@ class LatestInChannel(BaseStep, JujuStepHelper):
         refreshed_apps: list[str],
         model: str,
         pre_refresh_status: dict[str, str],
-        status: Status | None = None,
+        context: StepContext | None = None,
     ) -> Result:
         """Wait for refreshed apps to settle after a juju refresh.
 
@@ -144,6 +144,7 @@ class LatestInChannel(BaseStep, JujuStepHelper):
             )
             LOG.debug(f"Wait overlay for {model}: {overlay}")
             status_queue: queue.Queue[str] = queue.Queue()
+            status = context.status if context else None
             task = update_status_background(self, refreshed_apps, status_queue, status)
             try:
                 self.jhelper.wait_until_desired_status(
@@ -182,7 +183,7 @@ class LatestInChannel(BaseStep, JujuStepHelper):
         return Result(ResultType.COMPLETED)
 
     def refresh_apps(
-        self, apps: dict, model: str, status: Status | None = None
+        self, apps: dict, model: str, context: StepContext | None = None
     ) -> Result:
         """Refresh apps in the model.
 
@@ -231,10 +232,10 @@ class LatestInChannel(BaseStep, JujuStepHelper):
                 refreshed_apps.append(app_name)
 
         return self._wait_after_refresh(
-            refreshed_apps, model, pre_refresh_status, status
+            refreshed_apps, model, pre_refresh_status, context
         )
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Refresh all charms identified as needing a refresh.
 
         If the manifest has charm channel and revision, terraform apply should update
@@ -265,17 +266,17 @@ class LatestInChannel(BaseStep, JujuStepHelper):
 
         if is_maas_deployment(self.deployment):
             result = self.refresh_apps(
-                deployed_infra_apps, self.deployment.infra_model, status
+                deployed_infra_apps, self.deployment.infra_model, context
             )
             if result.result_type == ResultType.FAILED:
                 return result
 
-        result = self.refresh_apps(deployed_k8s_apps, OPENSTACK_MODEL, status)
+        result = self.refresh_apps(deployed_k8s_apps, OPENSTACK_MODEL, context)
         if result.result_type == ResultType.FAILED:
             return result
 
         result = self.refresh_apps(
-            deployed_machine_apps, self.deployment.openstack_machines_model, status
+            deployed_machine_apps, self.deployment.openstack_machines_model, context
         )
         if result.result_type == ResultType.FAILED:
             return result
@@ -305,13 +306,13 @@ class ReapplyInfraModelConfigStep(BaseStep, JujuStepHelper):
         self.jhelper = jhelper
         self.manifest = manifest
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Skip if not a MAAS deployment."""
         if not is_maas_deployment(self.deployment):
             return Result(ResultType.SKIPPED)
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Apply manifest charm config to each infra model application."""
         model = self.deployment.infra_model  # type: ignore[attr-defined]
         for app_name, charm_name in self.INFRA_APPS.items():
@@ -346,7 +347,7 @@ class RefreshSnapStep(BaseStep, JujuStepHelper):
         self.jhelper = jhelper
 
     def _refresh_snap_for_apps(
-        self, apps: list[str], model: str, status: Status | None = None
+        self, apps: list[str], model: str, context: StepContext | None = None
     ) -> Result:
         """Run refresh-snap action on all units of *apps* in *model*."""
         for app_name in apps:
@@ -362,7 +363,8 @@ class RefreshSnapStep(BaseStep, JujuStepHelper):
 
             for unit_name in application.units:
                 LOG.debug("Running refresh-snap on %s in %s", unit_name, model)
-                self.update_status(status, f"refreshing snap on {unit_name}")
+                if context is not None:
+                    self.update_status(context, f"refreshing snap on {unit_name}")
                 try:
                     self.jhelper.run_action(
                         unit_name,
@@ -376,12 +378,12 @@ class RefreshSnapStep(BaseStep, JujuStepHelper):
 
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Run refresh-snap on all snap-based charm applications."""
         result = self._refresh_snap_for_apps(
             SNAP_APPS_MACHINE_MODEL,
             self.deployment.openstack_machines_model,
-            status,
+            context,
         )
         if result.result_type == ResultType.FAILED:
             return result
@@ -390,7 +392,7 @@ class RefreshSnapStep(BaseStep, JujuStepHelper):
             result = self._refresh_snap_for_apps(
                 SNAP_APPS_INFRA_MODEL,
                 self.deployment.infra_model,  # type: ignore[attr-defined]
-                status,
+                context,
             )
             if result.result_type == ResultType.FAILED:
                 return result

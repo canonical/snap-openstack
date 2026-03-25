@@ -39,12 +39,12 @@ def deployment():
 
 
 class TestBaremetalCommands:
-    def test_run_set_temp_url_secret_failed(self):
+    def test_run_set_temp_url_secret_failed(self, step_context):
         jhelper = Mock()
         jhelper.run_action.side_effect = ActionFailedException("expected")
         step = steps.RunSetTempUrlSecretStep(deployment, jhelper)
 
-        result = step.run()
+        result = step.run(step_context)
 
         assert result.result_type == ResultType.FAILED
         jhelper.get_leader_unit.assert_called_once_with(
@@ -56,12 +56,12 @@ class TestBaremetalCommands:
             "set-temp-url-secret",
         )
 
-    def test_run_set_temp_url_secret_timeout(self):
+    def test_run_set_temp_url_secret_timeout(self, step_context):
         jhelper = Mock()
         jhelper.wait_until_active.side_effect = JujuWaitException
         step = steps.RunSetTempUrlSecretStep(deployment, jhelper)
 
-        result = step.run()
+        result = step.run(step_context)
 
         assert result.result_type == ResultType.FAILED
         jhelper.wait_until_active.assert_called_once_with(
@@ -71,7 +71,7 @@ class TestBaremetalCommands:
             queue=ANY,
         )
 
-    def test_deploy_nova_ironic_shards_already_exists(self, deployment):
+    def test_deploy_nova_ironic_shards_already_exists(self, deployment, step_context):
         ironic = ironic_feature.BaremetalFeature()
         ironic._manifest = Mock()
         client = deployment.get_client.return_value
@@ -80,20 +80,20 @@ class TestBaremetalCommands:
         }
         step = steps.DeployNovaIronicShardsStep(deployment, ironic, ["foo"], False)
 
-        result = step.run()
+        result = step.run(step_context)
 
         assert result.result_type == ResultType.FAILED
         tfhelper = deployment.get_tfhelper.return_value
         tfhelper.update_tfvars_and_apply_tf.assert_not_called()
 
-    def test_deploy_nova_ironic_shards_apply_failed(self, deployment):
+    def test_deploy_nova_ironic_shards_apply_failed(self, deployment, step_context):
         ironic = ironic_feature.BaremetalFeature()
         ironic._manifest = Mock()
         tfhelper = deployment.get_tfhelper.return_value
         tfhelper.apply.side_effect = TerraformException("expected to fail.")
         step = steps.DeployNovaIronicShardsStep(deployment, ironic, ["foo"])
 
-        result = step.run()
+        result = step.run(step_context)
 
         assert result.result_type == ResultType.FAILED
         expected_tfvars = {
@@ -104,17 +104,20 @@ class TestBaremetalCommands:
             ironic._manifest,
             tfvar_config=OPENSTACK_TERRAFORM_VARS,
             override_tfvars=expected_tfvars,
+            reporter=step_context.reporter,
         )
 
     @patch.object(steps, "JujuHelper")
-    def test_deploy_nova_ironic_shards_timeout(self, mock_JujuHelper, deployment):
+    def test_deploy_nova_ironic_shards_timeout(
+        self, mock_JujuHelper, deployment, step_context
+    ):
         ironic = ironic_feature.BaremetalFeature()
         ironic._manifest = Mock()
         jhelper = mock_JujuHelper.return_value
         jhelper.wait_until_desired_status.side_effect = JujuWaitException
         step = steps.DeployNovaIronicShardsStep(deployment, ironic, ["foo"])
 
-        result = step.run()
+        result = step.run(step_context)
 
         assert result.result_type == ResultType.FAILED
         jhelper.wait_until_desired_status.assert_called_once_with(
@@ -126,12 +129,12 @@ class TestBaremetalCommands:
         )
 
     @patch.object(steps, "JujuHelper")
-    def test_deploy_nova_ironic_shards(self, mock_JujuHelper, deployment):
+    def test_deploy_nova_ironic_shards(self, mock_JujuHelper, deployment, step_context):
         ironic = ironic_feature.BaremetalFeature()
         ironic._manifest = Mock()
         step = steps.DeployNovaIronicShardsStep(deployment, ironic, ["foo"])
 
-        result = step.run()
+        result = step.run(step_context)
 
         assert result.result_type == ResultType.COMPLETED
         expected_tfvars = {
@@ -143,6 +146,7 @@ class TestBaremetalCommands:
             ironic._manifest,
             tfvar_config=OPENSTACK_TERRAFORM_VARS,
             override_tfvars=expected_tfvars,
+            reporter=step_context.reporter,
         )
 
         jhelper = mock_JujuHelper.return_value
@@ -155,7 +159,9 @@ class TestBaremetalCommands:
         )
 
     @patch.object(steps, "JujuHelper")
-    def test_deploy_nova_ironic_shards_replace(self, mock_JujuHelper, deployment):
+    def test_deploy_nova_ironic_shards_replace(
+        self, mock_JujuHelper, deployment, step_context
+    ):
         ironic = ironic_feature.BaremetalFeature()
         ironic._manifest = Mock()
         client = deployment.get_client.return_value
@@ -164,7 +170,7 @@ class TestBaremetalCommands:
         }
         step = steps.DeployNovaIronicShardsStep(deployment, ironic, ["lish"], True)
 
-        result = step.run()
+        result = step.run(step_context)
 
         assert result.result_type == ResultType.COMPLETED
         expected_tfvars = {
@@ -176,6 +182,7 @@ class TestBaremetalCommands:
             ironic._manifest,
             tfvar_config=OPENSTACK_TERRAFORM_VARS,
             override_tfvars=expected_tfvars,
+            reporter=step_context.reporter,
         )
 
         jhelper = mock_JujuHelper.return_value
@@ -188,13 +195,13 @@ class TestBaremetalCommands:
         )
 
     @patch.object(steps.console, "print")
-    def test_nova_ironic_shards_list(self, console_print, deployment):
+    def test_nova_ironic_shards_list(self, console_print, deployment, step_context):
         # Has no shard.
         ironic = ironic_feature.BaremetalFeature()
         ironic._manifest = Mock()
         step = steps.ListNovaIronicShardsStep(deployment, ironic)
 
-        result = step.run()
+        result = step.run(step_context)
 
         assert result.result_type == ResultType.COMPLETED
         console_print.assert_not_called()
@@ -205,23 +212,23 @@ class TestBaremetalCommands:
             constants.NOVA_IRONIC_SHARDS_TFVAR: {"foo": {}},
         }
 
-        result = step.run()
+        result = step.run(step_context)
 
         assert result.result_type == ResultType.COMPLETED
         console_print.assert_called_once_with("foo")
 
-    def test_nova_ironic_shards_delete_not_found(self, deployment):
+    def test_nova_ironic_shards_delete_not_found(self, deployment, step_context):
         ironic = ironic_feature.BaremetalFeature()
         ironic._manifest = Mock()
         step = steps.DeleteNovaIronicShardStep(deployment, ironic, "foo")
 
-        result = step.run()
+        result = step.run(step_context)
 
         assert result.result_type == ResultType.FAILED
         tfhelper = deployment.get_tfhelper.return_value
         tfhelper.update_tfvars_and_apply_tf.assert_not_called()
 
-    def test_nova_ironic_shards_delete_apply_failed(self, deployment):
+    def test_nova_ironic_shards_delete_apply_failed(self, deployment, step_context):
         ironic = ironic_feature.BaremetalFeature()
         ironic._manifest = Mock()
         client = deployment.get_client.return_value
@@ -232,7 +239,7 @@ class TestBaremetalCommands:
         tfhelper.apply.side_effect = TerraformException("expected to fail.")
         step = steps.DeleteNovaIronicShardStep(deployment, ironic, "foo")
 
-        result = step.run()
+        result = step.run(step_context)
 
         assert result.result_type == ResultType.FAILED
         expected_tfvars = {
@@ -243,10 +250,13 @@ class TestBaremetalCommands:
             ironic._manifest,
             tfvar_config=OPENSTACK_TERRAFORM_VARS,
             override_tfvars=expected_tfvars,
+            reporter=step_context.reporter,
         )
 
     @patch.object(steps, "JujuHelper")
-    def test_nova_ironic_shards_delete_timeout(self, mock_JujuHelper, deployment):
+    def test_nova_ironic_shards_delete_timeout(
+        self, mock_JujuHelper, deployment, step_context
+    ):
         ironic = ironic_feature.BaremetalFeature()
         ironic._manifest = Mock()
         client = deployment.get_client.return_value
@@ -257,7 +267,7 @@ class TestBaremetalCommands:
         jhelper.wait_application_gone.side_effect = JujuWaitException
         step = steps.DeleteNovaIronicShardStep(deployment, ironic, "foo")
 
-        result = step.run()
+        result = step.run(step_context)
 
         assert result.result_type == ResultType.FAILED
         jhelper.wait_application_gone.assert_called_once_with(
@@ -267,7 +277,7 @@ class TestBaremetalCommands:
         )
 
     @patch.object(steps, "JujuHelper")
-    def test_nova_ironic_shards_delete(self, mock_JujuHelper, deployment):
+    def test_nova_ironic_shards_delete(self, mock_JujuHelper, deployment, step_context):
         ironic = ironic_feature.BaremetalFeature()
         ironic._manifest = Mock()
         client = deployment.get_client.return_value
@@ -276,7 +286,7 @@ class TestBaremetalCommands:
         }
         step = steps.DeleteNovaIronicShardStep(deployment, ironic, "foo")
 
-        result = step.run()
+        result = step.run(step_context)
 
         assert result.result_type == ResultType.COMPLETED
         expected_tfvars = {
@@ -288,6 +298,7 @@ class TestBaremetalCommands:
             ironic._manifest,
             tfvar_config=OPENSTACK_TERRAFORM_VARS,
             override_tfvars=expected_tfvars,
+            reporter=step_context.reporter,
         )
 
         jhelper = mock_JujuHelper.return_value
@@ -298,7 +309,9 @@ class TestBaremetalCommands:
         )
 
     @patch.object(steps, "JujuHelper")
-    def test_switch_config_add_already_exists(self, mock_JujuHelper, deployment):
+    def test_switch_config_add_already_exists(
+        self, mock_JujuHelper, deployment, step_context
+    ):
         ironic = ironic_feature.BaremetalFeature()
         ironic._manifest = Mock()
         jhelper = mock_JujuHelper.return_value
@@ -308,13 +321,13 @@ class TestBaremetalCommands:
             deployment, ironic, "netconf", "foo", config_obj
         )
 
-        result = step.run()
+        result = step.run(step_context)
 
         assert result.result_type == ResultType.FAILED
         jhelper.add_secret.assert_not_called()
 
     @patch.object(steps, "JujuHelper")
-    def test_switch_config_add(self, mock_JujuHelper, deployment):
+    def test_switch_config_add(self, mock_JujuHelper, deployment, step_context):
         ironic = ironic_feature.BaremetalFeature()
         ironic._manifest = Mock()
 
@@ -330,7 +343,7 @@ class TestBaremetalCommands:
             deployment, ironic, "netconf", "foo", config_obj
         )
 
-        result = step.run()
+        result = step.run(step_context)
 
         assert result.result_type == ResultType.COMPLETED
         secret_name = "switch-config-foo"
@@ -360,6 +373,7 @@ class TestBaremetalCommands:
             ironic._manifest,
             tfvar_config=OPENSTACK_TERRAFORM_VARS,
             override_tfvars=expected_tfvars,
+            reporter=step_context.reporter,
         )
 
         jhelper.wait_until_desired_status.assert_called_once_with(
@@ -372,7 +386,9 @@ class TestBaremetalCommands:
 
     @patch.object(steps, "Table")
     @patch.object(steps.console, "print")
-    def test_switch_config_list(self, console_print, mock_Table, deployment):
+    def test_switch_config_list(
+        self, console_print, mock_Table, deployment, step_context
+    ):
         ironic = ironic_feature.BaremetalFeature()
         ironic._manifest = Mock()
         step = steps.ListSwitchConfigsStep(deployment, ironic)
@@ -385,7 +401,7 @@ class TestBaremetalCommands:
             },
         }
 
-        result = step.run()
+        result = step.run(step_context)
 
         assert result.result_type == ResultType.COMPLETED
         mock_Table.assert_called_once_with(
@@ -403,7 +419,9 @@ class TestBaremetalCommands:
         console_print.assert_called_once_with(table)
 
     @patch.object(steps, "JujuHelper")
-    def test_switch_config_update_not_found(self, mock_JujuHelper, deployment):
+    def test_switch_config_update_not_found(
+        self, mock_JujuHelper, deployment, step_context
+    ):
         ironic = ironic_feature.BaremetalFeature()
         ironic._manifest = Mock()
         jhelper = mock_JujuHelper.return_value
@@ -413,13 +431,13 @@ class TestBaremetalCommands:
             deployment, ironic, "netconf", "foo-key", config_obj
         )
 
-        result = step.run()
+        result = step.run(step_context)
 
         assert result.result_type == ResultType.FAILED
         jhelper.update_secret.assert_not_called()
 
     @patch.object(steps, "JujuHelper")
-    def test_switch_config_update(self, mock_JujuHelper, deployment):
+    def test_switch_config_update(self, mock_JujuHelper, deployment, step_context):
         ironic = ironic_feature.BaremetalFeature()
         ironic._manifest = Mock()
 
@@ -432,7 +450,7 @@ class TestBaremetalCommands:
             deployment, ironic, "netconf", "foo", config_obj
         )
 
-        result = step.run()
+        result = step.run(step_context)
 
         assert result.result_type == ResultType.COMPLETED
         secret_name = "switch-config-foo"
@@ -447,20 +465,22 @@ class TestBaremetalCommands:
         )
 
     @patch.object(steps, "JujuHelper")
-    def test_switch_config_delete_not_found(self, mock_JujuHelper, deployment):
+    def test_switch_config_delete_not_found(
+        self, mock_JujuHelper, deployment, step_context
+    ):
         ironic = ironic_feature.BaremetalFeature()
         ironic._manifest = Mock()
         jhelper = mock_JujuHelper.return_value
         jhelper.show_secret.side_effect = JujuSecretNotFound
         step = steps.DeleteSwitchConfigStep(deployment, ironic, "foo")
 
-        result = step.run()
+        result = step.run(step_context)
 
         assert result.result_type == ResultType.FAILED
         jhelper.remove_secret.assert_not_called()
 
     @patch.object(steps, "JujuHelper")
-    def test_switch_config_delete(self, mock_JujuHelper, deployment):
+    def test_switch_config_delete(self, mock_JujuHelper, deployment, step_context):
         ironic = ironic_feature.BaremetalFeature()
         ironic._manifest = Mock()
         step = steps.DeleteSwitchConfigStep(deployment, ironic, "foo")
@@ -477,7 +497,7 @@ class TestBaremetalCommands:
             },
         }
 
-        result = step.run()
+        result = step.run(step_context)
 
         assert result.result_type == ResultType.COMPLETED
         secret_name = "switch-config-foo"
@@ -496,6 +516,7 @@ class TestBaremetalCommands:
             ironic._manifest,
             tfvar_config=OPENSTACK_TERRAFORM_VARS,
             override_tfvars=expected_tfvars,
+            reporter=step_context.reporter,
         )
 
         jhelper.wait_until_desired_status.assert_called_once_with(

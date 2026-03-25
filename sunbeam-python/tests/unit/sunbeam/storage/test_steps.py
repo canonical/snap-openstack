@@ -197,6 +197,7 @@ class TestDeploySpecificCinderVolumeStep:
         basic_client,
         basic_deployment,
         mock_backend_instance,
+        step_context,
     ):
         """Test that extra_tfvars are applied to terraform vars."""
         # Setup mocks
@@ -244,7 +245,7 @@ class TestDeploySpecificCinderVolumeStep:
         }
 
         # Run the step
-        deploy_specific_cinder_volume_step.run()
+        deploy_specific_cinder_volume_step.run(step_context)
 
         # Verify tfhelper was called with extra_tfvars applied
         assert deploy_specific_cinder_volume_step.tfhelper.update_tfvars_and_apply_tf.called
@@ -284,6 +285,7 @@ class TestDeploySpecificCinderVolumeStep:
         basic_manifest,
         test_model,
         mock_backend_instance,
+        step_context,
     ):
         """Test that extra_tfvars values take precedence over defaults."""
         # Setup mocks
@@ -339,7 +341,7 @@ class TestDeploySpecificCinderVolumeStep:
         )
 
         # Run the step
-        step.run()
+        step.run(step_context)
 
         # Verify tfhelper was called
         assert basic_tfhelper.update_tfvars_and_apply_tf.called

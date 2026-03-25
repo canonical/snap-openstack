@@ -23,7 +23,13 @@ def read_config():
 
 class TestDeployMachineApplicationStep:
     def test_run_pristine_installation(
-        self, deployment, cclient, tfhelper, jhelper, manifest
+        self,
+        deployment,
+        cclient,
+        tfhelper,
+        jhelper,
+        manifest,
+        step_context,
     ):
         jhelper.get_application.side_effect = ApplicationNotFoundException("not found")
 
@@ -37,13 +43,19 @@ class TestDeployMachineApplicationStep:
             "app1",
             "model1",
         )
-        result = step.run()
+        result = step.run(step_context)
 
         tfhelper.update_tfvars_and_apply_tf.assert_called_once()
         assert result.result_type == ResultType.COMPLETED
 
     def test_run_already_deployed(
-        self, deployment, cclient, tfhelper, jhelper, manifest
+        self,
+        deployment,
+        cclient,
+        tfhelper,
+        jhelper,
+        manifest,
+        step_context,
     ):
         tfconfig = "tfconfig"
         machines = ["1", "2"]
@@ -64,7 +76,7 @@ class TestDeployMachineApplicationStep:
             model,
             [Role.CONTROL],
         )
-        result = step.run()
+        result = step.run(step_context)
 
         tfhelper.update_tfvars_and_apply_tf.assert_called_with(
             cclient,
@@ -72,11 +84,18 @@ class TestDeployMachineApplicationStep:
             tfvar_config=tfconfig,
             override_tfvars={"machine_ids": machines, "machine_model": model},
             tf_apply_extra_args=[],
+            reporter=step_context.reporter,
         )
         assert result.result_type == ResultType.COMPLETED
 
     def test_run_tf_apply_failed(
-        self, deployment, cclient, tfhelper, jhelper, manifest
+        self,
+        deployment,
+        cclient,
+        tfhelper,
+        jhelper,
+        manifest,
+        step_context,
     ):
         jhelper.get_application.return_value = Mock(units={"app/1": Mock(machine=1)})
         tfhelper.update_tfvars_and_apply_tf.side_effect = TerraformException(
@@ -93,14 +112,20 @@ class TestDeployMachineApplicationStep:
             "app1",
             "model1",
         )
-        result = step.run()
+        result = step.run(step_context)
 
         tfhelper.update_tfvars_and_apply_tf.assert_called_once()
         assert result.result_type == ResultType.FAILED
         assert result.message == "apply failed..."
 
     def test_run_tf_apply_locked(
-        self, deployment, cclient, tfhelper, jhelper, manifest
+        self,
+        deployment,
+        cclient,
+        tfhelper,
+        jhelper,
+        manifest,
+        step_context,
     ):
         jhelper.get_application.return_value = Mock(units={"app/1": Mock(machine=1)})
         tfhelper.update_tfvars_and_apply_tf.side_effect = [
@@ -119,13 +144,19 @@ class TestDeployMachineApplicationStep:
             "model1",
         )
         step.run.retry.wait = tenacity.wait_none()
-        result = step.run()
+        result = step.run(step_context)
 
         tfhelper.update_tfvars_and_apply_tf.assert_called()
         assert result.result_type == ResultType.COMPLETED
 
     def test_run_waiting_timed_out(
-        self, deployment, cclient, tfhelper, jhelper, manifest
+        self,
+        deployment,
+        cclient,
+        tfhelper,
+        jhelper,
+        manifest,
+        step_context,
     ):
         jhelper.get_application.return_value = Mock(units={"app/1": Mock(machine=1)})
         jhelper.wait_application_ready.side_effect = TimeoutError("timed out")
@@ -140,7 +171,7 @@ class TestDeployMachineApplicationStep:
             "app1",
             "model1",
         )
-        result = step.run()
+        result = step.run(step_context)
 
         jhelper.wait_application_ready.assert_called_once()
         assert result.result_type == ResultType.FAILED
@@ -148,7 +179,7 @@ class TestDeployMachineApplicationStep:
 
 
 class TestRemoveMachineUnitStep:
-    def test_is_skip(self, cclient, jhelper):
+    def test_is_skip(self, cclient, jhelper, step_context):
         id = "1"
         cclient.cluster.list_nodes.return_value = [{"name": "node-0", "machineid": id}]
         jhelper.get_application.return_value = Mock(units={"app1/0": Mock(machine=id)})
@@ -156,25 +187,25 @@ class TestRemoveMachineUnitStep:
         step = RemoveMachineUnitsStep(
             cclient, "node-0", jhelper, "tfconfig", "app1", "model1"
         )
-        result = step.is_skip()
+        result = step.is_skip(step_context)
 
         cclient.cluster.list_nodes.assert_called_once()
         jhelper.get_application.assert_called_once()
         assert result.result_type == ResultType.COMPLETED
 
-    def test_is_skip_node_missing(self, cclient, jhelper):
+    def test_is_skip_node_missing(self, cclient, jhelper, step_context):
         cclient.cluster.list_nodes.return_value = [{"name": "node-0", "machineid": 1}]
 
         jhelper.get_application.return_value = Mock(units={"app1/0": Mock()})
         step = RemoveMachineUnitsStep(
             cclient, "node-1", jhelper, "tfconfig", "app1", "model1"
         )
-        result = step.is_skip()
+        result = step.is_skip(step_context)
 
         cclient.cluster.list_nodes.assert_called_once()
         assert result.result_type == ResultType.SKIPPED
 
-    def test_is_skip_application_missing(self, cclient, jhelper):
+    def test_is_skip_application_missing(self, cclient, jhelper, step_context):
         cclient.cluster.list_nodes.return_value = [{"name": "node-0", "machineid": 1}]
         jhelper.get_application.side_effect = ApplicationNotFoundException(
             "Application missing..."
@@ -183,33 +214,35 @@ class TestRemoveMachineUnitStep:
         step = RemoveMachineUnitsStep(
             cclient, "node-0", jhelper, "tfconfig", "app1", "model1"
         )
-        result = step.is_skip()
+        result = step.is_skip(step_context)
 
         jhelper.get_application.assert_called_once()
         assert result.result_type == ResultType.SKIPPED
 
-    def test_is_skip_unit_missing(self, cclient, jhelper):
+    def test_is_skip_unit_missing(self, cclient, jhelper, step_context):
         cclient.cluster.list_nodes.return_value = [{"name": "node-0", "machineid": 1}]
         jhelper.get_application.return_value = Mock(units={})
 
         step = RemoveMachineUnitsStep(
             cclient, "node-0", jhelper, "tfconfig", "app1", "model1"
         )
-        result = step.is_skip()
+        result = step.is_skip(step_context)
 
         cclient.cluster.list_nodes.assert_called_once()
         jhelper.get_application.assert_called_once()
         assert result.result_type == ResultType.SKIPPED
 
-    def test_run(self, cclient, jhelper, read_config):
+    def test_run(self, cclient, jhelper, read_config, step_context):
         step = RemoveMachineUnitsStep(
             cclient, "node-0", jhelper, "tfconfig", "app1", "model1"
         )
-        result = step.run()
+        result = step.run(step_context)
 
         assert result.result_type == ResultType.COMPLETED
 
-    def test_run_application_not_found(self, cclient, jhelper, read_config):
+    def test_run_application_not_found(
+        self, cclient, jhelper, read_config, step_context
+    ):
         jhelper.remove_unit.side_effect = ApplicationNotFoundException(
             "Application missing..."
         )
@@ -218,19 +251,19 @@ class TestRemoveMachineUnitStep:
             cclient, "node-0", jhelper, "tfconfig", "app1", "model1"
         )
         step.units_to_remove = {"app1/0"}
-        result = step.run()
+        result = step.run(step_context)
 
         jhelper.remove_unit.assert_called_once()
         assert result.result_type == ResultType.FAILED
         assert result.message == "Application missing..."
 
-    def test_run_timeout(self, cclient, jhelper, read_config):
+    def test_run_timeout(self, cclient, jhelper, read_config, step_context):
         jhelper.wait_application_ready.side_effect = TimeoutError("timed out")
 
         step = RemoveMachineUnitsStep(
             cclient, "node-0", jhelper, "tfconfig", "app1", "model1"
         )
-        result = step.run()
+        result = step.run(step_context)
 
         jhelper.wait_application_ready.assert_called_once()
         assert result.result_type == ResultType.FAILED

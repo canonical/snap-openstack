@@ -5,13 +5,13 @@ import logging
 import queue
 
 from rich.console import Console
-from rich.status import Status
 
 from sunbeam.clusterd.client import Client
 from sunbeam.core.common import (
     BaseStep,
     Result,
     ResultType,
+    StepContext,
     run_plan,
     update_status_background,
 )
@@ -65,28 +65,28 @@ class BaseUpgrade(BaseStep, JujuStepHelper):
         self.manifest = manifest
         self.model = model
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Run control plane and machine charm upgrade."""
-        result = self.pre_upgrade_tasks(status)
+        result = self.pre_upgrade_tasks(context)
         if result.result_type == ResultType.FAILED:
             return result
 
-        self.upgrade_tasks(status)
+        self.upgrade_tasks(context)
         if result.result_type == ResultType.FAILED:
             return result
 
-        result = self.post_upgrade_tasks(status)
+        result = self.post_upgrade_tasks(context)
         return result
 
-    def upgrade_tasks(self, status: Status | None = None) -> Result:
+    def upgrade_tasks(self, context: StepContext) -> Result:
         """Perform the upgrade tasks."""
         return Result(ResultType.COMPLETED)
 
-    def pre_upgrade_tasks(self, status: Status | None = None) -> Result:
+    def pre_upgrade_tasks(self, context: StepContext) -> Result:
         """Tasks to run before the upgrade."""
         return Result(ResultType.COMPLETED)
 
-    def post_upgrade_tasks(self, status: Status | None = None) -> Result:
+    def post_upgrade_tasks(self, context: StepContext) -> Result:
         """Tasks to run after the upgrade."""
         return Result(ResultType.COMPLETED)
 
@@ -98,7 +98,7 @@ class BaseUpgrade(BaseStep, JujuStepHelper):
         tfhelper: TerraformHelper,
         config: str,
         timeout: int,
-        status: Status | None = None,
+        context: StepContext | None = None,  # noqa: E501
     ) -> Result:
         """Upgrade applications.
 
@@ -116,12 +116,17 @@ class BaseUpgrade(BaseStep, JujuStepHelper):
         )
         try:
             tfhelper.update_partial_tfvars_and_apply_tf(
-                self.client, self.manifest, charms, config
+                self.client,
+                self.manifest,
+                charms,
+                config,
+                reporter=context.reporter if context else None,
             )
         except TerraformException as e:
             LOG.exception("Error upgrading cloud")
             return Result(ResultType.FAILED, str(e))
         status_queue: queue.Queue[str] = queue.Queue()
+        status = context.status if context else None
         task = update_status_background(self, apps, status_queue, status)
         try:
             self.jhelper.wait_until_desired_status(
@@ -169,14 +174,14 @@ class UpgradeControlPlane(BaseUpgrade):
         self.tfhelper = tfhelper
         self.config = OPENSTACK_CONFIG_KEY
 
-    def upgrade_tasks(self, status: Status | None = None) -> Result:
+    def upgrade_tasks(self, context: StepContext) -> Result:
         """Perform the upgrade tasks."""
         # Step 1: Upgrade mysql charms
         LOG.debug("Upgrading Mysql charms")
         charms = list(MYSQL_CHARMS_K8S.keys())
         apps = self.get_apps_filter_by_charms(self.model, charms)
         result = self.upgrade_applications(
-            apps, charms, self.model, self.tfhelper, self.config, 1200, status
+            apps, charms, self.model, self.tfhelper, self.config, 1200, context
         )
         if result.result_type == ResultType.FAILED:
             return result
@@ -196,7 +201,7 @@ class UpgradeControlPlane(BaseUpgrade):
             self.tfhelper,
             self.config,
             OPENSTACK_DEPLOY_TIMEOUT,
-            status,
+            context,
         )
         if result.result_type == ResultType.FAILED:
             return result
@@ -215,7 +220,7 @@ class UpgradeControlPlane(BaseUpgrade):
             self.tfhelper,
             self.config,
             OPENSTACK_DEPLOY_TIMEOUT,
-            status,
+            context,
         )
         return result
 
@@ -257,7 +262,7 @@ class UpgradeMachineCharm(BaseUpgrade):
         self.config = config
         self.timeout = timeout
 
-    def upgrade_tasks(self, status: Status | None = None) -> Result:
+    def upgrade_tasks(self, context: StepContext) -> Result:
         """Perform the upgrade tasks."""
         apps = self.get_apps_filter_by_charms(self.model, self.charms)
         result = self.upgrade_applications(
@@ -267,7 +272,7 @@ class UpgradeMachineCharm(BaseUpgrade):
             self.tfhelper,
             self.config,
             self.timeout,
-            status,
+            context,
         )
 
         return result

@@ -9,6 +9,7 @@ import os
 import queue
 import threading
 import typing
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence, Type, TypeVar
 
@@ -21,6 +22,12 @@ from snaphelpers import Snap, UnknownConfigKey
 from tenacity import RetryCallState
 
 from sunbeam.clusterd.client import Client
+from sunbeam.core.progress import (
+    CompositeProgressReporter,
+    LoggingProgressReporter,
+    ProgressReporter,
+    RichProgressReporter,
+)
 from sunbeam.errors import SunbeamException  # noqa F401
 
 LOG = logging.getLogger(__name__)
@@ -225,6 +232,14 @@ class StepResult:
             self.__setattr__(key, value)
 
 
+@dataclass
+class StepContext:
+    """Cross-cutting concerns passed to every step during plan execution."""
+
+    status: Status
+    reporter: ProgressReporter
+
+
 class BaseStep:
     """A step defines a logical unit of work to be done as part of a plan.
 
@@ -261,7 +276,7 @@ class BaseStep:
         """
         return False
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -269,7 +284,7 @@ class BaseStep:
         """
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Run the step to completion.
 
         Invoked when the step is run and returns a ResultType to indicate
@@ -286,10 +301,9 @@ class BaseStep:
         """
         return self.description + " ... "
 
-    def update_status(self, status: Status | None, msg: str):
-        """Update status if status is provided."""
-        if status is not None:
-            status.update(self.status + msg)
+    def update_status(self, context: StepContext, msg: str):
+        """Update the Rich status spinner with a message."""
+        context.status.update(self.status + msg)
 
 
 def run_plan(
@@ -311,12 +325,17 @@ def run_plan(
     for step in plan:
         LOG.debug(f"Starting step {step.name!r}")
         with console.status(step.status) as status:
+            rich_reporter = RichProgressReporter(status, step.status)
+            logging_reporter = LoggingProgressReporter()
+            reporter = CompositeProgressReporter(rich_reporter, logging_reporter)
+            context = StepContext(status=status, reporter=reporter)
+
             if step.has_prompts():
                 status.stop()
                 step.prompt(console, no_hint)
                 status.start()
 
-            skip_result = step.is_skip(status)
+            skip_result = step.is_skip(context)
             if skip_result.result_type == ResultType.SKIPPED:
                 results[step.__class__.__name__] = skip_result
                 LOG.debug(f"Skipping step {step.name}")
@@ -329,7 +348,7 @@ def run_plan(
                 raise click.ClickException(skip_result.message)
 
             LOG.debug(f"Running step {step.name}")
-            result = step.run(status)
+            result = step.run(context)
             results[step.__class__.__name__] = result
             LOG.debug(
                 f"Finished running step {step.name!r}. Result: {result.result_type}"

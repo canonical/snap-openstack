@@ -132,6 +132,7 @@ class TestDeployControlPlaneStep:
         config_mock,
         snap_patch,
         snap_mock,
+        step_context,
     ):
         snap_mock().config.get.return_value = "k8s"
         basic_jhelper.get_application_names.return_value = ["app1"]
@@ -148,7 +149,7 @@ class TestDeployControlPlaneStep:
             TOPOLOGY,
             MODEL,
         )
-        result = step.run()
+        result = step.run(step_context)
 
         basic_tfhelper.update_tfvars_and_apply_tf.assert_called_once()
         assert result.result_type == ResultType.COMPLETED
@@ -162,6 +163,7 @@ class TestDeployControlPlaneStep:
         config_mock,
         snap_patch,
         snap_mock,
+        step_context,
     ):
         snap_mock().config.get.return_value = "k8s"
         deployment_with_client.get_ovn_manager().get_control_plane_tfvars.return_value = {}
@@ -177,7 +179,7 @@ class TestDeployControlPlaneStep:
             TOPOLOGY,
             MODEL,
         )
-        result = step.run()
+        result = step.run(step_context)
 
         basic_tfhelper.update_tfvars_and_apply_tf.assert_called_once()
         assert result.result_type == ResultType.FAILED
@@ -192,6 +194,7 @@ class TestDeployControlPlaneStep:
         config_mock,
         snap_patch,
         snap_mock,
+        step_context,
     ):
         snap_mock().config.get.return_value = "k8s"
         deployment_with_client.get_ovn_manager().get_control_plane_tfvars.return_value = {}
@@ -206,7 +209,7 @@ class TestDeployControlPlaneStep:
             TOPOLOGY,
             MODEL,
         )
-        result = step.run()
+        result = step.run(step_context)
 
         basic_jhelper.wait_until_active.assert_called_once()
         assert result.result_type == ResultType.FAILED
@@ -221,6 +224,7 @@ class TestDeployControlPlaneStep:
         config_mock,
         snap_patch,
         snap_mock,
+        step_context,
     ):
         snap_mock().config.get.return_value = "k8s"
         deployment_with_client.get_ovn_manager().get_control_plane_tfvars.return_value = {}
@@ -237,7 +241,7 @@ class TestDeployControlPlaneStep:
             TOPOLOGY,
             MODEL,
         )
-        result = step.run()
+        result = step.run(step_context)
 
         basic_jhelper.wait_until_active.assert_called_once()
         assert result.result_type == ResultType.FAILED
@@ -252,6 +256,7 @@ class TestDeployControlPlaneStep:
         config_mock,
         snap_patch,
         snap_mock,
+        step_context,
     ):
         snap_mock().config.get.return_value = "k8s"
         step = DeployControlPlaneStep(
@@ -266,7 +271,7 @@ class TestDeployControlPlaneStep:
             "sunbeam.steps.openstack.read_config",
             Mock(side_effect=ConfigItemNotFoundException("not found")),
         ):
-            result = step.is_skip()
+            result = step.is_skip(step_context)
 
         assert result.result_type == ResultType.COMPLETED
 
@@ -279,6 +284,7 @@ class TestDeployControlPlaneStep:
         config_mock,
         snap_patch,
         snap_mock,
+        step_context,
     ):
         snap_mock().config.get.return_value = "k8s"
         step = DeployControlPlaneStep(
@@ -293,7 +299,7 @@ class TestDeployControlPlaneStep:
             "sunbeam.steps.openstack.read_config",
             Mock(return_value={"topology": "single", "database": "single"}),
         ):
-            result = step.is_skip()
+            result = step.is_skip(step_context)
 
         assert result.result_type == ResultType.COMPLETED
 
@@ -315,7 +321,13 @@ class PatchLoadBalancerServicesIPStepTest:
         return client
 
     def test_is_skip(
-        self, patch_client, read_config_patch, snap_patch, snap_mock, ovn_manager
+        self,
+        patch_client,
+        read_config_patch,
+        snap_patch,
+        snap_mock,
+        ovn_manager,
+        step_context,
     ):
         snap_mock().config.get.return_value = "k8s"
         with patch(
@@ -333,11 +345,17 @@ class PatchLoadBalancerServicesIPStepTest:
             ),
         ):
             step = OpenStackPatchLoadBalancerServicesIPStep(patch_client, ovn_manager)
-            result = step.is_skip()
+            result = step.is_skip(step_context)
         assert result.result_type == ResultType.SKIPPED
 
     def test_is_skip_missing_annotation(
-        self, patch_client, read_config_patch, snap_patch, snap_mock, ovn_manager
+        self,
+        patch_client,
+        read_config_patch,
+        snap_patch,
+        snap_mock,
+        ovn_manager,
+        step_context,
     ):
         snap_mock().config.get.return_value = "k8s"
         with patch(
@@ -349,11 +367,16 @@ class PatchLoadBalancerServicesIPStepTest:
             ),
         ):
             step = OpenStackPatchLoadBalancerServicesIPStep(patch_client, ovn_manager)
-            result = step.is_skip()
+            result = step.is_skip(step_context)
         assert result.result_type == ResultType.COMPLETED
 
     def test_is_skip_missing_config(
-        self, patch_client, snap_patch, snap_mock, ovn_manager
+        self,
+        patch_client,
+        snap_patch,
+        snap_mock,
+        ovn_manager,
+        step_context,
     ):
         snap_mock().config.get.return_value = "k8s"
         with patch(
@@ -361,11 +384,17 @@ class PatchLoadBalancerServicesIPStepTest:
             new=Mock(side_effect=ConfigItemNotFoundException),
         ):
             step = OpenStackPatchLoadBalancerServicesIPStep(patch_client, ovn_manager)
-            result = step.is_skip()
+            result = step.is_skip(step_context)
         assert result.result_type == ResultType.FAILED
 
     def test_run(
-        self, patch_client, read_config_patch, snap_patch, snap_mock, ovn_manager
+        self,
+        patch_client,
+        read_config_patch,
+        snap_patch,
+        snap_mock,
+        ovn_manager,
+        step_context,
     ):
         snap_mock().config.get.return_value = "k8s"
         with patch(
@@ -384,8 +413,8 @@ class PatchLoadBalancerServicesIPStepTest:
             ),
         ):
             step = OpenStackPatchLoadBalancerServicesIPStep(patch_client, ovn_manager)
-            step.is_skip()
-            result = step.run()
+            step.is_skip(step_context)
+            result = step.run(step_context)
         assert result.result_type == ResultType.COMPLETED
         # Verify apply was called instead of patch
         step.kube.apply.assert_called_once()
@@ -426,7 +455,13 @@ class TestPatchLoadBalancerServicesIPStaleAnnotation:
         )
 
     def test_is_skip_stale_annotation_pending_returns_completed(
-        self, patch_client, read_config_patch, snap_patch, snap_mock, ovn_manager
+        self,
+        patch_client,
+        read_config_patch,
+        snap_patch,
+        snap_mock,
+        ovn_manager,
+        step_context,
     ):
         """is_skip should return COMPLETED when a service has a stale IP annotation.
 
@@ -451,12 +486,18 @@ class TestPatchLoadBalancerServicesIPStaleAnnotation:
             new=Mock(return_value=Mock(get=get_mock)),
         ):
             step = OpenStackPatchLoadBalancerServicesIPStep(patch_client, ovn_manager)
-            result = step.is_skip()
+            result = step.is_skip(step_context)
 
         assert result.result_type == ResultType.COMPLETED
 
     def test_run_removes_stale_ip_annotation(
-        self, patch_client, read_config_patch, snap_patch, snap_mock, ovn_manager
+        self,
+        patch_client,
+        read_config_patch,
+        snap_patch,
+        snap_mock,
+        ovn_manager,
+        step_context,
     ):
         """run() should remove a stale IP annotation from a pending service.
 
@@ -488,8 +529,8 @@ class TestPatchLoadBalancerServicesIPStaleAnnotation:
             new=Mock(return_value=Mock(get=get_mock)),
         ):
             step = OpenStackPatchLoadBalancerServicesIPStep(patch_client, ovn_manager)
-            step.is_skip()
-            result = step.run()
+            step.is_skip(step_context)
+            result = step.run(step_context)
 
         assert result.result_type == ResultType.COMPLETED
         # patch must have been called exactly once — for rabbitmq-lb
@@ -524,7 +565,13 @@ class PatchLoadBalancerServicesIPPoolStepTest:
         return client
 
     def test_run(
-        self, pool_client, pool_name, read_config_patch, snap_patch, snap_mock
+        self,
+        pool_client,
+        pool_name,
+        read_config_patch,
+        snap_patch,
+        snap_mock,
+        step_context,
     ):
         snap_mock().config.get.return_value = "k8s"
         kube_get_mock = Mock()
@@ -558,7 +605,7 @@ class PatchLoadBalancerServicesIPPoolStepTest:
             new=Mock(return_value=Mock(get=kube_get_mock)),
         ):
             step = OpenStackPatchLoadBalancerServicesIPPoolStep(pool_client, pool_name)
-            result = step.run()
+            result = step.run(step_context)
         assert result.result_type == ResultType.COMPLETED
         # Verify apply was called instead of patch
         step.kube.apply.assert_called_once()
@@ -572,7 +619,13 @@ class PatchLoadBalancerServicesIPPoolStepTest:
         assert step.kube.apply.mock_calls[0][2]["field_manager"] == "sunbeam"
 
     def test_run_missing_annotation(
-        self, pool_client, pool_name, read_config_patch, snap_patch, snap_mock
+        self,
+        pool_client,
+        pool_name,
+        read_config_patch,
+        snap_patch,
+        snap_mock,
+        step_context,
     ):
         snap_mock().config.get.return_value = "k8s"
         kube_get_mock = Mock()
@@ -600,7 +653,7 @@ class PatchLoadBalancerServicesIPPoolStepTest:
             new=Mock(return_value=Mock(get=kube_get_mock)),
         ):
             step = OpenStackPatchLoadBalancerServicesIPPoolStep(pool_client, pool_name)
-            result = step.run()
+            result = step.run(step_context)
         assert result.result_type == ResultType.COMPLETED
         # Verify apply was called instead of patch
         step.kube.apply.assert_called_once()
@@ -613,18 +666,26 @@ class PatchLoadBalancerServicesIPPoolStepTest:
         # Verify field_manager was passed
         assert step.kube.apply.mock_calls[0][2]["field_manager"] == "sunbeam"
 
-    def test_run_missing_config(self, pool_client, pool_name, snap_patch, snap_mock):
+    def test_run_missing_config(
+        self, pool_client, pool_name, snap_patch, snap_mock, step_context
+    ):
         snap_mock().config.get.return_value = "k8s"
         with patch(
             "sunbeam.core.steps.read_config",
             new=Mock(side_effect=ConfigItemNotFoundException),
         ):
             step = OpenStackPatchLoadBalancerServicesIPPoolStep(pool_client, pool_name)
-            result = step.run()
+            result = step.run(step_context)
         assert result.result_type == ResultType.FAILED
 
     def test_run_same_ippool_already_allocation(
-        self, pool_client, pool_name, read_config_patch, snap_patch, snap_mock
+        self,
+        pool_client,
+        pool_name,
+        read_config_patch,
+        snap_patch,
+        snap_mock,
+        step_context,
     ):
         snap_mock().config.get.return_value = "k8s"
         with patch(
@@ -645,12 +706,18 @@ class PatchLoadBalancerServicesIPPoolStepTest:
             ),
         ):
             step = OpenStackPatchLoadBalancerServicesIPPoolStep(pool_client, pool_name)
-            result = step.run()
+            result = step.run(step_context)
         assert result.result_type == ResultType.COMPLETED
         step.kube.apply.assert_not_called()
 
     def test_run_different_ippool_already_allocated(
-        self, pool_client, pool_name, read_config_patch, snap_patch, snap_mock
+        self,
+        pool_client,
+        pool_name,
+        read_config_patch,
+        snap_patch,
+        snap_mock,
+        step_context,
     ):
         snap_mock().config.get.return_value = "k8s"
         kube_get_mock = Mock()
@@ -696,7 +763,7 @@ class PatchLoadBalancerServicesIPPoolStepTest:
             step._wait_for_ip_allocated_from_pool_annotation_update.retry.wait = (
                 tenacity.wait_none()
             )
-            result = step.run()
+            result = step.run(step_context)
         assert result.result_type == ResultType.COMPLETED
         # Verify apply was called instead of patch
         step.kube.apply.assert_called_once()
@@ -803,6 +870,7 @@ class TestReapplyOpenStackTerraformPlanStep:
         openstack_jhelper,
         openstack_manifest,
         openstack_read_config_patch,
+        step_context,
     ):
         openstack_jhelper.get_application_names.return_value = [
             "placement",
@@ -816,7 +884,7 @@ class TestReapplyOpenStackTerraformPlanStep:
             openstack_manifest,
             "test-machine-model",
         )
-        result = step.run()
+        result = step.run(step_context)
 
         openstack_tfhelper.update_tfvars_and_apply_tf.assert_called_once()
         assert result.result_type == ResultType.COMPLETED
@@ -829,6 +897,7 @@ class TestReapplyOpenStackTerraformPlanStep:
         openstack_jhelper,
         openstack_manifest,
         openstack_read_config_patch,
+        step_context,
     ):
         openstack_tfhelper.update_tfvars_and_apply_tf.side_effect = TerraformException(
             "apply failed..."
@@ -842,7 +911,7 @@ class TestReapplyOpenStackTerraformPlanStep:
             openstack_manifest,
             "test-machine-model",
         )
-        result = step.run()
+        result = step.run(step_context)
 
         openstack_tfhelper.update_tfvars_and_apply_tf.assert_called_once()
         assert result.result_type == ResultType.FAILED
@@ -856,6 +925,7 @@ class TestReapplyOpenStackTerraformPlanStep:
         openstack_jhelper,
         openstack_manifest,
         openstack_read_config_patch,
+        step_context,
     ):
         openstack_jhelper.get_application_names.return_value = [
             "placement",
@@ -871,7 +941,7 @@ class TestReapplyOpenStackTerraformPlanStep:
             openstack_manifest,
             "test-machine-model",
         )
-        result = step.run()
+        result = step.run(step_context)
 
         openstack_jhelper.wait_until_active.assert_called_once()
         assert result.result_type == ResultType.FAILED
@@ -885,6 +955,7 @@ class TestReapplyOpenStackTerraformPlanStep:
         openstack_jhelper,
         openstack_manifest,
         openstack_read_config_patch,
+        step_context,
     ):
         openstack_jhelper.get_application_names.return_value = [
             "placement",
@@ -902,7 +973,7 @@ class TestReapplyOpenStackTerraformPlanStep:
             openstack_manifest,
             "test-machine-model",
         )
-        result = step.run()
+        result = step.run(step_context)
 
         openstack_jhelper.wait_until_active.assert_called_once()
         assert result.result_type == ResultType.FAILED

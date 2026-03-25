@@ -10,7 +10,6 @@ import click
 import yaml
 from packaging.version import Version
 from rich.console import Console
-from rich.status import Status
 
 from sunbeam.clusterd.service import (
     ConfigItemNotFoundException,
@@ -19,6 +18,7 @@ from sunbeam.core.common import (
     BaseStep,
     Result,
     ResultType,
+    StepContext,
     read_config,
     run_plan,
     update_config,
@@ -77,7 +77,7 @@ class DisableLDAPDomainStep(BaseStep, JujuStepHelper):
         self.client = deployment.get_client()
         self.tfhelper = deployment.get_tfhelper(self.feature.tfplan)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Apply terraform configuration to deploy openstack application."""
         config_key = self.feature.get_tfvar_config_key()
 
@@ -94,7 +94,7 @@ class DisableLDAPDomainStep(BaseStep, JujuStepHelper):
         update_config(self.client, config_key, tfvars)
 
         try:
-            self.tfhelper.apply()
+            self.tfhelper.apply(reporter=context.reporter)
         except TerraformException as e:
             return Result(ResultType.FAILED, str(e))
 
@@ -142,7 +142,7 @@ class UpdateLDAPDomainStep(BaseStep, JujuStepHelper):
         self.client = deployment.get_client()
         self.tfhelper = deployment.get_tfhelper(self.feature.tfplan)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Apply terraform configuration to deploy openstack application."""
         config_key = self.feature.get_tfvar_config_key()
 
@@ -162,14 +162,14 @@ class UpdateLDAPDomainStep(BaseStep, JujuStepHelper):
         update_config(self.client, config_key, tfvars)
 
         try:
-            self.tfhelper.apply()
+            self.tfhelper.apply(reporter=context.reporter)
         except TerraformException as e:
             return Result(ResultType.FAILED, str(e))
         charm_name = "keystone-ldap-{}".format(self.charm_config["domain-name"])
         apps = ["keystone", charm_name]
         LOG.debug(f"Application monitored for readiness: {apps}")
         status_queue: queue.Queue[str] = queue.Queue()
-        task = update_status_background(self, apps, status_queue, status)
+        task = update_status_background(self, apps, status_queue, context.status)
         try:
             self.jhelper.wait_until_active(
                 self.model,
@@ -215,7 +215,7 @@ class AddLDAPDomainStep(BaseStep, JujuStepHelper):
         self.client = deployment.get_client()
         self.tfhelper = deployment.get_tfhelper(self.feature.tfplan)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Apply terraform configuration to deploy openstack application."""
         config_key = self.feature.get_tfvar_config_key()
 
@@ -232,14 +232,14 @@ class AddLDAPDomainStep(BaseStep, JujuStepHelper):
         update_config(self.client, config_key, tfvars)
 
         try:
-            self.tfhelper.apply()
+            self.tfhelper.apply(reporter=context.reporter)
         except TerraformException as e:
             return Result(ResultType.FAILED, str(e))
         charm_name = "keystone-ldap-{}".format(self.charm_config["domain-name"])
         apps = ["keystone", charm_name]
         LOG.debug(f"Application monitored for readiness: {apps}")
         status_queue: queue.Queue[str] = queue.Queue()
-        task = update_status_background(self, apps, status_queue, status)
+        task = update_status_background(self, apps, status_queue, context.status)
         try:
             self.jhelper.wait_until_active(
                 self.model,

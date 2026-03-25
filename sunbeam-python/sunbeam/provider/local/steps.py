@@ -12,7 +12,6 @@ from typing import Any
 
 import click
 from rich.console import Console
-from rich.status import Status
 
 import sunbeam.core.questions
 from sunbeam import utils
@@ -26,6 +25,7 @@ from sunbeam.core.common import (
     BaseStep,
     Result,
     ResultType,
+    StepContext,
     SunbeamException,
     parse_ip_range_or_cidr,
 )
@@ -747,7 +747,7 @@ class LocalConfigSRIOVStep(BaseStep):
         """
         return True
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -757,13 +757,13 @@ class LocalConfigSRIOVStep(BaseStep):
             return Result(ResultType.SKIPPED)
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Apply individual hypervisor settings."""
         app = "openstack-hypervisor"
         action_cmd = "set-hypervisor-local-settings"
         name = self.node_name
 
-        self.update_status(status, f"setting PCI configuration for {name}")
+        self.update_status(context, f"setting PCI configuration for {name}")
 
         excluded_devices = self.variables.get("excluded_devices") or {}
         node_excluded_devices = excluded_devices.get(name) or []
@@ -973,13 +973,13 @@ class LocalConfigDPDKStep(BaseConfigDPDKStep):
         self.nics = enabled_nic_names
         self.variables["nics"][self.node_name] = enabled_nic_names
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Apply individual hypervisor settings."""
         app = "openstack-hypervisor"
         action_cmd = "set-hypervisor-local-settings"
         name = self.node_name
 
-        self.update_status(status, f"setting DPDK ports for {name}: {self.nics}")
+        self.update_status(context, f"setting DPDK ports for {name}: {self.nics}")
 
         node = self.client.cluster.get_node_info(name)
         self.machine_id = str(node.get("machineid"))

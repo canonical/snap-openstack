@@ -4,10 +4,9 @@
 import logging
 
 from rich.console import Console
-from rich.status import Status
 
 from sunbeam.clusterd.client import Client
-from sunbeam.core.common import BaseStep, Result, ResultType, run_plan
+from sunbeam.core.common import BaseStep, Result, ResultType, StepContext, run_plan
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import JujuHelper
 from sunbeam.core.manifest import Manifest
@@ -31,7 +30,7 @@ class UpgradeFeatures(BaseStep):
         self.deployment = deployment
         self.upgrade_release = upgrade_release
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Upgrade features."""
         self.deployment.get_feature_manager().update_features(
             self.deployment, upgrade_release=self.upgrade_release

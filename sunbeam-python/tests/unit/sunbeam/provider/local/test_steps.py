@@ -332,14 +332,14 @@ class TestLocalSetHypervisorUnitsOptionsStep(BaseTestSetHypervisorUnitsOptionsSt
 
 
 class TestLocalClusterStatusStep:
-    def test_run(self, deployment, jhelper):
+    def test_run(self, deployment, jhelper, step_context):
         jhelper.get_model_status.return_value = Mock(machines={}, apps={})
         deployment.get_client().cluster.get_status.return_value = {
             "node-1": {"status": "ONLINE", "address": "10.0.0.1"}
         }
 
         step = local_steps.LocalClusterStatusStep(deployment, jhelper)
-        result = step.run(Mock())
+        result = step.run(step_context)
         assert result.result_type == ResultType.COMPLETED
 
     def test_compute_status(self, deployment, jhelper):
@@ -453,18 +453,18 @@ class TestLocalConfigSRIOVStep:
     def test_has_prompts(self):
         assert self._get_step().has_prompts()
 
-    def test_is_skip_should_skip_false(self):
+    def test_is_skip_should_skip_false(self, step_context):
         """Test is_skip returns COMPLETED when should_skip is False."""
         step = self._get_step()
         step.should_skip = False
-        result = step.is_skip()
+        result = step.is_skip(step_context)
         assert result.result_type == ResultType.COMPLETED
 
-    def test_is_skip_should_skip_true(self):
+    def test_is_skip_should_skip_true(self, step_context):
         """Test is_skip returns SKIPPED when should_skip is True."""
         step = self._get_step()
         step.should_skip = True
-        result = step.is_skip()
+        result = step.is_skip(step_context)
         assert result.result_type == ResultType.SKIPPED
 
     def test_should_skip_initialization(self):

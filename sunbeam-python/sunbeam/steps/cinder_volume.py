@@ -4,15 +4,13 @@
 import logging
 from typing import Any
 
-from rich.status import Status
-
 import sunbeam.steps.microceph as microceph
 from sunbeam import versions
 from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import (
     NodeNotExistInClusterException,
 )
-from sunbeam.core.common import BaseStep, Result, ResultType, Role
+from sunbeam.core.common import BaseStep, Result, ResultType, Role, StepContext
 from sunbeam.core.deployment import Deployment, Networks
 from sunbeam.core.juju import (
     ApplicationNotFoundException,
@@ -254,7 +252,7 @@ class CheckCinderVolumeDistributionStep(BaseStep):
         self.model = model
         self.force = force
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -325,7 +323,7 @@ class DestroyCinderVolumeApplicationStep(DestroyMachineApplicationStep):
         """Return application timeout in seconds."""
         return CINDER_VOLUME_APP_TIMEOUT
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Destroy Cinder Volume application."""
         # note(gboutry):this is a workaround for
         # https://github.com/juju/terraform-provider-juju/issues/473
@@ -346,4 +344,4 @@ class DestroyCinderVolumeApplicationStep(DestroyMachineApplicationStep):
                         f"Failed to remove resource {resource} from state",
                     )
 
-        return super().run(status)
+        return super().run(context)

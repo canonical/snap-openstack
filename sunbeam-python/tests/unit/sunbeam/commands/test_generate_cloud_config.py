@@ -24,33 +24,35 @@ def cprint():
 
 
 class TestConfigureCloudsYamlStep:
-    def test_is_skip_with_demo_setup(self, tmp_path, cclient, tfhelper, load_answers):
+    def test_is_skip_with_demo_setup(
+        self, tmp_path, cclient, tfhelper, load_answers, step_context
+    ):
         clouds_yaml = tmp_path / ".config" / "openstack" / "clouds.yaml"
         load_answers.return_value = {"user": {"run_demo_setup": True}}
         admin_credentials = {"OS_AUTH_URL": "http://keystone:5000"}
         step = generate.GenerateCloudConfigStep(
             cclient, tfhelper, admin_credentials, "sunbeam", False, True, clouds_yaml
         )
-        result = step.is_skip()
+        result = step.is_skip(step_context)
         assert result.result_type == ResultType.COMPLETED
 
-    def test_is_skip(self, tmp_path, cclient, tfhelper, load_answers):
+    def test_is_skip(self, tmp_path, cclient, tfhelper, load_answers, step_context):
         clouds_yaml = tmp_path / ".config" / "openstack" / "clouds.yaml"
         load_answers.return_value = {"user": {"run_demo_setup": False}}
         admin_credentials = {"OS_AUTH_URL": "http://keystone:5000"}
         step = generate.GenerateCloudConfigStep(
             cclient, tfhelper, admin_credentials, "sunbeam", False, True, clouds_yaml
         )
-        result = step.is_skip()
+        result = step.is_skip(step_context)
         assert result.result_type == ResultType.SKIPPED
 
-    def test_is_skip_with_admin(self, tmp_path, cclient, tfhelper):
+    def test_is_skip_with_admin(self, tmp_path, cclient, tfhelper, step_context):
         clouds_yaml = tmp_path / ".config" / "openstack" / "clouds.yaml"
         admin_credentials = {"OS_AUTH_URL": "http://keystone:5000"}
         step = generate.GenerateCloudConfigStep(
             cclient, tfhelper, admin_credentials, "sunbeam", True, True, clouds_yaml
         )
-        result = step.is_skip()
+        result = step.is_skip(step_context)
         assert result.result_type == ResultType.COMPLETED
 
     def test_run(
@@ -58,6 +60,7 @@ class TestConfigureCloudsYamlStep:
         tmp_path,
         cclient,
         tfhelper,
+        step_context,
     ):
         snap_real_home_dir = tmp_path
         clouds_yaml = snap_real_home_dir / ".config" / "openstack" / "clouds.yaml"
@@ -74,7 +77,7 @@ class TestConfigureCloudsYamlStep:
         step = generate.GenerateCloudConfigStep(
             cclient, tfhelper, admin_credentials, "sunbeam", False, True, clouds_yaml
         )
-        step.run()
+        step.run(step_context)
 
         # Verify clouds.yaml contents and assert
         with open(clouds_yaml, "r") as f:
@@ -92,7 +95,7 @@ class TestConfigureCloudsYamlStep:
 """
         assert contents == expect
 
-    def test_run_for_admin_user(self, tmp_path, cclient, tfhelper):
+    def test_run_for_admin_user(self, tmp_path, cclient, tfhelper, step_context):
         snap_real_home_dir = tmp_path
         clouds_yaml = snap_real_home_dir / ".config" / "openstack" / "clouds.yaml"
         admin_credentials = {
@@ -106,7 +109,7 @@ class TestConfigureCloudsYamlStep:
         step = generate.GenerateCloudConfigStep(
             cclient, tfhelper, admin_credentials, "sunbeam", True, True, clouds_yaml
         )
-        step.run()
+        step.run(step_context)
 
         # Verify clouds.yaml contents and assert
         with open(clouds_yaml, "r") as f:
@@ -124,7 +127,9 @@ class TestConfigureCloudsYamlStep:
 """
         assert contents == expect
 
-    def test_run_with_update_false(self, cclient, tfhelper, environ, cprint):
+    def test_run_with_update_false(
+        self, cclient, tfhelper, environ, cprint, step_context
+    ):
         environ.copy.return_value = {}
 
         creds = {
@@ -139,7 +144,7 @@ class TestConfigureCloudsYamlStep:
         step = generate.GenerateCloudConfigStep(
             cclient, tfhelper, admin_credentials, "sunbeam", False, False, None
         )
-        step.run()
+        step.run(step_context)
 
         expect = f"""clouds:
   sunbeam:

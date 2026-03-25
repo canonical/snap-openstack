@@ -1,25 +1,40 @@
 # SPDX-FileCopyrightText: 2023 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
+import contextlib
 import json
 import logging
 import os
 import subprocess
-from datetime import datetime
+import threading
+from datetime import datetime, timezone
 from pathlib import Path
 from string import Template
 
-from rich.status import Status
 from snaphelpers import Snap
 
 from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import ConfigItemNotFoundException
-from sunbeam.core.common import BaseStep, Result, ResultType, read_config, update_config
+from sunbeam.core.common import (
+    BaseStep,
+    Result,
+    ResultType,
+    StepContext,
+    read_config,
+    update_config,
+)
 from sunbeam.core.manifest import Manifest
+from sunbeam.core.progress import ProgressEvent, ProgressReporter
 from sunbeam.versions import VarMap
 
 LOG = logging.getLogger(__name__)
 TERRAFORM_APPLY_TIMEOUT = 1200  # 20 minutes
+_TF_UI_EVENT_TYPES = {
+    "apply_start",
+    "apply_complete",
+    "apply_errored",
+    "change_summary",
+}
 
 http_backend_template = """
 terraform {
@@ -187,7 +202,11 @@ class TerraformHelper:
             LOG.warning(e.stderr)
             raise TerraformException(str(e))
 
-    def apply(self, extra_args: list | None = None):
+    def apply(
+        self,
+        extra_args: list | None = None,
+        reporter: ProgressReporter | None = None,
+    ):
         """Terraform apply."""
         os_env = os.environ.copy()
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
@@ -197,37 +216,15 @@ class TerraformHelper:
         if self.env:
             os_env.update(self.env)
 
-        try:
-            cmd = [self.terraform, "apply"]
-            if extra_args:
-                cmd.extend(extra_args)
-            cmd.extend(["-auto-approve", "-no-color"])
-            if self.parallelism is not None:
-                cmd.append(f"-parallelism={self.parallelism}")
-            LOG.debug(
-                f"Running command {' '.join(cmd)}, cwd: {self.path}, tf log: {tf_log}"
-            )
-            process = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                check=True,
-                cwd=self.path,
-                env=os_env,
-                timeout=TERRAFORM_APPLY_TIMEOUT,
-            )
-            LOG.debug(
-                f"Command finished. stdout={process.stdout}, stderr={process.stderr}"
-            )
-        except subprocess.CalledProcessError as e:
-            LOG.error(f"terraform apply failed: {e.output}")
-            LOG.warning(e.stderr)
-            if "remote state already locked" in e.stderr:
-                raise TerraformStateLockedException(str(e))
-            else:
-                raise TerraformException(str(e))
+        cmd = [self.terraform, "apply"]
+        if extra_args:
+            cmd.extend(extra_args)
+        cmd.extend(["-auto-approve", "-no-color", "-json"])
+        if self.parallelism is not None:
+            cmd.append(f"-parallelism={self.parallelism}")
+        self._run_terraform_command(cmd, os_env, reporter=reporter)
 
-    def destroy(self):
+    def destroy(self, reporter: ProgressReporter | None = None):
         """Terraform destroy."""
         os_env = os.environ.copy()
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
@@ -237,32 +234,17 @@ class TerraformHelper:
         if self.env:
             os_env.update(self.env)
 
-        try:
-            cmd = [
-                self.terraform,
-                "destroy",
-                "-auto-approve",
-                "-no-color",
-                "-input=false",
-            ]
-            if self.parallelism is not None:
-                cmd.append(f"-parallelism={self.parallelism}")
-            LOG.debug(f"Running command {' '.join(cmd)}")
-            process = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                check=True,
-                cwd=self.path,
-                env=os_env,
-            )
-            LOG.debug(
-                f"Command finished. stdout={process.stdout}, stderr={process.stderr}"
-            )
-        except subprocess.CalledProcessError as e:
-            LOG.error(f"terraform destroy failed: {e.output}")
-            LOG.warning(e.stderr)
-            raise TerraformException(str(e))
+        cmd = [
+            self.terraform,
+            "destroy",
+            "-auto-approve",
+            "-no-color",
+            "-input=false",
+            "-json",
+        ]
+        if self.parallelism is not None:
+            cmd.append(f"-parallelism={self.parallelism}")
+        self._run_terraform_command(cmd, os_env, reporter=reporter)
 
     def output(self, hide_output: bool = False) -> dict:
         """Terraform output."""
@@ -388,7 +370,7 @@ class TerraformHelper:
             LOG.error(e.stderr)
             raise TerraformException(str(e))
 
-    def sync(self) -> None:
+    def sync(self, reporter: ProgressReporter | None = None) -> None:
         """Sync the running state back to the Terraform state file."""
         os_env = os.environ.copy()
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
@@ -398,23 +380,8 @@ class TerraformHelper:
         if self.env:
             os_env.update(self.env)
 
-        try:
-            cmd = [self.terraform, "apply", "-refresh-only", "-auto-approve"]
-            process = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                check=True,
-                cwd=self.path,
-                env=os_env,
-            )
-            LOG.debug(
-                f"Command finished. stdout={process.stdout}, stderr={process.stderr}"
-            )
-        except subprocess.CalledProcessError as e:
-            LOG.error(f"terraform sync failed: {e.output}")
-            LOG.error(e.stderr)
-            raise TerraformException(str(e))
+        cmd = [self.terraform, "apply", "-refresh-only", "-auto-approve", "-json"]
+        self._run_terraform_command(cmd, os_env, reporter=reporter)
 
     def update_partial_tfvars_and_apply_tf(
         self,
@@ -423,6 +390,7 @@ class TerraformHelper:
         charms: list[str],
         tfvar_config: str | None = None,
         tf_apply_extra_args: list | None = None,
+        reporter: ProgressReporter | None = None,
     ) -> None:
         """Updates tfvars for specific charms and apply the plan.
 
@@ -446,7 +414,7 @@ class TerraformHelper:
 
         self.write_tfvars(updated_tfvars)
         LOG.debug(f"Applying plan {self.plan} with tfvars {updated_tfvars}")
-        self.apply(tf_apply_extra_args)
+        self.apply(tf_apply_extra_args, reporter=reporter)
 
     def update_tfvars_and_apply_tf(
         self,
@@ -455,6 +423,7 @@ class TerraformHelper:
         tfvar_config: str | None = None,
         override_tfvars: dict | None = None,
         tf_apply_extra_args: list | None = None,
+        reporter: ProgressReporter | None = None,
     ) -> None:
         """Updates terraform vars and Apply the terraform.
 
@@ -496,7 +465,7 @@ class TerraformHelper:
 
         self.write_tfvars(updated_tfvars)
         LOG.debug(f"Applying plan {self.plan} with tfvars {updated_tfvars}")
-        self.apply(tf_apply_extra_args)
+        self.apply(tf_apply_extra_args, reporter=reporter)
 
     def _load_and_filter_db_tfvars(
         self, client: Client, tfvar_config: str | None
@@ -686,6 +655,129 @@ class TerraformHelper:
                 for _, tfvar_name in per_charm_tfvar_map.items()
             ]
 
+    def _parse_terraform_event(
+        self, line: str, state_lock_flag: list[bool] | None = None
+    ) -> ProgressEvent | None:
+        """Parse a terraform JSON line into a ProgressEvent.
+
+        Returns None for non-UI-relevant events or unparseable lines.
+        Sets state_lock_flag[0] = True if a state lock diagnostic is detected.
+        """
+        try:
+            data = json.loads(line)
+        except (json.JSONDecodeError, TypeError):
+            return None
+
+        event_type = data.get("type", "")
+
+        if event_type == "diagnostic":
+            diagnostic = data.get("diagnostic", {})
+            summary = diagnostic.get("summary", "")
+            detail = diagnostic.get("detail", "")
+            if "state lock" in summary.lower() or "already locked" in detail.lower():
+                if state_lock_flag is not None:
+                    state_lock_flag[0] = True
+            return None
+
+        if event_type not in _TF_UI_EVENT_TYPES:
+            return None
+
+        hook = data.get("hook", {})
+        resource = hook.get("resource", {})
+        addr = resource.get("addr", "unknown")
+        action = hook.get("action", "unknown")
+        timestamp_str = data.get("@timestamp", "")
+
+        try:
+            timestamp = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+        except (ValueError, AttributeError):
+            timestamp = datetime.now(tz=timezone.utc)
+
+        if event_type == "apply_start":
+            message = f"{addr}: {action}..."
+        elif event_type == "apply_complete":
+            elapsed = hook.get("elapsed_seconds", 0)
+            message = f"{addr}: {action} complete ({elapsed}s)"
+        elif event_type == "apply_errored":
+            message = f"{addr}: {action} errored"
+        elif event_type == "change_summary":
+            message = data.get("@message", "Apply complete.")
+        else:
+            message = data.get("@message", "")
+
+        return ProgressEvent(
+            source="terraform",
+            event_type=event_type,
+            message=message,
+            timestamp=timestamp,
+            metadata=data,
+        )
+
+    def _run_terraform_command(
+        self,
+        cmd: list[str],
+        env: dict,
+        reporter: ProgressReporter | None = None,
+        timeout: int = TERRAFORM_APPLY_TIMEOUT,
+    ) -> None:
+        """Run a terraform command with JSON streaming.
+
+        Reads stdout line-by-line, parses JSON events, and reports them.
+        Reads stderr in a separate thread to avoid pipe buffer deadlock.
+        """
+        LOG.debug(f"Running command {' '.join(cmd)}, cwd: {self.path}")
+
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            cwd=self.path,
+            env=env,
+        )
+
+        stderr_lines: list[str] = []
+
+        def _read_stderr():
+            if process.stderr is not None:
+                stderr_lines.append(process.stderr.read())
+
+        stderr_thread = threading.Thread(target=_read_stderr, daemon=True)
+        stderr_thread.start()
+
+        state_lock_flag = [False]
+        if process.stdout is None:
+            raise TerraformException("stdout pipe not available")
+
+        with contextlib.ExitStack() as stack:
+            if reporter is not None and hasattr(reporter, "__enter__"):
+                stack.enter_context(reporter)  # type: ignore[arg-type]
+            for line in process.stdout:
+                line = line.rstrip("\n")
+                if not line:
+                    continue
+                event = self._parse_terraform_event(line, state_lock_flag)
+                if event is not None and reporter is not None:
+                    reporter.report(event)
+
+        process.wait(timeout=timeout)
+        stderr_thread.join(timeout=10)
+        stderr_output = "".join(stderr_lines)
+
+        LOG.debug(f"Command finished. returncode={process.returncode}")
+        if stderr_output:
+            LOG.debug(f"stderr: {stderr_output}")
+
+        if process.returncode != 0:
+            if state_lock_flag[0] or "remote state already locked" in stderr_output:
+                raise TerraformStateLockedException(
+                    f"terraform command failed (state locked): {' '.join(cmd)}\n"
+                    f"stderr: {stderr_output}"
+                )
+            raise TerraformException(
+                f"terraform command failed: {' '.join(cmd)}\nstderr: {stderr_output}"
+            )
+
 
 class TerraformInitStep(BaseStep):
     """Initialize Terraform with required providers."""
@@ -696,7 +788,7 @@ class TerraformInitStep(BaseStep):
         )
         self.tfhelper = tfhelper
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -704,7 +796,7 @@ class TerraformInitStep(BaseStep):
         """
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Initialise Terraform configuration from provider mirror,."""
         try:
             self.tfhelper.init()

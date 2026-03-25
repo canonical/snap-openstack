@@ -6,11 +6,16 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any
 
 import tenacity
-from rich.status import Status
 
 from sunbeam.clusterd.client import Client
 from sunbeam.core import watcher as watcher_helper
-from sunbeam.core.common import BaseStep, Result, ResultType, SunbeamException
+from sunbeam.core.common import (
+    BaseStep,
+    Result,
+    ResultType,
+    StepContext,
+    SunbeamException,
+)
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import (
     ActionFailedException,
@@ -55,7 +60,7 @@ class MicroCephActionStep(BaseStep):
         self.action_params = action_params
         self.app = _MICROCEPH_APPLICATION
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Run charm microceph action."""
         failed: bool = False
         message: str = ""
@@ -100,7 +105,7 @@ class CreateWatcherAuditStepABC(ABC, BaseStep):
     def _get_actions(self, audit: "watcher.Audit") -> list["watcher.Action"]:
         return watcher_helper.get_actions(client=self.client, audit=audit)
 
-    def run(self, status: Status | None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Create Watcher audit."""
         try:
             audit = self._create_audit()
@@ -181,7 +186,7 @@ class RunWatcherAuditStep(BaseStep):
         )
         self.audit = audit
 
-    def run(self, status: Status | None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Execute Watcher Audit's Action Plan."""
         failed = False
         try:
@@ -190,7 +195,7 @@ class RunWatcherAuditStep(BaseStep):
                 step=self,
                 audit=self.audit,
                 client=self.client,
-                status=status,
+                status=context.status,
             )
         except (
             SunbeamException,
@@ -219,14 +224,14 @@ class DrainControlRoleNodeStep(DrainK8SUnitStep):
         super().__init__(client, node, jhelper, model)
         self.dry_run = dry_run
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Execute drain control role node step."""
         step_key = f"Drain '{self.node}'"
 
         if self.dry_run:
             return Result(ResultType.COMPLETED, {"id": step_key})
 
-        result = super().run(status)
+        result = super().run(context)
         result.message = {"id": step_key}
         return result
 
@@ -243,14 +248,14 @@ class CordonControlRoleNodeStep(CordonK8SUnitStep):
         super().__init__(client, node, jhelper, model)
         self.dry_run = dry_run
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Execute cordon control role node step."""
         step_key = f"Cordon '{self.node}'"
 
         if self.dry_run:
             return Result(ResultType.COMPLETED, {"id": step_key})
 
-        result = super().run(status)
+        result = super().run(context)
         result.message = {"id": step_key}
         return result
 
@@ -267,13 +272,13 @@ class UncordonControlRoleNodeStep(UncordonK8SUnitStep):
         super().__init__(client, node, jhelper, model)
         self.dry_run = dry_run
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Execute uncordon control role node step."""
         step_key = f"Uncordon '{self.node}'"
 
         if self.dry_run:
             return Result(ResultType.COMPLETED, {"id": step_key})
 
-        result = super().run(status)
+        result = super().run(context)
         result.message = {"id": step_key}
         return result

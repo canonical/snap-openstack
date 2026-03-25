@@ -12,7 +12,7 @@ from rich.console import Console
 
 import sunbeam.core.questions
 from sunbeam.clusterd.client import Client
-from sunbeam.core.common import BaseStep, Result, ResultType, Status
+from sunbeam.core.common import BaseStep, Result, ResultType, StepContext
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import (
     ActionFailedException,
@@ -200,7 +200,7 @@ class UserOpenRCStep(BaseStep):
         self.cacert = cacert
         self.openrc = openrc
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -217,7 +217,7 @@ class UserOpenRCStep(BaseStep):
         else:
             return Result(ResultType.SKIPPED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Fetch openrc from terraform state."""
         try:
             tf_output = self.tfhelper.output(hide_output=True)
@@ -269,7 +269,7 @@ class DemoSetup(BaseStep):
         self.tfhelper = tfhelper
         self.client = client
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -283,14 +283,14 @@ class DemoSetup(BaseStep):
         else:
             return Result(ResultType.SKIPPED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Execute configuration using terraform."""
         self.variables = sunbeam.core.questions.load_answers(
             self.client, CLOUD_CONFIG_SECTION
         )
         self.tfhelper.write_tfvars(self.variables, self.answer_file)
         try:
-            self.tfhelper.apply()
+            self.tfhelper.apply(reporter=context.reporter)
             return Result(ResultType.COMPLETED)
         except TerraformException as e:
             LOG.exception("Error configuring cloud")
@@ -307,7 +307,7 @@ class TerraformDemoInitStep(TerraformInitStep):
         self.tfhelper = tfhelper
         self.client = client
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -411,11 +411,11 @@ class BaseConfigDPDKStep(BaseStep):
             self.client, DPDK_CONFIG_SECTION, self.variables
         )
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Run the step to completion."""
         return Result(ResultType.COMPLETED)
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,

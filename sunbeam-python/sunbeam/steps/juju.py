@@ -20,7 +20,6 @@ import jubilant
 import pexpect  # type: ignore [import-untyped]
 import tenacity
 import yaml
-from rich.status import Status
 from snaphelpers import Snap
 
 from sunbeam.clusterd.client import Client
@@ -32,6 +31,7 @@ from sunbeam.core.common import (
     BaseStep,
     Result,
     ResultType,
+    StepContext,
     SunbeamException,
     convert_proxy_to_model_configs,
 )
@@ -73,7 +73,7 @@ class AddCloudJujuStep(BaseStep, JujuStepHelper):
         self.definition = definition
         self.controller = controller
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -115,7 +115,7 @@ class AddCloudJujuStep(BaseStep, JujuStepHelper):
             return Result(ResultType.SKIPPED)
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Run the step to completion.
 
         Invoked when the step is run and returns a ResultType to indicate
@@ -160,7 +160,7 @@ class AddCredentialsJujuStep(BaseStep, JujuStepHelper):
         self.definition = definition
         self.controller = controller
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -189,7 +189,7 @@ class AddCredentialsJujuStep(BaseStep, JujuStepHelper):
             return Result(ResultType.COMPLETED)
         return Result(ResultType.SKIPPED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Run the step to completion.
 
         Invoked when the step is run and returns a ResultType to indicate
@@ -230,7 +230,7 @@ class BootstrapJujuStep(BaseStep, JujuStepHelper):
         home = os.environ.get("SNAP_REAL_HOME")
         os.environ["JUJU_DATA"] = f"{home}/.local/share/juju"
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -257,7 +257,7 @@ class BootstrapJujuStep(BaseStep, JujuStepHelper):
             LOG.debug(str(e))
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Run the step to completion.
 
         Invoked when the step is run and returns a ResultType to indicate
@@ -349,11 +349,11 @@ class ScaleJujuStep(BaseStep, JujuStepHelper):
         self.n = n
         self.extra_args = extra_args or []
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not."""
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Enable Juju HA."""
         cmd = [
             self._get_juju_binary(),
@@ -375,7 +375,7 @@ class ScaleJujuStep(BaseStep, JujuStepHelper):
             "--timeout",
             "15m",
         ]
-        self.update_status(status, "scaling controller")
+        self.update_status(context, "scaling controller")
         LOG.debug("Waiting for HA to be enabled")
         LOG.debug(f"Running command {' '.join(cmd)}")
         process = subprocess.run(cmd, capture_output=True, text=True, check=True)
@@ -397,7 +397,7 @@ class DestroyJujuControllerStep(BaseStep, JujuStepHelper):
         home = os.environ.get("SNAP_REAL_HOME")
         os.environ["JUJU_DATA"] = f"{home}/.local/share/juju"
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -413,7 +413,7 @@ class DestroyJujuControllerStep(BaseStep, JujuStepHelper):
             return Result(ResultType.SKIPPED)
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Destroy juju-controller."""
         cmd = [
             self._get_juju_binary(),
@@ -446,7 +446,7 @@ class CreateJujuUserStep(BaseStep, JujuStepHelper):
         home = os.environ.get("SNAP_REAL_HOME")
         os.environ["JUJU_DATA"] = f"{home}/.local/share/juju"
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -464,7 +464,7 @@ class CreateJujuUserStep(BaseStep, JujuStepHelper):
 
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Run the step to completion.
 
         Invoked when the step is run and returns a ResultType to indicate
@@ -529,7 +529,7 @@ class ResetJujuUserStep(BaseStep, JujuStepHelper):
         home = os.environ.get("SNAP_REAL_HOME")
         os.environ["JUJU_DATA"] = f"{home}/.local/share/juju"
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Run the step to completion.
 
         Invoked when the step is run and returns a ResultType to indicate
@@ -595,7 +595,7 @@ class JujuGrantModelAccessStep(BaseStep, JujuStepHelper):
         home = os.environ.get("SNAP_REAL_HOME")
         os.environ["JUJU_DATA"] = f"{home}/.local/share/juju"
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Run the step to completion.
 
         Invoked when the step is run and returns a ResultType to indicate
@@ -645,7 +645,7 @@ class RemoveJujuUserStep(BaseStep, JujuStepHelper):
         home = os.environ.get("SNAP_REAL_HOME")
         os.environ["JUJU_DATA"] = f"{home}/.local/share/juju"
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -663,7 +663,7 @@ class RemoveJujuUserStep(BaseStep, JujuStepHelper):
 
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Run the step to completion.
 
         Invoked when the step is run and returns a ResultType to indicate
@@ -712,7 +712,7 @@ class RegisterJujuUserStep(BaseStep, JujuStepHelper):
         self.home = os.environ.get("SNAP_REAL_HOME")
         os.environ["JUJU_DATA"] = f"{self.home}/.local/share/juju"
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -755,7 +755,7 @@ class RegisterJujuUserStep(BaseStep, JujuStepHelper):
         self.registration_token = user.get("token")
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Run the step to completion.
 
         Invoked when the step is run and returns a ResultType to indicate
@@ -879,7 +879,7 @@ class RegisterRemoteJujuUserStep(RegisterJujuUserStep):
         self.registration_token = token
         self.account_file = f"{self.controller}.yaml"
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -910,14 +910,14 @@ class RegisterRemoteJujuUserStep(RegisterJujuUserStep):
 
         return user
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Run the step to completion.
 
         Invoked when the step is run and returns a ResultType to indicate
 
         :return:
         """
-        result = super().run()
+        result = super().run(context)
         if result.result_type != ResultType.COMPLETED:
             # Delete the account file created in skip step
             account_file = self.data_location / self.account_file
@@ -947,7 +947,7 @@ class UnregisterJujuController(BaseStep, JujuStepHelper):
         self.controller = controller
         self.account_file = data_location / f"{self.controller}.yaml"
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -965,7 +965,7 @@ class UnregisterJujuController(BaseStep, JujuStepHelper):
 
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Run the step to completion.
 
         Invoked when the step is run and returns a ResultType to indicate
@@ -1006,7 +1006,7 @@ class AddJujuMachineStep(BaseStep, JujuStepHelper):
         home = os.environ.get("SNAP_REAL_HOME")
         os.environ["JUJU_DATA"] = f"{home}/.local/share/juju"
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -1048,7 +1048,7 @@ class AddJujuMachineStep(BaseStep, JujuStepHelper):
                 return machine
         raise ValueError("Machine not found")
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Run the step to completion.
 
         Invoked when the step is run and returns a ResultType to indicate
@@ -1117,7 +1117,7 @@ class RemoveJujuMachineStep(BaseStep, JujuStepHelper):
         home = os.environ.get("SNAP_REAL_HOME")
         os.environ["JUJU_DATA"] = f"{home}/.local/share/juju"
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -1145,7 +1145,7 @@ class RemoveJujuMachineStep(BaseStep, JujuStepHelper):
 
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Run the step to completion.
 
         Invoked when the step is run and returns a ResultType to indicate
@@ -1193,7 +1193,7 @@ class BackupBootstrapUserStep(BaseStep, JujuStepHelper):
         home = os.environ.get("SNAP_REAL_HOME")
         self.juju_data = Path(f"{home}/.local/share/juju")
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -1212,7 +1212,7 @@ class BackupBootstrapUserStep(BaseStep, JujuStepHelper):
 
         return Result(ResultType.SKIPPED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Run the step to completion.
 
         Invoked when the step is run and returns a ResultType to indicate
@@ -1236,7 +1236,7 @@ class SaveJujuUserLocallyStep(BaseStep):
         self.username = name
         self.data_location = data_location
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -1254,7 +1254,7 @@ class SaveJujuUserLocallyStep(BaseStep):
 
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Run the step to completion.
 
         Invoked when the step is run and returns a ResultType to indicate
@@ -1280,7 +1280,7 @@ class SaveJujuRemoteUserLocallyStep(SaveJujuUserLocallyStep):
         super().__init__("", data_location)
         self.controller = controller
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Run the step to completion.
 
         Invoked when the step is run and returns a ResultType to indicate
@@ -1328,7 +1328,7 @@ class SaveJujuAdminUserLocallyStep(BaseStep):
 
         return None
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Run the step to completion.
 
         Invoked when the step is run and returns a ResultType to indicate
@@ -1365,7 +1365,7 @@ class WriteJujuStatusStep(BaseStep, JujuStepHelper):
         self.model = model
         self.file_path = file_path
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -1376,7 +1376,7 @@ class WriteJujuStatusStep(BaseStep, JujuStepHelper):
         LOG.debug(f"Model {self.model} not found")
         return Result(ResultType.SKIPPED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Run the step to completion.
 
         Invoked when the step is run and returns a ResultType to indicate
@@ -1415,7 +1415,7 @@ class WriteCharmLogStep(BaseStep, JujuStepHelper):
         self.file_path = file_path
         self.model_uuid: str | None = None
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -1429,7 +1429,7 @@ class WriteCharmLogStep(BaseStep, JujuStepHelper):
             LOG.debug(f"Model {self.model} not found")
             return Result(ResultType.SKIPPED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Run the step to completion.
 
         Invoked when the step is run and returns a ResultType to indicate
@@ -1474,7 +1474,7 @@ class JujuLoginStep(BaseStep, JujuStepHelper):
         self.juju_account = juju_account
         self.controller = controller
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -1508,7 +1508,7 @@ class JujuLoginStep(BaseStep, JujuStepHelper):
 
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Run the step to completion.
 
         Invoked when the step is run and returns a ResultType to indicate
@@ -1566,14 +1566,14 @@ class AddJujuModelStep(BaseStep):
         self.proxy_settings = proxy_settings or {}
         self.model_config = model_config or {}
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not."""
         if self.jhelper.model_exists(self.model):
             return Result(ResultType.SKIPPED)
         LOG.debug(f"Model {self.model} not found")
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Add model with configs."""
         try:
             self.model_config.update(
@@ -1604,14 +1604,14 @@ class DestroyJujuModelStep(BaseStep):
         self.model = model
         self.timeout = timeout
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not."""
         if self.jhelper.model_exists(self.model):
             return Result(ResultType.COMPLETED)
         LOG.debug(f"Model {self.model} not found")
         return Result(ResultType.SKIPPED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Add model with configs."""
         try:
             self.jhelper.destroy_model(self.model, destroy_storage=True)
@@ -1635,7 +1635,7 @@ class UpdateJujuModelConfigStep(BaseStep):
         self.model = model
         self.model_configs = model_configs
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Run the step to completion.
 
         Invoked when the step is run and returns a ResultType to indicate
@@ -1660,14 +1660,14 @@ class DownloadJujuControllerCharmStep(BaseStep, JujuStepHelper):
         )
         self.proxy_settings = proxy_settings or {}
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not."""
         if not self.proxy_settings:
             return Result(ResultType.SKIPPED)
 
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Run the step to completion.
 
         Invoked when the step is run and returns a ResultType to indicate
@@ -1742,9 +1742,9 @@ class AddJujuSpaceStep(BaseStep):
             raise ValueError("No subnets available in any space")
         return spaces_subnets
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not."""
-        self.update_status(status, "Checking if spaces are populated")
+        self.update_status(context, "Checking if spaces are populated")
         try:
             spaces_subnets = self._wait_for_spaces(self.model)
         except ValueError as e:
@@ -1752,7 +1752,7 @@ class AddJujuSpaceStep(BaseStep):
 
         all_subnets = set(itertools.chain.from_iterable(spaces_subnets.values()))
 
-        self.update_status(status, "Checking spaces configuration")
+        self.update_status(context, "Checking spaces configuration")
 
         wanted_subnets = set(self.subnets)
         missing_from_all = wanted_subnets - all_subnets
@@ -1777,14 +1777,14 @@ class AddJujuSpaceStep(BaseStep):
 
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Run the step to completion.
 
         Invoked when the step is run and returns a ResultType to indicate
 
         :return:
         """
-        self.update_status(status, "Adding space to model")
+        self.update_status(context, "Adding space to model")
         try:
             self.jhelper.add_space(self.model, self.space, self.subnets)
         except JujuException as e:
@@ -1815,7 +1815,7 @@ class IntegrateJujuApplicationsStep(BaseStep):
         self.requirer = requirer
         self.relation = relation
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not."""
         are_integrated = self.jhelper.are_integrated(
             self.model, self.requirer, self.provider, self.relation
@@ -1825,7 +1825,7 @@ class IntegrateJujuApplicationsStep(BaseStep):
             return Result(ResultType.SKIPPED)
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Integrate applications."""
         try:
             self.jhelper.integrate(
@@ -1869,7 +1869,7 @@ class UpdateJujuMachineIDStep(BaseStep):
         self.nodes_to_update = []
         self.hostname_id = {}
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not."""
         clusterd_nodes = self.client.cluster.list_nodes()
         if len(clusterd_nodes) == 0:
@@ -1928,7 +1928,7 @@ class UpdateJujuMachineIDStep(BaseStep):
 
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Integrate applications."""
         for node in self.nodes_to_update:
             LOG.debug(f"Updating machine {node['name']} in model {self.model}")
@@ -1953,7 +1953,7 @@ class SwitchToController(BaseStep, JujuStepHelper):
         )
         self.controller = controller
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Switch to juju controller."""
         try:
             cmd = [self._get_juju_binary(), "switch", self.controller]
@@ -2006,7 +2006,7 @@ class SaveControllerStep(BaseStep, JujuStepHelper):
             is_external=self.is_external,
         )
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not."""
         if self.controller is None:
             # juju controller not yet bootstrapped and is not pointed to external
@@ -2024,7 +2024,7 @@ class SaveControllerStep(BaseStep, JujuStepHelper):
 
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Save controller to deployment information."""
         if self.controller:
             # details can be filled only when controller exists
@@ -2113,7 +2113,7 @@ class RemoveSaasApplicationsStep(BaseStep):
 
         return remote_apps
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not."""
         model_status = self.jhelper.get_model_status(self.model)
         remote_applications = model_status.app_endpoints
@@ -2153,7 +2153,7 @@ class RemoveSaasApplicationsStep(BaseStep):
 
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Execute to remove SAAS apps."""
         if not self._remote_app_to_delete:
             return Result(ResultType.COMPLETED)
@@ -2303,7 +2303,7 @@ class MigrateModelStep(BaseStep, JujuStepHelper):
 
             raise ValueError("Model migration was aborted")
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not."""
         try:
             self._switch_controller(self.to_controller)
@@ -2321,7 +2321,7 @@ class MigrateModelStep(BaseStep, JujuStepHelper):
 
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Migrate model and switch to new controller."""
         # Get model owner
         try:
@@ -2360,7 +2360,7 @@ class CheckJujuReachableStep(BaseStep):
         super().__init__("Check Juju Reachable", "Checking if Juju is reachable")
         self.juju_controller = juju_controller
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Check if Juju is reachable."""
         if self.juju_controller is None:
             return Result(ResultType.FAILED, "Juju controller not found")

@@ -9,7 +9,6 @@ from typing import Sequence
 import rich.console
 import rich.table
 import yaml
-from rich.status import Status
 
 from sunbeam.clusterd.service import ClusterServiceUnavailableException
 from sunbeam.core.common import (
@@ -17,6 +16,7 @@ from sunbeam.core.common import (
     FORMAT_YAML,
     Result,
     ResultType,
+    StepContext,
     SunbeamException,
 )
 from sunbeam.core.deployment import Deployment
@@ -246,9 +246,9 @@ class ClusterStatusStep(abc.ABC, BaseStep):
         self._update_microcluster_status(status, self._get_microcluster_status())
         return self._to_status(status, self.applications_to_columns())
 
-    def run(self, status: Status | None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Run the step to completion."""
-        self.update_status(status, "Computing cluster status")
+        self.update_status(context, "Computing cluster status")
         try:
             cluster_status = self._compute_status()
         except SunbeamException as e:

@@ -11,7 +11,6 @@ from pathlib import Path
 import click
 from packaging.version import Version
 from rich.console import Console
-from rich.status import Status
 from snaphelpers import Snap
 
 from sunbeam.clusterd.client import Client
@@ -21,6 +20,7 @@ from sunbeam.core.common import (
     BaseStep,
     Result,
     ResultType,
+    StepContext,
     delete_config,
     read_config,
     run_plan,
@@ -457,7 +457,7 @@ class UpgradeOpenStackApplicationStep(BaseStep, JujuStepHelper):
         self.model = OPENSTACK_MODEL
         self.upgrade_release = upgrade_release
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Run feature upgrade."""
         LOG.debug(f"Upgrading feature {self.feature.name}")
         expected_wls = ["active", "blocked", "unknown"]
@@ -473,12 +473,13 @@ class UpgradeOpenStackApplicationStep(BaseStep, JujuStepHelper):
                 self.feature.manifest,
                 charms,
                 config,
+                reporter=context.reporter,
             )
         except TerraformException as e:
             LOG.exception(f"Error upgrading feature {self.feature.name}")
             return Result(ResultType.FAILED, str(e))
         status_queue: queue.Queue[str] = queue.Queue()
-        task = update_status_background(self, apps, status_queue, status)
+        task = update_status_background(self, apps, status_queue, context.status)
         try:
             self.jhelper.wait_until_desired_status(
                 self.model,
@@ -531,7 +532,7 @@ class EnableOpenStackApplicationStep(
         self.agent_desired_status = agent_desired_status
         self.model = OPENSTACK_MODEL
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -554,7 +555,7 @@ class EnableOpenStackApplicationStep(
 
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Apply terraform configuration to deploy openstack application."""
         config_key = self.feature.get_tfvar_config_key()
         extra_tfvars = self.feature.set_tfvars_on_enable(self.deployment, self.config)
@@ -568,6 +569,7 @@ class EnableOpenStackApplicationStep(
                 self.feature.manifest,
                 tfvar_config=config_key,
                 override_tfvars=extra_tfvars,
+                reporter=context.reporter,
             )
         except (TerraformException, TerraformStateLockedException) as e:
             return Result(ResultType.FAILED, str(e))
@@ -575,7 +577,7 @@ class EnableOpenStackApplicationStep(
         apps = self.feature.set_application_names(self.deployment)
         LOG.debug(f"Application monitored for readiness: {apps}")
         status_queue: queue.Queue[str] = queue.Queue()
-        task = update_status_background(self, apps, status_queue, status)
+        task = update_status_background(self, apps, status_queue, context.status)
         try:
             self.jhelper.wait_until_desired_status(
                 self.model,
@@ -623,7 +625,7 @@ class DisableOpenStackApplicationStep(
         self.feature = feature
         self.model = OPENSTACK_MODEL
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -646,14 +648,14 @@ class DisableOpenStackApplicationStep(
 
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Apply terraform configuration to remove openstack application."""
         config_key = self.feature.get_tfvar_config_key()
 
         try:
             if self.feature.tf_plan_location == TerraformPlanLocation.FEATURE_REPO:
                 # Just destroy the terraform plan
-                self.tfhelper.destroy()
+                self.tfhelper.destroy(reporter=context.reporter)
                 delete_config(self.deployment.get_client(), config_key)
             else:
                 # Update terraform variables to disable the application
@@ -666,6 +668,7 @@ class DisableOpenStackApplicationStep(
                     self.feature.manifest,
                     tfvar_config=config_key,
                     override_tfvars=extra_tfvars,
+                    reporter=context.reporter,
                 )
         except (TerraformException, TerraformStateLockedException) as e:
             return Result(ResultType.FAILED, str(e))
@@ -699,11 +702,11 @@ class WaitForApplicationsStep(BaseStep):
         self.model = model
         self.timeout = timeout
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Wait for applications to be idle."""
         LOG.debug(f"Application monitored for readiness: {self.apps}")
         status_queue: queue.Queue[str] = queue.Queue()
-        task = update_status_background(self, self.apps, status_queue, status)
+        task = update_status_background(self, self.apps, status_queue, context.status)
         try:
             self.jhelper.wait_until_desired_status(
                 self.model,

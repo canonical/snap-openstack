@@ -69,71 +69,71 @@ def vault_is_certificate_valid():
 
 
 class TestAddCACertsToKeystoneStep:
-    def test_is_skip(self, jhelper):
+    def test_is_skip(self, jhelper, step_context):
         name = "cabundle"
         jhelper.run_action.return_value = {"return-code": 0}
         step = tls.AddCACertsToKeystoneStep(jhelper, name, "fake-cert", "fake-chain")
-        result = step.is_skip()
+        result = step.is_skip(step_context)
 
         jhelper.run_action.assert_called_once()
         assert result.result_type == ResultType.COMPLETED
 
-    def test_is_skip_when_cabundle_already_distributed(self, jhelper):
+    def test_is_skip_when_cabundle_already_distributed(self, jhelper, step_context):
         name = "cabundle"
         jhelper.run_action.return_value = {"return-code": 0, name: "fake-ca-cert"}
         step = tls.AddCACertsToKeystoneStep(jhelper, name, "fake-cert", "fake-chain")
-        result = step.is_skip()
+        result = step.is_skip(step_context)
 
         jhelper.run_action.assert_called_once()
         assert result.result_type == ResultType.SKIPPED
 
-    def test_is_skip_when_action_failed(self, jhelper):
+    def test_is_skip_when_action_failed(self, jhelper, step_context):
         name = "cabundle"
         jhelper.run_action.side_effect = ActionFailedException("action failed...")
         step = tls.AddCACertsToKeystoneStep(jhelper, name, "fake-cert", "fake-chain")
-        result = step.is_skip()
+        result = step.is_skip(step_context)
 
         jhelper.run_action.assert_called_once()
         assert result.result_type == ResultType.FAILED
         assert result.message == "action failed..."
 
-    def test_is_skip_when_leader_not_found(self, jhelper):
+    def test_is_skip_when_leader_not_found(self, jhelper, step_context):
         name = "cabundle"
         jhelper.get_leader_unit.side_effect = LeaderNotFoundException(
             "not able to get leader..."
         )
         step = tls.AddCACertsToKeystoneStep(jhelper, name, "fake-cert", "fake-chain")
-        result = step.is_skip()
+        result = step.is_skip(step_context)
 
         jhelper.run_action.assert_not_called()
         assert result.result_type == ResultType.FAILED
         assert result.message == "not able to get leader..."
 
-    def test_run(self, jhelper):
+    def test_run(self, jhelper, step_context):
         name = "cabundle"
         jhelper.run_action.return_value = {"return-code": 0}
         step = tls.AddCACertsToKeystoneStep(jhelper, name, "fake-cert", "fake-chain")
-        result = step.run()
+        result = step.run(step_context)
 
         assert result.result_type == ResultType.COMPLETED
 
-    def test_run_when_action_failed(self, jhelper):
+    def test_run_when_action_failed(self, jhelper, step_context):
         name = "cabundle"
         jhelper.run_action.side_effect = ActionFailedException("action failed...")
         step = tls.AddCACertsToKeystoneStep(jhelper, name, "fake-cert", "fake-chain")
-        result = step.run()
+        result = step.run(step_context)
 
         jhelper.run_action.assert_called_once()
         assert result.result_type == ResultType.FAILED
         assert result.message == "action failed..."
 
-    def test_run_when_leader_not_found(self, jhelper):
+    def test_run_when_leader_not_found(self, jhelper, step_context):
         name = "cabundle"
         jhelper.get_leader_unit.side_effect = LeaderNotFoundException(
             "not able to get leader..."
         )
         step = tls.AddCACertsToKeystoneStep(jhelper, name, "fake-cert", "fake-chain")
-        result = step.run()
+        result = step.run(step_context)
 
         jhelper.run_action.assert_not_called()
         assert result.result_type == ResultType.FAILED
@@ -141,65 +141,65 @@ class TestAddCACertsToKeystoneStep:
 
 
 class TestRemoveCACertsFromKeystoneStep:
-    def test_is_skip(self, jhelper):
+    def test_is_skip(self, jhelper, step_context):
         name = "cabundle"
         jhelper.run_action.return_value = {"return-code": 0, name: "fake-ca-cert"}
         step = tls.RemoveCACertsFromKeystoneStep(jhelper, name, name)
-        result = step.is_skip()
+        result = step.is_skip(step_context)
 
         jhelper.run_action.assert_called_once()
         assert result.result_type == ResultType.COMPLETED
 
-    def test_is_skip_when_cabundle_not_distributed(self, jhelper):
+    def test_is_skip_when_cabundle_not_distributed(self, jhelper, step_context):
         name = "cabundle"
         jhelper.run_action.return_value = {"return-code": 0}
         step = tls.RemoveCACertsFromKeystoneStep(jhelper, name, name)
-        result = step.is_skip()
+        result = step.is_skip(step_context)
 
         jhelper.run_action.assert_called_once()
         assert result.result_type == ResultType.SKIPPED
 
-    def test_is_skip_when_action_failed(self, jhelper):
+    def test_is_skip_when_action_failed(self, jhelper, step_context):
         name = "cabundle"
         jhelper.run_action.side_effect = ActionFailedException("action failed...")
         step = tls.RemoveCACertsFromKeystoneStep(jhelper, name, name)
-        result = step.is_skip()
+        result = step.is_skip(step_context)
 
         jhelper.run_action.assert_called_once()
         assert result.result_type == ResultType.FAILED
         assert result.message == "action failed..."
 
-    def test_is_skip_when_leader_not_found(self, jhelper):
+    def test_is_skip_when_leader_not_found(self, jhelper, step_context):
         name = "cabundle"
         jhelper.get_leader_unit.side_effect = LeaderNotFoundException(
             "not able to get leader..."
         )
         step = tls.RemoveCACertsFromKeystoneStep(jhelper, name, name)
-        result = step.is_skip()
+        result = step.is_skip(step_context)
 
         jhelper.run_action.assert_not_called()
         assert result.result_type == ResultType.FAILED
         assert result.message == "not able to get leader..."
 
-    def test_run(self, jhelper):
+    def test_run(self, jhelper, step_context):
         name = "cabundle"
         jhelper.run_action.return_value = {"return-code": 0}
         step = tls.RemoveCACertsFromKeystoneStep(jhelper, name, name)
-        result = step.run()
+        result = step.run(step_context)
 
         assert result.result_type == ResultType.COMPLETED
 
-    def test_run_when_action_failed(self, jhelper):
+    def test_run_when_action_failed(self, jhelper, step_context):
         name = "cabundle"
         jhelper.run_action.side_effect = ActionFailedException("action failed...")
         step = tls.RemoveCACertsFromKeystoneStep(jhelper, name, name)
-        result = step.run()
+        result = step.run(step_context)
 
         assert jhelper.run_action.call_count == 2
         assert result.result_type == ResultType.FAILED
         assert result.message == "action failed..."
 
-    def test_run_when_action_with_compatible_name_succeeds(self, jhelper):
+    def test_run_when_action_with_compatible_name_succeeds(self, jhelper, step_context):
         name = "cabundle"
         feature_key = "ca.bundle"
         jhelper.run_action.side_effect = [
@@ -207,18 +207,18 @@ class TestRemoveCACertsFromKeystoneStep:
             {"return-code": 0},
         ]
         step = tls.RemoveCACertsFromKeystoneStep(jhelper, name, feature_key)
-        result = step.run()
+        result = step.run(step_context)
 
         assert jhelper.run_action.call_count == 2
         assert result.result_type == ResultType.COMPLETED
 
-    def test_run_when_leader_not_found(self, jhelper):
+    def test_run_when_leader_not_found(self, jhelper, step_context):
         name = "cabundle"
         jhelper.get_leader_unit.side_effect = LeaderNotFoundException(
             "not able to get leader..."
         )
         step = tls.RemoveCACertsFromKeystoneStep(jhelper, name, name)
-        result = step.run()
+        result = step.run(step_context)
 
         jhelper.run_action.assert_not_called()
         assert result.result_type == ResultType.FAILED
@@ -400,7 +400,7 @@ class TestConfigureTLSCertificatesStep:
         load_answers.assert_not_called()
         write_answers.assert_not_called()
 
-    def test_run(self, cclient, jhelper):
+    def test_run(self, cclient, jhelper, step_context):
         jhelper.run_action.return_value = {"return-code": 0}
         step = tls.ConfigureTLSCertificatesStep(
             cclient,
@@ -418,12 +418,12 @@ class TestConfigureTLSCertificatesStep:
             }
         }
 
-        result = step.run()
+        result = step.run(step_context)
 
         jhelper.run_action.assert_called_once()
         assert result.result_type == ResultType.COMPLETED
 
-    def test_run_with_no_certs_to_process(self, cclient, jhelper):
+    def test_run_with_no_certs_to_process(self, cclient, jhelper, step_context):
         jhelper.run_action.return_value = {"return-code": 0}
         step = tls.ConfigureTLSCertificatesStep(
             cclient,
@@ -431,12 +431,14 @@ class TestConfigureTLSCertificatesStep:
             encode_base64_as_string("fake-cert"),
             encode_base64_as_string("fake-chain"),
         )
-        result = step.run()
+        result = step.run(step_context)
 
         jhelper.run_action.assert_not_called()
         assert result.result_type == ResultType.COMPLETED
 
-    def test_run_when_action_returns_failed_return_code(self, cclient, jhelper):
+    def test_run_when_action_returns_failed_return_code(
+        self, cclient, jhelper, step_context
+    ):
         jhelper.run_action.return_value = {"return-code": 2}
         step = tls.ConfigureTLSCertificatesStep(
             cclient,
@@ -453,12 +455,12 @@ class TestConfigureTLSCertificatesStep:
                 "certificate": encode_base64_as_string("fake-cert"),
             }
         }
-        result = step.run()
+        result = step.run(step_context)
 
         jhelper.run_action.assert_called_once()
         assert result.result_type == ResultType.FAILED
 
-    def test_run_when_action_failed(self, cclient, jhelper):
+    def test_run_when_action_failed(self, cclient, jhelper, step_context):
         jhelper.run_action.side_effect = ActionFailedException("action failed...")
         step = tls.ConfigureTLSCertificatesStep(
             cclient,
@@ -475,13 +477,13 @@ class TestConfigureTLSCertificatesStep:
                 "certificate": encode_base64_as_string("fake-cert"),
             }
         }
-        result = step.run()
+        result = step.run(step_context)
 
         jhelper.run_action.assert_called_once()
         assert result.result_type == ResultType.FAILED
         assert result.message == "action failed..."
 
-    def test_run_when_leader_not_found(self, cclient, jhelper):
+    def test_run_when_leader_not_found(self, cclient, jhelper, step_context):
         jhelper.get_leader_unit.side_effect = LeaderNotFoundException(
             "not able to get leader..."
         )
@@ -500,13 +502,13 @@ class TestConfigureTLSCertificatesStep:
                 "certificate": encode_base64_as_string("fake-cert"),
             }
         }
-        result = step.run()
+        result = step.run(step_context)
 
         jhelper.run_action.assert_not_called()
         assert result.result_type == ResultType.FAILED
         assert result.message == "not able to get leader..."
 
-    def test_run_with_no_ca_chain(self, cclient, jhelper):
+    def test_run_with_no_ca_chain(self, cclient, jhelper, step_context):
         jhelper.run_action.return_value = {"return-code": 0}
         step = tls.ConfigureTLSCertificatesStep(
             cclient, jhelper, encode_base64_as_string("fake-cert")
@@ -521,7 +523,7 @@ class TestConfigureTLSCertificatesStep:
             }
         }
 
-        result = step.run()
+        result = step.run(step_context)
 
         jhelper.run_action.assert_called_once()
         assert result.result_type == ResultType.COMPLETED

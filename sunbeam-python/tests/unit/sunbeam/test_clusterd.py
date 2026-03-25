@@ -49,34 +49,34 @@ def load_answers():
 class TestClusterdSteps:
     """Unit tests for sunbeam clusterd steps."""
 
-    def test_init_step(self, cclient, mocker):
+    def test_init_step(self, cclient, mocker, step_context):
         role = "control"
         init_step = ClusterInitStep(cclient, [role], 0, "10.0.0.0/16")
         init_step.client = MagicMock()
         init_step.fqdn = "node1"
         mocker.patch("sunbeam.utils.get_local_ip_by_cidr", return_value="10.0.0.2")
-        result = init_step.run()
+        result = init_step.run(step_context)
         assert result.result_type == ResultType.COMPLETED
         init_step.client.cluster.bootstrap.assert_called_once()
 
-    def test_init_step_ipv6(self, cclient, mocker):
+    def test_init_step_ipv6(self, cclient, mocker, step_context):
         role = "control"
         init_step = ClusterInitStep(cclient, [role], 0, "fd00::/108")
         init_step.client = MagicMock()
         init_step.fqdn = "node1"
         mocker.patch("sunbeam.utils.get_local_ip_by_cidr", return_value="fd00::2")
-        result = init_step.run()
+        result = init_step.run(step_context)
         assert result.result_type == ResultType.COMPLETED
         init_step.client.cluster.bootstrap.assert_called_once()
 
-    def test_add_node_step(self, cclient):
+    def test_add_node_step(self, cclient, step_context):
         add_node_step = ClusterAddNodeStep(cclient, name="node-1")
         add_node_step.client = MagicMock()
-        result = add_node_step.run()
+        result = add_node_step.run(step_context)
         assert result.result_type == ResultType.COMPLETED
         add_node_step.client.cluster.add_node.assert_called_once_with(name="node-1")
 
-    def test_join_node_step(self, cclient):
+    def test_join_node_step(self, cclient, step_context):
         join_node_step = ClusterJoinNodeStep(
             cclient,
             token="TESTTOKEN",
@@ -85,103 +85,111 @@ class TestClusterdSteps:
             role=["control"],
         )
         join_node_step.client = MagicMock()
-        result = join_node_step.run()
+        result = join_node_step.run(step_context)
         assert result.result_type == ResultType.COMPLETED
         join_node_step.client.cluster.join_node.assert_called_once()
 
-    def test_list_node_step(self, cclient):
+    def test_list_node_step(self, cclient, step_context):
         list_node_step = ClusterListNodeStep(cclient)
         list_node_step.client = MagicMock()
-        result = list_node_step.run()
+        result = list_node_step.run(step_context)
         assert result.result_type == ResultType.COMPLETED
         list_node_step.client.cluster.get_cluster_members.assert_called_once()
 
-    def test_update_node_step(self, cclient):
+    def test_update_node_step(self, cclient, step_context):
         update_node_step = ClusterUpdateNodeStep(
             cclient, name="node-2", role=["control"], machine_id=1
         )
         update_node_step.client = MagicMock()
-        result = update_node_step.run()
+        result = update_node_step.run(step_context)
         assert result.result_type == ResultType.COMPLETED
         update_node_step.client.cluster.update_node_info.assert_called_once_with(
             "node-2", ["control"], 1
         )
 
-    def test_remove_node_step(self, cclient):
+    def test_remove_node_step(self, cclient, step_context):
         remove_node_step = ClusterRemoveNodeStep(cclient, name="node-2")
         remove_node_step.client = MagicMock()
-        result = remove_node_step.run()
+        result = remove_node_step.run(step_context)
         assert result.result_type == ResultType.COMPLETED
         remove_node_step.client.cluster.remove_node.assert_called_once_with("node-2")
 
-    def test_add_juju_user_step(self, cclient):
+    def test_add_juju_user_step(self, cclient, step_context):
         add_juju_user_step = ClusterAddJujuUserStep(
             cclient, name="node-2", token="FAKETOKEN"
         )
         add_juju_user_step.client = MagicMock()
-        result = add_juju_user_step.run()
+        result = add_juju_user_step.run(step_context)
         assert result.result_type == ResultType.COMPLETED
         add_juju_user_step.client.cluster.add_juju_user.assert_called_once_with(
             "node-2", "FAKETOKEN"
         )
 
-    def test_update_juju_user_is_skipped_when_token_matches(self, cclient):
+    def test_update_juju_user_is_skipped_when_token_matches(
+        self, cclient, step_context
+    ):
         cclient.cluster.get_juju_user.return_value = {"token": "TESTTOKEN"}
         step = ClusterUpdateJujuUserStep(cclient, "juju-user", "TESTTOKEN")
-        result = step.is_skip()
+        result = step.is_skip(step_context)
         assert result.result_type == ResultType.SKIPPED
 
-    def test_update_juju_user_updates_when_token_changed(self, cclient):
+    def test_update_juju_user_updates_when_token_changed(self, cclient, step_context):
         cclient.cluster.get_juju_user.return_value = {"token": "OLDTOKEN"}
         step = ClusterUpdateJujuUserStep(cclient, "juju-user", "NEWTOKEN")
-        result = step.is_skip()
+        result = step.is_skip(step_context)
         assert result.result_type == ResultType.COMPLETED
         # ensure run calls update
         step.client.cluster.update_juju_user = MagicMock()
-        result2 = step.run()
+        result2 = step.run(step_context)
         step.client.cluster.update_juju_user.assert_called_once_with(
             "juju-user", "NEWTOKEN"
         )
         assert result2.result_type == ResultType.COMPLETED
 
-    def test_update_juju_user_user_not_found(self, cclient):
+    def test_update_juju_user_user_not_found(self, cclient, step_context):
         cclient.cluster.get_juju_user.side_effect = service.JujuUserNotFoundException()
         step = ClusterUpdateJujuUserStep(cclient, "juju-user", "NEWTOKEN")
-        result = step.is_skip()
+        result = step.is_skip(step_context)
         assert result.result_type == ResultType.FAILED
         assert result.message == "Juju user juju-user not found."
 
-    def test_update_juju_user_handles_service_unavailable_in_is_skip(self, cclient):
+    def test_update_juju_user_handles_service_unavailable_in_is_skip(
+        self, cclient, step_context
+    ):
         cclient.cluster.get_juju_user.side_effect = (
             service.ClusterServiceUnavailableException("Cluster down")
         )
         step = ClusterUpdateJujuUserStep(cclient, "juju-user", "NEWTOKEN")
-        result = step.is_skip()
+        result = step.is_skip(step_context)
         assert result.result_type == ResultType.FAILED
         assert "Cluster down" in result.message
 
-    def test_update_juju_user_handles_service_unavailable_in_run(self, cclient):
+    def test_update_juju_user_handles_service_unavailable_in_run(
+        self, cclient, step_context
+    ):
         cclient.cluster.get_juju_user.return_value = {"token": "OLDTOKEN"}
         cclient.cluster.update_juju_user.side_effect = (
             service.ClusterServiceUnavailableException("Cluster down")
         )
         step = ClusterUpdateJujuUserStep(cclient, "juju-user", "NEWTOKEN")
-        assert step.is_skip().result_type == ResultType.COMPLETED
-        result = step.run()
+        assert step.is_skip(step_context).result_type == ResultType.COMPLETED
+        result = step.run(step_context)
         assert result.result_type == ResultType.FAILED
         assert "Cluster down" in result.message
 
-    def test_prompt_check_node_exists_when_node_present(self, cclient):
+    def test_prompt_check_node_exists_when_node_present(self, cclient, step_context):
         cclient.cluster.get_cluster_members.return_value = [{"name": "node-1"}]
         step = PromptCheckNodeExistStep(cclient, "node-1")
         with patch.object(sunbeam.core.questions, "QuestionBank") as qb:
             step.prompt()
             # QuestionBank should not be constructed when node exists
             assert not qb.called
-        result = step.run()
+        result = step.run(step_context)
         assert result.result_type == ResultType.COMPLETED
 
-    def test_prompt_check_node_missing_with_token_user_confirms(self, cclient):
+    def test_prompt_check_node_missing_with_token_user_confirms(
+        self, cclient, step_context
+    ):
         cclient.cluster.get_cluster_members.return_value = [{"name": "node-1"}]
         cclient.cluster.list_tokens.return_value = [
             {"name": "node-2", "token": "TESTTOKEN"}
@@ -191,10 +199,12 @@ class TestClusterdSteps:
             qb.return_value.continue_operation.ask.return_value = True
             step.prompt()
         assert step.continue_operation is True
-        result = step.run()
+        result = step.run(step_context)
         assert result.result_type == ResultType.COMPLETED
 
-    def test_prompt_check_node_missing_with_token_user_declines(self, cclient):
+    def test_prompt_check_node_missing_with_token_user_declines(
+        self, cclient, step_context
+    ):
         cclient.cluster.get_cluster_members.return_value = [{"name": "node-1"}]
         cclient.cluster.list_tokens.return_value = [
             {"name": "node-3", "token": "TESTTOKEN"}
@@ -204,11 +214,11 @@ class TestClusterdSteps:
             qb.return_value.continue_operation.ask.return_value = False
             step.prompt()
         assert step.continue_operation is False
-        result = step.run()
+        result = step.run(step_context)
         assert result.result_type == ResultType.FAILED
         assert "Operation cancelled by user" in result.message
 
-    def test_prompt_check_node_missing_without_token(self, cclient):
+    def test_prompt_check_node_missing_without_token(self, cclient, step_context):
         cclient.cluster.get_cluster_members.return_value = [{"name": "node-1"}]
         # tokens exist but not for the node
         cclient.cluster.list_tokens.return_value = [
@@ -218,18 +228,18 @@ class TestClusterdSteps:
         step.prompt()
         assert step.token_not_found is True
         assert step.continue_operation is False
-        result = step.run()
+        result = step.run(step_context)
         assert result.result_type == ResultType.FAILED
         assert "no token found" in result.message
 
-    def test_prompt_cluster_service_unavailable(self, cclient):
+    def test_prompt_cluster_service_unavailable(self, cclient, step_context):
         cclient.cluster.get_cluster_members.side_effect = (
             service.ClusterServiceUnavailableException("Cluster service is unavailable")
         )
         step = PromptCheckNodeExistStep(cclient, "node-1")
         step.prompt()
         assert step.cluster_unavailable is True
-        result = step.run()
+        result = step.run(step_context)
         assert result.result_type == ResultType.FAILED
         assert "Sunbeam Cluster service is unavailable" in result.message
 
@@ -766,7 +776,7 @@ class TestClusterUpdateJujuControllerStep:
             "10.0.0.0/24",
         ) == ["10.0.0.6:17070"]
 
-    def test_skip(self, cclient, snap, run, load_answers):
+    def test_skip(self, cclient, snap, run, load_answers, step_context):
         controller_name = "lxdcloud"
         endpoints = ["10.0.0.1:17070", "[fd42:9331:57e6:2088:216:3eff:fe82:2bb6]:17070"]
         management_cidr = "10.0.0.0/24"
@@ -782,12 +792,17 @@ class TestClusterUpdateJujuControllerStep:
         cclient.cluster.get_config.side_effect = ConfigItemNotFoundException()
 
         step = ClusterUpdateJujuControllerStep(cclient, controller_name)
-        result = step.is_skip()
+        result = step.is_skip(step_context)
 
         assert result.result_type == ResultType.COMPLETED
 
     def test_skip_when_controller_details_exist_in_clusterdb(
-        self, cclient, snap, run, load_answers
+        self,
+        cclient,
+        snap,
+        run,
+        load_answers,
+        step_context,
     ):
         controller_name = "lxdcloud"
         endpoints = ["10.0.0.1:17070", "[fd42:9331:57e6:2088:216:3eff:fe82:2bb6]:17070"]
@@ -811,7 +826,7 @@ class TestClusterUpdateJujuControllerStep:
         )
 
         step = ClusterUpdateJujuControllerStep(cclient, controller_name)
-        result = step.is_skip()
+        result = step.is_skip(step_context)
 
         assert result.result_type == ResultType.SKIPPED
 
@@ -826,41 +841,41 @@ def manifest():
 
 
 class TestDeploySunbeamClusterdApplicationStep:
-    def test_is_skip_when_application_not_found(self, manifest, model):
+    def test_is_skip_when_application_not_found(self, manifest, model, step_context):
         jhelper = Mock()
         jhelper.get_application.side_effect = ApplicationNotFoundException
         step = DeploySunbeamClusterdApplicationStep(jhelper, manifest, model)
-        result = step.is_skip()
+        result = step.is_skip(step_context)
         assert result.result_type == ResultType.COMPLETED
 
-    def test_is_skip_when_application_found(self, manifest, model):
+    def test_is_skip_when_application_found(self, manifest, model, step_context):
         jhelper = Mock()
         jhelper.get_application.return_value = Mock()
         step = DeploySunbeamClusterdApplicationStep(jhelper, manifest, model)
-        result = step.is_skip()
+        result = step.is_skip(step_context)
         assert result.result_type == ResultType.SKIPPED
 
-    def test_run_when_no_machines_found(self, manifest, model):
+    def test_run_when_no_machines_found(self, manifest, model, step_context):
         jhelper = Mock()
         jhelper.get_application.return_value = Mock()
         jhelper.get_machines.return_value = {}
         step = DeploySunbeamClusterdApplicationStep(jhelper, manifest, model)
-        result = step.run()
+        result = step.run(step_context)
         assert result.result_type == ResultType.FAILED
         assert result.message == f"No machines found in {model} model"
 
-    def test_run_when_machines_found(self, manifest, model):
+    def test_run_when_machines_found(self, manifest, model, step_context):
         jhelper = Mock()
         jhelper.get_application.return_value = Mock()
         jhelper.get_machines.return_value = {"1": "m1", "2": "m2", "3": "m3"}
         manifest.core.software.charms = {"sunbeam-clusterd": Mock(config={})}
         step = DeploySunbeamClusterdApplicationStep(jhelper, manifest, model)
-        result = step.run()
+        result = step.run(step_context)
         assert result.result_type == ResultType.COMPLETED
 
 
 class TestSaveManagementCidrStep:
-    def test_is_skip_when_management_cidr_already_saved(self):
+    def test_is_skip_when_management_cidr_already_saved(self, step_context):
         client = Mock()
         client.cluster.get_config.return_value = """{
             "bootstrap": {
@@ -868,31 +883,31 @@ class TestSaveManagementCidrStep:
             }
         }"""
         step = SaveManagementCidrStep(client, "10.0.0.0/24")
-        result = step.is_skip()
+        result = step.is_skip(step_context)
         assert result.result_type == ResultType.SKIPPED
 
-    def test_is_skip_when_management_cidr_not_saved(self):
+    def test_is_skip_when_management_cidr_not_saved(self, step_context):
         client = Mock()
         client.cluster.get_config.side_effect = service.ConfigItemNotFoundException
         step = SaveManagementCidrStep(client, "10.0.0.0/24")
         step.variables = {"bootstrap": {"management_cidr": "10.0.0.1/24"}}
-        result = step.is_skip()
+        result = step.is_skip(step_context)
         assert result.result_type == ResultType.COMPLETED
 
-    def test_run_successfully_saves_management_cidr(self):
+    def test_run_successfully_saves_management_cidr(self, step_context):
         client = Mock()
         client.cluster.update_config.side_effect = lambda x, y: None
         step = SaveManagementCidrStep(client, "10.0.0.0/24")
         step.variables = {"bootstrap": {}}
-        result = step.run()
+        result = step.run(step_context)
         assert result.result_type == ResultType.COMPLETED
 
-    def test_run_handles_cluster_service_unavailable_exception(self):
+    def test_run_handles_cluster_service_unavailable_exception(self, step_context):
         client = Mock()
         client.cluster.update_config.side_effect = (
             service.ClusterServiceUnavailableException("Cluster service is unavailable")
         )
         step = SaveManagementCidrStep(client, "10.0.0.0/24")
         step.variables = {"bootstrap": {}}
-        result = step.run()
+        result = step.run(step_context)
         assert result.result_type == ResultType.FAILED

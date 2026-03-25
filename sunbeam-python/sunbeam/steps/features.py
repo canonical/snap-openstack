@@ -7,7 +7,13 @@ import queue
 from rich.console import Console
 
 from sunbeam.clusterd.service import ClusterServiceUnavailableException
-from sunbeam.core.common import BaseStep, Result, ResultType, Status, SunbeamException
+from sunbeam.core.common import (
+    BaseStep,
+    Result,
+    ResultType,
+    StepContext,
+    SunbeamException,
+)
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import (
     ModelNotFoundException,
@@ -38,7 +44,7 @@ class DisableEnabledFeatures(BaseStep):
         """Determines if the step can take input from the user."""
         return super().prompt(console, show_hint)
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Check if the step should be skipped."""
         try:
             enabled_features = self.feature_manager.enabled_features(self.deployment)
@@ -51,7 +57,7 @@ class DisableEnabledFeatures(BaseStep):
             self.enabled_features.put(feature)
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Disable the features."""
         if not self.enabled_features:
             return Result(ResultType.COMPLETED)

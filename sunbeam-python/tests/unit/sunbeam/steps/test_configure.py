@@ -135,7 +135,7 @@ class _TestableStep(SetExternalNetworkUnitsOptionsStep):
 
 
 class TestSetExternalNetworkUnitsOptionsStepRun:
-    """Tests for SetExternalNetworkUnitsOptionsStep.run()."""
+    """Tests for SetExternalNetworkUnitsOptionsStep.run(step_context)."""
 
     def _make_step(self, cclient, jhelper, names):
         step = _TestableStep(
@@ -149,7 +149,9 @@ class TestSetExternalNetworkUnitsOptionsStepRun:
         return step
 
     @patch("sunbeam.feature_gates.split_roles_enabled", return_value=False)
-    def test_split_roles_off_with_bridge_mapping(self, mock_split, cclient, jhelper):
+    def test_split_roles_off_with_bridge_mapping(
+        self, mock_split, cclient, jhelper, step_context
+    ):
         cclient.cluster.get_node_info.return_value = {
             "machineid": 1,
             "role": ["network"],
@@ -157,7 +159,7 @@ class TestSetExternalNetworkUnitsOptionsStepRun:
         step = self._make_step(cclient, jhelper, ["node1"])
         step.bridge_mappings = {"node1": "br-physnet1:physnet1:eth2"}
 
-        result = step.run()
+        result = step.run(step_context)
 
         assert result.result_type == ResultType.COMPLETED
         jhelper.run_action.assert_called_once_with(
@@ -169,7 +171,11 @@ class TestSetExternalNetworkUnitsOptionsStepRun:
 
     @patch("sunbeam.feature_gates.split_roles_enabled", return_value=False)
     def test_split_roles_off_no_bridge_mapping_skipped(
-        self, mock_split, cclient, jhelper
+        self,
+        mock_split,
+        cclient,
+        jhelper,
+        step_context,
     ):
         cclient.cluster.get_node_info.return_value = {
             "machineid": 1,
@@ -178,14 +184,18 @@ class TestSetExternalNetworkUnitsOptionsStepRun:
         step = self._make_step(cclient, jhelper, ["node1"])
         step.bridge_mappings = {}
 
-        result = step.run()
+        result = step.run(step_context)
 
         assert result.result_type == ResultType.COMPLETED
         jhelper.run_action.assert_not_called()
 
     @patch("sunbeam.feature_gates.split_roles_enabled", return_value=True)
     def test_split_roles_on_network_node_with_bridge(
-        self, mock_split, cclient, jhelper
+        self,
+        mock_split,
+        cclient,
+        jhelper,
+        step_context,
     ):
         cclient.cluster.get_node_info.return_value = {
             "machineid": 1,
@@ -194,7 +204,7 @@ class TestSetExternalNetworkUnitsOptionsStepRun:
         step = self._make_step(cclient, jhelper, ["node1"])
         step.bridge_mappings = {"node1": "br-physnet1:physnet1:eth2"}
 
-        result = step.run()
+        result = step.run(step_context)
 
         assert result.result_type == ResultType.COMPLETED
         jhelper.run_action.assert_called_once_with(
@@ -209,7 +219,11 @@ class TestSetExternalNetworkUnitsOptionsStepRun:
 
     @patch("sunbeam.feature_gates.split_roles_enabled", return_value=True)
     def test_split_roles_on_compute_only_with_bridge(
-        self, mock_split, cclient, jhelper
+        self,
+        mock_split,
+        cclient,
+        jhelper,
+        step_context,
     ):
         """Compute-only: bridge_mapping ignored, only gw=false."""
         cclient.cluster.get_node_info.return_value = {
@@ -219,7 +233,7 @@ class TestSetExternalNetworkUnitsOptionsStepRun:
         step = self._make_step(cclient, jhelper, ["node1"])
         step.bridge_mappings = {"node1": "br-physnet1:physnet1:eth2"}
 
-        result = step.run()
+        result = step.run(step_context)
 
         assert result.result_type == ResultType.COMPLETED
         jhelper.run_action.assert_called_once_with(
@@ -232,7 +246,9 @@ class TestSetExternalNetworkUnitsOptionsStepRun:
         )
 
     @patch("sunbeam.feature_gates.split_roles_enabled", return_value=True)
-    def test_split_roles_on_compute_only_no_bridge(self, mock_split, cclient, jhelper):
+    def test_split_roles_on_compute_only_no_bridge(
+        self, mock_split, cclient, jhelper, step_context
+    ):
         cclient.cluster.get_node_info.return_value = {
             "machineid": 3,
             "role": ["compute"],
@@ -240,7 +256,7 @@ class TestSetExternalNetworkUnitsOptionsStepRun:
         step = self._make_step(cclient, jhelper, ["node1"])
         step.bridge_mappings = {}
 
-        result = step.run()
+        result = step.run(step_context)
 
         assert result.result_type == ResultType.COMPLETED
         jhelper.run_action.assert_called_once_with(
@@ -251,7 +267,9 @@ class TestSetExternalNetworkUnitsOptionsStepRun:
         )
 
     @patch("sunbeam.feature_gates.split_roles_enabled", return_value=True)
-    def test_split_roles_on_control_only_no_bridge(self, mock_split, cclient, jhelper):
+    def test_split_roles_on_control_only_no_bridge(
+        self, mock_split, cclient, jhelper, step_context
+    ):
         cclient.cluster.get_node_info.return_value = {
             "machineid": 4,
             "role": ["control"],
@@ -259,7 +277,7 @@ class TestSetExternalNetworkUnitsOptionsStepRun:
         step = self._make_step(cclient, jhelper, ["node1"])
         step.bridge_mappings = {}
 
-        result = step.run()
+        result = step.run(step_context)
 
         assert result.result_type == ResultType.COMPLETED
         jhelper.run_action.assert_called_once_with(
@@ -271,7 +289,11 @@ class TestSetExternalNetworkUnitsOptionsStepRun:
 
     @patch("sunbeam.feature_gates.split_roles_enabled", return_value=True)
     def test_split_roles_on_control_only_with_bridge_stripped(
-        self, mock_split, cclient, jhelper
+        self,
+        mock_split,
+        cclient,
+        jhelper,
+        step_context,
     ):
         """Control-only node: bridge_mapping ignored even if present."""
         cclient.cluster.get_node_info.return_value = {
@@ -281,7 +303,7 @@ class TestSetExternalNetworkUnitsOptionsStepRun:
         step = self._make_step(cclient, jhelper, ["node1"])
         step.bridge_mappings = {"node1": "br-physnet1:physnet1:eth2"}
 
-        result = step.run()
+        result = step.run(step_context)
 
         assert result.result_type == ResultType.COMPLETED
         jhelper.run_action.assert_called_once_with(
@@ -293,7 +315,11 @@ class TestSetExternalNetworkUnitsOptionsStepRun:
 
     @patch("sunbeam.feature_gates.split_roles_enabled", return_value=True)
     def test_split_roles_on_compute_network_with_bridge(
-        self, mock_split, cclient, jhelper
+        self,
+        mock_split,
+        cclient,
+        jhelper,
+        step_context,
     ):
         cclient.cluster.get_node_info.return_value = {
             "machineid": 5,
@@ -302,7 +328,7 @@ class TestSetExternalNetworkUnitsOptionsStepRun:
         step = self._make_step(cclient, jhelper, ["node1"])
         step.bridge_mappings = {"node1": "br-physnet1:physnet1:eth2"}
 
-        result = step.run()
+        result = step.run(step_context)
 
         assert result.result_type == ResultType.COMPLETED
         jhelper.run_action.assert_called_once_with(
@@ -316,7 +342,9 @@ class TestSetExternalNetworkUnitsOptionsStepRun:
         )
 
     @patch("sunbeam.feature_gates.split_roles_enabled", return_value=True)
-    def test_split_roles_on_multiple_mixed_nodes(self, mock_split, cclient, jhelper):
+    def test_split_roles_on_multiple_mixed_nodes(
+        self, mock_split, cclient, jhelper, step_context
+    ):
         node_info = {
             "net-node": {"machineid": 1, "role": ["network"]},
             "compute-node": {"machineid": 2, "role": ["compute"]},
@@ -339,7 +367,7 @@ class TestSetExternalNetworkUnitsOptionsStepRun:
             "both-node": "br-physnet2:physnet2:eth3",
         }
 
-        result = step.run()
+        result = step.run(step_context)
 
         assert result.result_type == ResultType.COMPLETED
         assert jhelper.run_action.call_count == 3
@@ -377,7 +405,9 @@ class TestSetExternalNetworkUnitsOptionsStepRun:
         }
 
     @patch("sunbeam.feature_gates.split_roles_enabled", return_value=True)
-    def test_action_fails_returns_failed(self, mock_split, cclient, jhelper):
+    def test_action_fails_returns_failed(
+        self, mock_split, cclient, jhelper, step_context
+    ):
         cclient.cluster.get_node_info.return_value = {
             "machineid": 1,
             "role": ["network"],
@@ -386,13 +416,17 @@ class TestSetExternalNetworkUnitsOptionsStepRun:
         step = self._make_step(cclient, jhelper, ["node1"])
         step.bridge_mappings = {"node1": "br-physnet1:physnet1:eth2"}
 
-        result = step.run()
+        result = step.run(step_context)
 
         assert result.result_type == ResultType.FAILED
 
     @patch("sunbeam.feature_gates.split_roles_enabled", return_value=True)
     def test_split_roles_multi_physnet_different_hosts(
-        self, mock_split, cclient, jhelper
+        self,
+        mock_split,
+        cclient,
+        jhelper,
+        step_context,
     ):
         """Two network nodes each with a different physnet."""
         node_info = {
@@ -411,7 +445,7 @@ class TestSetExternalNetworkUnitsOptionsStepRun:
             "net-b": "br-physnet2:physnet2:eth3",
         }
 
-        result = step.run()
+        result = step.run(step_context)
 
         assert result.result_type == ResultType.COMPLETED
         assert jhelper.run_action.call_count == 2
@@ -431,7 +465,11 @@ class TestSetExternalNetworkUnitsOptionsStepRun:
 
     @patch("sunbeam.feature_gates.split_roles_enabled", return_value=False)
     def test_no_split_roles_multi_physnet_different_hosts(
-        self, mock_split, cclient, jhelper
+        self,
+        mock_split,
+        cclient,
+        jhelper,
+        step_context,
     ):
         """Without split-roles, different physnets still work."""
         node_info = {
@@ -450,7 +488,7 @@ class TestSetExternalNetworkUnitsOptionsStepRun:
             "node-b": "br-physnet2:physnet2:eth3",
         }
 
-        result = step.run()
+        result = step.run(step_context)
 
         assert result.result_type == ResultType.COMPLETED
         assert jhelper.run_action.call_count == 2

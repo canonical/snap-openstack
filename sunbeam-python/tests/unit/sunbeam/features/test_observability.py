@@ -29,21 +29,29 @@ def update_config():
 
 
 class TestDeployObservabilityStackStep:
-    def test_run(self, deployment, tfhelper, jhelper, observabilityfeature, ssnap):
+    def test_run(
+        self, deployment, tfhelper, jhelper, observabilityfeature, ssnap, step_context
+    ):
         ssnap().config.get.return_value = "k8s"
         observabilityfeature.deployment.proxy_settings.return_value = {}
         jhelper.get_application_names.return_value = ["app1", "app2", "app3"]
         step = observability_feature.DeployObservabilityStackStep(
             deployment, observabilityfeature, tfhelper, jhelper
         )
-        result = step.run()
+        result = step.run(step_context)
 
         tfhelper.update_tfvars_and_apply_tf.assert_called_once()
         jhelper.wait_until_active.assert_called_once()
         assert result.result_type == ResultType.COMPLETED
 
     def test_run_tf_apply_failed(
-        self, deployment, tfhelper, jhelper, observabilityfeature, ssnap
+        self,
+        deployment,
+        tfhelper,
+        jhelper,
+        observabilityfeature,
+        ssnap,
+        step_context,
     ):
         ssnap().config.get.return_value = "k8s"
         observabilityfeature.deployment.proxy_settings.return_value = {}
@@ -54,7 +62,7 @@ class TestDeployObservabilityStackStep:
         step = observability_feature.DeployObservabilityStackStep(
             deployment, observabilityfeature, tfhelper, jhelper
         )
-        result = step.run()
+        result = step.run(step_context)
 
         tfhelper.update_tfvars_and_apply_tf.assert_called_once()
         jhelper.wait_until_active.assert_not_called()
@@ -62,7 +70,13 @@ class TestDeployObservabilityStackStep:
         assert result.message == "apply failed..."
 
     def test_run_waiting_timed_out(
-        self, deployment, tfhelper, jhelper, observabilityfeature, ssnap
+        self,
+        deployment,
+        tfhelper,
+        jhelper,
+        observabilityfeature,
+        ssnap,
+        step_context,
     ):
         ssnap().config.get.return_value = "k8s"
         observabilityfeature.deployment.proxy_settings.return_value = {}
@@ -72,7 +86,7 @@ class TestDeployObservabilityStackStep:
         step = observability_feature.DeployObservabilityStackStep(
             deployment, observabilityfeature, tfhelper, jhelper
         )
-        result = step.run()
+        result = step.run(step_context)
 
         tfhelper.update_tfvars_and_apply_tf.assert_called_once()
         jhelper.wait_until_active.assert_called_once()
@@ -81,19 +95,27 @@ class TestDeployObservabilityStackStep:
 
 
 class TestRemoveObservabilityStackStep:
-    def test_run(self, deployment, tfhelper, jhelper, observabilityfeature, ssnap):
+    def test_run(
+        self, deployment, tfhelper, jhelper, observabilityfeature, ssnap, step_context
+    ):
         ssnap().config.get.return_value = "k8s"
         step = observability_feature.RemoveObservabilityStackStep(
             deployment, observabilityfeature, tfhelper, jhelper
         )
-        result = step.run()
+        result = step.run(step_context)
 
         tfhelper.destroy.assert_called_once()
         jhelper.wait_model_gone.assert_called_once()
         assert result.result_type == ResultType.COMPLETED
 
     def test_run_tf_destroy_failed(
-        self, deployment, tfhelper, jhelper, observabilityfeature, ssnap
+        self,
+        deployment,
+        tfhelper,
+        jhelper,
+        observabilityfeature,
+        ssnap,
+        step_context,
     ):
         ssnap().config.get.return_value = "k8s"
         tfhelper.destroy.side_effect = TerraformException("destroy failed...")
@@ -101,7 +123,7 @@ class TestRemoveObservabilityStackStep:
         step = observability_feature.RemoveObservabilityStackStep(
             deployment, observabilityfeature, tfhelper, jhelper
         )
-        result = step.run()
+        result = step.run(step_context)
 
         tfhelper.destroy.assert_called_once()
         jhelper.wait_model_gone.assert_not_called()
@@ -109,7 +131,13 @@ class TestRemoveObservabilityStackStep:
         assert result.message == "destroy failed..."
 
     def test_run_waiting_timed_out(
-        self, deployment, tfhelper, jhelper, observabilityfeature, ssnap
+        self,
+        deployment,
+        tfhelper,
+        jhelper,
+        observabilityfeature,
+        ssnap,
+        step_context,
     ):
         ssnap().config.get.return_value = "k8s"
         jhelper.wait_model_gone.side_effect = TimeoutError("timed out")
@@ -117,7 +145,7 @@ class TestRemoveObservabilityStackStep:
         step = observability_feature.RemoveObservabilityStackStep(
             deployment, observabilityfeature, tfhelper, jhelper
         )
-        result = step.run()
+        result = step.run(step_context)
 
         tfhelper.destroy.assert_called_once()
         jhelper.wait_model_gone.assert_called_once()
@@ -126,18 +154,25 @@ class TestRemoveObservabilityStackStep:
 
 
 class TestDeployObservabilityAgentStep:
-    def test_run(self, deployment, tfhelper, jhelper, observabilityfeature):
+    def test_run(
+        self, deployment, tfhelper, jhelper, observabilityfeature, step_context
+    ):
         step = observability_feature.DeployObservabilityAgentStep(
             deployment, Mock(), observabilityfeature, tfhelper, jhelper
         )
-        result = step.run()
+        result = step.run(step_context)
 
         tfhelper.update_tfvars_and_apply_tf.assert_called_once()
         jhelper.wait_application_ready.assert_called_once()
         assert result.result_type == ResultType.COMPLETED
 
     def test_run_tf_apply_failed(
-        self, deployment, tfhelper, jhelper, observabilityfeature
+        self,
+        deployment,
+        tfhelper,
+        jhelper,
+        observabilityfeature,
+        step_context,
     ):
         tfhelper.update_tfvars_and_apply_tf.side_effect = TerraformException(
             "apply failed..."
@@ -146,7 +181,7 @@ class TestDeployObservabilityAgentStep:
         step = observability_feature.DeployObservabilityAgentStep(
             deployment, Mock(), observabilityfeature, tfhelper, jhelper
         )
-        result = step.run()
+        result = step.run(step_context)
 
         tfhelper.update_tfvars_and_apply_tf.assert_called_once()
         jhelper.wait_application_ready.assert_not_called()
@@ -154,14 +189,19 @@ class TestDeployObservabilityAgentStep:
         assert result.message == "apply failed..."
 
     def test_run_waiting_timed_out(
-        self, deployment, tfhelper, jhelper, observabilityfeature
+        self,
+        deployment,
+        tfhelper,
+        jhelper,
+        observabilityfeature,
+        step_context,
     ):
         jhelper.wait_application_ready.side_effect = TimeoutError("timed out")
 
         step = observability_feature.DeployObservabilityAgentStep(
             deployment, Mock(), observabilityfeature, tfhelper, jhelper
         )
-        result = step.run()
+        result = step.run(step_context)
 
         tfhelper.update_tfvars_and_apply_tf.assert_called_once()
         jhelper.wait_application_ready.assert_called_once()
@@ -171,26 +211,37 @@ class TestDeployObservabilityAgentStep:
 
 class TestRemoveObservabilityAgentStep:
     def test_run(
-        self, deployment, tfhelper, jhelper, observabilityfeature, update_config
+        self,
+        deployment,
+        tfhelper,
+        jhelper,
+        observabilityfeature,
+        update_config,
+        step_context,
     ):
         step = observability_feature.RemoveObservabilityAgentStep(
             deployment, observabilityfeature, tfhelper, jhelper
         )
-        result = step.run()
+        result = step.run(step_context)
 
         tfhelper.destroy.assert_called_once()
         jhelper.wait_application_gone.assert_called_once()
         assert result.result_type == ResultType.COMPLETED
 
     def test_run_tf_destroy_failed(
-        self, deployment, tfhelper, jhelper, observabilityfeature
+        self,
+        deployment,
+        tfhelper,
+        jhelper,
+        observabilityfeature,
+        step_context,
     ):
         tfhelper.destroy.side_effect = TerraformException("destroy failed...")
 
         step = observability_feature.RemoveObservabilityAgentStep(
             deployment, observabilityfeature, tfhelper, jhelper
         )
-        result = step.run()
+        result = step.run(step_context)
 
         tfhelper.destroy.assert_called_once()
         jhelper.wait_application_gone.assert_not_called()
@@ -198,14 +249,19 @@ class TestRemoveObservabilityAgentStep:
         assert result.message == "destroy failed..."
 
     def test_run_waiting_timed_out(
-        self, deployment, tfhelper, jhelper, observabilityfeature
+        self,
+        deployment,
+        tfhelper,
+        jhelper,
+        observabilityfeature,
+        step_context,
     ):
         jhelper.wait_application_gone.side_effect = TimeoutError("timed out")
 
         step = observability_feature.RemoveObservabilityAgentStep(
             deployment, observabilityfeature, tfhelper, jhelper
         )
-        result = step.run()
+        result = step.run(step_context)
 
         tfhelper.destroy.assert_called_once()
         jhelper.wait_application_gone.assert_called_once()
@@ -214,7 +270,9 @@ class TestRemoveObservabilityAgentStep:
 
 
 class TestIntegrateRemoteCosOffersStep:
-    def test_run(self, deployment, jhelper, observabilityfeature, snap, run):
+    def test_run(
+        self, deployment, jhelper, observabilityfeature, snap, run, step_context
+    ):
         observabilityfeature.grafana_offer_url = "remotecos:admin/grafana"
         observabilityfeature.prometheus_offer_url = "remotecos:admin/prometheus"
         observabilityfeature.loki_offer_url = "remotecos:admin/loki"
@@ -223,12 +281,18 @@ class TestIntegrateRemoteCosOffersStep:
             deployment, observabilityfeature, jhelper
         )
 
-        result = step.run()
+        result = step.run(step_context)
         jhelper.wait_application_ready.assert_called()
         assert result.result_type == ResultType.COMPLETED
 
     def test_run_waiting_timedout(
-        self, deployment, jhelper, observabilityfeature, snap, run
+        self,
+        deployment,
+        jhelper,
+        observabilityfeature,
+        snap,
+        run,
+        step_context,
     ):
         jhelper.wait_application_ready.side_effect = TimeoutError("timed out")
 
@@ -240,14 +304,16 @@ class TestIntegrateRemoteCosOffersStep:
             deployment, observabilityfeature, jhelper
         )
 
-        result = step.run()
+        result = step.run(step_context)
         jhelper.wait_application_ready.assert_called()
         assert result.result_type == ResultType.FAILED
         assert result.message == "timed out"
 
 
 class TestRemoveRemoteCosOffersStep:
-    def test_run(self, deployment, jhelper, observabilityfeature, snap, run):
+    def test_run(
+        self, deployment, jhelper, observabilityfeature, snap, run, step_context
+    ):
         observabilityfeature.deployment.openstack_machines_model = "test-model"
         jhelper.get_model_status.side_effect = [
             Mock(
@@ -269,13 +335,19 @@ class TestRemoveRemoteCosOffersStep:
             deployment, observabilityfeature, jhelper
         )
 
-        result = step.run()
+        result = step.run(step_context)
         run.assert_called_once()
         jhelper.wait_application_ready.assert_called()
         assert result.result_type == ResultType.COMPLETED
 
     def test_run_no_remote_offers(
-        self, deployment, jhelper, observabilityfeature, snap, run
+        self,
+        deployment,
+        jhelper,
+        observabilityfeature,
+        snap,
+        run,
+        step_context,
     ):
         observabilityfeature.deployment.openstack_machines_model = "test-model"
         jhelper.get_model_status.side_effect = [Mock(apps={}), Mock(apps={})]
@@ -283,13 +355,19 @@ class TestRemoveRemoteCosOffersStep:
             deployment, observabilityfeature, jhelper
         )
 
-        result = step.run()
+        result = step.run(step_context)
         run.assert_not_called()
         jhelper.wait_application_ready.assert_called()
         assert result.result_type == ResultType.COMPLETED
 
     def test_run_waiting_timedout(
-        self, deployment, jhelper, observabilityfeature, snap, run
+        self,
+        deployment,
+        jhelper,
+        observabilityfeature,
+        snap,
+        run,
+        step_context,
     ):
         observabilityfeature.deployment.openstack_machines_model = "test-model"
         jhelper.get_model_status.side_effect = [
@@ -313,7 +391,7 @@ class TestRemoveRemoteCosOffersStep:
             deployment, observabilityfeature, jhelper
         )
 
-        result = step.run()
+        result = step.run(step_context)
         run.assert_called_once()
         jhelper.wait_application_ready.assert_called()
         assert result.result_type == ResultType.FAILED

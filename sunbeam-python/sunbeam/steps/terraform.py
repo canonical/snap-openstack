@@ -4,9 +4,7 @@
 import logging
 import shutil
 
-from rich.status import Status
-
-from sunbeam.core.common import BaseStep, Result, ResultType
+from sunbeam.core.common import BaseStep, Result, ResultType, StepContext
 from sunbeam.core.deployment import Deployment
 
 LOG = logging.getLogger(__name__)
@@ -19,7 +17,7 @@ class CleanTerraformPlansStep(BaseStep):
         )
         self.tf_plans = deployment.plans_directory
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -30,7 +28,7 @@ class CleanTerraformPlansStep(BaseStep):
 
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Delete terraform plan directories."""
         try:
             shutil.rmtree(self.tf_plans)

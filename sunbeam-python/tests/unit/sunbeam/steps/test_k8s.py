@@ -134,30 +134,34 @@ class TestAddK8SCloudStep:
         deployment.get_client().cluster.get_config.return_value = "{}"
         return deployment
 
-    def test_is_skip(self, setup_deployment, jhelper, cloud_name):
+    def test_is_skip(self, setup_deployment, jhelper, cloud_name, step_context):
         clouds = {}
         jhelper.get_clouds.return_value = clouds
 
         step = AddK8SCloudStep(setup_deployment, jhelper)
-        result = step.is_skip()
+        result = step.is_skip(step_context)
 
         assert result.result_type == ResultType.COMPLETED
 
     def test_is_skip_cloud_already_deployed(
-        self, setup_deployment, jhelper, cloud_name
+        self,
+        setup_deployment,
+        jhelper,
+        cloud_name,
+        step_context,
     ):
         clouds = {cloud_name: {"endpoint": "10.0.10.1"}}
         jhelper.get_clouds.return_value = clouds
 
         step = AddK8SCloudStep(setup_deployment, jhelper)
-        result = step.is_skip()
+        result = step.is_skip(step_context)
 
         assert result.result_type == ResultType.SKIPPED
 
-    def test_run(self, setup_deployment, jhelper, cloud_name):
+    def test_run(self, setup_deployment, jhelper, cloud_name, step_context):
         with patch("sunbeam.steps.k8s.read_config", Mock(return_value={})):
             step = AddK8SCloudStep(setup_deployment, jhelper)
-            result = step.run()
+            result = step.run(step_context)
 
         jhelper.add_k8s_cloud.assert_called_with(
             cloud_name,
@@ -185,30 +189,32 @@ class TestAddK8SCredentialStep:
     def credential_name(self, cloud_name):
         return f"{cloud_name}{CREDENTIAL_SUFFIX}"
 
-    def test_is_skip(self, deployment, jhelper):
+    def test_is_skip(self, deployment, jhelper, step_context):
         credentials = {}
         jhelper.get_credentials.return_value = credentials
 
         step = AddK8SCredentialStep(deployment, jhelper)
         with patch.object(step, "get_credentials", return_value=credentials):
-            result = step.is_skip()
+            result = step.is_skip(step_context)
 
         assert result.result_type == ResultType.COMPLETED
 
-    def test_is_skip_credential_exists(self, deployment, jhelper, credential_name):
+    def test_is_skip_credential_exists(
+        self, deployment, jhelper, credential_name, step_context
+    ):
         credentials = {"controller-credentials": {credential_name: {}}}
         jhelper.get_credentials.return_value = credentials
 
         step = AddK8SCredentialStep(deployment, jhelper)
         with patch.object(step, "get_credentials", return_value=credentials):
-            result = step.is_skip()
+            result = step.is_skip(step_context)
 
         assert result.result_type == ResultType.SKIPPED
 
-    def test_run(self, deployment, jhelper, cloud_name, credential_name):
+    def test_run(self, deployment, jhelper, cloud_name, credential_name, step_context):
         with patch("sunbeam.steps.k8s.read_config", Mock(return_value={})):
             step = AddK8SCredentialStep(deployment, jhelper)
-            result = step.run()
+            result = step.run(step_context)
 
         jhelper.add_k8s_credential.assert_called_with(
             cloud_name,
@@ -231,23 +237,23 @@ class TestStoreK8SKubeConfigStep:
     def deployment(self, deployment_with_space):
         return deployment_with_space
 
-    def test_is_skip(self, deployment, client, jhelper):
+    def test_is_skip(self, deployment, client, jhelper, step_context):
         step = StoreK8SKubeConfigStep(deployment, client, jhelper, "test-model")
-        result = step.is_skip()
+        result = step.is_skip(step_context)
 
         assert result.result_type == ResultType.SKIPPED
 
-    def test_is_skip_config_missing(self, deployment, client, jhelper):
+    def test_is_skip_config_missing(self, deployment, client, jhelper, step_context):
         with patch(
             "sunbeam.steps.k8s.read_config",
             Mock(side_effect=ConfigItemNotFoundException),
         ):
             step = StoreK8SKubeConfigStep(deployment, client, jhelper, "test-model")
-            result = step.is_skip()
+            result = step.is_skip(step_context)
 
         assert result.result_type == ResultType.COMPLETED
 
-    def test_run(self, deployment, client, jhelper):
+    def test_run(self, deployment, client, jhelper, step_context):
         kubeconfig_content = """apiVersion: v1
 clusters:
 - cluster:
@@ -281,37 +287,37 @@ users:
         }
 
         step = StoreK8SKubeConfigStep(deployment, client, jhelper, "test-model")
-        result = step.run()
+        result = step.run(step_context)
 
         jhelper.get_leader_unit.assert_called_once()
         jhelper.run_action.assert_called_once()
         assert result.result_type == ResultType.COMPLETED
 
-    def test_run_application_not_found(self, deployment, client, jhelper):
+    def test_run_application_not_found(self, deployment, client, jhelper, step_context):
         jhelper.get_leader_unit.side_effect = ApplicationNotFoundException(
             "Application missing..."
         )
 
         step = StoreK8SKubeConfigStep(deployment, client, jhelper, "test-model")
-        result = step.run()
+        result = step.run(step_context)
 
         jhelper.get_leader_unit.assert_called_once()
         assert result.result_type == ResultType.FAILED
         assert result.message == "Application missing..."
 
-    def test_run_leader_not_found(self, deployment, client, jhelper):
+    def test_run_leader_not_found(self, deployment, client, jhelper, step_context):
         jhelper.get_leader_unit.side_effect = LeaderNotFoundException(
             "Leader missing..."
         )
 
         step = StoreK8SKubeConfigStep(deployment, client, jhelper, "test-model")
-        result = step.run()
+        result = step.run(step_context)
 
         jhelper.get_leader_unit.assert_called_once()
         assert result.result_type == ResultType.FAILED
         assert result.message == "Leader missing..."
 
-    def test_run_action_failed(self, deployment, client, jhelper):
+    def test_run_action_failed(self, deployment, client, jhelper, step_context):
         jhelper.run_action.side_effect = ActionFailedException("Action failed...")
         jhelper.get_leader_unit.return_value = "k8s/0"
         jhelper.get_leader_unit_machine.return_value = "0"
@@ -323,7 +329,7 @@ users:
             )
         }
         step = StoreK8SKubeConfigStep(deployment, client, jhelper, "test-model")
-        result = step.run()
+        result = step.run(step_context)
 
         jhelper.get_leader_unit.assert_called_once()
         jhelper.run_action.assert_called_once()
@@ -392,20 +398,20 @@ class TestEnsureL2AdvertisementByHostStep:
         kubeconfig_mocker.stop()
         kube_mocker.stop()
 
-    def test_is_skip_no_outdated_or_deleted(self, step):
+    def test_is_skip_no_outdated_or_deleted(self, step, step_context):
         step._get_outdated_l2_advertisement = Mock(return_value=([], []))
-        result = step.is_skip()
+        result = step.is_skip(step_context)
         assert result.result_type == ResultType.SKIPPED
 
-    def test_is_skip_with_outdated(self, step):
+    def test_is_skip_with_outdated(self, step, step_context):
         step._get_outdated_l2_advertisement = Mock(return_value=(["node1"], []))
-        result = step.is_skip()
+        result = step.is_skip(step_context)
         assert result.result_type == ResultType.COMPLETED
         assert len(step.to_update) == 1
 
-    def test_is_skip_with_deleted(self, step):
+    def test_is_skip_with_deleted(self, step, step_context):
         step._get_outdated_l2_advertisement = Mock(return_value=([], ["node2"]))
-        result = step.is_skip()
+        result = step.is_skip(step_context)
         assert result.result_type == ResultType.COMPLETED
         assert len(step.to_delete) == 1
 
@@ -763,57 +769,80 @@ class TestEnsureDefaultL2AdvertisementMutedStep:
         kube_patch.stop()
         meta_v1_patch.stop()
 
-    def test_is_skip_kubeconfig_not_found(self, deployment, client, jhelper):
+    def test_is_skip_kubeconfig_not_found(
+        self, deployment, client, jhelper, step_context
+    ):
         with patch(
             "sunbeam.steps.k8s.read_config", side_effect=ConfigItemNotFoundException
         ):
             step = EnsureDefaultL2AdvertisementMutedStep(deployment, client, jhelper)
-            result = step.is_skip()
+            result = step.is_skip(step_context)
         assert result.result_type == ResultType.FAILED
         assert "kubeconfig not found" in result.message
 
     def test_is_skip_l2_advertisement_not_found(
-        self, deployment, client, jhelper, kube
+        self,
+        deployment,
+        client,
+        jhelper,
+        kube,
+        step_context,
     ):
         api_error = ApiError.__new__(ApiError)
         api_error.status = Mock(code=404)
         kube.get = Mock(side_effect=api_error)
         with patch("sunbeam.steps.k8s.read_config", return_value={}):
             step = EnsureDefaultL2AdvertisementMutedStep(deployment, client, jhelper)
-            result = step.is_skip()
+            result = step.is_skip(step_context)
         assert result.result_type == ResultType.SKIPPED
 
     def test_is_skip_l2_advertisement_api_error_other(
-        self, deployment, client, jhelper, kube
+        self,
+        deployment,
+        client,
+        jhelper,
+        kube,
+        step_context,
     ):
         api_error = ApiError.__new__(ApiError)
         api_error.status = Mock(code=500)
         with patch("sunbeam.steps.k8s.read_config", return_value={}):
             kube.get = Mock(side_effect=api_error)
             step = EnsureDefaultL2AdvertisementMutedStep(deployment, client, jhelper)
-            result = step.is_skip()
+            result = step.is_skip(step_context)
         assert result.result_type == ResultType.FAILED
 
     def test_is_skip_l2_advertisement_already_muted(
-        self, deployment, client, jhelper, kube, node_selectors
+        self,
+        deployment,
+        client,
+        jhelper,
+        kube,
+        node_selectors,
+        step_context,
     ):
         l2_advertisement = Mock()
         l2_advertisement.spec = {"nodeSelectors": node_selectors}
         with patch("sunbeam.steps.k8s.read_config", return_value={}):
             kube.get = Mock(return_value=l2_advertisement)
             step = EnsureDefaultL2AdvertisementMutedStep(deployment, client, jhelper)
-            result = step.is_skip()
+            result = step.is_skip(step_context)
         assert result.result_type == ResultType.SKIPPED
 
     def test_is_skip_l2_advertisement_needs_muting(
-        self, deployment, client, jhelper, kube
+        self,
+        deployment,
+        client,
+        jhelper,
+        kube,
+        step_context,
     ):
         l2_advertisement = Mock()
         l2_advertisement.spec = {"nodeSelectors": [{"matchLabels": {"foo": "bar"}}]}
         with patch("sunbeam.steps.k8s.read_config", return_value={}):
             kube.get = Mock(return_value=l2_advertisement)
             step = EnsureDefaultL2AdvertisementMutedStep(deployment, client, jhelper)
-            result = step.is_skip()
+            result = step.is_skip(step_context)
         assert result.result_type == ResultType.COMPLETED
 
     def test_run_success(self, deployment, client, jhelper, kube):
@@ -859,7 +888,7 @@ class TestEnsureK8SUnitsTaggedStep:
         step.kube = kube
         return step
 
-    def test_is_skip_no_nodes_to_update(self, step, client, jhelper):
+    def test_is_skip_no_nodes_to_update(self, step, client, jhelper, step_context):
         control_nodes = [
             {"name": "node1", "machineid": "1"},
             {"name": "node2", "machineid": "2"},
@@ -888,10 +917,10 @@ class TestEnsureK8SUnitsTaggedStep:
             ),
         }
         with patch("sunbeam.steps.k8s.get_kube_client", return_value=step.kube):
-            result = step.is_skip()
+            result = step.is_skip(step_context)
         assert result.result_type == ResultType.SKIPPED
 
-    def test_is_skip_nodes_to_update(self, step, client, jhelper):
+    def test_is_skip_nodes_to_update(self, step, client, jhelper, step_context):
         control_nodes = [
             {"name": "node1", "machineid": "1"},
             {"name": "node2", "machineid": "2"},
@@ -920,11 +949,13 @@ class TestEnsureK8SUnitsTaggedStep:
             ),
         }
         with patch("sunbeam.steps.k8s.get_kube_client", return_value=step.kube):
-            result = step.is_skip()
+            result = step.is_skip(step_context)
         assert result.result_type == ResultType.COMPLETED
         assert "node2" in step.to_update
 
-    def test_is_skip_nodes_to_update_with_fqdn(self, step, client, jhelper):
+    def test_is_skip_nodes_to_update_with_fqdn(
+        self, step, client, jhelper, step_context
+    ):
         control_nodes = [
             {"name": "node1.maas", "machineid": "1"},
             {"name": "node2.maas", "machineid": "2"},
@@ -953,19 +984,19 @@ class TestEnsureK8SUnitsTaggedStep:
             ),
         }
         with patch("sunbeam.steps.k8s.get_kube_client", return_value=step.kube):
-            result = step.is_skip()
+            result = step.is_skip(step_context)
         assert result.result_type == ResultType.COMPLETED
         assert "node2.maas" in step.to_update
 
-    def test_is_skip_kube_client_error(self, step, client):
+    def test_is_skip_kube_client_error(self, step, client, step_context):
         client.cluster.list_nodes_by_role.return_value = []
         with patch(
             "sunbeam.steps.k8s.get_kube_client", side_effect=KubeClientError("fail")
         ):
-            result = step.is_skip()
+            result = step.is_skip(step_context)
         assert result.result_type == ResultType.FAILED
 
-    def test_is_skip_k8s_api_error(self, step, client, jhelper):
+    def test_is_skip_k8s_api_error(self, step, client, jhelper, step_context):
         client.cluster.list_nodes_by_role.return_value = [
             {"name": "node1", "machineid": "1"}
         ]
@@ -985,10 +1016,10 @@ class TestEnsureK8SUnitsTaggedStep:
         api_error.status = Mock(code=500)
         step.kube.list.side_effect = api_error
         with patch("sunbeam.steps.k8s.get_kube_client", return_value=step.kube):
-            result = step.is_skip()
+            result = step.is_skip(step_context)
         assert result.result_type == ResultType.FAILED
 
-    def test_is_skip_machine_missing(self, step, client, jhelper):
+    def test_is_skip_machine_missing(self, step, client, jhelper, step_context):
         control_nodes = [
             {"name": "node1", "machineid": "1"},
         ]
@@ -996,17 +1027,17 @@ class TestEnsureK8SUnitsTaggedStep:
         step.kube.list.return_value = [Mock(metadata=Mock(name="node1", labels={}))]
         jhelper.get_machines.return_value = {}
         with patch("sunbeam.steps.k8s.get_kube_client", return_value=step.kube):
-            result = step.is_skip()
+            result = step.is_skip(step_context)
         assert result.result_type == ResultType.FAILED
 
-    def test_is_skip_machine_not_control_role(self, step, client):
+    def test_is_skip_machine_not_control_role(self, step, client, step_context):
         step.fqdn = "node1"
         client.cluster.get_node_info.return_value = {
             "name": "node1",
             "machineid": "1",
             "role": "compute",
         }
-        result = step.is_skip()
+        result = step.is_skip(step_context)
         assert result.result_type == ResultType.FAILED
 
     def test_run_success(self, step):
@@ -1176,17 +1207,17 @@ class TestDeployK8SApplicationStep:
         config = step._get_k8s_config_tfvars()
         assert config["cluster-annotations"] == ""
 
-    def test_is_skip_valid(self, step):
-        result = step.is_skip()
+    def test_is_skip_valid(self, step, step_context):
+        result = step.is_skip(step_context)
         assert result.result_type == ResultType.COMPLETED
 
-    def test_is_skip_invalid_annotations(self, step, manifest):
+    def test_is_skip_invalid_annotations(self, step, manifest, step_context):
         charm_manifest = Mock()
         charm_manifest.config = {
             "cluster-annotations": "k8sd/v1alpha1/cilium/devices=br+ bond+",
         }
         manifest.core.software.charms.get.return_value = charm_manifest
-        result = step.is_skip()
+        result = step.is_skip(step_context)
         assert result.result_type == ResultType.FAILED
         assert "comma-separated" in result.message
 
@@ -1357,7 +1388,7 @@ class TestPatchCoreDNSStep:
     def kube(self, basic_kube):
         return basic_kube
 
-    def test_is_skip(self, step, kube):
+    def test_is_skip(self, step, kube, step_context):
         api_error = ApiError(
             Mock(),
             httpx.Response(
@@ -1373,10 +1404,10 @@ class TestPatchCoreDNSStep:
         kube.get = Mock(side_effect=api_error)
 
         with patch("sunbeam.steps.k8s.get_kube_client", return_value=kube):
-            result = step.is_skip()
+            result = step.is_skip(step_context)
         assert result.result_type == ResultType.COMPLETED
 
-    def test_is_skip_kube_get_error(self, step, kube):
+    def test_is_skip_kube_get_error(self, step, kube, step_context):
         api_error = ApiError(
             Mock(),
             httpx.Response(
@@ -1392,10 +1423,10 @@ class TestPatchCoreDNSStep:
         kube.get = Mock(side_effect=api_error)
 
         with patch("sunbeam.steps.k8s.get_kube_client", return_value=kube):
-            result = step.is_skip()
+            result = step.is_skip(step_context)
         assert result.result_type == ResultType.FAILED
 
-    def test_is_skip_hpa_already_exists(self, step, kube):
+    def test_is_skip_hpa_already_exists(self, step, kube, step_context):
         control_nodes = [
             {"name": "node1", "machineid": "1"},
             {"name": "node2", "machineid": "2"},
@@ -1407,10 +1438,10 @@ class TestPatchCoreDNSStep:
 
         with patch("sunbeam.steps.k8s.get_kube_client", return_value=kube):
             kube.get = Mock(return_value=hpa)
-            result = step.is_skip()
+            result = step.is_skip(step_context)
         assert result.result_type == ResultType.SKIPPED
 
-    def test_is_skip_new_control_nodes_added(self, step, kube):
+    def test_is_skip_new_control_nodes_added(self, step, kube, step_context):
         control_nodes = [
             {"name": "node1", "machineid": "1"},
             {"name": "node2", "machineid": "2"},
@@ -1423,11 +1454,11 @@ class TestPatchCoreDNSStep:
 
         with patch("sunbeam.steps.k8s.get_kube_client", return_value=kube):
             kube.get = Mock(return_value=hpa)
-            result = step.is_skip()
+            result = step.is_skip(step_context)
         assert result.result_type == ResultType.COMPLETED
         assert step.replica_count == 3
 
-    def test_is_skip_control_nodes_removed(self, step, kube):
+    def test_is_skip_control_nodes_removed(self, step, kube, step_context):
         control_nodes = [
             {"name": "node1", "machineid": "1"},
             {"name": "node2", "machineid": "2"},
@@ -1439,7 +1470,7 @@ class TestPatchCoreDNSStep:
 
         with patch("sunbeam.steps.k8s.get_kube_client", return_value=kube):
             kube.get = Mock(return_value=hpa)
-            result = step.is_skip()
+            result = step.is_skip(step_context)
         assert result.result_type == ResultType.COMPLETED
         assert step.replica_count == 1
 
@@ -1502,46 +1533,50 @@ class TestPatchServiceExternalTrafficStep:
         step.kube = kube
         return step
 
-    def test_is_skip_external_traffic_policy_already_local(self, step, service_name):
+    def test_is_skip_external_traffic_policy_already_local(
+        self, step, service_name, step_context
+    ):
         service = Mock()
         service.spec = Mock()
         service.spec.externalTrafficPolicy = "Local"
         with patch("sunbeam.steps.k8s.get_kube_client", return_value=step.kube):
             step.kube.get.return_value = service
-            result = step.is_skip()
+            result = step.is_skip(step_context)
         assert result.result_type == ResultType.SKIPPED
 
-    def test_is_skip_external_traffic_policy_not_local(self, step, service_name):
+    def test_is_skip_external_traffic_policy_not_local(
+        self, step, service_name, step_context
+    ):
         service = Mock()
         service.spec = Mock()
         service.spec.externalTrafficPolicy = "Cluster"
         with patch("sunbeam.steps.k8s.get_kube_client", return_value=step.kube):
             step.kube.get.return_value = service
-            result = step.is_skip()
+            result = step.is_skip(step_context)
         assert result.result_type == ResultType.COMPLETED
 
-    def test_is_skip_service_has_no_spec(self, step, service_name):
+    def test_is_skip_service_has_no_spec(self, step, service_name, step_context):
         service = Mock()
         service.spec = None
         with patch("sunbeam.steps.k8s.get_kube_client", return_value=step.kube):
             step.kube.get.return_value = service
-            result = step.is_skip()
+            result = step.is_skip(step_context)
         assert result.result_type == ResultType.SKIPPED
 
-    def test_is_skip_kube_client_error(self, step):
+    def test_is_skip_kube_client_error(self, step, step_context):
         with patch(
             "sunbeam.steps.k8s.get_kube_client", side_effect=KubeClientError("fail")
         ):
-            result = step.is_skip()
+            result = step.is_skip(step_context)
         assert result.result_type == ResultType.FAILED
 
-    def test_is_skip_api_error(self, step):
+    def test_is_skip_api_error(self, step, step_context):
         api_error = lightkube.core.exceptions.ApiError.__new__(
             lightkube.core.exceptions.ApiError
         )
         with patch("sunbeam.steps.k8s.get_kube_client", return_value=step.kube):
             step.kube.get.side_effect = api_error
-            result = step.is_skip()
+            result = step.is_skip(step_context)
         assert result.result_type == ResultType.FAILED
 
     def test_run_success(self, step, service_name):

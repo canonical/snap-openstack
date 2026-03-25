@@ -18,7 +18,6 @@ from typing import Sequence, Tuple
 import click
 import tenacity
 from rich.console import Console
-from rich.status import Status
 from snaphelpers import Snap
 
 import sunbeam.core.questions
@@ -40,6 +39,7 @@ from sunbeam.core.common import (
     BaseStep,
     Result,
     ResultType,
+    StepContext,
     parse_ip_range,
 )
 from sunbeam.core.deployment import CertPair, Networks
@@ -108,7 +108,7 @@ class AddMaasDeployment(BaseStep):
         self.deployments_config = deployments_config
         self.deployment = deployment
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Check if deployment is already added."""
         try:
             self.deployments_config.get_deployment(self.deployment.name)
@@ -136,7 +136,7 @@ class AddMaasDeployment(BaseStep):
 
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Check MAAS is working, write to local configuration."""
         try:
             client = maas_client.MaasClient(self.deployment.url, self.deployment.token)
@@ -1162,7 +1162,7 @@ class MaasBootstrapJujuStep(BootstrapJujuStep):
         """
         return False
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not."""
         controller_tag = maas_deployment.RoleTags.JUJU_CONTROLLER.value
         machines = maas_client.list_machines(self.maas_client, tags=controller_tag)
@@ -1173,7 +1173,7 @@ class MaasBootstrapJujuStep(BootstrapJujuStep):
             )
         controller = sorted(machines, key=lambda x: x["hostname"])[0]
         self.bootstrap_args.extend(("--to", "system-id=" + controller["system_id"]))
-        return super().is_skip(status)
+        return super().is_skip(context)
 
 
 class MaasScaleJujuStep(ScaleJujuStep):
@@ -1195,7 +1195,7 @@ class MaasScaleJujuStep(ScaleJujuStep):
         super().__init__(controller, extra_args=extra_args)
         self.client = maas_client
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not."""
         try:
             controller = self.get_controller(self.controller)
@@ -1265,12 +1265,12 @@ class MaasSaveControllerStep(SaveControllerStep):
             controller, deployment_name, deployments_config, data_location, is_external
         )
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not."""
         if not maas_deployment.is_maas_deployment(self.deployment):
             return Result(ResultType.SKIPPED)
 
-        return super().is_skip(status)
+        return super().is_skip(context)
 
 
 class MaasSaveClusterdCredentialsStep(BaseStep):
@@ -1290,7 +1290,7 @@ class MaasSaveClusterdCredentialsStep(BaseStep):
         self.deployment_name = deployment_name
         self.deployments_config = deployments_config
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not."""
         deployment = self.deployments_config.get_deployment(self.deployment_name)
         if not maas_deployment.is_maas_deployment(deployment):
@@ -1298,7 +1298,7 @@ class MaasSaveClusterdCredentialsStep(BaseStep):
         self.model = deployment.infra_model
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Save clusterd address to deployment information."""
         try:
             leader_unit = self.jhelper.get_leader_unit(
@@ -1368,14 +1368,14 @@ class MaasRemoveDeploymentCredentialsStep(BaseStep):
         self.deployment_name = deployment_name
         self.deployments_config = deployments_config
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not."""
         deployment = self.deployments_config.get_deployment(self.deployment_name)
         if not maas_deployment.is_maas_deployment(deployment):
             return Result(ResultType.SKIPPED)
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Remove credentials from deployment information."""
         deployment = self.deployments_config.get_deployment(self.deployment_name)
         if not maas_deployment.is_maas_deployment(deployment):
@@ -1406,7 +1406,7 @@ class MaasAddMachinesToClusterdStep(BaseStep):
         self.machines = None
         self.nodes = None
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not."""
         maas_machines = maas_client.list_machines(self.maas_client)
         LOG.debug(f"Machines fetched: {maas_machines}")
@@ -1431,7 +1431,7 @@ class MaasAddMachinesToClusterdStep(BaseStep):
         self.machines = filtered_machines
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Add machines to Juju model."""
         if self.machines is None or self.nodes is None:
             # only happens if is_skip() was not called before, or if run executed
@@ -1454,7 +1454,7 @@ class MaasRemoveMachineFromClusterdStep(BaseStep):
         self.client = client
         self.node = node
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not."""
         try:
             self.client.cluster.get_node_info(self.node)
@@ -1462,7 +1462,7 @@ class MaasRemoveMachineFromClusterdStep(BaseStep):
             return Result(ResultType.SKIPPED)
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Add machines to Juju model."""
         try:
             self.client.cluster.remove_node_info(self.node)
@@ -1488,7 +1488,7 @@ class MaasDeployMachinesStep(BaseStep):
         self.jhelper = jhelper
         self.model = model
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not."""
         clusterd_nodes = self.client.cluster.list_nodes()
         if len(clusterd_nodes) == 0:
@@ -1539,10 +1539,10 @@ class MaasDeployMachinesStep(BaseStep):
             return Result(ResultType.SKIPPED)
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Deploy machines in Juju."""
         for node in self.nodes_to_deploy:
-            self.update_status(status, f"deploying {node['name']}")
+            self.update_status(context, f"deploying {node['name']}")
             LOG.debug(f"Adding machine {node['name']} to model {self.model}")
             juju_machine = self.jhelper.add_machine(
                 "system-id=" + node["systemid"],
@@ -1552,7 +1552,7 @@ class MaasDeployMachinesStep(BaseStep):
             self.client.cluster.update_node_info(
                 node["name"], machineid=int(juju_machine)
             )
-        self.update_status(status, "waiting for machines to deploy")
+        self.update_status(context, "waiting for machines to deploy")
         machines = self.jhelper.get_machines(self.model)
         for node in self.nodes_to_update:
             LOG.debug(f"Updating machine {node['name']} in model {self.model}")
@@ -1586,7 +1586,7 @@ class MaasDeployInfraMachinesStep(BaseStep):
         self.jhelper = jhelper
         self.model = model
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not."""
         maas_machines = maas_client.list_machines(self.maas_client)
         LOG.debug(f"Machines fetched: {maas_machines}")
@@ -1615,10 +1615,10 @@ class MaasDeployInfraMachinesStep(BaseStep):
             return Result(ResultType.SKIPPED)
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Deploy machines in Juju."""
         for machine in self.machines_to_deploy:
-            self.update_status(status, f"deploying {machine['hostname']}")
+            self.update_status(context, f"deploying {machine['hostname']}")
             LOG.debug(f"Adding machine {machine['hostname']} to model {self.model}")
             self.jhelper.add_machine(
                 "system-id=" + machine["system_id"],
@@ -1774,7 +1774,7 @@ class MaasConfigureMicrocephOSDStep(BaseStep):
 
         return []
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not."""
         try:
             microceph_disks = self._get_microceph_disks()
@@ -1823,7 +1823,7 @@ class MaasConfigureMicrocephOSDStep(BaseStep):
                 return machine_cfg.dangerous_i_acknowledge_i_will_lose_data_wipe_disks
         return False
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Configure local disks on microceph."""
         for unit, disks in self.disks_to_configure.items():
             hostname = self.unit_to_hostname[unit]
@@ -1942,7 +1942,7 @@ class MaasDeployK8SApplicationStep(k8s.DeployK8SApplicationStep):
         """Return loadbalancer range from public space."""
         return self.ranges
 
-    def is_skip(self, status: Status | None = None):
+    def is_skip(self, context: StepContext):
         """Determines if the step should be skipped or not."""
         internal_space = self.deployment.get_space(Networks.INTERNAL)
         public_space = self.deployment.get_space(Networks.PUBLIC)
@@ -1970,7 +1970,7 @@ class MaasDeployK8SApplicationStep(k8s.DeployK8SApplicationStep):
             return Result(ResultType.FAILED, str(e))
         self.ranges = internal_range
 
-        return super().is_skip(status)
+        return super().is_skip(context)
 
 
 class MaasSetExternalNetworkUnitsOptionsStep(SetExternalNetworkUnitsOptionsStep):
@@ -2042,9 +2042,9 @@ class MaasSetExternalNetworkUnitsOptionsStep(SetExternalNetworkUnitsOptionsStep)
                 bridge_mappings[hostname] = None
         return bridge_mappings
 
-    def is_skip(self, status: Status | None = None):
+    def is_skip(self, context: StepContext):
         """Determines if the step should be skipped or not."""
-        result = super().is_skip(status)
+        result = super().is_skip(context)
         if result.result_type == ResultType.FAILED:
             return result
         # Skip if no network nodes to configure
@@ -2395,9 +2395,9 @@ class MaasConfigSRIOVStep(BaseStep):
 
         return pci_whitelist, excluded_devices
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Apply individual hypervisor settings."""
-        self.update_status(status, "setting PCI configuration")
+        self.update_status(context, "setting PCI configuration")
 
         compute_machines = self._get_compute_machines()
 
@@ -2574,9 +2574,9 @@ class MaasConfigDPDKStep(BaseConfigDPDKStep):
         compute_machines = self._get_compute_machines()
         self.nics = self._get_dpdk_port_map(compute_machines)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Apply individual hypervisor settings."""
-        self.update_status(status, "setting DPDK ports")
+        self.update_status(context, "setting DPDK ports")
 
         compute_machines = self._get_compute_machines()
         for machine in compute_machines:

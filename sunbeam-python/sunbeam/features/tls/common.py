@@ -9,7 +9,6 @@ import click
 import pydantic
 from packaging.version import Version
 from rich.console import Console
-from rich.status import Status
 
 from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import ConfigItemNotFoundException
@@ -18,6 +17,7 @@ from sunbeam.core.common import (
     BaseStep,
     Result,
     ResultType,
+    StepContext,
     read_config,
     run_plan,
     update_config,
@@ -238,7 +238,7 @@ class AddCACertsToKeystoneStep(BaseStep):
         self.app = "keystone"
         self.model = OPENSTACK_MODEL
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -265,7 +265,7 @@ class AddCACertsToKeystoneStep(BaseStep):
 
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Run keystone add-ca-certs action."""
         action_cmd = "add-ca-certs"
         try:
@@ -309,7 +309,7 @@ class RemoveCACertsFromKeystoneStep(BaseStep):
         self.app = "keystone"
         self.model = OPENSTACK_MODEL
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -339,7 +339,7 @@ class RemoveCACertsFromKeystoneStep(BaseStep):
 
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Run keystone add-ca-certs action."""
         action_cmd = "remove-ca-certs"
         try:
@@ -623,7 +623,7 @@ class ConfigureTLSCertificatesStep(BaseStep):
 
         questions.write_answers(self.client, self._CONFIG, variables)
 
-    def is_skip(self, status: Status | None = None) -> Result:
+    def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
         :return: ResultType.SKIPPED if the Step should be skipped,
@@ -631,7 +631,7 @@ class ConfigureTLSCertificatesStep(BaseStep):
         """
         return Result(ResultType.COMPLETED)
 
-    def run(self, status: Status | None = None) -> Result:
+    def run(self, context: StepContext) -> Result:
         """Run configure steps."""
         action_cmd = "provide-certificate"
         try:
