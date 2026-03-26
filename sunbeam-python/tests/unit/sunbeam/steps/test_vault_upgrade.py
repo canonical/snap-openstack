@@ -65,7 +65,7 @@ class TestVaultCharmUpgradeStep:
     ):
         app = Mock(charm_rev=50, charm_channel="1.16/stable", base=None)
         basic_jhelper.get_application.return_value = app
-        basic_manifest.core.software.charms.get.return_value = Mock(
+        basic_manifest.find_charm.return_value = Mock(
             channel="1.16/stable", revision=None
         )
 
@@ -80,7 +80,7 @@ class TestVaultCharmUpgradeStep:
     ):
         app = Mock(charm_rev=200, charm_channel="1.19/stable", base=None)
         basic_jhelper.get_application.return_value = app
-        basic_manifest.core.software.charms.get.return_value = Mock(
+        basic_manifest.find_charm.return_value = Mock(
             channel="1.19/stable", revision=200
         )
 
@@ -96,7 +96,7 @@ class TestVaultCharmUpgradeStep:
         app = Mock(charm_rev=100, charm_channel=VAULT_CHANNEL, base=None)
         basic_jhelper.get_application.return_value = app
         basic_jhelper.get_available_charm_revision.return_value = 100
-        basic_manifest.core.software.charms.get.return_value = None
+        basic_manifest.find_charm.return_value = None
 
         result = step.is_skip(step_context)
 
@@ -109,7 +109,7 @@ class TestVaultCharmUpgradeStep:
         app = Mock(charm_rev=50, charm_channel="1.18/stable", base=None)
         basic_jhelper.get_application.return_value = app
         basic_jhelper.get_available_charm_revision.return_value = 100
-        basic_manifest.core.software.charms.get.return_value = None
+        basic_manifest.find_charm.return_value = None
 
         result = step.is_skip(step_context)
 
@@ -121,7 +121,7 @@ class TestVaultCharmUpgradeStep:
         app = Mock(charm_rev=100, charm_channel="1.18/stable", base=None)
         basic_jhelper.get_application.return_value = app
         basic_jhelper.get_available_charm_revision.return_value = 120
-        basic_manifest.core.software.charms.get.return_value = Mock(
+        basic_manifest.find_charm.return_value = Mock(
             channel="1.19/stable", revision=None
         )
 
@@ -136,7 +136,7 @@ class TestVaultCharmUpgradeStep:
     def test_run_fails_when_vault_unsealed_after_upgrade(
         self, step, basic_jhelper, basic_manifest, vaulthelper, step_context
     ):
-        basic_manifest.core.software.charms.get.return_value = None
+        basic_manifest.find_charm.return_value = None
         vaulthelper.get_vault_status.return_value = {"sealed": False}
         basic_jhelper.get_leader_unit.return_value = "vault/0"
 
@@ -163,7 +163,7 @@ class TestVaultCharmUpgradeStep:
         mock_read_config,
         step_context,
     ):
-        basic_manifest.core.software.charms.get.return_value = Mock(
+        basic_manifest.find_charm.return_value = Mock(
             channel="1.18/stable", revision=None
         )
         vaulthelper.get_vault_status.return_value = {"sealed": True}

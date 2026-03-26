@@ -110,7 +110,7 @@ class TestMySQLCharmUpgradeStep:
         step_context,
     ):
         basic_jhelper.get_application.return_value = Mock(charm_rev=255, base=None)
-        basic_manifest.core.software.charms.get.return_value = Mock(
+        basic_manifest.find_charm.return_value = Mock(
             revision=255, channel="8.0/stable"
         )
 
@@ -124,7 +124,7 @@ class TestMySQLCharmUpgradeStep:
         basic_jhelper.get_application.return_value = Mock(
             charm_rev=255, base=None, charm_channel="8.0/stable"
         )
-        basic_manifest.core.software.charms.get.return_value = Mock(
+        basic_manifest.find_charm.return_value = Mock(
             revision=None, channel="9.0/stable"
         )
 
@@ -164,7 +164,7 @@ class TestMySQLCharmUpgradeStep:
         self, step, basic_jhelper, basic_manifest, step_context
     ):
         charm_manifest = Mock(revision=None, channel="8.0/stable")
-        basic_manifest.core.software.charms.get.return_value = charm_manifest
+        basic_manifest.find_charm.return_value = charm_manifest
         app = Mock(charm_rev=255, charm_channel="8.0/stable", base=None)
         basic_jhelper.get_application.return_value = app
         basic_jhelper.get_available_charm_revision.return_value = 343

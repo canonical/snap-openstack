@@ -210,12 +210,7 @@ class LatestInChannel(BaseStep, JujuStepHelper):
             # Skip infra apps, they are refreshed via `sunbeam cluster refresh <app>`
             if charm in INFRA_APPS:
                 continue
-            manifest_charm = self.manifest.core.software.charms.get(charm)
-            if not manifest_charm:
-                for _, feature in self.manifest.get_features():
-                    manifest_charm = feature.software.charms.get(charm)
-                    if manifest_charm:
-                        break
+            manifest_charm = self.manifest.find_charm(charm)
 
             if not manifest_charm:
                 LOG.debug(f"Running refresh for app {app_name} (no manifest entry)")

@@ -21,7 +21,7 @@ from sunbeam.core.juju import (
     JujuWaitException,
     LeaderNotFoundException,
 )
-from sunbeam.core.manifest import CharmManifest, Manifest
+from sunbeam.core.manifest import Manifest
 from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.core.terraform import TerraformException, TerraformHelper
 from sunbeam.features.interface.v1.openstack import OPENSTACK_TERRAFORM_VARS
@@ -64,17 +64,6 @@ class VaultCharmUpgradeStep(BaseStep, JujuStepHelper):
         self.application = application
         self.tfvar_config = OPENSTACK_TERRAFORM_VARS
 
-    def _charm_manifest(self) -> CharmManifest | None:
-        """Return the CharmManifest entry for vault-k8s, or None."""
-        charm_manifest = self.manifest.core.software.charms.get(CHARM_NAME)
-        if charm_manifest:
-            return charm_manifest
-        for _, feature in self.manifest.get_features():
-            charm_manifest = feature.software.charms.get(CHARM_NAME)
-            if charm_manifest:
-                return charm_manifest
-        return None
-
     def upgrade(
         self, revision: int | None = None, channel: str = VAULT_CHANNEL
     ) -> None:
@@ -110,7 +99,7 @@ class VaultCharmUpgradeStep(BaseStep, JujuStepHelper):
                 f"{self.application} application has not been deployed yet",
             )
 
-        charm_manifest = self._charm_manifest()
+        charm_manifest = self.manifest.find_charm(CHARM_NAME)
         target_channel = (
             charm_manifest.channel if charm_manifest else None
         ) or VAULT_CHANNEL
@@ -173,7 +162,7 @@ class VaultCharmUpgradeStep(BaseStep, JujuStepHelper):
 
     def run(self, context: StepContext) -> Result:
         """Run vault-k8s charm upgrade steps."""
-        charm_manifest = self._charm_manifest()
+        charm_manifest = self.manifest.find_charm(CHARM_NAME)
         revision = charm_manifest.revision if charm_manifest else None
         target_channel = (
             charm_manifest.channel if charm_manifest else None
