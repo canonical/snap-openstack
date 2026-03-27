@@ -16,6 +16,7 @@ from packaging.version import Version
 from rich.console import Console
 from rich.table import Table
 
+from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import (
     ClusterServiceUnavailableException,
     ConfigItemNotFoundException,
@@ -461,6 +462,49 @@ class AuthorizeVaultCharmStep(BaseStep, JujuStepHelper):
         return Result(ResultType.COMPLETED)
 
 
+def auto_unseal_vault(
+    client: Client,
+    jhelper: JujuHelper,
+) -> None:
+    """Auto-unseal vault in dev mode using keys stored in cluster db.
+
+    Reads VAULT_DEV_MODE_KEY from clusterd. If dev_mode is enabled,
+    runs VaultUnsealStep for each key then AuthorizeVaultCharmStep
+    with the root_token.
+
+    :param client: Clusterd client for reading config.
+    :param jhelper: JujuHelper instance.
+    :raises VaultCommandFailedException: if vault is not in dev mode or
+        any unseal/authorize step fails.
+    """
+    try:
+        vault_info = read_config(client, VAULT_DEV_MODE_KEY)
+    except ConfigItemNotFoundException:
+        vault_info = {}
+
+    if not vault_info.get("dev_mode"):
+        raise VaultCommandFailedException("Vault is not in dev mode")
+
+    unseal_keys = vault_info.get("unseal_keys", [])
+    root_token = vault_info.get("root_token")
+
+    unseal_plan: list[BaseStep] = []
+    # Run the loop twice, once for leader and non-leader units
+    for _ in range(2):
+        for key in unseal_keys:
+            unseal_plan.append(VaultUnsealStep(jhelper, key))
+    try:
+        if unseal_plan:
+            run_plan(unseal_plan, console)
+        if not root_token:
+            raise VaultCommandFailedException(
+                "Missing root token. Disable and enable vault again."
+            )
+        run_plan([AuthorizeVaultCharmStep(jhelper, root_token)], console)
+    except click.ClickException as e:
+        raise VaultCommandFailedException(e.format_message()) from e
+
+
 class VaultStatusStep(BaseStep):
     """Vault Status step."""
 
@@ -616,8 +660,6 @@ class VaultFeature(OpenStackControlPlaneFeature):
             client = deployment.get_client()
 
             plan1: list[BaseStep] = []
-            plan2: list[BaseStep] = []
-            plan3: list[BaseStep] = []
 
             # Skip vault init plan if unseal keys are already added in cluster db
             if not vault_info.get("unseal_keys"):
@@ -634,22 +676,11 @@ class VaultFeature(OpenStackControlPlaneFeature):
                 vault_info["root_token"] = result.get("root_token")
                 update_config(client, VAULT_DEV_MODE_KEY, vault_info)
 
-            # Run the loop twice, once for leader and non-leader units
-            for i in range(2):
-                for unseal_key in vault_info["unseal_keys"]:
-                    plan2.append(VaultUnsealStep(jhelper, unseal_key))
-
-            run_plan(plan2, console)
-
-            root_token = vault_info.get("root_token")
-            if not root_token:
-                click.ClickException(
-                    "Missing root token. Disable and enable vault again."
-                )
-                exit(1)
-
-            plan3 = [AuthorizeVaultCharmStep(jhelper, root_token)]
-            run_plan(plan3, console)
+            # Unseal and authorize
+            try:
+                auto_unseal_vault(client, jhelper)
+            except VaultCommandFailedException as e:
+                raise click.ClickException(str(e)) from e
 
     @click.command()
     @click_option_show_hints

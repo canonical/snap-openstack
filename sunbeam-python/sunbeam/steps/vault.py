@@ -4,13 +4,11 @@
 import logging
 
 from sunbeam.clusterd.client import Client
-from sunbeam.clusterd.service import ConfigItemNotFoundException
 from sunbeam.core.common import (
     BaseStep,
     Result,
     ResultType,
     StepContext,
-    read_config,
 )
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import (
@@ -26,10 +24,9 @@ from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.core.terraform import TerraformException, TerraformHelper
 from sunbeam.features.interface.v1.openstack import OPENSTACK_TERRAFORM_VARS
 from sunbeam.features.vault.feature import (
-    VAULT_DEV_MODE_KEY,
-    AuthorizeVaultCharmStep,
+    VaultCommandFailedException,
     VaultHelper,
-    VaultUnsealStep,
+    auto_unseal_vault,
 )
 from sunbeam.versions import VAULT_CHANNEL
 
@@ -240,42 +237,24 @@ class VaultCharmUpgradeStep(BaseStep, JujuStepHelper):
 
         if not vault_status.get("sealed"):
             return Result(
-                ResultType.FAILED,
-                "Vault is unexpectedly unsealed after upgrade.",
+                ResultType.FAILED, "Vault is unexpectedly unsealed after upgrade. "
             )
 
         try:
-            vault_info = read_config(self.client, VAULT_DEV_MODE_KEY)
-        except ConfigItemNotFoundException:
-            vault_info = {}
-
-        if vault_info.get("dev_mode"):
-            self.update_status(context, "Auto-unsealing vault (dev mode)")
-            unseal_keys = vault_info.get("unseal_keys", [])
-            root_token = vault_info.get("root_token")
-            warnings: list[str] = []
-
-            for key in unseal_keys:
-                result = VaultUnsealStep(self.jhelper, key).run(context)
-                if result.result_type == ResultType.FAILED:
-                    LOG.warning(f"Unseal step failed: {result.message}")
-                    warnings.append(result.message)
-
-            if root_token:
-                result = AuthorizeVaultCharmStep(self.jhelper, root_token).run(context)
-                if result.result_type == ResultType.FAILED:
-                    LOG.warning(f"Authorize charm step failed: {result.message}")
-                    warnings.append(result.message)
-
-            if warnings:
+            # Stop the outer spinner so run_plan's spinners in
+            # auto_unseal_vault() display cleanly.
+            context.status.stop()
+            auto_unseal_vault(self.client, self.jhelper)
+        except VaultCommandFailedException as e:
+            if "not in dev mode" in str(e):
                 return Result(
                     ResultType.COMPLETED,
-                    "Vault upgraded but some auto-unseal steps failed: "
-                    + "; ".join(warnings),
+                    "Vault upgraded. Vault needs to be manually unsealed "
+                    "and authorized.",
                 )
-            return Result(ResultType.COMPLETED, "Vault upgraded and auto-unsealed.")
-
-        return Result(
-            ResultType.COMPLETED,
-            "Vault upgraded. Vault needs to be manually unsealed and authorized.",
-        )
+            return Result(
+                ResultType.COMPLETED,
+                f"Vault upgraded but auto-unseal failed: {e}. "
+                "Run unseal and authorize steps manually.",
+            )
+        return Result(ResultType.COMPLETED, "Vault upgraded and auto-unsealed.")

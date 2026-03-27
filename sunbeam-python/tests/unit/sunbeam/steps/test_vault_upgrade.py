@@ -5,12 +5,12 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from sunbeam.clusterd.service import ConfigItemNotFoundException
-from sunbeam.core.common import Result, ResultType
+from sunbeam.core.common import ResultType
 from sunbeam.core.juju import (
     ApplicationNotFoundException,
     JujuException,
 )
+from sunbeam.features.vault.feature import VaultCommandFailedException
 from sunbeam.steps.vault import (
     CHARM_BASE,
     VAULT_CHANNEL,
@@ -25,20 +25,8 @@ def vaulthelper():
 
 
 @pytest.fixture
-def mock_read_config():
-    with patch("sunbeam.steps.vault.read_config") as p:
-        yield p
-
-
-@pytest.fixture
-def vault_unseal_step():
-    with patch("sunbeam.steps.vault.VaultUnsealStep") as p:
-        yield p
-
-
-@pytest.fixture
-def authorize_vault_step():
-    with patch("sunbeam.steps.vault.AuthorizeVaultCharmStep") as p:
+def mock_auto_unseal():
+    with patch("sunbeam.steps.vault.auto_unseal_vault") as p:
         yield p
 
 
@@ -160,7 +148,7 @@ class TestVaultCharmUpgradeStep:
         basic_jhelper,
         basic_manifest,
         vaulthelper,
-        mock_read_config,
+        mock_auto_unseal,
         step_context,
     ):
         basic_manifest.find_charm.return_value = Mock(
@@ -168,7 +156,7 @@ class TestVaultCharmUpgradeStep:
         )
         vaulthelper.get_vault_status.return_value = {"sealed": True}
         basic_jhelper.get_leader_unit.return_value = "vault/0"
-        mock_read_config.return_value = {"dev_mode": False}
+        mock_auto_unseal.return_value = None
 
         result = step.run(step_context)
 
@@ -205,24 +193,14 @@ class TestVaultCharmUpgradeStep:
         assert result.result_type == ResultType.FAILED
         assert "timed out" in result.message
 
-    def test_run_vault_sealed_no_dev_mode_config(
-        self, step, basic_jhelper, vaulthelper, mock_read_config, step_context
+    def test_run_vault_sealed_no_dev_mode(
+        self, step, basic_jhelper, vaulthelper, mock_auto_unseal, step_context
     ):
         basic_jhelper.get_leader_unit.return_value = "vault/0"
         vaulthelper.get_vault_status.return_value = {"sealed": True}
-        mock_read_config.side_effect = ConfigItemNotFoundException()
-
-        result = step.run(step_context)
-
-        assert result.result_type == ResultType.COMPLETED
-        assert "manually unsealed" in result.message
-
-    def test_run_vault_sealed_dev_mode_false(
-        self, step, basic_jhelper, vaulthelper, mock_read_config, step_context
-    ):
-        basic_jhelper.get_leader_unit.return_value = "vault/0"
-        vaulthelper.get_vault_status.return_value = {"sealed": True}
-        mock_read_config.return_value = {"dev_mode": False}
+        mock_auto_unseal.side_effect = VaultCommandFailedException(
+            "Vault is not in dev mode"
+        )
 
         result = step.run(step_context)
 
@@ -234,37 +212,33 @@ class TestVaultCharmUpgradeStep:
         step,
         basic_jhelper,
         vaulthelper,
-        mock_read_config,
-        vault_unseal_step,
-        authorize_vault_step,
+        mock_auto_unseal,
         step_context,
     ):
         basic_jhelper.get_leader_unit.return_value = "vault/0"
-
-        vault_info = {
-            "dev_mode": True,
-            "unseal_keys": ["key1", "key2"],
-            "root_token": "s.roottoken",
-        }
-
-        mock_read_config.return_value = vault_info
         vaulthelper.get_vault_status.return_value = {"sealed": True}
-
-        mock_unseal_instance = Mock()
-        mock_unseal_instance.run.return_value = Result(ResultType.COMPLETED)
-        vault_unseal_step.return_value = mock_unseal_instance
-
-        mock_authorize_instance = Mock()
-        mock_authorize_instance.run.return_value = Result(ResultType.COMPLETED)
-        authorize_vault_step.return_value = mock_authorize_instance
+        mock_auto_unseal.return_value = None
 
         result = step.run(step_context)
 
         assert result.result_type == ResultType.COMPLETED
         assert "auto-unsealed" in result.message
+        mock_auto_unseal.assert_called_once_with(step.client, basic_jhelper)
 
-        assert vault_unseal_step.call_count == 2
-        vault_unseal_step.assert_any_call(basic_jhelper, "key1")
-        vault_unseal_step.assert_any_call(basic_jhelper, "key2")
+    def test_run_vault_sealed_auto_unseal_fails(
+        self,
+        step,
+        basic_jhelper,
+        vaulthelper,
+        mock_auto_unseal,
+        step_context,
+    ):
+        basic_jhelper.get_leader_unit.return_value = "vault/0"
+        vaulthelper.get_vault_status.return_value = {"sealed": True}
+        mock_auto_unseal.side_effect = VaultCommandFailedException("unseal failed")
 
-        authorize_vault_step.assert_called_once_with(basic_jhelper, "s.roottoken")
+        result = step.run(step_context)
+
+        assert result.result_type == ResultType.COMPLETED
+        assert "auto-unseal failed" in result.message
+        assert "unseal failed" in result.message
