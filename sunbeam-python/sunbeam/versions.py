@@ -184,6 +184,7 @@ DEPLOY_OPENSTACK_TFVAR_MAP: VarMap = {
         "mysql-config-map",
         "mysql-storage",
         "mysql-storage-map",
+        "rabbitmq-storage",
         # TLS feature computed values (for backward compatibility)
         "vault-config",
         "traefik-config",

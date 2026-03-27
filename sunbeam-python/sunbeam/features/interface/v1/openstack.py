@@ -32,7 +32,11 @@ from sunbeam.core.juju import (
     JujuStepHelper,
     JujuWaitException,
 )
-from sunbeam.core.manifest import AddManifestStep, Manifest
+from sunbeam.core.manifest import (
+    AddManifestStep,
+    Manifest,
+    check_storage_modifications_in_manifest,
+)
 from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.core.terraform import (
     TerraformException,
@@ -46,7 +50,6 @@ from sunbeam.steps.openstack import (
     DATABASE_STORAGE_KEY,
     TOPOLOGY_KEY,
     build_overlay_dict,
-    check_database_size_modifications_in_manifest,
     compute_resources_for_service,
     get_database_default_storage_dict,
     get_database_resource_dict,
@@ -538,20 +541,21 @@ class EnableOpenStackApplicationStep(
         :return: ResultType.SKIPPED if the Step should be skipped,
                 ResultType.COMPLETED or ResultType.FAILED otherwise
         """
-        # Check for database size modifications in manifest
-        try:
-            many_mysql = self.feature.get_database_topology(self.deployment) == "multi"
-            client = self.deployment.get_client()
-            database_size_changed = check_database_size_modifications_in_manifest(
-                client, self.feature.manifest, many_mysql
+        # Check for storage size modifications in manifest
+        client = self.deployment.get_client()
+        modified = check_storage_modifications_in_manifest(
+            client,
+            self.feature.manifest,
+            self.tfhelper.tfvar_map,
+            OPENSTACK_TERRAFORM_VARS,
+            extra_tfvar_config_keys=[self.feature.get_tfvar_config_key()],
+        )
+        if modified:
+            return Result(
+                ResultType.FAILED,
+                "Storage sizes are immutable and cannot be modified"
+                f" in manifest: {', '.join(modified)}",
             )
-            if database_size_changed:
-                return Result(
-                    ResultType.FAILED,
-                    "Storage sizes are immutable and cannot be modified in manifest",
-                )
-        except ValueError as e:
-            return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.COMPLETED)
 
@@ -631,20 +635,21 @@ class DisableOpenStackApplicationStep(
         :return: ResultType.SKIPPED if the Step should be skipped,
                 ResultType.COMPLETED or ResultType.FAILED otherwise
         """
-        # Check for database size modifications in manifest
-        try:
-            many_mysql = self.feature.get_database_topology(self.deployment) == "multi"
-            client = self.deployment.get_client()
-            database_size_changed = check_database_size_modifications_in_manifest(
-                client, self.feature.manifest, many_mysql
+        # Check for storage size modifications in manifest
+        client = self.deployment.get_client()
+        modified = check_storage_modifications_in_manifest(
+            client,
+            self.feature.manifest,
+            self.tfhelper.tfvar_map,
+            OPENSTACK_TERRAFORM_VARS,
+            extra_tfvar_config_keys=[self.feature.get_tfvar_config_key()],
+        )
+        if modified:
+            return Result(
+                ResultType.FAILED,
+                "Storage sizes are immutable and cannot be modified"
+                f" in manifest: {', '.join(modified)}",
             )
-            if database_size_changed:
-                return Result(
-                    ResultType.FAILED,
-                    "Storage sizes are immutable and cannot be modified in manifest",
-                )
-        except ValueError as e:
-            return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.COMPLETED)
 

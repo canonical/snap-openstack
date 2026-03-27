@@ -42,6 +42,7 @@ def deployment():
         )
 
     client.cluster.get_config.side_effect = get_config
+    deploy.get_tfhelper.return_value.tfvar_map = {"charms": {}}
 
     yield deploy
 

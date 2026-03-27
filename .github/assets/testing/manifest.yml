@@ -82,6 +82,8 @@ core:
         channel: MICROOVN_CHARM
       rabbitmq-k8s:
         channel: RABBITMQ_CHARM
+        storage:
+          rabbitmq-data: 1G
       mysql-k8s:
         channel: MYSQL_CHARM
       mysql-router-k8s:
