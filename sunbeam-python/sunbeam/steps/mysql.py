@@ -442,12 +442,7 @@ class MySQLCharmUpgradeStep(BaseStep, JujuStepHelper):
             )
 
         # charm not present in manifest
-        charm_manifest = self.manifest.core.software.charms.get(MYSQL_CHARM)
-        if not charm_manifest:
-            for _, feature in self.manifest.get_features():
-                charm_manifest = feature.software.charms.get(MYSQL_CHARM)
-                if charm_manifest:
-                    break
+        charm_manifest = self.manifest.find_charm(MYSQL_CHARM)
         if not charm_manifest:
             msg = (
                 f"{MYSQL_CHARM} charm not present in manifest, skipping mysql upgrade"

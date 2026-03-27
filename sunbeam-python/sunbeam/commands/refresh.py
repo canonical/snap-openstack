@@ -11,7 +11,12 @@ from rich.console import Console
 from snaphelpers import Snap
 
 from sunbeam.clusterd.service import ManifestItemNotFoundException
-from sunbeam.core.common import RiskLevel, infer_risk, run_plan
+from sunbeam.core.common import (
+    RiskLevel,
+    get_step_message,
+    infer_risk,
+    run_plan,
+)
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import JujuHelper
 from sunbeam.core.manifest import AddManifestStep
@@ -21,6 +26,7 @@ from sunbeam.steps.upgrades.intra_channel import (
     LatestInChannelCoordinator,
     MySQLInChannelUpgradeCoordinator,
 )
+from sunbeam.steps.vault import VaultCharmUpgradeStep
 from sunbeam.utils import click_option_show_hints
 
 LOG = logging.getLogger(__name__)
@@ -224,3 +230,54 @@ def refresh_mysql(
     )
     upgrade_coordinator.run_plan(show_hints)
     click.echo("MySQL refresh complete.")
+
+
+@refresh.command("vault")
+@click.option(
+    "-m",
+    "--manifest",
+    "manifest_path",
+    help="Manifest file.",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+)
+@click_option_show_hints
+@click.pass_context
+def refresh_vault(
+    ctx: click.Context,
+    manifest_path: Path | None = None,
+    show_hints: bool = False,
+) -> None:
+    """Upgrade vault-k8s charm to latest stable channel."""
+    deployment: Deployment = ctx.obj
+    client = deployment.get_client()
+    jhelper = JujuHelper(deployment.juju_controller)
+
+    manifest = None
+    if manifest_path:
+        manifest = deployment.get_manifest(manifest_path)
+        run_plan([AddManifestStep(client, manifest_path)], console, show_hints)
+
+    if not manifest:
+        LOG.debug("Getting latest manifest from cluster db")
+        manifest = deployment.get_manifest()
+
+    tfhelper = deployment.get_tfhelper("openstack-plan")
+
+    plan_results = run_plan(
+        [
+            VaultCharmUpgradeStep(
+                deployment,
+                client,
+                manifest,
+                jhelper,
+                tfhelper,
+            )
+        ],
+        console,
+        show_hints,
+    )
+
+    message = get_step_message(plan_results, VaultCharmUpgradeStep)
+    if message:
+        click.echo(message)
+    click.echo("Vault refresh complete.")

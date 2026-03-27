@@ -407,6 +407,21 @@ class Manifest(pydantic.BaseModel):
             else:
                 yield name, feature
 
+    def find_charm(self, charm_name: str) -> CharmManifest | None:
+        """Look up a charm in core software, then feature manifests.
+
+        :param charm_name: Name of the charm to find.
+        :return: CharmManifest if found, None otherwise.
+        """
+        charm_manifest = self.core.software.charms.get(charm_name)
+        if charm_manifest:
+            return charm_manifest
+        for _, feature in self.get_features():
+            charm_manifest = feature.software.charms.get(charm_name)
+            if charm_manifest:
+                return charm_manifest
+        return None
+
     def get_feature(self, name: str) -> FeatureManifest | None:
         """Return the feature."""
         for f_o_g_name, feature_or_group_manifest in self.features.items():

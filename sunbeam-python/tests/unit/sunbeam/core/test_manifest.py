@@ -172,6 +172,53 @@ class TestManifest:
                 )
             )
 
+    def test_find_charm_in_core(self):
+        charm = manifest_mod.CharmManifest(channel="2024.1/stable", revision=100)
+        manifest = manifest_mod.Manifest(
+            core=manifest_mod.CoreManifest(
+                software=manifest_mod.SoftwareConfig(charms={"keystone-k8s": charm})
+            )
+        )
+        assert manifest.find_charm("keystone-k8s") is charm
+
+    def test_find_charm_in_feature(self):
+        charm = manifest_mod.CharmManifest(channel="2024.1/stable", revision=50)
+        manifest = manifest_mod.Manifest(
+            features={
+                "vault": manifest_mod.FeatureManifest(
+                    software=manifest_mod.SoftwareConfig(charms={"vault-k8s": charm})
+                )
+            }
+        )
+        assert manifest.find_charm("vault-k8s") is charm
+
+    def test_find_charm_in_feature_group(self):
+        charm = manifest_mod.CharmManifest(channel="2024.1/stable")
+        manifest = manifest_mod.Manifest(
+            features={
+                "observability": manifest_mod.FeatureGroupManifest(
+                    root={
+                        "grafana": manifest_mod.FeatureManifest(
+                            software=manifest_mod.SoftwareConfig(
+                                charms={"grafana-k8s": charm}
+                            )
+                        )
+                    }
+                )
+            }
+        )
+        assert manifest.find_charm("grafana-k8s") is charm
+
+    def test_find_charm_not_found(self):
+        manifest = manifest_mod.Manifest(
+            core=manifest_mod.CoreManifest(
+                software=manifest_mod.SoftwareConfig(
+                    charms={"keystone-k8s": manifest_mod.CharmManifest()}
+                )
+            )
+        )
+        assert manifest.find_charm("not-a-charm-k8s") is None
+
 
 @pytest.fixture
 def edge_manifest(mocker, snap_conf):

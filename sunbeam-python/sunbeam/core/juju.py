@@ -1563,6 +1563,8 @@ class JujuHelper:
         model: str,
         channel: str | None = None,
         revision: int | None = None,
+        base: str | None = None,
+        trust: bool = False,
     ):
         """Update application to latest charm revision in current channel.
 
@@ -1570,9 +1572,18 @@ class JujuHelper:
         :param model: Model object
         :param channel: Channel to refresh to, if None uses current channel
         :param revision: Revision to refresh to, if None uses latest revision
+        :param base: Select a different base than is currently running
+        :param trust: If true, allows charm to run hooks that require access to
+            cloud credentials
         """
         with self._model(model) as juju:
-            juju.refresh(application_name, channel=channel, revision=revision)
+            juju.refresh(
+                application_name,
+                channel=channel,
+                revision=revision,
+                base=base,
+                trust=trust,
+            )
 
     def get_available_charm_revision(
         self,

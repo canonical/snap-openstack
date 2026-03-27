@@ -30,8 +30,7 @@ class TestLatestInChannel:
         self.manifest = Mock()
 
         # Set up default manifest structure
-        self.manifest.core.software.charms = {}
-        self.manifest.get_features.return_value = []
+        self.manifest.find_charm = Mock(return_value=None)
 
         self.upgrader = LatestInChannel(self.deployment, self.jhelper, self.manifest)
 
@@ -42,10 +41,6 @@ class TestLatestInChannel:
             "nova": ("nova-k8s", "2024.1/stable", 123),
         }
         model = "openstack"
-
-        # No manifest charm entry
-        self.manifest.core.software.charms = {}
-        self.manifest.get_features.return_value = []
 
         # Mock wait methods
         self.jhelper.wait_until_active = Mock()
@@ -69,7 +64,7 @@ class TestLatestInChannel:
         manifest_charm = Mock()
         manifest_charm.channel = "2024.1/stable"
         manifest_charm.revision = 150
-        self.manifest.core.software.charms = {"nova-k8s": manifest_charm}
+        self.manifest.find_charm.return_value = manifest_charm
 
         # Mock wait methods
         self.jhelper.wait_until_active = Mock()
@@ -98,7 +93,7 @@ class TestLatestInChannel:
         manifest_charm = Mock()
         manifest_charm.channel = "2024.1/stable"
         manifest_charm.revision = None
-        self.manifest.core.software.charms = {"nova-k8s": manifest_charm}
+        self.manifest.find_charm.return_value = manifest_charm
 
         # Mock wait methods
         self.jhelper.wait_until_active = Mock()
@@ -129,7 +124,10 @@ class TestLatestInChannel:
         manifest_charm = Mock()
         manifest_charm.channel = "2024.1/candidate"
         manifest_charm.revision = 200
-        self.manifest.core.software.charms = {"nova-k8s": manifest_charm}
+
+        self.manifest.find_charm.side_effect = lambda name: (
+            manifest_charm if name == "nova-k8s" else None
+        )
 
         # Mock wait methods
         self.jhelper.wait_until_active = Mock()
@@ -152,40 +150,6 @@ class TestLatestInChannel:
 
         assert result.result_type == ResultType.COMPLETED
 
-    def test_refresh_apps_from_feature_manifest(self):
-        """Test refresh when charm is in feature manifest, not core."""
-        # Setup
-        apps = {
-            "barbican": ("barbican-k8s", "2024.1/stable", 123),
-        }
-        model = "openstack"
-
-        # Not in core manifest
-        self.manifest.core.software.charms = {}
-
-        # In feature manifest
-        feature_manifest = Mock()
-        manifest_charm = Mock()
-        manifest_charm.channel = "2024.1/stable"
-        manifest_charm.revision = 100
-        feature_manifest.software.charms = {"barbican-k8s": manifest_charm}
-        self.manifest.get_features.return_value = [("barbican", feature_manifest)]
-
-        # Mock wait methods
-        self.jhelper.wait_until_active = Mock()
-
-        # Execute
-        result = self.upgrader.refresh_apps(apps, model)
-
-        # Verify charm_refresh was called with feature manifest config
-        self.jhelper.charm_refresh.assert_called_once_with(
-            "barbican",
-            model,
-            channel="2024.1/stable",
-            revision=100,
-        )
-        assert result.result_type == ResultType.COMPLETED
-
     def test_refresh_apps_machine_model(self):
         """Test refresh for machine model apps."""
         # Setup
@@ -193,9 +157,6 @@ class TestLatestInChannel:
             "nova-compute": ("nova-compute", "2024.1/stable", 123),
         }
         model = "openstack-machines"
-
-        # No manifest entry
-        self.manifest.core.software.charms = {}
 
         # Mock wait methods
         self.jhelper.wait_application_ready = Mock()
@@ -218,9 +179,6 @@ class TestLatestInChannel:
         }
         model = OPENSTACK_MODEL
 
-        # No manifest entry
-        self.manifest.core.software.charms = {}
-
         # Mock wait to timeout
         self.jhelper.wait_until_desired_status = Mock(
             side_effect=TimeoutError("timed out")
@@ -241,9 +199,6 @@ class TestLatestInChannel:
         }
         model = "openstack-machines"
 
-        # No manifest entry
-        self.manifest.core.software.charms = {}
-
         # Mock wait to timeout
         self.jhelper.wait_application_ready = Mock(
             side_effect=TimeoutError("timed out")
@@ -260,7 +215,6 @@ class TestLatestInChannel:
         """Test that pre-refresh status is fetched before charm_refresh calls."""
         apps = {"nova": ("nova-k8s", "2024.1/stable", 123)}
         model = OPENSTACK_MODEL
-        self.manifest.core.software.charms = {}
 
         # snapshot_workload_status returns nova as "waiting"
         self.jhelper.snapshot_workload_status.return_value = {"nova": "waiting"}
@@ -288,7 +242,6 @@ class TestLatestInChannel:
         """Test graceful degradation when snapshot_workload_status raises."""
         apps = {"nova": ("nova-k8s", "2024.1/stable", 123)}
         model = OPENSTACK_MODEL
-        self.manifest.core.software.charms = {}
 
         # snapshot raises — should not propagate
         self.jhelper.snapshot_workload_status.side_effect = Exception(
