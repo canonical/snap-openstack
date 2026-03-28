@@ -31,6 +31,7 @@ from sunbeam.steps.cinder_volume import DeployCinderVolumeApplicationStep
 from sunbeam.steps.hypervisor import ReapplyHypervisorTerraformPlanStep
 from sunbeam.steps.k8s import (
     DeployK8SApplicationStep,
+    EnsureCiliumOnCorrectSpaceStep,
     EnsureDefaultL2AdvertisementMutedStep,
     EnsureL2AdvertisementByHostStep,
 )
@@ -455,6 +456,12 @@ class LatestInChannelCoordinator(UpgradeCoordinator):
                         self.manifest,
                         self.deployment.openstack_machines_model,
                     ),
+                    EnsureCiliumOnCorrectSpaceStep(
+                        self.deployment,
+                        self.client,
+                        self.jhelper,
+                        self.deployment.openstack_machines_model,
+                    ),
                     EnsureDefaultL2AdvertisementMutedStep(
                         self.deployment, self.client, self.jhelper
                     ),
@@ -497,6 +504,12 @@ class LatestInChannelCoordinator(UpgradeCoordinator):
                         self.manifest,
                         self.deployment.openstack_machines_model,
                         refresh=True,
+                    ),
+                    EnsureCiliumOnCorrectSpaceStep(
+                        self.deployment,
+                        self.client,
+                        self.jhelper,
+                        self.deployment.openstack_machines_model,
                     ),
                 ]
             )

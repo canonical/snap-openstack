@@ -13,7 +13,7 @@ import tenacity
 from lightkube import ApiError
 
 from sunbeam.clusterd.service import ConfigItemNotFoundException
-from sunbeam.core.common import ResultType
+from sunbeam.core.common import ResultType, SunbeamException
 from sunbeam.core.deployment import Networks
 from sunbeam.core.juju import (
     ActionFailedException,
@@ -30,6 +30,7 @@ from sunbeam.steps.k8s import (
     AddK8SCloudStep,
     AddK8SCredentialStep,
     DeployK8SApplicationStep,
+    EnsureCiliumOnCorrectSpaceStep,
     EnsureDefaultL2AdvertisementMutedStep,
     EnsureK8SUnitsTaggedStep,
     EnsureL2AdvertisementByHostStep,
@@ -1614,3 +1615,182 @@ class TestPatchServiceExternalTrafficStep:
             kube_mock.patch.side_effect = api_error
             result = step.run(None)
         assert result.result_type == ResultType.FAILED
+
+
+class TestEnsureCiliumOnCorrectSpaceStep:
+    @pytest.fixture
+    def deployment(self, deployment_with_space):
+        return deployment_with_space
+
+    @pytest.fixture
+    def client(self, basic_client):
+        return basic_client
+
+    @pytest.fixture
+    def jhelper(self, jhelper_with_networks):
+        return jhelper_with_networks
+
+    @pytest.fixture
+    def step(self, deployment, client, jhelper):
+        step = EnsureCiliumOnCorrectSpaceStep(deployment, client, jhelper, "test-model")
+        step.kube = Mock()
+        return step
+
+    # --- is_skip tests ---
+
+    def test_is_skip_same_management_and_internal_space(
+        self, client, jhelper, step_context
+    ):
+        """When management == internal space, step must be skipped."""
+        deployment = Mock()
+        deployment.name = "test-deployment"
+        deployment.get_space.return_value = "shared-space"  # same for both
+        step = EnsureCiliumOnCorrectSpaceStep(deployment, client, jhelper, "test-model")
+        result = step.is_skip(step_context)
+        assert result.result_type == ResultType.SKIPPED
+
+    def test_is_skip_kube_client_error(self, step, step_context):
+        """KubeClientError during k8s client creation should fail the step."""
+        with patch(
+            "sunbeam.steps.k8s.get_kube_client", side_effect=KubeClientError("fail")
+        ):
+            result = step.is_skip(step_context)
+        assert result.result_type == ResultType.FAILED
+
+    def test_is_skip_juju_exception_getting_networks(self, step, jhelper, step_context):
+        from sunbeam.core.juju import JujuException
+
+        jhelper.get_space_networks.side_effect = JujuException("no space")
+        with patch("sunbeam.steps.k8s.get_kube_client", return_value=step.kube):
+            result = step.is_skip(step_context)
+        assert result.result_type == ResultType.FAILED
+
+    def test_is_skip_k8s_list_nodes_error(self, step, jhelper, step_context):
+        jhelper.get_space_networks.return_value = [ipaddress.ip_network("10.0.0.0/8")]
+        step.kube.list.side_effect = ApiError.__new__(ApiError)
+        with patch("sunbeam.steps.k8s.get_kube_client", return_value=step.kube):
+            result = step.is_skip(step_context)
+        assert result.result_type == ResultType.FAILED
+
+    def test_is_skip_all_nodes_on_correct_space(self, step, jhelper, step_context):
+        """All nodes' InternalIPs in the internal subnet → skip."""
+        jhelper.get_space_networks.return_value = [ipaddress.ip_network("10.0.0.0/8")]
+        step.kube.list.return_value = [
+            _to_kube_object(
+                {"name": "node1"},
+                status={"addresses": [Mock(type="InternalIP", address="10.0.0.1")]},
+            ),
+            _to_kube_object(
+                {"name": "node2"},
+                status={"addresses": [Mock(type="InternalIP", address="10.0.0.2")]},
+            ),
+        ]
+        with patch("sunbeam.steps.k8s.get_kube_client", return_value=step.kube):
+            result = step.is_skip(step_context)
+        assert result.result_type == ResultType.SKIPPED
+
+    def test_is_skip_node_on_wrong_space(self, step, jhelper, step_context):
+        """A node with an InternalIP outside the internal subnet → must run."""
+        jhelper.get_space_networks.return_value = [ipaddress.ip_network("10.0.0.0/8")]
+        step.kube.list.return_value = [
+            _to_kube_object(
+                {"name": "node1"},
+                # 192.168.x.x is management space, not in 10.0.0.0/8
+                status={"addresses": [Mock(type="InternalIP", address="192.168.1.5")]},
+            ),
+        ]
+        with patch("sunbeam.steps.k8s.get_kube_client", return_value=step.kube):
+            result = step.is_skip(step_context)
+        assert result.result_type == ResultType.COMPLETED
+        assert step.needs_restart is True
+
+    def test_is_skip_node_with_no_internal_ip(self, step, jhelper, step_context):
+        """Node with no InternalIP address is ignored (safe default)."""
+        jhelper.get_space_networks.return_value = [ipaddress.ip_network("10.0.0.0/8")]
+        step.kube.list.return_value = [
+            _to_kube_object(
+                {"name": "node1"},
+                # Only a Hostname address, no InternalIP
+                status={"addresses": [Mock(type="Hostname", address="node1")]},
+            ),
+        ]
+        with patch("sunbeam.steps.k8s.get_kube_client", return_value=step.kube):
+            result = step.is_skip(step_context)
+        assert result.result_type == ResultType.SKIPPED
+
+    def test_is_skip_node_with_no_status(self, step, jhelper, step_context):
+        """Node with no status is ignored (safe default)."""
+        jhelper.get_space_networks.return_value = [ipaddress.ip_network("10.0.0.0/8")]
+        node = Mock()
+        node.metadata = Mock(name="node1")
+        node.status = None
+        step.kube.list.return_value = [node]
+        with patch("sunbeam.steps.k8s.get_kube_client", return_value=step.kube):
+            result = step.is_skip(step_context)
+        assert result.result_type == ResultType.SKIPPED
+
+    # --- run tests ---
+
+    def test_run_patches_cilium_daemonset(self, step):
+        """run() patches the Cilium DaemonSet and waits for rollout."""
+        step.needs_restart = True
+        step.kube.patch = Mock()
+        step.kube.get = Mock()
+        ds_status = Mock()
+        ds_status.desiredNumberScheduled = 2
+        ds_status.updatedNumberScheduled = 2
+        ds_status.numberAvailable = 2
+        step.kube.get.return_value = Mock(status=ds_status)
+        result = step.run(None)
+        step.kube.patch.assert_called_once()
+        patch_call_kwargs = step.kube.patch.call_args
+        # Second positional arg is the resource name
+        assert patch_call_kwargs[0][1] == "cilium"
+        assert result.result_type == ResultType.COMPLETED
+
+    def test_run_patch_api_error(self, step):
+        """ApiError during DaemonSet patch is surfaced as FAILED."""
+        step.needs_restart = True
+        api_error = ApiError.__new__(ApiError)
+        api_error.status = Mock(code=500)
+        step.kube.patch = Mock(side_effect=api_error)
+        result = step.run(None)
+        assert result.result_type == ResultType.FAILED
+        assert "Failed to restart Cilium DaemonSet" in result.message
+
+    def test_run_rollout_timeout(self, step):
+        """SunbeamException from _wait_for_rollout is surfaced as FAILED."""
+        step.needs_restart = True
+        step.kube.patch = Mock()
+        with patch.object(
+            step, "_wait_for_rollout", side_effect=SunbeamException("timed out")
+        ):
+            result = step.run(None)
+        assert result.result_type == ResultType.FAILED
+        assert "timed out" in result.message
+
+    def test_wait_for_rollout_completes_immediately(self, step):
+        """_wait_for_rollout returns as soon as desired==updated==available."""
+        ds_status = Mock()
+        ds_status.desiredNumberScheduled = 3
+        ds_status.updatedNumberScheduled = 3
+        ds_status.numberAvailable = 3
+        step.kube.get = Mock(return_value=Mock(status=ds_status))
+        # Should not raise
+        step._wait_for_rollout()
+        step.kube.get.assert_called_once()
+
+    def test_wait_for_rollout_times_out(self, step):
+        """_wait_for_rollout raises SunbeamException when deadline passes."""
+        ds_status = Mock()
+        ds_status.desiredNumberScheduled = 3
+        ds_status.updatedNumberScheduled = 1  # not converged
+        ds_status.numberAvailable = 1
+        step.kube.get = Mock(return_value=Mock(status=ds_status))
+        # First call sets deadline=0+300=300; second call returns 301 so loop exits.
+        with (
+            patch("sunbeam.steps.k8s.time.monotonic", side_effect=[0.0, 301.0]),
+            patch("sunbeam.steps.k8s.time.sleep"),
+        ):
+            with pytest.raises(SunbeamException, match="did not complete"):
+                step._wait_for_rollout()
