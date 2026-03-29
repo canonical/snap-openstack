@@ -8,6 +8,7 @@ from ssl import SSLError
 from unittest.mock import MagicMock, Mock, patch
 
 import pytest
+from click.testing import CliRunner
 from lightkube import ApiError
 from maas.client.bones import CallError
 
@@ -16,6 +17,10 @@ from sunbeam.core.checks import DiagnosticResultType
 from sunbeam.core.deployment import Networks
 from sunbeam.core.deployments import DeploymentsConfig
 from sunbeam.core.juju import ControllerNotFoundException
+from sunbeam.provider.maas.commands import (
+    validate_deployment_cmd,
+    validate_machine_cmd,
+)
 from sunbeam.provider.maas.deployment import (
     ROLE_NETWORK_MAPPING,
     MaasDeployment,
@@ -241,6 +246,114 @@ class TestMachineStorageCheck:
         assert result.passed is DiagnosticResultType.FAILURE
         assert result.details["machine"] == "test_machine"
         assert result.message and "machine has no role assigned" in result.message
+
+
+class TestValidateDeploymentCommand:
+    def test_exit_nonzero_on_failed_checks(self, mocker):
+        runner = CliRunner()
+        deployment = MaasDeployment(name="test", token="token", url="url")
+
+        mocker.patch("sunbeam.provider.maas.commands.run_preflight_checks")
+        mocker.patch(
+            "sunbeam.provider.maas.commands.MaasClient.from_deployment",
+            return_value=Mock(),
+        )
+        mocker.patch("sunbeam.provider.maas.commands.list_machines", return_value=[])
+        mocker.patch(
+            "sunbeam.provider.maas.commands._run_maas_meta_checks",
+            return_value=[{"passed": DiagnosticResultType.FAILURE.value}],
+        )
+        mocker.patch(
+            "sunbeam.provider.maas.commands._save_report",
+            return_value="/tmp/report.yaml",
+        )
+
+        result = runner.invoke(validate_deployment_cmd, obj=deployment)
+
+        assert result.exit_code == 1
+        assert "Validation failed" in result.output
+
+    def test_exit_zero_on_successful_checks(self, mocker):
+        runner = CliRunner()
+        deployment = MaasDeployment(name="test", token="token", url="url")
+
+        mocker.patch("sunbeam.provider.maas.commands.run_preflight_checks")
+        mocker.patch(
+            "sunbeam.provider.maas.commands.MaasClient.from_deployment",
+            return_value=Mock(),
+        )
+        mocker.patch("sunbeam.provider.maas.commands.list_machines", return_value=[])
+        mocker.patch(
+            "sunbeam.provider.maas.commands._run_maas_meta_checks",
+            return_value=[{"passed": DiagnosticResultType.SUCCESS.value}],
+        )
+        mocker.patch(
+            "sunbeam.provider.maas.commands._save_report",
+            return_value="/tmp/report.yaml",
+        )
+
+        result = runner.invoke(validate_deployment_cmd, obj=deployment)
+
+        assert result.exit_code == 0
+        assert "Validation failed" not in result.output
+
+
+class TestValidateMachineCommand:
+    def test_exit_nonzero_on_failed_checks(self, mocker):
+        runner = CliRunner()
+        deployment = MaasDeployment(name="test", token="token", url="url")
+
+        mocker.patch("sunbeam.provider.maas.commands.run_preflight_checks")
+        mocker.patch(
+            "sunbeam.provider.maas.commands.MaasClient.from_deployment",
+            return_value=Mock(),
+        )
+        mocker.patch(
+            "sunbeam.provider.maas.commands.get_machine",
+            return_value={"hostname": "node1"},
+        )
+        mocker.patch(
+            "sunbeam.provider.maas.commands._run_maas_checks",
+            return_value=[{"passed": DiagnosticResultType.FAILURE.value}],
+        )
+        mocker.patch(
+            "sunbeam.provider.maas.commands._save_report",
+            return_value="/tmp/report.yaml",
+        )
+
+        result = runner.invoke(validate_machine_cmd, ["node1"], obj=deployment)
+
+        assert result.exit_code == 1
+        assert "Validation failed" in result.output
+
+    def test_exit_zero_on_successful_checks(self, mocker):
+        runner = CliRunner()
+        deployment = MaasDeployment(name="test", token="token", url="url")
+
+        mocker.patch("sunbeam.provider.maas.commands.run_preflight_checks")
+        mocker.patch(
+            "sunbeam.provider.maas.commands.MaasClient.from_deployment",
+            return_value=Mock(),
+        )
+        mocker.patch(
+            "sunbeam.provider.maas.commands.get_machine",
+            return_value={"hostname": "node1"},
+        )
+        mocker.patch(
+            "sunbeam.provider.maas.commands._run_maas_checks",
+            return_value=[
+                {"passed": DiagnosticResultType.SUCCESS.value},
+                {"passed": DiagnosticResultType.WARNING.value},
+            ],
+        )
+        mocker.patch(
+            "sunbeam.provider.maas.commands._save_report",
+            return_value="/tmp/report.yaml",
+        )
+
+        result = runner.invoke(validate_machine_cmd, ["node1"], obj=deployment)
+
+        assert result.exit_code == 0
 
     def test_run_with_not_storage_node(self):
         machine = {

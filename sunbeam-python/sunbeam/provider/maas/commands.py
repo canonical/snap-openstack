@@ -1518,6 +1518,12 @@ def _save_report(snap: Snap, name: str, report: list[dict]) -> str:
     return str(report_path.absolute())
 
 
+def _report_has_failures(report: list[dict]) -> bool:
+    return any(
+        result.get("passed") == DiagnosticResultType.FAILURE.value for result in report
+    )
+
+
 @click.command("validate")
 @click.argument("machine", type=str)
 @click.pass_context
@@ -1550,6 +1556,8 @@ def validate_machine_cmd(ctx: click.Context, machine: str):
     report = _run_maas_checks(validation_checks, console)
     report_path = _save_report(snap, "validate-machine-" + machine, report)
     console.print(f"Report saved to {report_path!r}")
+    if _report_has_failures(report):
+        raise click.ClickException(f"Validation failed; see report {report_path!r}")
 
 
 @click.command("validate")
@@ -1577,6 +1585,8 @@ def validate_deployment_cmd(ctx: click.Context):
     report = _run_maas_meta_checks(validation_checks, console)
     report_path = _save_report(snap, "validate-deployment-" + deployment.name, report)
     console.print(f"Report saved to {report_path!r}")
+    if _report_has_failures(report):
+        raise click.ClickException(f"Validation failed; see report {report_path!r}")
 
 
 @click.command("remove")
