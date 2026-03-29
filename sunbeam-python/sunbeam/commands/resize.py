@@ -8,16 +8,17 @@ from click.core import ParameterSource
 from rich.console import Console
 
 from sunbeam.clusterd.client import Client
+from sunbeam.core.ceph import is_microceph_necessary
 from sunbeam.core.common import click_option_topology, run_plan
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import JujuHelper
 from sunbeam.core.terraform import TerraformInitStep
-from sunbeam.steps.cinder_volume import DeployCinderVolumeApplicationStep
-from sunbeam.steps.k8s import PatchCoreDNSStep
-from sunbeam.steps.microceph import (
+from sunbeam.features.microceph.steps import (
     DeployMicrocephApplicationStep,
     SetCephMgrPoolSizeStep,
 )
+from sunbeam.steps.cinder_volume import DeployCinderVolumeApplicationStep
+from sunbeam.steps.k8s import PatchCoreDNSStep
 from sunbeam.steps.openstack import DeployControlPlaneStep
 from sunbeam.utils import click_option_show_hints
 
@@ -58,7 +59,7 @@ def resize(
         LOG.warning("WARNING: Option --force is deprecated and the value is ignored.")
 
     plan = []
-    if len(storage_nodes):
+    if len(storage_nodes) and is_microceph_necessary(client):
         # Change default-pool-size based on number of storage nodes
         plan.extend(
             [

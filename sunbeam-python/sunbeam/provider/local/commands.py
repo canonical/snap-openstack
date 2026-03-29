@@ -5,7 +5,7 @@ import base64
 import json
 import logging
 from pathlib import Path
-from typing import Tuple, Type
+from typing import Any, Tuple, Type
 
 import click
 import yaml
@@ -29,6 +29,7 @@ from sunbeam.commands.configure import (
 from sunbeam.commands.dashboard_url import retrieve_dashboard_url
 from sunbeam.commands.proxy import PromptForProxyStep
 from sunbeam.core import ovn
+from sunbeam.core.ceph import SetCephProviderStep, is_microceph_necessary
 from sunbeam.core.checks import (
     Check,
     DaemonGroupCheck,
@@ -83,6 +84,13 @@ from sunbeam.feature_gates import (
     feature_gate_command,
     feature_gate_option,
     split_roles_enabled,
+)
+from sunbeam.features.interface.v1.base import EnableDisableFeature
+from sunbeam.features.microceph.steps import (
+    CheckMicrocephDistributionStep,
+    ConfigureMicrocephOSDStep,
+    DeployMicrocephApplicationStep,
+    RemoveMicrocephUnitsStep,
 )
 from sunbeam.provider.base import ProviderBase
 from sunbeam.provider.common.multiregion import connect_to_region_controller
@@ -165,12 +173,6 @@ from sunbeam.steps.k8s import (
     StoreK8SKubeConfigStep,
     UpdateK8SCloudStep,
 )
-from sunbeam.steps.microceph import (
-    CheckMicrocephDistributionStep,
-    ConfigureMicrocephOSDStep,
-    DeployMicrocephApplicationStep,
-    RemoveMicrocephUnitsStep,
-)
 from sunbeam.steps.microovn import (
     DeployMicroOVNApplicationStep,
     ReapplyMicroOVNOptionalIntegrationsStep,
@@ -215,6 +217,64 @@ def cluster(ctx):
 def remove_trailing_dot(value: str) -> str:
     """Remove trailing dot from the value."""
     return value.rstrip(".")
+
+
+def _set_ceph_feature_enabled_state(
+    deployment: LocalDeployment, client: Any, enabled: bool
+) -> None:
+    """Persist ceph feature enablement state."""
+    feature = deployment.get_feature_manager().resolve_feature("ceph")
+    if not isinstance(feature, EnableDisableFeature):
+        LOG.debug("Failed to resolve ceph feature to update feature state.")
+        return
+    feature.update_feature_info(client, {"enabled": str(enabled).lower()})
+
+
+def _is_microceph_necessary_feature_aware(
+    deployment: LocalDeployment, client: Any
+) -> bool:
+    """Return whether microceph operations are needed."""
+    mode_requires_microceph = is_microceph_necessary(client)
+    try:
+        ceph_feature_enabled = deployment.get_feature_manager().is_feature_enabled(
+            deployment, "ceph"
+        )
+    except Exception as e:
+        LOG.debug("Failed to read ceph feature enablement state: %r", e)
+        return mode_requires_microceph
+
+    return ceph_feature_enabled or mode_requires_microceph
+
+
+def _call_enabled_feature_join_hooks(
+    deployment: LocalDeployment, node_info: Any, name: str, roles: list[str]
+) -> None:
+    """Call on_join hook for all enabled features."""
+    deployment.get_feature_manager().call_enabled_features_on_join(
+        deployment,
+        node_info,
+        node_name=name,
+        roles=roles,
+        status="joined",
+    )
+
+
+def _call_enabled_feature_depart_hooks(
+    deployment: LocalDeployment,
+    node_info: Any,
+    name: str,
+    roles: list[str],
+    force: bool,
+) -> None:
+    """Call on_depart hook for all enabled features."""
+    deployment.get_feature_manager().call_enabled_features_on_depart(
+        deployment,
+        node_info,
+        node_name=name,
+        roles=roles,
+        status="departed",
+        force=force,
+    )
 
 
 class LocalProvider(ProviderBase):
@@ -616,6 +676,16 @@ def deploy_and_migrate_juju_controller(
     help="Token obtained from the region controller.",
     type=str,
 )
+@click.option(
+    "--no-default-storage",
+    "no_default_storage",
+    is_flag=True,
+    default=False,
+    help=(
+        "Do not deploy the default storage backend. "
+        "Storage role will still be available for external storage backends."
+    ),
+)
 @click_option_show_hints
 @click.pass_context
 def bootstrap(  # noqa: C901
@@ -628,6 +698,7 @@ def bootstrap(  # noqa: C901
     accept_defaults: bool = False,
     show_hints: bool = False,
     region_controller_token: str | None = None,
+    no_default_storage: bool = False,
 ) -> None:
     """Bootstrap the local node.
 
@@ -745,6 +816,7 @@ def bootstrap(  # noqa: C901
     plan.append(SyncFeatureGatesToCluster(client))
     plan.append(SaveManagementCidrStep(client, management_cidr))
     plan.append(SetOvnProviderStep(client, snap))
+    plan.append(SetCephProviderStep(client, no_default_storage=no_default_storage))
     plan.append(AddManifestStep(client, manifest_path))
     plan.append(
         PromptForProxyStep(
@@ -755,6 +827,7 @@ def bootstrap(  # noqa: C901
     plan.append(PromptRegionStep(client, manifest, accept_defaults))
     plan.append(ValidateIdentityManifest(client, manifest))
     run_plan(plan, console, show_hints)
+    _set_ceph_feature_enabled_state(deployment, client, enabled=not no_default_storage)
 
     if region_controller_token:
         connect_to_region_controller(
@@ -836,19 +909,21 @@ def bootstrap(  # noqa: C901
             )
         )
 
-    # Deploy Microceph application during bootstrap irrespective of node role.
+    # Deploy Microceph application during bootstrap if microceph is enabled.
+    microceph_necessary = _is_microceph_necessary_feature_aware(deployment, client)
     microceph_tfhelper = deployment.get_tfhelper("microceph-plan")
-    plan1.append(TerraformInitStep(microceph_tfhelper))
-    plan1.append(
-        DeployMicrocephApplicationStep(
-            deployment,
-            client,
-            microceph_tfhelper,
-            jhelper,
-            manifest,
-            deployment.openstack_machines_model,
+    if microceph_necessary:
+        plan1.append(TerraformInitStep(microceph_tfhelper))
+        plan1.append(
+            DeployMicrocephApplicationStep(
+                deployment,
+                client,
+                microceph_tfhelper,
+                jhelper,
+                manifest,
+                deployment.openstack_machines_model,
+            )
         )
-    )
     cinder_volume_tfhelper = deployment.get_tfhelper("cinder-volume-plan")
     plan1.append(TerraformInitStep(cinder_volume_tfhelper))
     plan1.append(
@@ -865,7 +940,7 @@ def bootstrap(  # noqa: C901
     openstack_tfhelper = deployment.get_tfhelper("openstack-plan")
     plan1.append(TerraformInitStep(openstack_tfhelper))
 
-    if is_storage_node:
+    if is_storage_node and microceph_necessary:
         plan1.append(
             ConfigureMicrocephOSDStep(
                 client,
@@ -916,16 +991,17 @@ def bootstrap(  # noqa: C901
         # Redeploy of Microceph is required to fill terraform vars
         # related to traefik-rgw/keystone-endpoints offers from
         # openstack model
-        plan1.append(
-            DeployMicrocephApplicationStep(
-                deployment,
-                client,
-                microceph_tfhelper,
-                jhelper,
-                manifest,
-                deployment.openstack_machines_model,
+        if microceph_necessary:
+            plan1.append(
+                DeployMicrocephApplicationStep(
+                    deployment,
+                    client,
+                    microceph_tfhelper,
+                    jhelper,
+                    manifest,
+                    deployment.openstack_machines_model,
+                )
             )
-        )
         # Fill AMQP / Keystone / MySQL offers from openstack model
         plan1.append(
             DeployCinderVolumeApplicationStep(
@@ -1582,27 +1658,29 @@ def join(  # noqa: C901
             )
 
     if is_storage_node:
-        plan4.append(TerraformInitStep(microceph_tfhelper))
-        plan4.append(
-            DeployMicrocephApplicationStep(
-                deployment,
-                client,
-                microceph_tfhelper,
-                jhelper,
-                manifest,
-                deployment.openstack_machines_model,
+        microceph_necessary = _is_microceph_necessary_feature_aware(deployment, client)
+        if microceph_necessary:
+            plan4.append(TerraformInitStep(microceph_tfhelper))
+            plan4.append(
+                DeployMicrocephApplicationStep(
+                    deployment,
+                    client,
+                    microceph_tfhelper,
+                    jhelper,
+                    manifest,
+                    deployment.openstack_machines_model,
+                )
             )
-        )
-        plan4.append(
-            ConfigureMicrocephOSDStep(
-                client,
-                name,
-                jhelper,
-                deployment.openstack_machines_model,
-                accept_defaults=accept_defaults,
-                manifest=manifest,
+            plan4.append(
+                ConfigureMicrocephOSDStep(
+                    client,
+                    name,
+                    jhelper,
+                    deployment.openstack_machines_model,
+                    accept_defaults=accept_defaults,
+                    manifest=manifest,
+                )
             )
-        )
         plan4.append(
             DeployCinderVolumeApplicationStep(
                 deployment,
@@ -1630,21 +1708,22 @@ def join(  # noqa: C901
                 )
             )
 
-            # Redeploy of Microceph is required to fill terraform vars
-            # related to traefik-rgw/keystone-endpoints offers from
-            # openstack model
-            microceph_tfhelper = deployment.get_tfhelper("microceph-plan")
-            plan4.append(TerraformInitStep(microceph_tfhelper))
-            plan4.append(
-                DeployMicrocephApplicationStep(
-                    deployment,
-                    client,
-                    microceph_tfhelper,
-                    jhelper,
-                    manifest,
-                    deployment.openstack_machines_model,
+            if microceph_necessary:
+                # Redeploy of Microceph is required to fill terraform vars
+                # related to traefik-rgw/keystone-endpoints offers from
+                # openstack model
+                microceph_tfhelper = deployment.get_tfhelper("microceph-plan")
+                plan4.append(TerraformInitStep(microceph_tfhelper))
+                plan4.append(
+                    DeployMicrocephApplicationStep(
+                        deployment,
+                        client,
+                        microceph_tfhelper,
+                        jhelper,
+                        manifest,
+                        deployment.openstack_machines_model,
+                    )
                 )
-            )
             # Fill AMQP / Keystone / MySQL offers from openstack model
             plan4.append(
                 DeployCinderVolumeApplicationStep(
@@ -1740,6 +1819,8 @@ def join(  # noqa: C901
             )
 
     run_plan(plan4, console, show_hints)
+    node_info = client.cluster.get_node_info(name)
+    _call_enabled_feature_join_hooks(deployment, node_info, name, roles_str)
 
     click.echo(f"Node joined cluster with roles: {pretty_roles}")
 
@@ -1800,6 +1881,12 @@ def remove(ctx: click.Context, name: str, force: bool, show_hints: bool) -> None
     deployment: LocalDeployment = ctx.obj
     client = deployment.get_client()
     jhelper = JujuHelper(deployment.juju_controller)
+    try:
+        node_info = client.cluster.get_node_info(name)
+    except Exception:
+        node_info = {"name": name}
+    node_roles = node_info.get("role", []) if isinstance(node_info, dict) else []
+    microceph_necessary = _is_microceph_necessary_feature_aware(deployment, client)
 
     preflight_checks = [DaemonGroupCheck()]
     run_preflight_checks(preflight_checks, console)
@@ -1820,6 +1907,10 @@ def remove(ctx: click.Context, name: str, force: bool, show_hints: bool) -> None
                 deployment.openstack_machines_model,
                 force=force,
             ),
+        ]
+    )
+    if microceph_necessary:
+        plan.append(
             CheckMicrocephDistributionStep(
                 client,
                 name,
@@ -1827,6 +1918,9 @@ def remove(ctx: click.Context, name: str, force: bool, show_hints: bool) -> None
                 deployment.openstack_machines_model,
                 force=force,
             ),
+        )
+    plan.extend(
+        [
             CheckMysqlK8SDistributionStep(
                 client,
                 name,
@@ -1863,9 +1957,16 @@ def remove(ctx: click.Context, name: str, force: bool, show_hints: bool) -> None
             RemoveCinderVolumeUnitsStep(
                 client, name, jhelper, deployment.openstack_machines_model
             ),
+        ]
+    )
+    if microceph_necessary:
+        plan.append(
             RemoveMicrocephUnitsStep(
                 client, name, jhelper, deployment.openstack_machines_model
             ),
+        )
+    plan.extend(
+        [
             RemoveMicroOVNUnitsStep(
                 client, name, jhelper, deployment.openstack_machines_model
             ),
@@ -1904,6 +2005,9 @@ def remove(ctx: click.Context, name: str, force: bool, show_hints: bool) -> None
     )
 
     run_plan(plan, console, show_hints)
+    _call_enabled_feature_depart_hooks(
+        deployment, node_info, name, node_roles, force=force
+    )
     click.echo(f"Removed node {name} from the cluster")
     # Removing machine does not clean up all deployed juju components. This is
     # deliberate, see https://bugs.launchpad.net/juju/+bug/1851489.

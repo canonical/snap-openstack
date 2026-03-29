@@ -73,6 +73,10 @@ def deployment_with_client(basic_client):
     storage_manager = Mock()
     storage_manager.list_principal_applications.return_value = []
     deployment.get_storage_manager.return_value = storage_manager
+
+    from sunbeam.features.microceph.provider import MicrocephProvider
+
+    deployment.get_ceph_provider.return_value = MicrocephProvider()
     return deployment
 
 
@@ -491,6 +495,7 @@ class TestPatchLoadBalancerServicesIPStaleAnnotation:
         """Client mock; returns node-1 for any role so ovn-relay is excluded."""
         client = Mock()
         client.cluster.list_nodes_by_role.return_value = ["node-1"]
+        client.cluster.get_config.return_value = "{}"
         return client
 
     def _make_service(self, ip_annotation=None, ingress_ip=None):
@@ -918,6 +923,10 @@ class TestReapplyOpenStackTerraformPlanStep:
         storage_manager = Mock()
         storage_manager.list_principal_applications.return_value = []
         deployment.get_storage_manager.return_value = storage_manager
+
+        from sunbeam.features.microceph.provider import MicrocephProvider
+
+        deployment.get_ceph_provider.return_value = MicrocephProvider()
         return deployment
 
     def test_run(
