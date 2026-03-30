@@ -23,14 +23,14 @@ from sunbeam.core.juju import (
 )
 from sunbeam.core.manifest import Manifest
 from sunbeam.core.terraform import TerraformException, TerraformHelper
-from sunbeam.steps.cinder_volume import CONFIG_KEY as CINDER_VOLUME_CONFIG_KEY
+from sunbeam.features.microceph.steps import CONFIG_KEY as MICROCEPH_CONFIG_KEY
 from sunbeam.steps.hypervisor import CONFIG_KEY as HYPERVISOR_CONFIG_KEY
 from sunbeam.steps.k8s import K8S_CONFIG_KEY
-from sunbeam.steps.microceph import CONFIG_KEY as MICROCEPH_CONFIG_KEY
 from sunbeam.steps.openstack import CONFIG_KEY as OPENSTACK_CONFIG_KEY
 from sunbeam.steps.openstack import OPENSTACK_DEPLOY_TIMEOUT
 from sunbeam.steps.sunbeam_machine import CONFIG_KEY as SUNBEAM_MACHINE_CONFIG_KEY
 from sunbeam.steps.upgrades.base import UpgradeCoordinator, UpgradeFeatures
+from sunbeam.storage.steps import STORAGE_BACKEND_TFVAR_CONFIG_KEY
 from sunbeam.versions import (
     MISC_CHARMS_K8S,
     MYSQL_CHARMS_K8S,
@@ -308,7 +308,7 @@ class UpgradeMicrocephCharm(UpgradeMachineCharm):
         )
 
 
-class UpgradeCinderVolumeCharm(UpgradeMachineCharm):
+class UpgradeStorageBackendCharms(UpgradeMachineCharm):
     def __init__(
         self,
         client: Client,
@@ -317,7 +317,10 @@ class UpgradeCinderVolumeCharm(UpgradeMachineCharm):
         manifest: Manifest,
         model: str,
     ):
-        """Create instance of UpgradeCinderVolumeCharm class.
+        """Create instance of UpgradeStorageBackendCharms class.
+
+        Upgrades cinder-volume and storage backend charms managed by the
+        storage-backend Terraform plan.
 
         :client: Client to connect to clusterdb
         :jhelper: Helper for interacting with pylibjuju
@@ -325,15 +328,15 @@ class UpgradeCinderVolumeCharm(UpgradeMachineCharm):
         :model: Name of model containing charms.
         """
         super().__init__(
-            "Upgrade Cinder Volume charm",
-            "Upgrading cinder-volume charm",
+            "Upgrade Storage Backend charms",
+            "Upgrading storage backend charms",
             client,
             tfhelper,
             jhelper,
             manifest,
             model,
-            ["cinder-volume", "cinder-volume-ceph"],
-            CINDER_VOLUME_CONFIG_KEY,
+            ["cinder-volume"],
+            STORAGE_BACKEND_TFVAR_CONFIG_KEY,
             1200,
         )
 
@@ -461,9 +464,9 @@ class ChannelUpgradeCoordinator(UpgradeCoordinator):
                 self.manifest,
                 self.deployment.openstack_machines_model,
             ),
-            UpgradeCinderVolumeCharm(
+            UpgradeStorageBackendCharms(
                 self.client,
-                get_tf("cinder-volume-plan"),
+                get_tf("storage-backend-plan"),
                 self.jhelper,
                 self.manifest,
                 self.deployment.openstack_machines_model,

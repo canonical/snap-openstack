@@ -146,18 +146,20 @@ resource "juju_integration" "hypervisor-ceilometer" {
   }
 }
 
-resource "juju_integration" "hypervisor-cinder-ceph" {
-  count = (var.cinder-volume-ceph-application-name != null) ? 1 : 0
+resource "juju_integration" "hypervisor-extra-integration" {
+  for_each = {
+    for i in var.extra_integrations : "${i.application_name}-${i.endpoint_name}" => i
+  }
   model = var.machine_model
 
   application {
     name     = juju_application.openstack-hypervisor.name
-    endpoint = "ceph-access"
+    endpoint = each.value.hypervisor_endpoint_name
   }
 
   application {
-    name     = var.cinder-volume-ceph-application-name
-    endpoint = "ceph-access"
+    name     = each.value.application_name
+    endpoint = each.value.endpoint_name
   }
 }
 

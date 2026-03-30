@@ -10,6 +10,7 @@ import logging
 import re
 import types
 import typing
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
@@ -59,6 +60,35 @@ FQDN_PATTERN = (
 
 PRINCIPAL_HA_APPLICATION = "cinder-volume"
 PRINCIPAL_NON_HA_APPLICATION = "cinder-volume-noha"
+
+
+@dataclass(frozen=True)
+class BackendIntegration:
+    """An additional juju integration a backend needs.
+
+    Beyond the standard subordinate relation to cinder-volume.
+    """
+
+    application_name: str
+    endpoint_name: str
+    backend_endpoint_name: str
+
+    def to_dict(self) -> dict[str, str]:
+        """Return the integration as a dictionary."""
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class HypervisorIntegration:
+    """An integration the hypervisor needs with a storage backend."""
+
+    application_name: str
+    endpoint_name: str
+    hypervisor_endpoint_name: str
+
+    def to_dict(self) -> dict[str, str]:
+        """Return the integration as a dictionary."""
+        return asdict(self)
 
 
 def validate_juju_application_name(name: str) -> bool:
@@ -238,7 +268,7 @@ class StorageBackendBase(FeatureGateMixin, typing.Generic[BackendConfig]):
     def create_destroy_step(
         self,
         deployment: Deployment,
-        client,
+        client: Client,
         tfhelper: TerraformHelper,
         jhelper: JujuHelper,
         manifest: Manifest,
@@ -630,6 +660,27 @@ class StorageBackendBase(FeatureGateMixin, typing.Generic[BackendConfig]):
             },
         ]
 
+    def get_extra_integrations(self, deployment: Deployment) -> set[BackendIntegration]:
+        """Additional juju integrations the backend needs.
+
+        Beyond the standard subordinate relation to cinder-volume.
+        """
+        return set()
+
+    def get_application_name(self, backend_name: str) -> str:
+        """Return the Juju application name used for this backend."""
+        return backend_name
+
+    def get_units(self) -> int | None:
+        """Return the requested unit count for this backend application."""
+        return 1
+
+    def get_hypervisor_integrations(
+        self, deployment: Deployment
+    ) -> set[HypervisorIntegration]:
+        """Integrations the hypervisor needs with this backend."""
+        return set()
+
     def build_terraform_vars(
         self,
         deployment: Deployment,
@@ -637,7 +688,7 @@ class StorageBackendBase(FeatureGateMixin, typing.Generic[BackendConfig]):
         backend_name: str,
         config: BackendConfig,
     ) -> dict[str, Any]:
-        """Generate Terraform variables for Pure Storage backend deployment."""
+        """Generate Terraform variables for this storage backend deployment."""
         # Map our configuration fields to the correct charm configuration option names
         config_dict = config.model_dump(exclude_none=True, by_alias=True)
 
@@ -674,6 +725,8 @@ class StorageBackendBase(FeatureGateMixin, typing.Generic[BackendConfig]):
 
         # Build Terraform variables to match the plan's expected format
         tfvars = {
+            "application_name": self.get_application_name(backend_name),
+            "units": self.get_units(),
             "principal_application": self.principal_application,
             "charm_name": self.charm_name,
             "charm_base": self.charm_base,
@@ -683,6 +736,9 @@ class StorageBackendBase(FeatureGateMixin, typing.Generic[BackendConfig]):
             "charm_config": config_dict,
             "secrets": secret_fields,
         }
+
+        extra_integrations = self.get_extra_integrations(deployment)
+        tfvars["extra_integrations"] = [i.to_dict() for i in extra_integrations]
 
         return tfvars
 

@@ -109,6 +109,10 @@ class TestEnableMaintenance:
             patch("sunbeam.features.maintenance.commands.run_plan") as mock_run_plan,
             patch("sunbeam.features.maintenance.commands.JujuHelper"),
             patch("sunbeam.features.maintenance.commands.OperationViewer"),
+            patch(
+                "sunbeam.features.maintenance.commands.is_internal_ceph_enabled",
+                return_value=False,
+            ),
         ):
             # Set up mock class name for get_step_message
             mock_create_watcher_step.__name__ = "CreateWatcherHostMaintenanceAuditStep"

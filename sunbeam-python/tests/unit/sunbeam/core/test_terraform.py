@@ -3,6 +3,7 @@
 
 import functools
 import json
+import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, Mock, patch
 
@@ -83,6 +84,48 @@ def read_config():
 
 
 class TestTerraformHelper:
+    def test_state_list_preserves_terraform_stderr(self, tmp_path):
+        """Terraform stderr is preserved in the raised exception."""
+        tfhelper = TerraformHelper(
+            path=tmp_path,
+            plan="storage-backend-plan",
+            tfvar_map={},
+        )
+
+        error = subprocess.CalledProcessError(
+            returncode=1,
+            cmd=["terraform", "state", "list"],
+            stderr="No state file was found!",
+        )
+
+        with patch("subprocess.run", side_effect=error):
+            with pytest.raises(TerraformException, match="No state file was found!"):
+                tfhelper.state_list()
+
+    def test_import_resource_runs_non_interactively(self, tmp_path):
+        """Import should never prompt for input."""
+        tfhelper = TerraformHelper(
+            path=tmp_path,
+            plan="storage-backend-plan",
+            tfvar_map={},
+        )
+
+        with patch("subprocess.run") as mock_run:
+            tfhelper.import_resource("module.example.resource", "id-123")
+
+        cmd = (
+            mock_run.call_args.kwargs["args"]
+            if "args" in mock_run.call_args.kwargs
+            else mock_run.call_args.args[0]
+        )
+        assert cmd == [
+            tfhelper.terraform,
+            "import",
+            "-input=false",
+            "module.example.resource",
+            "id-123",
+        ]
+
     def test_update_tfvars_and_apply_tf(
         self,
         mocker,

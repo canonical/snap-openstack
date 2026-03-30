@@ -339,7 +339,7 @@ class TerraformHelper:
         except subprocess.CalledProcessError as e:
             LOG.error(f"terraform state list failed: {e.output}")
             LOG.error(e.stderr)
-            raise TerraformException(str(e))
+            raise TerraformException(e.stderr or e.output or str(e))
 
     def state_rm(self, resource: str) -> None:
         """Remove a resource from Terraform state."""
@@ -369,6 +369,35 @@ class TerraformHelper:
             LOG.error(f"terraform state rm failed: {e.output}")
             LOG.error(e.stderr)
             raise TerraformException(str(e))
+
+    def import_resource(self, address: str, resource_id: str) -> None:
+        """Import an existing resource into Terraform state."""
+        os_env = os.environ.copy()
+        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        tf_log = str(self.path / f"terraform-import-{timestamp}.log")
+        os_env.update({"TF_LOG_PATH": tf_log})
+        os_env.setdefault("TF_LOG", "INFO")
+        if self.env:
+            os_env.update(self.env)
+
+        try:
+            cmd = [self.terraform, "import", "-input=false", address, resource_id]
+            LOG.debug(f"Running command {' '.join(cmd)}")
+            process = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=True,
+                cwd=self.path,
+                env=os_env,
+            )
+            LOG.debug(
+                f"Command finished. stdout={process.stdout}, stderr={process.stderr}"
+            )
+        except subprocess.CalledProcessError as e:
+            LOG.error(f"terraform import failed: {e.output}")
+            LOG.error(e.stderr)
+            raise TerraformException(e.stderr or e.output or str(e))
 
     def sync(self, reporter: ProgressReporter | None = None) -> None:
         """Sync the running state back to the Terraform state file."""

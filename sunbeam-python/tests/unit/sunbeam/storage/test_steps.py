@@ -7,10 +7,20 @@ from unittest.mock import Mock, patch
 import pydantic
 import pytest
 
+from sunbeam.clusterd.service import (
+    ConfigItemNotFoundException,
+    NodeNotExistInClusterException,
+)
+from sunbeam.core.common import ResultType
+from sunbeam.core.juju import ApplicationNotFoundException
 from sunbeam.core.questions import PasswordPromptQuestion, PromptQuestion
 from sunbeam.storage.models import SecretDictField
 from sunbeam.storage.steps import (
+    CheckStorageNodeRemovalStep,
     DeploySpecificCinderVolumeStep,
+    DestroySpecificCinderVolumeStep,
+    RemoveStorageMachineUnitsStep,
+    ValidateStoragePrerequisitesStep,
     basemodel_validator,
     generate_questions_from_config,
 )
@@ -356,3 +366,800 @@ class TestDeploySpecificCinderVolumeStep:
             ]
             is True
         )
+
+
+class TestDeploySpecificCinderVolumeStepIsSkip:
+    """Tests for DeploySpecificCinderVolumeStep.is_skip() lifecycle logic."""
+
+    @pytest.fixture
+    def ha_backend_instance(self):
+        """Mock HA storage backend instance."""
+        backend = Mock()
+        backend.principal_application = "cinder-volume"
+        backend.supports_ha = True
+        backend.snap_name = "cinder-volume"
+        backend.tfvar_config_key = "TerraformVarsStorageBackends"
+        return backend
+
+    @pytest.fixture
+    def noha_backend_instance(self):
+        """Mock non-HA storage backend instance."""
+        backend = Mock()
+        backend.principal_application = "cinder-volume-noha"
+        backend.supports_ha = False
+        backend.snap_name = "cinder-volume_noha"
+        backend.tfvar_config_key = "TerraformVarsStorageBackends"
+        return backend
+
+    @patch("sunbeam.storage.steps.read_config")
+    def test_ha_backend_does_not_skip_when_no_cinder_volume_entry(
+        self,
+        mock_read_config,
+        basic_deployment,
+        basic_client,
+        basic_tfhelper,
+        basic_jhelper,
+        basic_manifest,
+        test_model,
+        ha_backend_instance,
+        step_context,
+    ):
+        """HA backend should NOT skip deploy when no cinder-volume entry exists."""
+        basic_client.cluster.list_nodes_by_role.return_value = [{"machineid": "0"}]
+        mock_read_config.return_value = {"backends": {}, "cinder-volumes": {}}
+
+        step = DeploySpecificCinderVolumeStep(
+            basic_deployment,
+            basic_client,
+            basic_tfhelper,
+            basic_jhelper,
+            basic_manifest,
+            "test-backend",
+            ha_backend_instance,
+            test_model,
+        )
+
+        result = step.is_skip(step_context)
+        assert result.result_type == ResultType.COMPLETED
+
+    @patch("sunbeam.storage.steps.read_config")
+    def test_ha_backend_does_not_skip_when_config_not_found(
+        self,
+        mock_read_config,
+        basic_deployment,
+        basic_client,
+        basic_tfhelper,
+        basic_jhelper,
+        basic_manifest,
+        test_model,
+        ha_backend_instance,
+        step_context,
+    ):
+        """HA backend should NOT skip deploy when config key doesn't exist yet."""
+        basic_client.cluster.list_nodes_by_role.return_value = [{"machineid": "0"}]
+        mock_read_config.side_effect = ConfigItemNotFoundException("not found")
+
+        step = DeploySpecificCinderVolumeStep(
+            basic_deployment,
+            basic_client,
+            basic_tfhelper,
+            basic_jhelper,
+            basic_manifest,
+            "test-backend",
+            ha_backend_instance,
+            test_model,
+        )
+
+        result = step.is_skip(step_context)
+        assert result.result_type == ResultType.COMPLETED
+
+    @patch("sunbeam.storage.steps.read_config")
+    def test_ha_backend_skips_when_cinder_volume_entry_exists(
+        self,
+        mock_read_config,
+        basic_deployment,
+        basic_client,
+        basic_tfhelper,
+        basic_jhelper,
+        basic_manifest,
+        test_model,
+        ha_backend_instance,
+        step_context,
+    ):
+        """HA backend should skip deploy when cinder-volume entry already exists."""
+        basic_client.cluster.list_nodes_by_role.return_value = [{"machineid": "0"}]
+        mock_read_config.return_value = {
+            "backends": {},
+            "cinder-volumes": {
+                "cinder-volume": {
+                    "application_name": "cinder-volume",
+                    "machine_ids": ["0"],
+                }
+            },
+        }
+
+        step = DeploySpecificCinderVolumeStep(
+            basic_deployment,
+            basic_client,
+            basic_tfhelper,
+            basic_jhelper,
+            basic_manifest,
+            "test-backend",
+            ha_backend_instance,
+            test_model,
+        )
+
+        result = step.is_skip(step_context)
+        assert result.result_type == ResultType.SKIPPED
+
+    @patch("sunbeam.storage.steps.read_config")
+    def test_noha_backend_does_not_skip_when_no_cinder_volume_entry(
+        self,
+        mock_read_config,
+        basic_deployment,
+        basic_client,
+        basic_tfhelper,
+        basic_jhelper,
+        basic_manifest,
+        test_model,
+        noha_backend_instance,
+        step_context,
+    ):
+        """Non-HA backend should NOT skip when no cinder-volume entry exists."""
+        basic_client.cluster.list_nodes_by_role.return_value = [{"machineid": "0"}]
+        mock_read_config.return_value = {"backends": {}, "cinder-volumes": {}}
+
+        step = DeploySpecificCinderVolumeStep(
+            basic_deployment,
+            basic_client,
+            basic_tfhelper,
+            basic_jhelper,
+            basic_manifest,
+            "test-backend",
+            noha_backend_instance,
+            test_model,
+        )
+
+        result = step.is_skip(step_context)
+        assert result.result_type == ResultType.COMPLETED
+
+    def test_deploy_fails_when_no_storage_nodes(
+        self,
+        basic_deployment,
+        basic_client,
+        basic_tfhelper,
+        basic_jhelper,
+        basic_manifest,
+        test_model,
+        ha_backend_instance,
+        step_context,
+    ):
+        """Deploy should fail when no storage nodes are found."""
+        basic_client.cluster.list_nodes_by_role.return_value = []
+
+        step = DeploySpecificCinderVolumeStep(
+            basic_deployment,
+            basic_client,
+            basic_tfhelper,
+            basic_jhelper,
+            basic_manifest,
+            "test-backend",
+            ha_backend_instance,
+            test_model,
+        )
+
+        result = step.is_skip(step_context)
+        assert result.result_type == ResultType.FAILED
+
+
+class TestDeploySpecificCinderVolumeStepRunMachineIds:
+    """Tests for DeploySpecificCinderVolumeStep.run() machine ID selection."""
+
+    @pytest.fixture
+    def ha_backend_instance(self):
+        backend = Mock()
+        backend.principal_application = "cinder-volume"
+        backend.supports_ha = True
+        backend.snap_name = "cinder-volume"
+        backend.tfvar_config_key = "TerraformVarsStorageBackends"
+        return backend
+
+    @pytest.fixture
+    def noha_backend_instance(self):
+        backend = Mock()
+        backend.principal_application = "cinder-volume-noha"
+        backend.supports_ha = False
+        backend.snap_name = "cinder-volume_noha"
+        backend.tfvar_config_key = "TerraformVarsStorageBackends"
+        return backend
+
+    @patch("sunbeam.storage.steps.read_config")
+    @patch("sunbeam.storage.steps.get_optional_control_plane_offers")
+    @patch("sunbeam.storage.steps.get_mandatory_control_plane_offers")
+    def test_ha_deploy_uses_all_storage_node_machine_ids(
+        self,
+        mock_get_offers,
+        mock_get_optional_offers,
+        mock_read_config,
+        basic_deployment,
+        basic_client,
+        basic_tfhelper,
+        basic_jhelper,
+        basic_manifest,
+        test_model,
+        ha_backend_instance,
+        step_context,
+    ):
+        """HA deploy should use all storage node machine IDs."""
+        mock_read_config.return_value = {}
+        mock_get_offers.return_value = {
+            "keystone-offer-url": "keystone-url",
+            "amqp-offer-url": "amqp-url",
+            "database-offer-url": "database-url",
+        }
+        mock_get_optional_offers.return_value = {}
+        basic_client.cluster.list_nodes_by_role.return_value = [
+            {"machineid": "0"},
+            {"machineid": "1"},
+            {"machineid": "2"},
+        ]
+        basic_jhelper.get_model.return_value = {"model-uuid": "test-uuid"}
+        basic_jhelper.wait_application_ready = Mock()
+        basic_deployment.get_space.return_value = "test-space"
+        basic_deployment.get_tfhelper.return_value = Mock()
+
+        feature_manager = Mock()
+        feature_manager.is_feature_enabled.return_value = False
+        basic_deployment.get_feature_manager.return_value = feature_manager
+
+        mock_charm = Mock()
+        mock_charm.config = {}
+        mock_charm.channel = "2024.1/edge"
+        mock_charm.revision = 123
+        basic_manifest.core.software.charms = {"cinder-volume": mock_charm}
+
+        basic_tfhelper.update_tfvars_and_apply_tf = Mock()
+
+        step = DeploySpecificCinderVolumeStep(
+            basic_deployment,
+            basic_client,
+            basic_tfhelper,
+            basic_jhelper,
+            basic_manifest,
+            "test-backend",
+            ha_backend_instance,
+            test_model,
+        )
+
+        step.run(step_context)
+
+        call_args = basic_tfhelper.update_tfvars_and_apply_tf.call_args
+        tfvars = call_args[1]["override_tfvars"]
+        machine_ids = tfvars["cinder-volumes"]["cinder-volume"]["machine_ids"]
+        assert machine_ids == ["0", "1", "2"]
+
+    @patch("sunbeam.storage.steps.read_config")
+    @patch("sunbeam.storage.steps.get_optional_control_plane_offers")
+    @patch("sunbeam.storage.steps.get_mandatory_control_plane_offers")
+    def test_noha_deploy_uses_first_node_only(
+        self,
+        mock_get_offers,
+        mock_get_optional_offers,
+        mock_read_config,
+        basic_deployment,
+        basic_client,
+        basic_tfhelper,
+        basic_jhelper,
+        basic_manifest,
+        test_model,
+        noha_backend_instance,
+        step_context,
+    ):
+        """Non-HA deploy should use first storage node only."""
+        mock_read_config.return_value = {}
+        mock_get_offers.return_value = {
+            "keystone-offer-url": "keystone-url",
+            "amqp-offer-url": "amqp-url",
+            "database-offer-url": "database-url",
+        }
+        mock_get_optional_offers.return_value = {}
+        basic_client.cluster.list_nodes_by_role.return_value = [
+            {"machineid": "0"},
+            {"machineid": "1"},
+            {"machineid": "2"},
+        ]
+        basic_jhelper.get_model.return_value = {"model-uuid": "test-uuid"}
+        basic_jhelper.wait_application_ready = Mock()
+        basic_deployment.get_space.return_value = "test-space"
+        basic_deployment.get_tfhelper.return_value = Mock()
+
+        feature_manager = Mock()
+        feature_manager.is_feature_enabled.return_value = False
+        basic_deployment.get_feature_manager.return_value = feature_manager
+
+        mock_charm = Mock()
+        mock_charm.config = {}
+        mock_charm.channel = "2024.1/edge"
+        mock_charm.revision = 123
+        basic_manifest.core.software.charms = {"cinder-volume": mock_charm}
+
+        basic_tfhelper.update_tfvars_and_apply_tf = Mock()
+
+        step = DeploySpecificCinderVolumeStep(
+            basic_deployment,
+            basic_client,
+            basic_tfhelper,
+            basic_jhelper,
+            basic_manifest,
+            "test-backend",
+            noha_backend_instance,
+            test_model,
+        )
+
+        step.run(step_context)
+
+        call_args = basic_tfhelper.update_tfvars_and_apply_tf.call_args
+        tfvars = call_args[1]["override_tfvars"]
+        machine_ids = tfvars["cinder-volumes"]["cinder-volume-noha"]["machine_ids"]
+        assert machine_ids == ["0"]
+
+
+class TestDestroySpecificCinderVolumeStepIsSkip:
+    """Tests for DestroySpecificCinderVolumeStep.is_skip() lifecycle logic."""
+
+    @pytest.fixture
+    def ha_backend_instance(self):
+        backend = Mock()
+        backend.principal_application = "cinder-volume"
+        backend.supports_ha = True
+        backend.tfvar_config_key = "TerraformVarsStorageBackends"
+        return backend
+
+    @pytest.fixture
+    def noha_backend_instance(self):
+        backend = Mock()
+        backend.principal_application = "cinder-volume-noha"
+        backend.supports_ha = False
+        backend.tfvar_config_key = "TerraformVarsStorageBackends"
+        return backend
+
+    @patch("sunbeam.storage.steps.read_config")
+    def test_destroy_skips_when_another_ha_backend_uses_same_principal(
+        self,
+        mock_read_config,
+        basic_deployment,
+        basic_client,
+        basic_tfhelper,
+        basic_jhelper,
+        basic_manifest,
+        test_model,
+        ha_backend_instance,
+        step_context,
+    ):
+        """Destroy should skip when another backend still uses the same principal."""
+        mock_read_config.return_value = {
+            "backends": {
+                "backend-a": {"principal_application": "cinder-volume"},
+                "backend-b": {"principal_application": "cinder-volume"},
+            },
+            "cinder-volumes": {"cinder-volume": {"application_name": "cinder-volume"}},
+        }
+
+        step = DestroySpecificCinderVolumeStep(
+            basic_deployment,
+            basic_client,
+            basic_tfhelper,
+            basic_jhelper,
+            basic_manifest,
+            "backend-a",
+            ha_backend_instance,
+            test_model,
+        )
+
+        result = step.is_skip(step_context)
+        assert result.result_type == ResultType.SKIPPED
+
+    @patch("sunbeam.storage.steps.read_config")
+    def test_destroy_proceeds_when_no_other_backend_uses_principal(
+        self,
+        mock_read_config,
+        basic_deployment,
+        basic_client,
+        basic_tfhelper,
+        basic_jhelper,
+        basic_manifest,
+        test_model,
+        ha_backend_instance,
+        step_context,
+    ):
+        """Destroy should proceed when no other backend uses the principal."""
+        mock_read_config.return_value = {
+            "backends": {
+                "backend-a": {"principal_application": "cinder-volume"},
+            },
+            "cinder-volumes": {"cinder-volume": {"application_name": "cinder-volume"}},
+        }
+
+        step = DestroySpecificCinderVolumeStep(
+            basic_deployment,
+            basic_client,
+            basic_tfhelper,
+            basic_jhelper,
+            basic_manifest,
+            "backend-a",
+            ha_backend_instance,
+            test_model,
+        )
+
+        result = step.is_skip(step_context)
+        assert result.result_type == ResultType.COMPLETED
+
+    @patch("sunbeam.storage.steps.read_config")
+    def test_destroy_skips_when_principal_entry_not_in_cinder_volumes(
+        self,
+        mock_read_config,
+        basic_deployment,
+        basic_client,
+        basic_tfhelper,
+        basic_jhelper,
+        basic_manifest,
+        test_model,
+        ha_backend_instance,
+        step_context,
+    ):
+        """Destroy should skip when principal entry doesn't exist in tfvars."""
+        mock_read_config.return_value = {
+            "backends": {
+                "backend-a": {"principal_application": "cinder-volume"},
+            },
+            "cinder-volumes": {},
+        }
+
+        step = DestroySpecificCinderVolumeStep(
+            basic_deployment,
+            basic_client,
+            basic_tfhelper,
+            basic_jhelper,
+            basic_manifest,
+            "backend-a",
+            ha_backend_instance,
+            test_model,
+        )
+
+        result = step.is_skip(step_context)
+        assert result.result_type == ResultType.SKIPPED
+
+    @patch("sunbeam.storage.steps.read_config")
+    def test_destroy_skips_when_config_not_found(
+        self,
+        mock_read_config,
+        basic_deployment,
+        basic_client,
+        basic_tfhelper,
+        basic_jhelper,
+        basic_manifest,
+        test_model,
+        ha_backend_instance,
+        step_context,
+    ):
+        """Destroy should skip when config doesn't exist (nothing deployed)."""
+        mock_read_config.side_effect = ConfigItemNotFoundException("not found")
+
+        step = DestroySpecificCinderVolumeStep(
+            basic_deployment,
+            basic_client,
+            basic_tfhelper,
+            basic_jhelper,
+            basic_manifest,
+            "backend-a",
+            ha_backend_instance,
+            test_model,
+        )
+
+        result = step.is_skip(step_context)
+        assert result.result_type == ResultType.SKIPPED
+
+    @patch("sunbeam.storage.steps.read_config")
+    def test_destroy_noha_proceeds_when_only_backend(
+        self,
+        mock_read_config,
+        basic_deployment,
+        basic_client,
+        basic_tfhelper,
+        basic_jhelper,
+        basic_manifest,
+        test_model,
+        noha_backend_instance,
+        step_context,
+    ):
+        """Non-HA destroy should proceed when it is the only backend."""
+        mock_read_config.return_value = {
+            "backends": {
+                "backend-noha": {"principal_application": "cinder-volume-noha"},
+            },
+            "cinder-volumes": {
+                "cinder-volume-noha": {"application_name": "cinder-volume-noha"}
+            },
+        }
+
+        step = DestroySpecificCinderVolumeStep(
+            basic_deployment,
+            basic_client,
+            basic_tfhelper,
+            basic_jhelper,
+            basic_manifest,
+            "backend-noha",
+            noha_backend_instance,
+            test_model,
+        )
+
+        result = step.is_skip(step_context)
+        assert result.result_type == ResultType.COMPLETED
+
+
+class TestValidateStoragePrerequisitesStep:
+    """Tests for ValidateStoragePrerequisitesStep."""
+
+    @pytest.fixture
+    def validate_step(self, basic_deployment, basic_client, basic_jhelper):
+        """Create ValidateStoragePrerequisitesStep instance for testing."""
+        basic_deployment.openstack_machines_model = "openstack-machines"
+        return ValidateStoragePrerequisitesStep(
+            basic_deployment,
+            basic_client,
+            basic_jhelper,
+        )
+
+    def test_succeeds_without_cinder_volume_app(
+        self,
+        validate_step,
+        basic_client,
+        basic_jhelper,
+        step_context,
+    ):
+        """Step should succeed when cinder-volume app does not exist.
+
+        As long as Juju auth, bootstrap, model, and storage nodes are OK,
+        the absence of a cinder-volume application must not cause failure.
+        """
+        # Juju auth succeeds
+        basic_jhelper.models.return_value = ["openstack-machines"]
+
+        # Sunbeam bootstrapped
+        basic_client.cluster.check_sunbeam_bootstrapped.return_value = True
+
+        # OpenStack model exists
+        basic_jhelper.model_exists.return_value = True
+
+        # Storage nodes are deployed
+        basic_client.cluster.list_nodes_by_role.return_value = [
+            {"machineid": "0"},
+            {"machineid": "1"},
+        ]
+
+        # No cinder-volume application present (this must NOT cause failure)
+        basic_jhelper.get_application.side_effect = Exception(
+            "application cinder-volume not found"
+        )
+
+        result = validate_step.run(step_context)
+        assert result.result_type == ResultType.COMPLETED
+
+    def test_fails_when_not_bootstrapped(
+        self,
+        validate_step,
+        basic_client,
+        basic_jhelper,
+        step_context,
+    ):
+        """Step should fail when Sunbeam is not bootstrapped."""
+        basic_jhelper.models.return_value = ["openstack-machines"]
+        basic_client.cluster.check_sunbeam_bootstrapped.return_value = False
+
+        result = validate_step.run(step_context)
+        assert result.result_type == ResultType.FAILED
+
+    def test_fails_when_no_storage_nodes(
+        self,
+        validate_step,
+        basic_client,
+        basic_jhelper,
+        step_context,
+    ):
+        """Step should fail when no storage nodes exist."""
+        basic_jhelper.models.return_value = ["openstack-machines"]
+        basic_client.cluster.check_sunbeam_bootstrapped.return_value = True
+        basic_jhelper.model_exists.return_value = True
+        basic_client.cluster.list_nodes_by_role.return_value = []
+
+        result = validate_step.run(step_context)
+        assert result.result_type == ResultType.FAILED
+
+    def test_fails_when_model_does_not_exist(
+        self,
+        validate_step,
+        basic_client,
+        basic_jhelper,
+        step_context,
+    ):
+        """Step should fail when OpenStack model does not exist."""
+        basic_jhelper.models.return_value = ["openstack-machines"]
+        basic_client.cluster.check_sunbeam_bootstrapped.return_value = True
+        basic_jhelper.model_exists.return_value = False
+
+        result = validate_step.run(step_context)
+        assert result.result_type == ResultType.FAILED
+
+
+class TestCheckStorageNodeRemovalStep:
+    """Tests for CheckStorageNodeRemovalStep."""
+
+    @pytest.fixture
+    def make_step(self, basic_client, basic_jhelper):
+        """Factory for creating CheckStorageNodeRemovalStep with defaults."""
+
+        def _make(force=False, node_name="node-0", model="openstack-machines"):
+            return CheckStorageNodeRemovalStep(
+                basic_client, node_name, basic_jhelper, model, force=force
+            )
+
+        return _make
+
+    def test_skips_for_non_storage_node(self, make_step, basic_client, step_context):
+        """Step should skip when the departing node is not a storage node."""
+        basic_client.cluster.get_node_info.return_value = {
+            "name": "node-0",
+            "role": "control",
+            "machineid": "0",
+        }
+
+        step = make_step()
+        result = step.is_skip(step_context)
+        assert result.result_type == ResultType.SKIPPED
+
+    def test_skips_when_node_not_found(self, make_step, basic_client, step_context):
+        """Step should skip when the node does not exist in the cluster."""
+        basic_client.cluster.get_node_info.side_effect = NodeNotExistInClusterException(
+            "not found"
+        )
+
+        step = make_step()
+        result = step.is_skip(step_context)
+        assert result.result_type == ResultType.SKIPPED
+
+    def test_skips_when_cinder_volume_not_deployed(
+        self, make_step, basic_client, basic_jhelper, step_context
+    ):
+        """Step should skip when cinder-volume app does not exist."""
+        basic_client.cluster.get_node_info.return_value = {
+            "name": "node-0",
+            "role": "storage",
+            "machineid": "0",
+        }
+        basic_jhelper.get_application.side_effect = ApplicationNotFoundException(
+            "not found"
+        )
+
+        step = make_step()
+        result = step.is_skip(step_context)
+        assert result.result_type == ResultType.SKIPPED
+
+    def test_skips_when_no_cinder_volume_unit_on_node(
+        self, make_step, basic_client, basic_jhelper, step_context
+    ):
+        """Step should skip when the node has no cinder-volume units."""
+        basic_client.cluster.get_node_info.return_value = {
+            "name": "node-0",
+            "role": "storage",
+            "machineid": "0",
+        }
+
+        # cinder-volume app exists but units are on different machines
+        mock_app = Mock()
+        mock_unit = Mock()
+        mock_unit.machine = "99"
+        mock_app.units = {"cinder-volume/0": mock_unit}
+        basic_jhelper.get_application.return_value = mock_app
+
+        step = make_step()
+        result = step.is_skip(step_context)
+        assert result.result_type == ResultType.SKIPPED
+
+    def test_proceeds_when_node_hosts_cinder_volume(
+        self, make_step, basic_client, basic_jhelper, step_context
+    ):
+        """Step should NOT skip when the node hosts a cinder-volume unit."""
+        basic_client.cluster.get_node_info.return_value = {
+            "name": "node-0",
+            "role": "storage",
+            "machineid": "0",
+        }
+
+        mock_app = Mock()
+        mock_unit = Mock()
+        mock_unit.machine = "0"
+        mock_app.units = {"cinder-volume/0": mock_unit}
+        basic_jhelper.get_application.return_value = mock_app
+
+        step = make_step()
+        result = step.is_skip(step_context)
+        assert result.result_type == ResultType.COMPLETED
+
+    def test_fails_when_last_storage_node_without_force(
+        self, make_step, basic_client, step_context
+    ):
+        """Removing the last storage node should fail without --force."""
+        basic_client.cluster.list_nodes_by_role.return_value = [
+            {"name": "node-0", "machineid": "0"}
+        ]
+
+        step = make_step(force=False)
+        result = step.run(step_context)
+        assert result.result_type == ResultType.FAILED
+        assert "Cannot remove the last storage node" in result.message
+
+    def test_succeeds_with_force_on_last_node(
+        self, make_step, basic_client, step_context
+    ):
+        """Removing the last storage node should succeed with --force."""
+        basic_client.cluster.list_nodes_by_role.return_value = [
+            {"name": "node-0", "machineid": "0"}
+        ]
+
+        step = make_step(force=True)
+        result = step.run(step_context)
+        assert result.result_type == ResultType.COMPLETED
+
+    def test_succeeds_when_multiple_storage_nodes(
+        self, make_step, basic_client, step_context
+    ):
+        """Removing a storage node should succeed when others remain."""
+        basic_client.cluster.list_nodes_by_role.return_value = [
+            {"name": "node-0", "machineid": "0"},
+            {"name": "node-1", "machineid": "1"},
+        ]
+
+        step = make_step(force=False)
+        result = step.run(step_context)
+        assert result.result_type == ResultType.COMPLETED
+
+
+class TestRemoveStorageMachineUnitsStep:
+    """Tests for RemoveStorageMachineUnitsStep."""
+
+    def test_inherits_remove_machine_units_step(self):
+        """Step should inherit from RemoveMachineUnitsStep."""
+        from sunbeam.core.steps import RemoveMachineUnitsStep
+
+        assert issubclass(RemoveStorageMachineUnitsStep, RemoveMachineUnitsStep)
+
+    def test_constructor_sets_application(self, basic_client, basic_jhelper):
+        """Step should target cinder-volume application."""
+        step = RemoveStorageMachineUnitsStep(
+            basic_client, "node-0", basic_jhelper, "openstack-machines"
+        )
+        assert step.application == "cinder-volume"
+
+    def test_unit_timeout(self, basic_client, basic_jhelper):
+        """Step should use 30-minute timeout."""
+        step = RemoveStorageMachineUnitsStep(
+            basic_client, "node-0", basic_jhelper, "openstack-machines"
+        )
+        assert step.get_unit_timeout() == 1800
+
+    def test_skips_when_cinder_volume_not_deployed(
+        self, basic_client, basic_jhelper, step_context
+    ):
+        """Step should skip when cinder-volume application does not exist."""
+        basic_client.cluster.list_nodes.return_value = [
+            {"name": "node-0", "machineid": "0"}
+        ]
+        basic_jhelper.get_application.side_effect = ApplicationNotFoundException(
+            "not found"
+        )
+
+        step = RemoveStorageMachineUnitsStep(
+            basic_client, "node-0", basic_jhelper, "openstack-machines"
+        )
+        result = step.is_skip(step_context)
+        assert result.result_type == ResultType.SKIPPED
