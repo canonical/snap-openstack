@@ -412,7 +412,10 @@ class TestInfinidatBuildTerraformVars:
     def test_channel_override_preserves_other_defaults(
         self, infinidat_backend, mock_deployment, sample_config
     ):
-        """Channel override via standard manifest field works, other fields stay default."""
+        """Channel override via standard manifest field works.
+
+        Other fields stay default.
+        """
         manifest = self._make_manifest(channel="stable")
         result = infinidat_backend.build_terraform_vars(
             mock_deployment, manifest, "my-backend", sample_config
@@ -426,7 +429,10 @@ class TestInfinidatBuildTerraformVars:
     def test_revision_override_preserves_other_defaults(
         self, infinidat_backend, mock_deployment, sample_config
     ):
-        """Revision override via standard manifest field works, other fields stay default."""
+        """Revision override via standard manifest field works.
+
+        Other fields stay default.
+        """
         manifest = self._make_manifest(revision=42)
         result = infinidat_backend.build_terraform_vars(
             mock_deployment, manifest, "my-backend", sample_config

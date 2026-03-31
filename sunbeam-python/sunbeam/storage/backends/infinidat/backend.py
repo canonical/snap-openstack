@@ -4,12 +4,11 @@
 """Infinidat InfiniBox storage backend implementation using base step classes."""
 
 import logging
-from typing import Annotated, Any, Literal
+from typing import Annotated, Literal
 
 from pydantic import Field
 
-from sunbeam.core.deployment import Deployment
-from sunbeam.core.manifest import Manifest, StorageBackendConfig
+from sunbeam.core.manifest import StorageBackendConfig
 from sunbeam.storage.base import StorageBackendBase
 from sunbeam.storage.models import SecretDictField
 
