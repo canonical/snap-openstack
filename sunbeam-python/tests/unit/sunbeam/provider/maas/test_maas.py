@@ -1562,7 +1562,7 @@ class TestMaasDeployK8SApplicationStep:
             "k8s_config": {
                 "cluster-annotations": (
                     "k8sd/v1alpha1/cilium/devices="
-                    "!br-ex,!br-int,!br-phys+,br+,bond+,eth+,eno+,ens+,enp+,em+,vlan+"
+                    "!br-ex,!br-int,!br-phys+,br-bond+,bond+,eth+,eno+,ens+,enp+,em+,vlan+"
                 ),
                 "load-balancer-cidrs": "10.0.0.0/28",
                 "load-balancer-enabled": True,

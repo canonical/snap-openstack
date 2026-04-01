@@ -109,7 +109,7 @@ CILIUM_DEVICES_ANNOTATION_DEFAULT = ",".join(
         "!br-ex",
         "!br-int",
         "!br-phys+",
-        "br+",
+        "br-bond+",
         "bond+",
         "eth+",
         "eno+",
