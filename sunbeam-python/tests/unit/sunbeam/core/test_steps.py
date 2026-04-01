@@ -87,7 +87,6 @@ class TestDeployMachineApplicationStep:
             tfvar_config=tfconfig,
             override_tfvars={
                 "machine_ids": machines,
-                "machine_model": model,
                 "machine_model_uuid": "model-uuid",
             },
             tf_apply_extra_args=[],

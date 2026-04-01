@@ -377,10 +377,6 @@ class ReapplyHypervisorTerraformPlanStep(BaseStep):
     def run(self, context: StepContext) -> Result:
         """Apply terraform configuration to deploy hypervisor."""
         # Refresh model related variables
-        self.extra_tfvars["machine_model"] = self.model
-        self.extra_tfvars["machine_model_owner"] = self.jhelper.get_model_owner(
-            self.model
-        )
         self.extra_tfvars["machine_model_uuid"] = self.jhelper.get_model_uuid(
             self.model
         )
