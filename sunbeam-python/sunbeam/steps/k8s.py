@@ -104,7 +104,21 @@ K8S_UNIT_TIMEOUT = 1800  # 30 minutes, adding / removing units can take a long t
 K8S_ENABLE_ADDONS_TIMEOUT = 300  # 5 minutes
 K8SD_SNAP_SOCKET = "/var/snap/k8s/common/var/lib/k8sd/state/control.socket"
 CILIUM_DEVICES_ANNOTATION_KEY = "k8sd/v1alpha1/cilium/devices"
-CILIUM_DEVICES_ANNOTATION_DEFAULT = "br+,bond+,eth+,eno+,ens+,enp+,em+,vlan+"
+CILIUM_DEVICES_ANNOTATION_DEFAULT = ",".join(
+    (
+        "!br-ex",
+        "!br-int",
+        "!br-phys+",
+        "br-bond+",
+        "bond+",
+        "eth+",
+        "eno+",
+        "ens+",
+        "enp+",
+        "em+",
+        "vlan+",
+    )
+)
 
 COREDNS_HPA = {
     "enabled": True,
