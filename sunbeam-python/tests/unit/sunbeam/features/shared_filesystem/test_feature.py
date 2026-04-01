@@ -82,6 +82,7 @@ class TestSharedFilesystemFeature:
     @patch.object(manila_feature, "click", Mock())
     def test_run_disable_plans(self, mock_JujuHelper, deployment):
         jhelper = mock_JujuHelper.return_value
+        jhelper.get_model_uuid.return_value = "model-uuid"
         tfhelper = deployment.get_tfhelper.return_value
         tfhelper.state_list.return_value = []
         manila = manila_feature.SharedFilesystemFeature()
@@ -96,8 +97,8 @@ class TestSharedFilesystemFeature:
             deployment.get_client.return_value,
             manila._manifest,
             tfvar_config=manila_data.CONFIG_KEY,
-            override_tfvars={"machine_model": "foo"},
-            tf_apply_extra_args=["-input=false", "-destroy"],
+            override_tfvars={"machine_model_uuid": "model-uuid"},
+            tf_apply_extra_args=["-destroy"],
             reporter=ANY,
         )
         jhelper.wait_application_gone.assert_any_call(

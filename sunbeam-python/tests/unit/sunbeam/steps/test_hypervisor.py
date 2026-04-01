@@ -451,7 +451,7 @@ class TestReapplyHypervisorTerraformPlanStep:
 
         basic_tfhelper.update_tfvars_and_apply_tf.assert_called_once()
 
-        expected_override_tfvars = {"charm_config": {}}
+        expected_override_tfvars: dict = {"charm_config": {}}
         expected_override_tfvars["charm_config"].update(network_config_tfvars)
         expected_override_tfvars["charm_config"].update(pci_config_tfvars)
         expected_override_tfvars["charm_config"].update(dpdk_config_tfvars)
@@ -461,9 +461,6 @@ class TestReapplyHypervisorTerraformPlanStep:
                 "override_tfvars", {}
             )
         )
-        # expected extra model fields populated by the step
-        expected_override_tfvars["machine_model"] = "test-model"
-        expected_override_tfvars["machine_model_owner"] = "test-owner"
         expected_override_tfvars["machine_model_uuid"] = "test-uuid"
 
         assert override_tfvars_from_mock_call == expected_override_tfvars

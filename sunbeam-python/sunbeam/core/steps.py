@@ -112,7 +112,6 @@ class DeployMachineApplicationStep(BaseStep):
             extra_tfvars = self.extra_tfvars()
 
             # Add Juju model details
-            extra_tfvars["machine_model"] = self.model
             extra_tfvars["machine_model_uuid"] = self.jhelper.get_model_uuid(self.model)
 
             if "machine_ids" not in extra_tfvars:
@@ -343,9 +342,9 @@ class DestroyMachineApplicationStep(BaseStep):
                     self.manifest,
                     tfvar_config=self.config,
                     override_tfvars={
-                        "machine_model": self.model,
+                        "machine_model_uuid": self.jhelper.get_model_uuid(self.model),
                     },
-                    tf_apply_extra_args=["-input=false", "-destroy"],
+                    tf_apply_extra_args=["-destroy"],
                     reporter=context.reporter,
                 )
             except TerraformException as e:
