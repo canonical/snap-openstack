@@ -31,18 +31,25 @@ def deployment():
     return deploy
 
 
+@pytest.mark.parametrize(
+    "db_topology, expected_extra_masakari_apps",
+    [
+        ("single", ["masakari", "masakari-mysql-router"]),
+        ("multi", ["masakari", "masakari-mysql-router", "masakari-mysql"]),
+    ],
+)
 @patch("sunbeam.features.instance_recovery.feature.JujuHelper")
 @patch("sunbeam.features.instance_recovery.feature.RemoveSaasApplicationsStep")
 @patch("sunbeam.features.instance_recovery.feature.run_plan")
 @patch("sunbeam.features.instance_recovery.consul.ConsulFeature.set_application_names")
-@patch.object(InstanceRecoveryFeature, "get_database_topology", return_value="single")
 def test_disable_purges_consul_and_masakari_saas_apps(
-    mock_get_database_topology,
     mock_consul_app_names,
     mock_run_plan,
     mock_remove_saas,
     _mock_jhelper_class,
     deployment,
+    db_topology,
+    expected_extra_masakari_apps,
 ):
     consul_apps = [
         "consul-management",
@@ -53,11 +60,18 @@ def test_disable_purges_consul_and_masakari_saas_apps(
     mock_jhelper = Mock()
     _mock_jhelper_class.return_value = mock_jhelper
 
-    feature = InstanceRecoveryFeature()
-    feature._manifest = Mock()
-    feature.run_disable_plans(deployment, show_hints=False)
+    with patch.object(
+        InstanceRecoveryFeature,
+        "get_database_topology",
+        return_value=db_topology,
+    ) as mock_get_database_topology:
+        feature = InstanceRecoveryFeature()
+        feature._manifest = Mock()
+        feature.run_disable_plans(deployment, show_hints=False)
 
-    expected_saas_apps = consul_apps + ["masakari", "masakari-mysql-router"]
+        mock_get_database_topology.assert_called_once_with(deployment)
+
+    expected_saas_apps = consul_apps + expected_extra_masakari_apps
 
     assert mock_run_plan.call_count == 1
 
@@ -69,5 +83,3 @@ def test_disable_purges_consul_and_masakari_saas_apps(
     assert mock_remove_saas.call_args.args[0] == mock_jhelper
     assert mock_remove_saas.call_args.args[1] == "openstack-machines"
     assert mock_remove_saas.call_args.args[2] == OPENSTACK_MODEL
-
-    mock_get_database_topology.assert_called_once_with(deployment)
