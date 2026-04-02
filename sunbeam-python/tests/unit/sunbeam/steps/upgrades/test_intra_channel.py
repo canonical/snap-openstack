@@ -12,7 +12,6 @@ from sunbeam.core.juju import (
 )
 from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.steps.k8s import (
-    EnsureCiliumOnCorrectSpaceStep,
     EnsureDefaultL2AdvertisementMutedStep,
 )
 from sunbeam.steps.openstack import OpenStackPatchLoadBalancerServicesIPPoolStep
@@ -874,45 +873,6 @@ class TestLatestInChannelCoordinator:
         assert EnsureDefaultL2AdvertisementMutedStep in step_types
         # MaasDeployK8SApplicationStep was called; its return value is in the plan
         assert mock_maas_deploy_k8s_cls.return_value in plan
-
-    @patch(f"{_INTRA_CHANNEL}.is_maas_deployment")
-    def test_get_plan_maas_includes_cilium_step(self, mock_is_maas):
-        """MAAS refresh plan must include EnsureCiliumOnCorrectSpaceStep."""
-        mock_is_maas.return_value = True
-        self.deployment.public_api_label = "test-public-api"
-
-        mock_maas_client_module = Mock()
-        mock_maas_client_module.MaasClient.from_deployment.return_value = Mock()
-        mock_maas_steps_module = Mock()
-        mock_maas_steps_module.MaasDeployK8SApplicationStep = Mock()
-
-        with patch.dict(
-            sys.modules,
-            {
-                "sunbeam.provider.maas.client": mock_maas_client_module,
-                "sunbeam.provider.maas.steps": mock_maas_steps_module,
-            },
-        ):
-            coordinator = LatestInChannelCoordinator(
-                self.deployment, self.client, self.jhelper, self.manifest
-            )
-            plan = coordinator.get_plan()
-
-        step_types = [type(step) for step in plan]
-        assert EnsureCiliumOnCorrectSpaceStep in step_types
-
-    @patch(f"{_INTRA_CHANNEL}.is_maas_deployment")
-    def test_get_plan_local_includes_cilium_step(self, mock_is_maas):
-        """Local refresh plan must include EnsureCiliumOnCorrectSpaceStep."""
-        mock_is_maas.return_value = False
-
-        coordinator = LatestInChannelCoordinator(
-            self.deployment, self.client, self.jhelper, self.manifest
-        )
-        plan = coordinator.get_plan()
-
-        step_types = [type(step) for step in plan]
-        assert EnsureCiliumOnCorrectSpaceStep in step_types
 
     @patch(f"{_INTRA_CHANNEL}.is_maas_deployment")
     def test_get_plan_always_includes_core_steps(self, mock_is_maas):

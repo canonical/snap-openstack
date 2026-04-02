@@ -13,8 +13,7 @@ import tenacity
 from lightkube import ApiError
 
 from sunbeam.clusterd.service import ConfigItemNotFoundException
-from sunbeam.core.common import ResultType, SunbeamException
-from sunbeam.core.deployment import Networks
+from sunbeam.core.common import ResultType
 from sunbeam.core.juju import (
     ActionFailedException,
     ApplicationNotFoundException,
@@ -23,14 +22,10 @@ from sunbeam.core.juju import (
     MachineNotFoundException,
 )
 from sunbeam.steps.k8s import (
-    CILIUM_DEVICES_ANNOTATION_DEFAULT,
-    CILIUM_DEVICES_ANNOTATION_KEY,
     CREDENTIAL_SUFFIX,
     K8S_CLOUD_SUFFIX,
     AddK8SCloudStep,
     AddK8SCredentialStep,
-    DeployK8SApplicationStep,
-    EnsureCiliumOnCorrectSpaceStep,
     EnsureDefaultL2AdvertisementMutedStep,
     EnsureK8SUnitsTaggedStep,
     EnsureL2AdvertisementByHostStep,
@@ -65,13 +60,7 @@ def deployment_with_space():
     """Deployment mock with space configuration."""
     deployment = Mock()
     deployment.name = "test-deployment"
-
-    def get_space(network):
-        if network == Networks.INTERNAL:
-            return "internal"
-        return "management"
-
-    deployment.get_space.side_effect = get_space
+    deployment.get_space.return_value = "management"
     return deployment
 
 
@@ -908,12 +897,12 @@ class TestEnsureK8SUnitsTaggedStep:
         jhelper.get_machines.return_value = {
             "1": Mock(
                 network_interfaces={
-                    "eth0": Mock(space="internal", ip_addresses=["10.0.0.1"])
+                    "eth0": Mock(space="management", ip_addresses=["10.0.0.1"])
                 }
             ),
             "2": Mock(
                 network_interfaces={
-                    "eth0": Mock(space="internal", ip_addresses=["10.0.0.2"])
+                    "eth0": Mock(space="management", ip_addresses=["10.0.0.2"])
                 }
             ),
         }
@@ -940,12 +929,12 @@ class TestEnsureK8SUnitsTaggedStep:
         jhelper.get_machines.return_value = {
             "1": Mock(
                 network_interfaces={
-                    "eth0": Mock(space="internal", ip_addresses=["10.0.0.1"])
+                    "eth0": Mock(space="management", ip_addresses=["10.0.0.1"])
                 }
             ),
             "2": Mock(
                 network_interfaces={
-                    "eth0": Mock(space="internal", ip_addresses=["10.0.0.2"])
+                    "eth0": Mock(space="management", ip_addresses=["10.0.0.2"])
                 }
             ),
         }
@@ -975,12 +964,12 @@ class TestEnsureK8SUnitsTaggedStep:
         jhelper.get_machines.return_value = {
             "1": Mock(
                 network_interfaces={
-                    "eth0": Mock(space="internal", ip_addresses=["10.0.0.1"])
+                    "eth0": Mock(space="management", ip_addresses=["10.0.0.1"])
                 }
             ),
             "2": Mock(
                 network_interfaces={
-                    "eth0": Mock(space="internal", ip_addresses=["10.0.0.2"])
+                    "eth0": Mock(space="management", ip_addresses=["10.0.0.2"])
                 }
             ),
         }
@@ -1004,12 +993,12 @@ class TestEnsureK8SUnitsTaggedStep:
         jhelper.get_machines.return_value = {
             "1": Mock(
                 network_interfaces={
-                    "eth0": Mock(space="internal", ip_addresses=["10.0.0.1"])
+                    "eth0": Mock(space="management", ip_addresses=["10.0.0.1"])
                 }
             ),
             "2": Mock(
                 network_interfaces={
-                    "eth0": Mock(space="internal", ip_addresses=["10.0.0.2"])
+                    "eth0": Mock(space="management", ip_addresses=["10.0.0.2"])
                 }
             ),
         }
@@ -1064,172 +1053,6 @@ class TestEnsureK8SUnitsTaggedStep:
             result = step.run(None)
         step.kube.apply.assert_called_once()
         assert result.result_type == ResultType.FAILED
-
-
-class TestDeployK8SApplicationStep:
-    @pytest.fixture
-    def deployment(self, deployment_with_space):
-        deployment_with_space.openstack_machines_model = "test-model"
-        return deployment_with_space
-
-    @pytest.fixture
-    def client(self, basic_client):
-        return basic_client
-
-    @pytest.fixture
-    def jhelper(self, basic_jhelper):
-        return basic_jhelper
-
-    @pytest.fixture
-    def manifest(self, basic_manifest):
-        basic_manifest.core.software.charms.get.return_value = None
-        return basic_manifest
-
-    @pytest.fixture
-    def step(self, deployment, client, jhelper, manifest):
-        tfhelper = Mock()
-        step = DeployK8SApplicationStep(
-            deployment,
-            client,
-            tfhelper,
-            jhelper,
-            manifest,
-            "test-model",
-        )
-        step.client = client
-        client.cluster.get_config.return_value = "{}"
-        return step
-
-    def test_extra_tfvars(self, step):
-        tfvars = step.extra_tfvars()
-        assert tfvars["endpoint_bindings"] == [
-            {"space": "management"},
-            {"endpoint": "cluster", "space": "internal"},
-        ]
-
-    def test_get_k8s_config_tfvars_default(self, step):
-        config = step._get_k8s_config_tfvars()
-        expected_annotation = (
-            CILIUM_DEVICES_ANNOTATION_KEY + "=" + CILIUM_DEVICES_ANNOTATION_DEFAULT
-        )
-        assert config["cluster-annotations"] == expected_annotation
-        assert config["load-balancer-enabled"] is True
-        assert config["load-balancer-l2-mode"] is True
-
-    def test_get_k8s_config_tfvars_manifest_override(self, step, manifest):
-        charm_manifest = Mock()
-        charm_manifest.config = {
-            "cluster-annotations": "k8sd/v1alpha1/cilium/devices=custom-device+",
-        }
-        manifest.core.software.charms.get.return_value = charm_manifest
-        config = step._get_k8s_config_tfvars()
-        assert (
-            config["cluster-annotations"]
-            == "k8sd/v1alpha1/cilium/devices=custom-device+"
-        )
-
-    def test_get_k8s_config_tfvars_manifest_override_space_separated_rejected(
-        self, step, manifest
-    ):
-        from sunbeam.core.common import SunbeamException
-
-        charm_manifest = Mock()
-        charm_manifest.config = {
-            "cluster-annotations": "k8sd/v1alpha1/cilium/devices=br+ bond+",
-        }
-        manifest.core.software.charms.get.return_value = charm_manifest
-        with pytest.raises(SunbeamException, match="comma-separated"):
-            step._get_k8s_config_tfvars()
-
-    def test_get_k8s_config_tfvars_manifest_override_multi_annotation(
-        self, step, manifest
-    ):
-        charm_manifest = Mock()
-        charm_manifest.config = {
-            "cluster-annotations": (
-                "k8sd/v1alpha1/cilium/devices=br+,bond+ other/key=value"
-            ),
-        }
-        manifest.core.software.charms.get.return_value = charm_manifest
-        config = step._get_k8s_config_tfvars()
-        assert (
-            config["cluster-annotations"]
-            == "k8sd/v1alpha1/cilium/devices=br+,bond+ other/key=value"
-        )
-
-    def test_get_k8s_config_tfvars_manifest_override_cilium_not_first(
-        self, step, manifest
-    ):
-        charm_manifest = Mock()
-        charm_manifest.config = {
-            "cluster-annotations": (
-                "other/key=value k8sd/v1alpha1/cilium/devices=br+,bond+"
-            ),
-        }
-        manifest.core.software.charms.get.return_value = charm_manifest
-        config = step._get_k8s_config_tfvars()
-        assert (
-            config["cluster-annotations"]
-            == "other/key=value k8sd/v1alpha1/cilium/devices=br+,bond+"
-        )
-
-    def test_get_k8s_config_tfvars_manifest_override_space_sep_with_trailing_annotation(
-        self, step, manifest
-    ):
-        from sunbeam.core.common import SunbeamException
-
-        charm_manifest = Mock()
-        charm_manifest.config = {
-            "cluster-annotations": (
-                "k8sd/v1alpha1/cilium/devices=br+ bond+ other/key=value"
-            ),
-        }
-        manifest.core.software.charms.get.return_value = charm_manifest
-        with pytest.raises(SunbeamException, match="comma-separated"):
-            step._get_k8s_config_tfvars()
-
-    def test_get_k8s_config_tfvars_manifest_override_no_cilium_key(
-        self, step, manifest
-    ):
-        charm_manifest = Mock()
-        charm_manifest.config = {
-            "cluster-annotations": "some/other=annotation",
-        }
-        manifest.core.software.charms.get.return_value = charm_manifest
-        config = step._get_k8s_config_tfvars()
-        assert config["cluster-annotations"] == "some/other=annotation"
-
-    def test_get_k8s_config_tfvars_manifest_override_empty(self, step, manifest):
-        charm_manifest = Mock()
-        charm_manifest.config = {
-            "cluster-annotations": "",
-        }
-        manifest.core.software.charms.get.return_value = charm_manifest
-        config = step._get_k8s_config_tfvars()
-        assert config["cluster-annotations"] == ""
-
-    def test_is_skip_valid(self, step, step_context):
-        result = step.is_skip(step_context)
-        assert result.result_type == ResultType.COMPLETED
-
-    def test_is_skip_invalid_annotations(self, step, manifest, step_context):
-        charm_manifest = Mock()
-        charm_manifest.config = {
-            "cluster-annotations": "k8sd/v1alpha1/cilium/devices=br+ bond+",
-        }
-        manifest.core.software.charms.get.return_value = charm_manifest
-        result = step.is_skip(step_context)
-        assert result.result_type == ResultType.FAILED
-        assert "comma-separated" in result.message
-
-    def test_get_k8s_config_tfvars_with_lb_range(self, step):
-        step._get_loadbalancer_range = Mock(return_value="10.0.0.0/28")
-        config = step._get_k8s_config_tfvars()
-        assert config["load-balancer-cidrs"] == "10.0.0.0/28"
-
-    def test_get_k8s_config_tfvars_with_node_labels(self, step):
-        config = step._get_k8s_config_tfvars()
-        assert "sunbeam/deployment=" in config["node-labels"]
 
 
 class TestGetKubeClient:
@@ -1615,182 +1438,3 @@ class TestPatchServiceExternalTrafficStep:
             kube_mock.patch.side_effect = api_error
             result = step.run(None)
         assert result.result_type == ResultType.FAILED
-
-
-class TestEnsureCiliumOnCorrectSpaceStep:
-    @pytest.fixture
-    def deployment(self, deployment_with_space):
-        return deployment_with_space
-
-    @pytest.fixture
-    def client(self, basic_client):
-        return basic_client
-
-    @pytest.fixture
-    def jhelper(self, jhelper_with_networks):
-        return jhelper_with_networks
-
-    @pytest.fixture
-    def step(self, deployment, client, jhelper):
-        step = EnsureCiliumOnCorrectSpaceStep(deployment, client, jhelper, "test-model")
-        step.kube = Mock()
-        return step
-
-    # --- is_skip tests ---
-
-    def test_is_skip_same_management_and_internal_space(
-        self, client, jhelper, step_context
-    ):
-        """When management == internal space, step must be skipped."""
-        deployment = Mock()
-        deployment.name = "test-deployment"
-        deployment.get_space.return_value = "shared-space"  # same for both
-        step = EnsureCiliumOnCorrectSpaceStep(deployment, client, jhelper, "test-model")
-        result = step.is_skip(step_context)
-        assert result.result_type == ResultType.SKIPPED
-
-    def test_is_skip_kube_client_error(self, step, step_context):
-        """KubeClientError during k8s client creation should fail the step."""
-        with patch(
-            "sunbeam.steps.k8s.get_kube_client", side_effect=KubeClientError("fail")
-        ):
-            result = step.is_skip(step_context)
-        assert result.result_type == ResultType.FAILED
-
-    def test_is_skip_juju_exception_getting_networks(self, step, jhelper, step_context):
-        from sunbeam.core.juju import JujuException
-
-        jhelper.get_space_networks.side_effect = JujuException("no space")
-        with patch("sunbeam.steps.k8s.get_kube_client", return_value=step.kube):
-            result = step.is_skip(step_context)
-        assert result.result_type == ResultType.FAILED
-
-    def test_is_skip_k8s_list_nodes_error(self, step, jhelper, step_context):
-        jhelper.get_space_networks.return_value = [ipaddress.ip_network("10.0.0.0/8")]
-        step.kube.list.side_effect = ApiError.__new__(ApiError)
-        with patch("sunbeam.steps.k8s.get_kube_client", return_value=step.kube):
-            result = step.is_skip(step_context)
-        assert result.result_type == ResultType.FAILED
-
-    def test_is_skip_all_nodes_on_correct_space(self, step, jhelper, step_context):
-        """All nodes' InternalIPs in the internal subnet → skip."""
-        jhelper.get_space_networks.return_value = [ipaddress.ip_network("10.0.0.0/8")]
-        step.kube.list.return_value = [
-            _to_kube_object(
-                {"name": "node1"},
-                status={"addresses": [Mock(type="InternalIP", address="10.0.0.1")]},
-            ),
-            _to_kube_object(
-                {"name": "node2"},
-                status={"addresses": [Mock(type="InternalIP", address="10.0.0.2")]},
-            ),
-        ]
-        with patch("sunbeam.steps.k8s.get_kube_client", return_value=step.kube):
-            result = step.is_skip(step_context)
-        assert result.result_type == ResultType.SKIPPED
-
-    def test_is_skip_node_on_wrong_space(self, step, jhelper, step_context):
-        """A node with an InternalIP outside the internal subnet → must run."""
-        jhelper.get_space_networks.return_value = [ipaddress.ip_network("10.0.0.0/8")]
-        step.kube.list.return_value = [
-            _to_kube_object(
-                {"name": "node1"},
-                # 192.168.x.x is management space, not in 10.0.0.0/8
-                status={"addresses": [Mock(type="InternalIP", address="192.168.1.5")]},
-            ),
-        ]
-        with patch("sunbeam.steps.k8s.get_kube_client", return_value=step.kube):
-            result = step.is_skip(step_context)
-        assert result.result_type == ResultType.COMPLETED
-        assert step.needs_restart is True
-
-    def test_is_skip_node_with_no_internal_ip(self, step, jhelper, step_context):
-        """Node with no InternalIP address is ignored (safe default)."""
-        jhelper.get_space_networks.return_value = [ipaddress.ip_network("10.0.0.0/8")]
-        step.kube.list.return_value = [
-            _to_kube_object(
-                {"name": "node1"},
-                # Only a Hostname address, no InternalIP
-                status={"addresses": [Mock(type="Hostname", address="node1")]},
-            ),
-        ]
-        with patch("sunbeam.steps.k8s.get_kube_client", return_value=step.kube):
-            result = step.is_skip(step_context)
-        assert result.result_type == ResultType.SKIPPED
-
-    def test_is_skip_node_with_no_status(self, step, jhelper, step_context):
-        """Node with no status is ignored (safe default)."""
-        jhelper.get_space_networks.return_value = [ipaddress.ip_network("10.0.0.0/8")]
-        node = Mock()
-        node.metadata = Mock(name="node1")
-        node.status = None
-        step.kube.list.return_value = [node]
-        with patch("sunbeam.steps.k8s.get_kube_client", return_value=step.kube):
-            result = step.is_skip(step_context)
-        assert result.result_type == ResultType.SKIPPED
-
-    # --- run tests ---
-
-    def test_run_patches_cilium_daemonset(self, step):
-        """run() patches the Cilium DaemonSet and waits for rollout."""
-        step.needs_restart = True
-        step.kube.patch = Mock()
-        step.kube.get = Mock()
-        ds_status = Mock()
-        ds_status.desiredNumberScheduled = 2
-        ds_status.updatedNumberScheduled = 2
-        ds_status.numberAvailable = 2
-        step.kube.get.return_value = Mock(status=ds_status)
-        result = step.run(None)
-        step.kube.patch.assert_called_once()
-        patch_call_kwargs = step.kube.patch.call_args
-        # Second positional arg is the resource name
-        assert patch_call_kwargs[0][1] == "cilium"
-        assert result.result_type == ResultType.COMPLETED
-
-    def test_run_patch_api_error(self, step):
-        """ApiError during DaemonSet patch is surfaced as FAILED."""
-        step.needs_restart = True
-        api_error = ApiError.__new__(ApiError)
-        api_error.status = Mock(code=500)
-        step.kube.patch = Mock(side_effect=api_error)
-        result = step.run(None)
-        assert result.result_type == ResultType.FAILED
-        assert "Failed to restart Cilium DaemonSet" in result.message
-
-    def test_run_rollout_timeout(self, step):
-        """SunbeamException from _wait_for_rollout is surfaced as FAILED."""
-        step.needs_restart = True
-        step.kube.patch = Mock()
-        with patch.object(
-            step, "_wait_for_rollout", side_effect=SunbeamException("timed out")
-        ):
-            result = step.run(None)
-        assert result.result_type == ResultType.FAILED
-        assert "timed out" in result.message
-
-    def test_wait_for_rollout_completes_immediately(self, step):
-        """_wait_for_rollout returns as soon as desired==updated==available."""
-        ds_status = Mock()
-        ds_status.desiredNumberScheduled = 3
-        ds_status.updatedNumberScheduled = 3
-        ds_status.numberAvailable = 3
-        step.kube.get = Mock(return_value=Mock(status=ds_status))
-        # Should not raise
-        step._wait_for_rollout()
-        step.kube.get.assert_called_once()
-
-    def test_wait_for_rollout_times_out(self, step):
-        """_wait_for_rollout raises SunbeamException when deadline passes."""
-        ds_status = Mock()
-        ds_status.desiredNumberScheduled = 3
-        ds_status.updatedNumberScheduled = 1  # not converged
-        ds_status.numberAvailable = 1
-        step.kube.get = Mock(return_value=Mock(status=ds_status))
-        # First call sets deadline=0+300=300; second call returns 301 so loop exits.
-        with (
-            patch("sunbeam.steps.k8s.time.monotonic", side_effect=[0.0, 301.0]),
-            patch("sunbeam.steps.k8s.time.sleep"),
-        ):
-            with pytest.raises(SunbeamException, match="did not complete"):
-                step._wait_for_rollout()

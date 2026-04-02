@@ -2,12 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import copy
-import datetime
 import ipaddress
 import json
 import logging
 import subprocess
-import time
 import typing
 
 import jubilant
@@ -103,22 +101,6 @@ K8S_DESTROY_TIMEOUT = 900
 K8S_UNIT_TIMEOUT = 1800  # 30 minutes, adding / removing units can take a long time
 K8S_ENABLE_ADDONS_TIMEOUT = 300  # 5 minutes
 K8SD_SNAP_SOCKET = "/var/snap/k8s/common/var/lib/k8sd/state/control.socket"
-CILIUM_DEVICES_ANNOTATION_KEY = "k8sd/v1alpha1/cilium/devices"
-CILIUM_DEVICES_ANNOTATION_DEFAULT = ",".join(
-    (
-        "!br-ex",
-        "!br-int",
-        "!br-phys+",
-        "br-bond+",
-        "bond+",
-        "eth+",
-        "eno+",
-        "ens+",
-        "enp+",
-        "em+",
-        "vlan+",
-    )
-)
 
 COREDNS_HPA = {
     "enabled": True,
@@ -281,16 +263,6 @@ class DeployK8SApplicationStep(DeployMachineApplicationStep):
         """Return application timeout."""
         return K8S_APP_TIMEOUT
 
-    def is_skip(self, context: StepContext) -> Result:
-        """Determines if the step should be skipped or not."""
-        try:
-            # note(gboutry): validate in the is_skip phase to avoid
-            # failing in the middle of the plan.
-            self._get_k8s_config_tfvars()
-        except SunbeamException as e:
-            return Result(ResultType.FAILED, str(e))
-        return Result(ResultType.COMPLETED)
-
     def _get_loadbalancer_range(self) -> str | None:
         """Return loadbalancer range stored in cluster db."""
         variables = load_answers(self.client, self._ADDONS_CONFIG)
@@ -300,28 +272,11 @@ class DeployK8SApplicationStep(DeployMachineApplicationStep):
         config_tfvars: dict[str, bool | str | None] = {
             "load-balancer-enabled": True,
             "load-balancer-l2-mode": True,
-            "cluster-annotations": (
-                CILIUM_DEVICES_ANNOTATION_KEY + "=" + CILIUM_DEVICES_ANNOTATION_DEFAULT
-            ),
         }
 
         charm_manifest = self.manifest.core.software.charms.get("k8s")
         if charm_manifest and charm_manifest.config:
             config_tfvars.update(charm_manifest.config)
-
-        cluster_annotations = str(config_tfvars.get("cluster-annotations", ""))
-        prefix = CILIUM_DEVICES_ANNOTATION_KEY + "="
-        if prefix in cluster_annotations:
-            after_key = cluster_annotations.split(prefix, 1)[1]
-            tokens = after_key.split()
-            # First token is the devices value; remaining tokens without "="
-            # are stray space-separated device values
-            stray = [t for t in tokens[1:] if "=" not in t]
-            if stray:
-                raise SunbeamException(
-                    "Cilium devices annotation value must be comma-separated,"
-                    f" not space-separated: {prefix}{after_key.strip()}"
-                )
 
         lb_range = self._get_loadbalancer_range()
         if lb_range:
@@ -340,10 +295,6 @@ class DeployK8SApplicationStep(DeployMachineApplicationStep):
         tfvars = {
             "endpoint_bindings": [
                 {"space": self.deployment.get_space(Networks.MANAGEMENT)},
-                {
-                    "endpoint": "cluster",
-                    "space": self.deployment.get_space(Networks.INTERNAL),
-                },
             ],
             "k8s_config": self._get_k8s_config_tfvars(),
         }
@@ -373,12 +324,12 @@ def _get_machines_space_ips(
 class EnsureK8SUnitsTaggedStep(BaseStep):
     """Ensure K8S units get properly tagged.
 
-    This step ensures that every k8s node is tagged with the
+    This step ensures that evey k8s nodes is tagged with the
     HOSTNAME_LABEL, to ensure sunbeam can query the correct nodes
     afterwards.
-    Match is done on the IP addresses from the space configured as
-    Networks.INTERNAL. Node IP in k8s is guaranteed by the cluster
-    space binding.
+    Match is done on management ip address. Node IP in k8s is guaranteed by
+    the cluster space binding, which is always bound to the management
+    space.
     """
 
     def __init__(
@@ -399,16 +350,18 @@ class EnsureK8SUnitsTaggedStep(BaseStep):
         self.fqdn = fqdn
         self.to_update: dict[str, str] = {}
 
-    def _get_cluster_ips(
+    def _get_management_ips(
         self, juju_machine: "jubilant.statustypes.MachineStatus"
     ) -> list[str]:
-        cluster_space = self.deployment.get_space(Networks.INTERNAL)
-        cluster_networks = self.jhelper.get_space_networks(self.model, cluster_space)
+        management_space = self.deployment.get_space(Networks.MANAGEMENT)
+        management_networks = self.jhelper.get_space_networks(
+            self.model, management_space
+        )
 
         return _get_machines_space_ips(
             juju_machine.network_interfaces,
-            cluster_space,
-            cluster_networks,
+            management_space,
+            management_networks,
         )
 
     @tenacity.retry(
@@ -484,18 +437,18 @@ class EnsureK8SUnitsTaggedStep(BaseStep):
                 raise SunbeamException(
                     f"{sunbeam_name!r} not found in Juju, expected id {machine_id!r}"
                 )
-            cluster_ips = self._get_cluster_ips(juju_machine)
-            if not cluster_ips:
-                LOG.debug("No cluster IPs found for machine %s", machine_id)
-                raise SunbeamException(f"{sunbeam_name!r} has no cluster IPs")
+            management_ips = self._get_management_ips(juju_machine)
+            if not management_ips:
+                LOG.debug("No management IPs found for machine %s", machine_id)
+                raise SunbeamException(f"{sunbeam_name!r} has no management IPs")
 
             try:
-                k8s_node = self._find_matching_k8s_node(sunbeam_name, cluster_ips)
+                k8s_node = self._find_matching_k8s_node(sunbeam_name, management_ips)
             except ValueError:
                 LOG.debug(
-                    "No matching k8s node found for %s, cluster IPs %s",
+                    "No matching k8s node found for %s, management IPs %s",
                     sunbeam_name,
-                    cluster_ips,
+                    management_ips,
                 )
                 raise SunbeamException(f"{sunbeam_name} has no matching k8s node")
             except K8SError as e:
@@ -584,214 +537,6 @@ class EnsureK8SUnitsTaggedStep(BaseStep):
                 )
 
         return Result(ResultType.COMPLETED)
-
-
-class EnsureCiliumOnCorrectSpaceStep(BaseStep):
-    """Ensure Cilium DaemonSet is bound to the correct (internal) space.
-
-    After a cluster refresh that changes the k8s 'cluster' endpoint binding from
-    the management space to the internal space, k8sd reconfigures the node's
-    InternalIP to the internal-space address. However, the Cilium DaemonSet pods
-    do not automatically restart and remain attached to the old network interface.
-
-    This step detects that mismatch by comparing each k8s node's live InternalIP
-    against the subnets of the configured internal space. If any node's InternalIP
-    falls outside those subnets, the step triggers a rolling restart of the Cilium
-    DaemonSet (equivalent to ``kubectl rollout restart ds/cilium -n kube-system``).
-
-    The step is a no-op when management and internal spaces are the same, or when
-    all nodes are already on the correct space.
-    """
-
-    _CILIUM_DAEMONSET = "cilium"
-    _CILIUM_NAMESPACE = "kube-system"
-    _ROLLOUT_TIMEOUT = 300  # seconds
-
-    def __init__(
-        self,
-        deployment: Deployment,
-        client: Client,
-        jhelper: JujuHelper,
-        model: str,
-    ):
-        super().__init__(
-            "Ensure Cilium on correct space",
-            "Checking Cilium is bound to the correct network space",
-        )
-        self.deployment = deployment
-        self.client = client
-        self.jhelper = jhelper
-        self.model = model
-        self.needs_restart = False
-
-    def _get_internal_space_networks(
-        self,
-    ) -> list[ipaddress.IPv4Network | ipaddress.IPv6Network]:
-        internal_space = self.deployment.get_space(Networks.INTERNAL)
-        return self.jhelper.get_space_networks(self.model, internal_space)
-
-    def _node_internal_ip_in_space(
-        self,
-        node: "core_v1.Node",
-        internal_networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network],
-    ) -> bool:
-        """Return True if any node InternalIP falls within the internal space.
-
-        Evaluates all InternalIP entries to support dual-stack nodes.
-        """
-        if node.status is None or node.status.addresses is None:
-            return True  # can't determine; skip this node
-        found_internal_ip = False
-        for address in node.status.addresses:
-            if address.type == "InternalIP":
-                found_internal_ip = True
-                try:
-                    ip = ipaddress.ip_address(address.address)
-                except ValueError:
-                    LOG.debug("Invalid InternalIP %s on node", address.address)
-                    continue
-                if any(ip in net for net in internal_networks):
-                    return True
-        if not found_internal_ip:
-            return True  # no InternalIP found; skip this node
-        return False
-
-    def is_skip(self, context: StepContext) -> Result:
-        """Determines if the step should be skipped or not.
-
-        :return: ResultType.SKIPPED if Cilium is already on the correct space
-                 or management and internal spaces are the same,
-                 ResultType.COMPLETED if Cilium needs a restart,
-                 ResultType.FAILED on error.
-        """
-        # Reset restart flag to ensure this check is idempotent across calls.
-        self.needs_restart = False
-        management_space = self.deployment.get_space(Networks.MANAGEMENT)
-        internal_space = self.deployment.get_space(Networks.INTERNAL)
-        if management_space == internal_space:
-            LOG.debug(
-                "Management and internal spaces are identical (%s), skipping",
-                internal_space,
-            )
-            return Result(ResultType.SKIPPED)
-
-        try:
-            self.kube = get_kube_client(self.client)
-        except KubeClientError as e:
-            LOG.debug("Failed to create k8s client", exc_info=True)
-            return Result(ResultType.FAILED, str(e))
-
-        try:
-            internal_networks = self._get_internal_space_networks()
-        except JujuException as e:
-            LOG.debug("Failed to get internal space networks", exc_info=True)
-            return Result(ResultType.FAILED, str(e))
-
-        try:
-            k8s_nodes = list_nodes(
-                self.kube, labels={DEPLOYMENT_LABEL: self.deployment.name}
-            )
-        except K8SError as e:
-            LOG.debug("Failed to list k8s nodes", exc_info=True)
-            return Result(ResultType.FAILED, str(e))
-
-        for node in k8s_nodes:
-            node_name = node.metadata.name if node.metadata else "<unknown>"
-            if not self._node_internal_ip_in_space(node, internal_networks):
-                LOG.debug(
-                    "Node %s has InternalIP outside internal space — "
-                    "Cilium restart required",
-                    node_name,
-                )
-                self.needs_restart = True
-                break
-
-        if not self.needs_restart:
-            LOG.debug("All k8s nodes have InternalIP in the internal space, skipping")
-            return Result(ResultType.SKIPPED)
-
-        return Result(ResultType.COMPLETED)
-
-    def run(self, context: StepContext) -> Result:
-        """Restart the Cilium DaemonSet so it rebinds to the correct interface."""
-        restart_annotation = datetime.datetime.now(tz=datetime.timezone.utc).isoformat()
-        patch = {
-            "spec": {
-                "template": {
-                    "metadata": {
-                        "annotations": {
-                            "kubectl.kubernetes.io/restartedAt": restart_annotation,
-                        }
-                    }
-                }
-            }
-        }
-        LOG.debug("Patching Cilium DaemonSet with restartedAt=%s", restart_annotation)
-        try:
-            self.kube.patch(
-                apps_v1.DaemonSet,
-                self._CILIUM_DAEMONSET,
-                patch,
-                namespace=self._CILIUM_NAMESPACE,
-            )
-        except l_exceptions.ApiError as e:
-            LOG.debug("Failed to patch Cilium DaemonSet", exc_info=True)
-            return Result(
-                ResultType.FAILED,
-                f"Failed to restart Cilium DaemonSet: {e}",
-            )
-
-        LOG.debug("Waiting for Cilium DaemonSet rollout to complete")
-        try:
-            self._wait_for_rollout()
-        except SunbeamException as e:
-            return Result(ResultType.FAILED, str(e))
-
-        return Result(ResultType.COMPLETED)
-
-    def _wait_for_rollout(self) -> None:
-        """Wait until the Cilium DaemonSet rollout is complete.
-
-        Polls the DaemonSet status until both updatedNumberScheduled and
-        numberAvailable equal desiredNumberScheduled (for a non-zero desired
-        count), or until _ROLLOUT_TIMEOUT seconds elapse.
-        """
-        deadline = time.monotonic() + self._ROLLOUT_TIMEOUT
-        while time.monotonic() < deadline:
-            try:
-                ds = self.kube.get(
-                    apps_v1.DaemonSet,
-                    self._CILIUM_DAEMONSET,
-                    namespace=self._CILIUM_NAMESPACE,
-                )
-            except l_exceptions.ApiError as e:
-                raise SunbeamException(
-                    f"Failed to get Cilium DaemonSet during rollout wait: {e}"
-                ) from e
-
-            ds_status = ds.status
-            if ds_status is None:
-                time.sleep(5)
-                continue
-
-            desired = ds_status.desiredNumberScheduled or 0
-            updated = ds_status.updatedNumberScheduled or 0
-            available = ds_status.numberAvailable or 0
-            LOG.debug(
-                "Cilium rollout: desired=%d updated=%d available=%d",
-                desired,
-                updated,
-                available,
-            )
-            if desired > 0 and updated == desired and available == desired:
-                LOG.debug("Cilium DaemonSet rollout complete")
-                return
-
-            time.sleep(5)
-
-        raise SunbeamException(
-            f"Cilium DaemonSet rollout did not complete within {self._ROLLOUT_TIMEOUT}s"
-        )
 
 
 class RemoveK8SUnitsStep(RemoveMachineUnitsStep):
