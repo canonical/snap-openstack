@@ -10,12 +10,19 @@ from sunbeam.core.juju import (
     ApplicationNotFoundException,
     JujuException,
 )
+from sunbeam.core.terraform import TerraformException
 from sunbeam.features.vault.feature import VaultCommandFailedException
 from sunbeam.steps.vault import (
     CHARM_BASE,
     VAULT_CHANNEL,
     VaultCharmUpgradeStep,
 )
+
+
+@pytest.fixture
+def mock_migrate():
+    with patch("sunbeam.steps.vault.migrate_vault_config_in_db") as p:
+        yield p
 
 
 @pytest.fixture
@@ -63,7 +70,7 @@ class TestVaultCharmUpgradeStep:
         assert result.result_type == ResultType.FAILED
         assert "track is below" in result.message
 
-    def test_skip_when_manifest_channel_and_revision_match_deployment(
+    def test_no_skip_when_manifest_channel_and_revision_match_deployment(
         self, step, basic_jhelper, basic_manifest, step_context
     ):
         app = Mock(charm_rev=200, charm_channel="1.19/stable", base=None)
@@ -75,10 +82,10 @@ class TestVaultCharmUpgradeStep:
         with patch.object(step, "channel_update_needed", return_value=True):
             result = step.is_skip(step_context)
 
-        assert result.result_type == ResultType.SKIPPED
-        assert "already at manifest pinned" in result.message
+        assert result.result_type == ResultType.COMPLETED
+        assert step._skip_charm_refresh is True
 
-    def test_skip_when_already_at_latest_revision_for_target(
+    def test_no_skip_when_already_at_latest_revision_for_target(
         self, step, basic_jhelper, basic_manifest, step_context
     ):
         app = Mock(charm_rev=100, charm_channel=VAULT_CHANNEL, base=None)
@@ -88,8 +95,8 @@ class TestVaultCharmUpgradeStep:
 
         result = step.is_skip(step_context)
 
-        assert result.result_type == ResultType.SKIPPED
-        assert "latest revision" in result.message
+        assert result.result_type == ResultType.COMPLETED
+        assert step._skip_charm_refresh is True
 
     def test_not_skipped_when_newer_revision_available(
         self, step, basic_jhelper, basic_manifest, step_context
@@ -102,6 +109,7 @@ class TestVaultCharmUpgradeStep:
         result = step.is_skip(step_context)
 
         assert result.result_type == ResultType.COMPLETED
+        assert step._skip_charm_refresh is False
 
     def test_not_skipped_when_manifest_channel_is_upgrade(
         self, step, basic_jhelper, basic_manifest, step_context
@@ -122,7 +130,13 @@ class TestVaultCharmUpgradeStep:
         )
 
     def test_run_fails_when_vault_unsealed_after_upgrade(
-        self, step, basic_jhelper, basic_manifest, vaulthelper, step_context
+        self,
+        step,
+        basic_jhelper,
+        basic_manifest,
+        vaulthelper,
+        mock_migrate,
+        step_context,
     ):
         basic_manifest.find_charm.return_value = None
         vaulthelper.get_vault_status.return_value = {"sealed": False}
@@ -149,6 +163,7 @@ class TestVaultCharmUpgradeStep:
         basic_manifest,
         vaulthelper,
         mock_auto_unseal,
+        mock_migrate,
         step_context,
     ):
         basic_manifest.find_charm.return_value = Mock(
@@ -194,7 +209,13 @@ class TestVaultCharmUpgradeStep:
         assert "timed out" in result.message
 
     def test_run_vault_sealed_no_dev_mode(
-        self, step, basic_jhelper, vaulthelper, mock_auto_unseal, step_context
+        self,
+        step,
+        basic_jhelper,
+        vaulthelper,
+        mock_auto_unseal,
+        mock_migrate,
+        step_context,
     ):
         basic_jhelper.get_leader_unit.return_value = "vault/0"
         vaulthelper.get_vault_status.return_value = {"sealed": True}
@@ -213,6 +234,7 @@ class TestVaultCharmUpgradeStep:
         basic_jhelper,
         vaulthelper,
         mock_auto_unseal,
+        mock_migrate,
         step_context,
     ):
         basic_jhelper.get_leader_unit.return_value = "vault/0"
@@ -231,6 +253,7 @@ class TestVaultCharmUpgradeStep:
         basic_jhelper,
         vaulthelper,
         mock_auto_unseal,
+        mock_migrate,
         step_context,
     ):
         basic_jhelper.get_leader_unit.return_value = "vault/0"
@@ -242,3 +265,109 @@ class TestVaultCharmUpgradeStep:
         assert result.result_type == ResultType.COMPLETED
         assert "auto-unseal failed" in result.message
         assert "unseal failed" in result.message
+
+    def test_run_skips_unseal_when_charm_refresh_skipped(
+        self,
+        step,
+        basic_jhelper,
+        basic_manifest,
+        basic_tfhelper,
+        mock_migrate,
+        step_context,
+    ):
+        basic_manifest.find_charm.return_value = None
+        step._skip_charm_refresh = True
+
+        result = step.run(step_context)
+
+        assert result.result_type == ResultType.COMPLETED
+        assert "no charm refresh needed" in result.message
+        mock_migrate.assert_called_once()
+        basic_jhelper.charm_refresh.assert_not_called()
+        basic_jhelper.get_leader_unit.assert_not_called()
+
+    def test_run_fails_when_terraform_fails_on_skip_path(
+        self,
+        step,
+        basic_jhelper,
+        basic_manifest,
+        basic_tfhelper,
+        mock_migrate,
+        step_context,
+    ):
+        basic_manifest.find_charm.return_value = None
+        basic_tfhelper.update_tfvars_and_apply_tf.side_effect = TerraformException(
+            "apply failed"
+        )
+        step._skip_charm_refresh = True
+
+        result = step.run(step_context)
+
+        assert result.result_type == ResultType.FAILED
+        assert "terraform" in result.message.lower()
+
+    def test_run_fails_when_terraform_fails_after_refresh(
+        self,
+        step,
+        basic_jhelper,
+        basic_manifest,
+        basic_tfhelper,
+        mock_migrate,
+        step_context,
+    ):
+        basic_manifest.find_charm.return_value = None
+        basic_tfhelper.update_tfvars_and_apply_tf.side_effect = TerraformException(
+            "apply failed"
+        )
+
+        result = step.run(step_context)
+
+        assert result.result_type == ResultType.FAILED
+        assert "terraform" in result.message.lower()
+        basic_jhelper.get_leader_unit.assert_not_called()
+
+    def test_run_calls_migrate_vault_config(
+        self,
+        step,
+        basic_jhelper,
+        basic_manifest,
+        basic_tfhelper,
+        vaulthelper,
+        mock_auto_unseal,
+        mock_migrate,
+        step_context,
+    ):
+        basic_manifest.find_charm.return_value = None
+        vaulthelper.get_vault_status.return_value = {"sealed": True}
+        basic_jhelper.get_leader_unit.return_value = "vault/0"
+        mock_auto_unseal.return_value = None
+
+        step.run(step_context)
+
+        mock_migrate.assert_called_once_with(
+            step.client, step.tfvar_config, VAULT_CHANNEL
+        )
+
+    def test_run_calls_migrate_with_manifest_channel(
+        self,
+        step,
+        basic_jhelper,
+        basic_manifest,
+        basic_tfhelper,
+        vaulthelper,
+        mock_auto_unseal,
+        mock_migrate,
+        step_context,
+    ):
+        basic_manifest.find_charm.return_value = Mock(
+            channel="1.19/stable", revision=None
+        )
+        vaulthelper.get_vault_status.return_value = {"sealed": True}
+        basic_jhelper.get_leader_unit.return_value = "vault/0"
+        mock_auto_unseal.return_value = None
+
+        step.run(step_context)
+
+        mock_migrate.assert_called_once_with(
+            step.client, step.tfvar_config, "1.19/stable"
+        )

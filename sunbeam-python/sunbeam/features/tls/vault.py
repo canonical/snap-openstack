@@ -49,7 +49,12 @@ from sunbeam.features.tls.common import (
     certificate_questions,
     handle_list_outstanding_csrs,
 )
-from sunbeam.features.vault.feature import VaultCommandFailedException, VaultHelper
+from sunbeam.features.vault.feature import (
+    VaultCommandFailedException,
+    VaultHelper,
+    migrate_vault_config_in_db,
+    vault_pki_config_key,
+)
 from sunbeam.utils import click_option_show_hints, pass_method_obj
 
 CA_APP_NAME = "vault"
@@ -97,11 +102,21 @@ class VaultTlsFeature(TlsFeature):
         )
         return content
 
+    def _get_vault_channel(self, jhelper: JujuHelper) -> str:
+        """Return the deployed vault charm channel, or VAULT_CHANNEL as default."""
+        from sunbeam.versions import VAULT_CHANNEL
+
+        try:
+            app = jhelper.get_application(CA_APP_NAME, OPENSTACK_MODEL)
+            return app.charm_channel or VAULT_CHANNEL
+        except SunbeamException:
+            return VAULT_CHANNEL
+
     def _build_tls_config_maps(
         self,
         jhelper: JujuHelper,
         endpoints: list[str],
-    ) -> dict[str, dict[str, str]]:
+    ) -> dict[str, dict[str, str | bool]]:
         """Get the TLS config maps for specified endpoints."""
         external: dict[str, str] = {}
         missing: list[str] = []
@@ -128,7 +143,7 @@ class VaultTlsFeature(TlsFeature):
                 "Please configure these hostnames using Sunbeam bootstrap."
             )
 
-        maps: dict[str, dict[str, str]] = {}
+        maps: dict[str, dict[str, str | bool]] = {}
         domains = set()
         for hostname in external.values():
             if "." in hostname:
@@ -140,7 +155,12 @@ class VaultTlsFeature(TlsFeature):
             )
 
         common_domain = domains.pop()
-        maps["vault-config"] = {"common_name": common_domain}
+        vault_channel = self._get_vault_channel(jhelper)
+        config_key = vault_pki_config_key(vault_channel)
+        vault_config: dict[str, str | bool] = {config_key: common_domain}
+        if config_key == "pki_ca_common_name":
+            vault_config["pki_allow_subdomains"] = True
+        maps["vault-config"] = vault_config
 
         if "public" in external:
             maps["traefik-public-config"] = {"external_hostname": external["public"]}
@@ -215,6 +235,10 @@ class VaultTlsFeature(TlsFeature):
             "manual-tls-certificates-channel": "1/stable",
         }
         jhelper = JujuHelper(deployment.juju_controller)
+        vault_channel = self._get_vault_channel(jhelper)
+        migrate_vault_config_in_db(
+            deployment.get_client(), self.get_tfvar_config_key(), vault_channel
+        )
         tfvars.update(self._build_tls_config_maps(jhelper, config.endpoints))
         tfvars["enable-tls-for-public-endpoint"] = "public" in config.endpoints
         tfvars["enable-tls-for-internal-endpoint"] = "internal" in config.endpoints
@@ -467,5 +491,5 @@ class VaultTlsFeature(TlsFeature):
                 found: {', '.join(external.values())}"
             )
         common_domain = domains.pop()
-        endpoints_config.update({"vault-config": {"common_name": common_domain}})
-        console.print(f"Set {CA_APP_NAME}.common_name = {common_domain}")
+        LOG.debug("Common domain for vault PKI: %s", common_domain)
+        console.print(f"Set Vault CA common name to {common_domain}")

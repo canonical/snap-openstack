@@ -64,6 +64,8 @@ from sunbeam.features.interface.v1.openstack import (
 from sunbeam.utils import click_option_show_hints, pass_method_obj
 from sunbeam.versions import VAULT_CHANNEL
 
+VAULT_PKI_CA_COMMON_NAME_MIN_VERSION = Version("1.18")
+
 VAULT_COMMAND_TIMEOUT = 300  # 5 minutes
 VAULT_CHARM_UPDATES_TIMEOUT = (
     600  # 10 minutes, note that charm status get updated on update-status interval
@@ -77,6 +79,67 @@ DEFAULT_VAULT_KEY_THRESHOLD = 1
 
 LOG = logging.getLogger(__name__)
 console = Console()
+
+
+def vault_pki_config_key(channel: str) -> str:
+    """Return the vault charm config key for PKI CA common name.
+
+    Vault 1.18+ renamed 'common_name' to 'pki_ca_common_name'.
+    """
+    try:
+        track = channel.split("/")[0]
+        version = Version(track)
+    except (ValueError, IndexError):
+        return "pki_ca_common_name"
+    if version >= VAULT_PKI_CA_COMMON_NAME_MIN_VERSION:
+        return "pki_ca_common_name"
+    return "common_name"
+
+
+def migrate_vault_config_in_db(
+    client: Client,
+    tfvar_config: str,
+    channel: str,
+) -> None:
+    """Migrate vault-config keys in stored tfvars for the given channel.
+
+    Renames common_name <-> pki_ca_common_name and manages
+    pki_allow_subdomains based on the target channel.
+    """
+    config_key = vault_pki_config_key(channel)
+    old_key = (
+        "common_name" if config_key == "pki_ca_common_name" else "pki_ca_common_name"
+    )
+
+    try:
+        stored = read_config(client, tfvar_config)
+    except ConfigItemNotFoundException:
+        return
+
+    vault_config = stored.get("vault-config")
+    if not isinstance(vault_config, dict):
+        return
+
+    changed = False
+
+    if old_key in vault_config:
+        if config_key in vault_config:
+            del vault_config[old_key]
+        else:
+            vault_config[config_key] = vault_config.pop(old_key)
+        changed = True
+
+    if config_key == "pki_ca_common_name":
+        if not vault_config.get("pki_allow_subdomains"):
+            vault_config["pki_allow_subdomains"] = True
+            changed = True
+    else:
+        if "pki_allow_subdomains" in vault_config:
+            del vault_config["pki_allow_subdomains"]
+            changed = True
+
+    if changed:
+        update_config(client, tfvar_config, stored)
 
 
 class VaultCommandFailedException(SunbeamException):
