@@ -26,6 +26,7 @@ from sunbeam.steps.k8s import (
     K8S_CLOUD_SUFFIX,
     AddK8SCloudStep,
     AddK8SCredentialStep,
+    EnsureCiliumDeviceByHostStep,
     EnsureDefaultL2AdvertisementMutedStep,
     EnsureK8SUnitsTaggedStep,
     EnsureL2AdvertisementByHostStep,
@@ -389,21 +390,52 @@ class TestEnsureL2AdvertisementByHostStep:
         kube_mocker.stop()
 
     def test_is_skip_no_outdated_or_deleted(self, step, step_context):
-        step._get_outdated_l2_advertisement = Mock(return_value=([], []))
+        step._get_outdated_resources = Mock(return_value=([], []))
         result = step.is_skip(step_context)
         assert result.result_type == ResultType.SKIPPED
 
     def test_is_skip_with_outdated(self, step, step_context):
-        step._get_outdated_l2_advertisement = Mock(return_value=(["node1"], []))
+        step._get_outdated_resources = Mock(return_value=(["node1"], []))
         result = step.is_skip(step_context)
         assert result.result_type == ResultType.COMPLETED
         assert len(step.to_update) == 1
 
     def test_is_skip_with_deleted(self, step, step_context):
-        step._get_outdated_l2_advertisement = Mock(return_value=([], ["node2"]))
+        step._get_outdated_resources = Mock(return_value=([], ["node2"]))
         result = step.is_skip(step_context)
         assert result.result_type == ResultType.COMPLETED
         assert len(step.to_delete) == 1
+
+    def test_is_skip_single_node_fqdn_preserves_other_resources(
+        self, deployment, client, jhelper, step_context
+    ):
+        """When fqdn is set, resources for other nodes must not be deleted.
+
+        Regression test: during greenfield join, only the joining node is in
+        the working set.  _get_outdated_resources marks other nodes' resources
+        as deleted, but the base class must suppress deletions in single-node
+        mode so previously-joined nodes keep their L2Advertisement.
+        """
+        node_info = {"name": "node2", "machineid": "2", "role": ["control"]}
+        client.cluster.get_node_info = Mock(return_value=node_info)
+        network = Mock()
+        step = EnsureL2AdvertisementByHostStep(
+            deployment,
+            client,
+            jhelper,
+            "test-model",
+            network,
+            "test-pool",
+            fqdn="node2.maas",
+        )
+        step.kube = Mock()
+        step._get_outdated_resources = Mock(return_value=(["node2"], ["node1"]))
+        with patch("sunbeam.steps.k8s.get_kube_client", return_value=step.kube):
+            result = step.is_skip(step_context)
+        assert result.result_type == ResultType.COMPLETED
+        assert len(step.to_update) == 1
+        assert step.to_update[0]["name"] == "node2"
+        assert step.to_delete == []
 
     def test_run_update_and_delete(self, step):
         step.to_update = [{"name": "node1", "machineid": "1"}]
@@ -460,8 +492,7 @@ class TestEnsureL2AdvertisementByHostStep:
 
     def test_get_interface_cached(self, step):
         step._ifnames = {"node1": "eth0"}
-        network = Mock()
-        result = step._get_interface({"name": "node1"}, network)
+        result = step._get_interface({"name": "node1"})
         assert result == "eth0"
 
     def test_get_interface_found(self, step, jhelper, deployment):
@@ -470,8 +501,7 @@ class TestEnsureL2AdvertisementByHostStep:
             "eth1": Mock(space="other-space"),
         }
         deployment.get_space.return_value = "management"
-        network = Mock()
-        result = step._get_interface({"name": "node1", "machineid": "1"}, network)
+        result = step._get_interface({"name": "node1", "machineid": "1"})
         assert result == "eth0"
         assert step._ifnames["node1"] == "eth0"
 
@@ -482,14 +512,14 @@ class TestEnsureL2AdvertisementByHostStep:
             "eth1": Mock(space="another-space"),
         }
         deployment.get_space.return_value = "management"
-        network = Mock()
-        network.name = "test-network"
+        step.network = Mock()
+        step.network.name = "test-network"
 
         # Test the private method directly - it should raise an exception
         # Using a standard exception pattern instead of accessing the
         # private exception class
         with pytest.raises(Exception) as exc_info:
-            step._get_interface({"name": "node1", "machineid": "1"}, network)
+            step._get_interface({"name": "node1", "machineid": "1"})
 
         # Verify it's the expected error message
         assert "Node node1 has no interface in test-network space" in str(
@@ -652,17 +682,15 @@ def test_get_outdated_l2_advertisement(
         "test-pool",
     )
 
-    def _get_interface(node, network):
+    def _get_interface(node):
         for node_it in nodes:
             if node_it["name"] == node["name"]:
                 return node_it["interface"]
-        raise RuntimeError(
-            f"Node {node['name']} has no interface in network space '{network}'"
-        )
+        raise RuntimeError(f"Node {node['name']} has no interface in network space")
 
     step._get_interface = Mock(side_effect=_get_interface)
 
-    outdated_res, deleted_res = step._get_outdated_l2_advertisement(nodes, kube)
+    outdated_res, deleted_res = step._get_outdated_resources(nodes, kube)
 
     assert outdated_res == outdated
     assert deleted_res == deleted
@@ -1438,3 +1466,374 @@ class TestPatchServiceExternalTrafficStep:
             kube_mock.patch.side_effect = api_error
             result = step.run(None)
         assert result.result_type == ResultType.FAILED
+
+
+class TestEnsureCiliumDeviceByHostStep:
+    @pytest.fixture
+    def deployment(self, basic_deployment):
+        basic_deployment.name = "test-deployment"
+        basic_deployment.get_space.return_value = "internal"
+        return basic_deployment
+
+    @pytest.fixture
+    def control_nodes(self):
+        return [
+            {"name": "node1", "machineid": "1"},
+            {"name": "node2", "machineid": "2"},
+        ]
+
+    @pytest.fixture
+    def client(self, control_nodes):
+        return Mock(
+            cluster=Mock(
+                list_nodes_by_role=Mock(return_value=control_nodes),
+                get_config=Mock(return_value="{}"),
+            )
+        )
+
+    @pytest.fixture
+    def jhelper(self, basic_jhelper):
+        return basic_jhelper
+
+    @pytest.fixture
+    def step(self, deployment, client, jhelper):
+        step = EnsureCiliumDeviceByHostStep(deployment, client, jhelper, "test-model")
+        step.kube = Mock()
+        return step
+
+    @pytest.fixture(autouse=True)
+    def setup_patches(self, step):
+        kubeconfig_mocker = patch(
+            "sunbeam.steps.k8s.l_kubeconfig.KubeConfig",
+            Mock(from_dict=Mock(return_value=Mock())),
+        )
+        kubeconfig_mocker.start()
+        kube_mocker = patch(
+            "sunbeam.steps.k8s.l_client.Client",
+            Mock(return_value=Mock(return_value=step.kube)),
+        )
+        kube_mocker.start()
+        yield
+        kubeconfig_mocker.stop()
+        kube_mocker.stop()
+
+    def test_is_skip_no_changes(self, step, step_context):
+        step._get_outdated_resources = Mock(return_value=([], []))
+        result = step.is_skip(step_context)
+        assert result.result_type == ResultType.SKIPPED
+
+    def test_is_skip_outdated_device(self, step, step_context):
+        step._get_outdated_resources = Mock(return_value=(["node1"], []))
+        result = step.is_skip(step_context)
+        assert result.result_type == ResultType.COMPLETED
+        assert len(step.to_update) == 1
+        assert step.to_update[0]["name"] == "node1"
+
+    def test_is_skip_missing_config(self, step, step_context):
+        step._get_outdated_resources = Mock(return_value=(["node1", "node2"], []))
+        result = step.is_skip(step_context)
+        assert result.result_type == ResultType.COMPLETED
+        assert len(step.to_update) == 2
+
+    def test_is_skip_deleted_node(self, step, step_context):
+        """Deleted nodes (not in control_nodes) are scheduled for cleanup."""
+        step._get_outdated_resources = Mock(return_value=([], ["departed-node"]))
+        result = step.is_skip(step_context)
+        assert result.result_type == ResultType.COMPLETED
+        assert len(step.to_delete) == 1
+        assert step.to_delete[0]["name"] == "departed-node"
+
+    def test_is_skip_single_node_fqdn(self, deployment, client, jhelper, step_context):
+        node_info = {"name": "node1", "machineid": "1", "role": ["control"]}
+        client.cluster.get_node_info = Mock(return_value=node_info)
+        step = EnsureCiliumDeviceByHostStep(
+            deployment, client, jhelper, "test-model", fqdn="node1.maas"
+        )
+        step.kube = Mock()
+        step._get_outdated_resources = Mock(return_value=(["node1"], []))
+        with patch("sunbeam.steps.k8s.get_kube_client", return_value=step.kube):
+            result = step.is_skip(step_context)
+        assert result.result_type == ResultType.COMPLETED
+        assert step.control_nodes == [node_info]
+
+    def test_is_skip_single_node_fqdn_preserves_other_configs(
+        self, deployment, client, jhelper, step_context
+    ):
+        """When fqdn is set, configs for other nodes must not be deleted.
+
+        Regression test: during greenfield join, only the joining node is in
+        the working set.  _get_outdated_resources marks other nodes' configs
+        as deleted, but the base class must suppress deletions in single-node
+        mode so previously-joined nodes keep their CiliumNodeConfig.
+        """
+        node_info = {"name": "node2", "machineid": "2", "role": ["control"]}
+        client.cluster.get_node_info = Mock(return_value=node_info)
+        step = EnsureCiliumDeviceByHostStep(
+            deployment, client, jhelper, "test-model", fqdn="node2.maas"
+        )
+        step.kube = Mock()
+        # node2 needs an update; node1 reported as deleted (not in working set)
+        step._get_outdated_resources = Mock(return_value=(["node2"], ["node1"]))
+        with patch("sunbeam.steps.k8s.get_kube_client", return_value=step.kube):
+            result = step.is_skip(step_context)
+        assert result.result_type == ResultType.COMPLETED
+        assert len(step.to_update) == 1
+        assert step.to_update[0]["name"] == "node2"
+        assert step.to_delete == []
+
+    def test_is_skip_wrong_node_selector(self, step, control_nodes, jhelper):
+        jhelper.get_machine_interfaces.return_value = {
+            "eth0": Mock(space="internal"),
+        }
+        wrong_selector_config = Mock()
+        wrong_selector_config.metadata = Mock(
+            name="cilium-devices-node1",
+            labels={
+                "app.kubernetes.io/managed-by": "test-deployment",
+                "sunbeam/hostname": "node1",
+            },
+        )
+        wrong_selector_config.spec = {
+            "nodeSelector": {"matchLabels": {"sunbeam/hostname": "wrong-node"}},
+            "defaults": {"devices": "eth0"},
+        }
+        step.kube.list = Mock(return_value=[wrong_selector_config])
+        outdated, deleted = step._get_outdated_resources(control_nodes, step.kube)
+        assert "node1" in outdated
+
+    def test_run_creates_config(self, step):
+        step.to_update = [{"name": "node1", "machineid": "1"}]
+        step.to_delete = []
+        step._get_interface = Mock(return_value="eth0")
+        step.kube.apply = Mock()
+        step.kube.patch = Mock()
+
+        # _find_cilium_pod returns the old pod
+        old_pod = Mock()
+        old_pod.metadata = Mock(name="cilium-abc")
+        old_pod.spec = Mock(nodeName="node1")
+        # _wait_for_cilium_ready returns a NEW pod (different name)
+        new_pod = Mock()
+        new_pod.metadata = Mock(name="cilium-xyz")
+        new_pod.spec = Mock(nodeName="node1")
+        new_pod.status = Mock(conditions=[Mock(type="Ready", status="True")])
+
+        call_count = [0]
+
+        def list_side_effect(*args, **kwargs):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return [old_pod]  # _find_cilium_pod
+            return [new_pod]  # _wait_for_cilium_ready
+
+        step.kube.list = Mock(side_effect=list_side_effect)
+        step.kube.delete = Mock()
+
+        result = step.run(None)
+
+        step.kube.apply.assert_called_once()
+        step.kube.patch.assert_called_once()  # clears restart-pending
+        assert result.result_type == ResultType.COMPLETED
+
+    def test_run_updates_config(self, step):
+        step.to_update = [
+            {"name": "node1", "machineid": "1"},
+            {"name": "node2", "machineid": "2"},
+        ]
+        step.to_delete = []
+        step._get_interface = Mock(side_effect=["eth0", "eth1"])
+        step.kube.apply = Mock()
+        step.kube.patch = Mock()
+
+        # Old pods (to be deleted)
+        old_pod1 = Mock()
+        old_pod1.metadata = Mock(name="cilium-aaa")
+        old_pod1.spec = Mock(nodeName="node1")
+        old_pod2 = Mock()
+        old_pod2.metadata = Mock(name="cilium-bbb")
+        old_pod2.spec = Mock(nodeName="node2")
+        # New replacement pods
+        new_pod1 = Mock()
+        new_pod1.metadata = Mock(name="cilium-new1")
+        new_pod1.spec = Mock(nodeName="node1")
+        new_pod1.status = Mock(conditions=[Mock(type="Ready", status="True")])
+        new_pod2 = Mock()
+        new_pod2.metadata = Mock(name="cilium-new2")
+        new_pod2.spec = Mock(nodeName="node2")
+        new_pod2.status = Mock(conditions=[Mock(type="Ready", status="True")])
+
+        call_count = [0]
+
+        def list_side_effect(*args, **kwargs):
+            call_count[0] += 1
+            if call_count[0] in (1, 3):  # _find_cilium_pod calls
+                return [old_pod1, old_pod2]
+            if call_count[0] == 2:  # _wait after node1
+                return [new_pod1, old_pod2]
+            return [new_pod1, new_pod2]  # _wait after node2
+
+        step.kube.list = Mock(side_effect=list_side_effect)
+        step.kube.delete = Mock()
+
+        result = step.run(None)
+
+        assert step.kube.apply.call_count == 2
+        assert step.kube.patch.call_count == 2  # clears restart-pending on both
+        assert result.result_type == ResultType.COMPLETED
+
+    def test_run_deletes_stale_config(self, step):
+        step.to_update = []
+        step.to_delete = [{"name": "node2"}]
+        step.kube.delete = Mock()
+
+        old_pod = Mock()
+        old_pod.metadata = Mock(name="cilium-xyz")
+        old_pod.spec = Mock(nodeName="node2")
+        new_pod = Mock()
+        new_pod.metadata = Mock(name="cilium-new")
+        new_pod.spec = Mock(nodeName="node2")
+        new_pod.status = Mock(conditions=[Mock(type="Ready", status="True")])
+
+        call_count = [0]
+
+        def list_side_effect(*args, **kwargs):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return [old_pod]  # _find_cilium_pod
+            return [new_pod]  # _wait_for_cilium_ready
+
+        step.kube.list = Mock(side_effect=list_side_effect)
+
+        result = step.run(None)
+
+        assert step.kube.delete.call_count == 2  # config + pod
+        assert result.result_type == ResultType.COMPLETED
+
+    def test_run_api_error(self, step):
+        step.to_update = [{"name": "node1", "machineid": "1"}]
+        step.to_delete = []
+        step._get_interface = Mock(return_value="eth0")
+        api_error = ApiError.__new__(ApiError)
+        api_error.status = Mock(code=500)
+        step.kube.apply = Mock(side_effect=api_error)
+
+        result = step.run(None)
+
+        assert result.result_type == ResultType.FAILED
+        assert "Failed to apply CiliumNodeConfig for node1" in result.message
+
+    def test_run_no_interface_found(self, step):
+        step.to_update = [{"name": "node1", "machineid": "1"}]
+        step.to_delete = []
+        step._get_interface = Mock(side_effect=MachineNotFoundException("not found"))
+
+        result = step.run(None)
+
+        assert result.result_type == ResultType.FAILED
+
+    def test_run_cilium_pod_not_found(self, step):
+        step.to_update = [{"name": "node1", "machineid": "1"}]
+        step.to_delete = []
+        step._get_interface = Mock(return_value="eth0")
+        step.kube.apply = Mock()
+        step.kube.list = Mock(return_value=[])
+
+        result = step.run(None)
+
+        assert result.result_type == ResultType.FAILED
+        assert "No cilium pod found on node node1" in result.message
+
+    def test_run_restart_timeout(self, step):
+        step.to_update = [{"name": "node1", "machineid": "1"}]
+        step.to_delete = []
+        step._get_interface = Mock(return_value="eth0")
+        step.kube.apply = Mock()
+
+        old_pod = Mock()
+        old_pod.metadata = Mock(name="cilium-abc")
+        old_pod.spec = Mock(nodeName="node1")
+        # Replacement pod exists but never becomes Ready
+        not_ready_pod = Mock()
+        not_ready_pod.metadata = Mock(name="cilium-new")
+        not_ready_pod.spec = Mock(nodeName="node1")
+        not_ready_pod.status = Mock(conditions=[Mock(type="Ready", status="False")])
+
+        call_count = [0]
+
+        def list_side_effect(*args, **kwargs):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return [old_pod]  # _find_cilium_pod
+            return [not_ready_pod]  # _wait_for_cilium_ready
+
+        step.kube.list = Mock(side_effect=list_side_effect)
+        step.kube.delete = Mock()
+
+        with (
+            patch("sunbeam.steps.k8s.time.monotonic", side_effect=[0.0, 301.0]),
+            patch("sunbeam.steps.k8s.time.sleep"),
+        ):
+            result = step.run(None)
+
+        assert result.result_type == ResultType.FAILED
+        assert "did not become Ready" in result.message
+
+    def test_run_old_pod_ignored_during_readiness_wait(self, step):
+        """The terminating pod (same name as deleted) must not satisfy readiness."""
+        step.to_update = [{"name": "node1", "machineid": "1"}]
+        step.to_delete = []
+        step._get_interface = Mock(return_value="eth0")
+        step.kube.apply = Mock()
+        step.kube.patch = Mock()
+
+        old_pod = Mock()
+        old_pod.metadata = Mock(name="cilium-abc")
+        old_pod.spec = Mock(nodeName="node1")
+        # Old pod still shows as Ready (terminating but not gone yet)
+        old_pod.status = Mock(conditions=[Mock(type="Ready", status="True")])
+        # New pod eventually becomes Ready
+        new_pod = Mock()
+        new_pod.metadata = Mock(name="cilium-new")
+        new_pod.spec = Mock(nodeName="node1")
+        new_pod.status = Mock(conditions=[Mock(type="Ready", status="True")])
+
+        call_count = [0]
+
+        def list_side_effect(*args, **kwargs):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return [old_pod]  # _find_cilium_pod
+            if call_count[0] == 2:
+                return [old_pod]  # _wait: old pod still around, should skip
+            return [new_pod]  # _wait: new pod appears
+
+        step.kube.list = Mock(side_effect=list_side_effect)
+        step.kube.delete = Mock()
+
+        with patch("sunbeam.steps.k8s.time.monotonic", side_effect=[0.0, 1.0, 2.0]):
+            with patch("sunbeam.steps.k8s.time.sleep"):
+                result = step.run(None)
+
+        assert result.result_type == ResultType.COMPLETED
+
+    def test_is_skip_restart_pending(self, step, control_nodes, jhelper):
+        """Config with correct device but restart-pending=true is outdated."""
+        jhelper.get_machine_interfaces.return_value = {
+            "eth0": Mock(space="internal"),
+        }
+        config = Mock()
+        config.metadata = Mock(
+            name="cilium-devices-node1",
+            labels={
+                "app.kubernetes.io/managed-by": "test-deployment",
+                "sunbeam/hostname": "node1",
+            },
+            annotations={"sunbeam/restart-pending": "true"},
+        )
+        config.spec = {
+            "nodeSelector": {"matchLabels": {"sunbeam/hostname": "node1"}},
+            "defaults": {"devices": "eth0"},
+        }
+        step.kube.list = Mock(return_value=[config])
+        outdated, deleted = step._get_outdated_resources(control_nodes, step.kube)
+        assert "node1" in outdated

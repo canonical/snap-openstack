@@ -160,6 +160,7 @@ from sunbeam.steps.k8s import (
     CordonK8SUnitStep,
     DestroyK8SApplicationStep,
     DrainK8SUnitStep,
+    EnsureCiliumDeviceByHostStep,
     EnsureDefaultL2AdvertisementMutedStep,
     EnsureK8SUnitsTaggedStep,
     EnsureL2AdvertisementByHostStep,
@@ -748,6 +749,14 @@ def deploy(
     )
     plan2.append(EnsureDefaultL2AdvertisementMutedStep(deployment, client, jhelper))
     plan2.append(MaasCreateLoadBalancerIPPoolsStep(deployment, client, maas_client))
+    plan2.append(
+        EnsureCiliumDeviceByHostStep(
+            deployment,
+            client,
+            jhelper,
+            deployment.openstack_machines_model,
+        ),
+    )
     plan2.append(
         EnsureL2AdvertisementByHostStep(
             deployment,
@@ -1675,6 +1684,12 @@ def remove_node(ctx: click.Context, name: str, force: bool, show_hints: bool) ->
             client, name, jhelper, deployment.openstack_machines_model, remove_pvc=True
         ),
         RemoveK8SUnitsStep(client, name, jhelper, deployment.openstack_machines_model),
+        EnsureCiliumDeviceByHostStep(
+            deployment,
+            client,
+            jhelper,
+            deployment.openstack_machines_model,
+        ),
         EnsureL2AdvertisementByHostStep(
             deployment,
             client,

@@ -12,6 +12,7 @@ from sunbeam.core.juju import (
 )
 from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.steps.k8s import (
+    EnsureCiliumDeviceByHostStep,
     EnsureDefaultL2AdvertisementMutedStep,
 )
 from sunbeam.steps.openstack import OpenStackPatchLoadBalancerServicesIPPoolStep
@@ -869,6 +870,7 @@ class TestLatestInChannelCoordinator:
             plan = coordinator.get_plan()
 
         step_types = [type(step) for step in plan]
+        assert EnsureCiliumDeviceByHostStep in step_types
         assert OpenStackPatchLoadBalancerServicesIPPoolStep in step_types
         assert EnsureDefaultL2AdvertisementMutedStep in step_types
         # MaasDeployK8SApplicationStep was called; its return value is in the plan
@@ -886,6 +888,7 @@ class TestLatestInChannelCoordinator:
 
         step_types = [type(step) for step in plan]
         assert LatestInChannel in step_types
+        assert EnsureCiliumDeviceByHostStep in step_types
         assert ReapplyInfraModelConfigStep in step_types
         assert UpgradeFeatures in step_types
 

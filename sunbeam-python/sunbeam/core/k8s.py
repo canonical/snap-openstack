@@ -132,6 +132,19 @@ class K8SHelper:
         )
 
     @classmethod
+    def get_lightkube_cilium_node_config_resource(
+        cls,
+    ) -> Type["l_generic_resource.GenericNamespacedResource"]:
+        """Return lightkube generic resource of type CiliumNodeConfig."""
+        return l_generic_resource.create_namespaced_resource(
+            "cilium.io",
+            "v2",
+            "CiliumNodeConfig",
+            "ciliumnodeconfigs",
+            verbs=["delete", "get", "list", "patch", "post", "put"],
+        )
+
+    @classmethod
     def get_loadbalancer_namespace(cls) -> str:
         """Return namespace for loadbalancer."""
         return "metallb-system"
