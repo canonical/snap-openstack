@@ -567,7 +567,7 @@ class ClusterUpdateJujuUserStep(BaseStep):
         """
         try:
             user = self.client.cluster.get_juju_user(self.username)
-            LOG.debug("Juju user %s is found in database.", user)
+            LOG.debug("Juju user %s is found in database.", self.username)
             if user.get("token") == self.token:
                 LOG.debug("Juju user token is up to date, skipping update.")
                 return Result(ResultType.SKIPPED)
@@ -575,9 +575,8 @@ class ClusterUpdateJujuUserStep(BaseStep):
             LOG.debug(e)
             return Result(ResultType.FAILED, str(e))
         except JujuUserNotFoundException:
-            LOG.debug("Juju user is not found in database, cannot update.")
-            return Result(
-                ResultType.FAILED, message=f"Juju user {self.username} not found."
+            LOG.debug(
+                "Juju user %s is not found in database, adding user.", self.username
             )
 
         return Result(ResultType.COMPLETED)
@@ -585,11 +584,18 @@ class ClusterUpdateJujuUserStep(BaseStep):
     def run(self, context: StepContext) -> Result:
         """Update juju user in sunbeam cluster."""
         try:
-            self.client.cluster.update_juju_user(self.username, self.token)
-            return Result(result_type=ResultType.COMPLETED)
+            try:
+                self.client.cluster.update_juju_user(self.username, self.token)
+            except JujuUserNotFoundException:
+                LOG.debug(
+                    "Juju user %s is not found in database, adding user.", self.username
+                )
+                self.client.cluster.add_juju_user(self.username, self.token)
         except ClusterServiceUnavailableException as e:
             LOG.debug(e)
             return Result(ResultType.FAILED, str(e))
+
+        return Result(result_type=ResultType.COMPLETED)
 
 
 class ClusterUpdateJujuControllerStep(BaseStep, JujuStepHelper):

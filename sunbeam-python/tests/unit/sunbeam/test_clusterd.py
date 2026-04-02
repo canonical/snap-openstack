@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import logging
 import subprocess
 from unittest.mock import MagicMock, Mock, patch
 
@@ -126,19 +127,39 @@ class TestClusterdSteps:
         )
 
     def test_update_juju_user_is_skipped_when_token_matches(
-        self, cclient, step_context
+        self, cclient, step_context, caplog
     ):
         cclient.cluster.get_juju_user.return_value = {"token": "TESTTOKEN"}
         step = ClusterUpdateJujuUserStep(cclient, "juju-user", "TESTTOKEN")
-        result = step.is_skip(step_context)
+        with caplog.at_level(logging.DEBUG, logger="sunbeam.steps.clusterd"):
+            result = step.is_skip(step_context)
         assert result.result_type == ResultType.SKIPPED
+        assert any(
+            rec.levelno == logging.DEBUG
+            and "Juju user juju-user is found in database." in rec.getMessage()
+            for rec in caplog.records
+        )
+        assert any(
+            rec.levelno == logging.DEBUG
+            and "Juju user token is up to date, skipping update." in rec.getMessage()
+            for rec in caplog.records
+        )
 
-    def test_update_juju_user_updates_when_token_changed(self, cclient, step_context):
+    def test_update_juju_user_updates_when_token_changed(
+        self, cclient, step_context, caplog
+    ):
         cclient.cluster.get_juju_user.return_value = {"token": "OLDTOKEN"}
         step = ClusterUpdateJujuUserStep(cclient, "juju-user", "NEWTOKEN")
-        result = step.is_skip(step_context)
+        with caplog.at_level(logging.DEBUG, logger="sunbeam.steps.clusterd"):
+            result = step.is_skip(step_context)
         assert result.result_type == ResultType.COMPLETED
-        # ensure run calls update
+        assert any(
+            rec.levelno == logging.DEBUG
+            and "Juju user juju-user is found in database." in rec.getMessage()
+            for rec in caplog.records
+        )
+        assert "Juju user token is up to date, skipping update." not in caplog.text
+
         step.client.cluster.update_juju_user = MagicMock()
         result2 = step.run(step_context)
         step.client.cluster.update_juju_user.assert_called_once_with(
@@ -146,12 +167,31 @@ class TestClusterdSteps:
         )
         assert result2.result_type == ResultType.COMPLETED
 
-    def test_update_juju_user_user_not_found(self, cclient, step_context):
+    def test_update_juju_user_user_not_found(self, cclient, step_context, caplog):
         cclient.cluster.get_juju_user.side_effect = service.JujuUserNotFoundException()
         step = ClusterUpdateJujuUserStep(cclient, "juju-user", "NEWTOKEN")
-        result = step.is_skip(step_context)
-        assert result.result_type == ResultType.FAILED
-        assert result.message == "Juju user juju-user not found."
+        with caplog.at_level(logging.DEBUG, logger="sunbeam.steps.clusterd"):
+            result = step.is_skip(step_context)
+        assert result.result_type == ResultType.COMPLETED
+        assert any(
+            rec.levelno == logging.DEBUG
+            and "Juju user juju-user is not found in database, adding user."
+            in rec.getMessage()
+            for rec in caplog.records
+        )
+
+        step.client.cluster.update_juju_user.side_effect = (
+            service.JujuUserNotFoundException()
+        )
+        step.client.cluster.add_juju_user = MagicMock()
+        result2 = step.run(step_context)
+        step.client.cluster.update_juju_user.assert_called_once_with(
+            "juju-user", "NEWTOKEN"
+        )
+        step.client.cluster.add_juju_user.assert_called_once_with(
+            "juju-user", "NEWTOKEN"
+        )
+        assert result2.result_type == ResultType.COMPLETED
 
     def test_update_juju_user_handles_service_unavailable_in_is_skip(
         self, cclient, step_context
