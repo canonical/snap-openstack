@@ -9,9 +9,9 @@ variable "observability-agent-integration-apps" {
   default     = []
 }
 
-variable "principal-application-model" {
-  description = "Name of the model principal application is deployed in"
-  default     = "controller"
+variable "principal-application-model-uuid" {
+  description = "UUID of the Juju model principal application is deployed in"
+  type        = string
 }
 
 variable "opentelemetry-collector-channel" {

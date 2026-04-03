@@ -83,7 +83,10 @@ class EnableUbuntuProApplicationStep(BaseStep, JujuStepHelper):
 
     def run(self, context: StepContext) -> Result:
         """Apply terraform configuration to deploy ubuntu-pro."""
-        extra_tfvars = {"machine-model": self.model, "token": self.token}
+        extra_tfvars = {
+            "machine_model_uuid": self.jhelper.get_model_uuid(self.model),
+            "token": self.token,
+        }
         try:
             self.tfhelper.update_tfvars_and_apply_tf(
                 self.client,

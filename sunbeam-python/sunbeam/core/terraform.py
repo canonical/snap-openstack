@@ -219,7 +219,7 @@ class TerraformHelper:
         cmd = [self.terraform, "apply"]
         if extra_args:
             cmd.extend(extra_args)
-        cmd.extend(["-auto-approve", "-no-color", "-json"])
+        cmd.extend(["-input=false", "-auto-approve", "-no-color", "-json"])
         if self.parallelism is not None:
             cmd.append(f"-parallelism={self.parallelism}")
         self._run_terraform_command(cmd, os_env, reporter=reporter)

@@ -7,9 +7,15 @@ terraform {
   required_providers {
     juju = {
       source  = "juju/juju"
-      version = "= 0.23.1"
+      version = "= 1.3.1"
     }
   }
+}
+
+provider "juju" {}
+
+data "juju_model" "principal_application_model" {
+  uuid = var.principal-application-model-uuid
 }
 
 # To ensure grafana-agent gets removed cleanly before we add opentelemetry-collector
@@ -19,9 +25,9 @@ moved {
 }
 
 resource "juju_application" "observability-agent" {
-  name  = "opentelemetry-collector"
-  trust = false
-  model = var.principal-application-model
+  name       = "opentelemetry-collector"
+  trust      = false
+  model_uuid = data.juju_model.principal_application_model.uuid
 
   charm {
     name     = "opentelemetry-collector"
@@ -34,8 +40,8 @@ resource "juju_application" "observability-agent" {
 }
 
 resource "juju_integration" "observability-agent-integrations" {
-  for_each = toset(var.observability-agent-integration-apps)
-  model    = var.principal-application-model
+  for_each   = toset(var.observability-agent-integration-apps)
+  model_uuid = data.juju_model.principal_application_model.uuid
 
   application {
     name     = juju_application.observability-agent.name
@@ -49,8 +55,8 @@ resource "juju_integration" "observability-agent-integrations" {
 }
 
 resource "juju_integration" "observability-agent-to-cos-prometheus" {
-  count = var.receive-remote-write-offer-url != null ? 1 : 0
-  model = var.principal-application-model
+  count      = var.receive-remote-write-offer-url != null ? 1 : 0
+  model_uuid = data.juju_model.principal_application_model.uuid
 
   application {
     name = juju_application.observability-agent.name
@@ -63,8 +69,8 @@ resource "juju_integration" "observability-agent-to-cos-prometheus" {
 }
 
 resource "juju_integration" "observability-agent-to-cos-loki" {
-  count = var.logging-offer-url != null ? 1 : 0
-  model = var.principal-application-model
+  count      = var.logging-offer-url != null ? 1 : 0
+  model_uuid = data.juju_model.principal_application_model.uuid
 
   application {
     name = juju_application.observability-agent.name
@@ -76,8 +82,8 @@ resource "juju_integration" "observability-agent-to-cos-loki" {
 }
 
 resource "juju_integration" "observability-agent-to-cos-grafana" {
-  count = var.grafana-dashboard-offer-url != null ? 1 : 0
-  model = var.principal-application-model
+  count      = var.grafana-dashboard-offer-url != null ? 1 : 0
+  model_uuid = data.juju_model.principal_application_model.uuid
 
   application {
     name = juju_application.observability-agent.name

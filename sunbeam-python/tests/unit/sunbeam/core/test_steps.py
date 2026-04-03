@@ -57,6 +57,9 @@ class TestDeployMachineApplicationStep:
         manifest,
         step_context,
     ):
+        jhelper.get_model_owner.return_value = "admin"
+        jhelper.get_model_uuid.return_value = "model-uuid"
+
         tfconfig = "tfconfig"
         machines = ["1", "2"]
         model = "model1"
@@ -82,7 +85,10 @@ class TestDeployMachineApplicationStep:
             cclient,
             manifest,
             tfvar_config=tfconfig,
-            override_tfvars={"machine_ids": machines, "machine_model": model},
+            override_tfvars={
+                "machine_ids": machines,
+                "machine_model_uuid": "model-uuid",
+            },
             tf_apply_extra_args=[],
             reporter=step_context.reporter,
         )
@@ -98,6 +104,7 @@ class TestDeployMachineApplicationStep:
         step_context,
     ):
         jhelper.get_application.return_value = Mock(units={"app/1": Mock(machine=1)})
+        jhelper.get_model_uuid.return_value = "model-uuid"
         tfhelper.update_tfvars_and_apply_tf.side_effect = TerraformException(
             "apply failed..."
         )
