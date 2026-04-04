@@ -1,10 +1,11 @@
 # Sunbeam TLS Feature
 
-This feature enables user to provide TLS certificates obtained through manual process. The certificates can be applied on public and internal traefik instances.
+This feature provides multiple TLS providers for Sunbeam-managed Traefik endpoints, including manual and automatic certificate workflows.
 
 ## Installation
 
-Sunbeam supports 2 different methods to enable TLS CA:
+Sunbeam supports 3 different methods to enable TLS:
 
-- [TLS CA via Manual TLS Certificate Operator](./VaultTLS.md)
+- [TLS CA via Manual TLS Certificate Operator](./TLSCA.md)
 - [Vault TLS](./VaultTLS.md)
+- [Self-signed TLS](./SelfSignedTLS.md)
