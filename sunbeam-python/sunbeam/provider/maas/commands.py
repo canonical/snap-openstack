@@ -1833,7 +1833,7 @@ def destroy_deployment_cmd(
                 DestroyJujuModelStep(jhelper, deployment.infra_model),
             ]
         )
-    except (ValueError, TimeoutError):
+    except ValueError, TimeoutError:
         LOG.debug(
             "Failed to initialize different helpers,"
             " has juju controller already been destroyed?",
