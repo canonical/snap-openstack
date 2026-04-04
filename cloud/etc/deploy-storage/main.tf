@@ -23,6 +23,8 @@ module "backends" {
 
   model = data.juju_model.model.uuid
 
+  application_name      = each.value.application_name
+  units                 = each.value.units
   name                  = each.key
   principal_application = each.value.principal_application
   charm_name            = each.value.charm_name
@@ -32,6 +34,7 @@ module "backends" {
   charm_config          = each.value.charm_config
   endpoint_bindings     = each.value.endpoint_bindings
   secrets               = each.value.secrets
+  extra_integrations    = each.value.extra_integrations
 }
 
 module "cinder-volume" {

@@ -589,6 +589,18 @@ class EnableDisableFeature(BaseFeature, Generic[ConfigType]):
         info = self.get_feature_info(client)
         return info.get("enabled", "false").lower() == "true"
 
+    def on_join(
+        self, deployment: Deployment, node: typing.Any, **kwargs: typing.Any
+    ) -> None:
+        """Hook invoked when a node joins the deployment."""
+        pass
+
+    def on_depart(
+        self, deployment: Deployment, node: typing.Any, **kwargs: typing.Any
+    ) -> None:
+        """Hook invoked when a node departs the deployment."""
+        pass
+
     def check_enabled_requirement_is_compatible(
         self, deployment: Deployment, requirement: FeatureRequirement
     ):

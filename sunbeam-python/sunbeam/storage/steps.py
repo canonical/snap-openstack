@@ -18,6 +18,7 @@ from rich.console import Console
 from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import (
     ConfigItemNotFoundException,
+    NodeNotExistInClusterException,
     StorageBackendNotFoundException,
 )
 from sunbeam.core.common import (
@@ -32,6 +33,7 @@ from sunbeam.core.common import (
 )
 from sunbeam.core.deployment import Deployment, Networks
 from sunbeam.core.juju import (
+    ApplicationNotFoundException,
     ControllerNotFoundException,
     ControllerNotReachableException,
     JujuException,
@@ -47,16 +49,11 @@ from sunbeam.core.questions import (
     load_answers,
     write_answers,
 )
+from sunbeam.core.steps import RemoveMachineUnitsStep
 from sunbeam.core.terraform import (
     TerraformException,
     TerraformHelper,
     TerraformStateLockedException,
-)
-from sunbeam.steps.cinder_volume import (
-    APPLICATION,
-    CINDER_VOLUME_APP_TIMEOUT,
-    get_mandatory_control_plane_offers,
-    get_optional_control_plane_offers,
 )
 from sunbeam.storage.models import SecretDictField
 from sunbeam.versions import CINDER_VOLUME_CHARM
@@ -66,6 +63,38 @@ if TYPE_CHECKING:
 
 LOG = logging.getLogger(__name__)
 console = Console()
+
+CINDER_VOLUME_APP_TIMEOUT = 1200
+
+
+def get_mandatory_control_plane_offers(
+    tfhelper: TerraformHelper,
+) -> dict[str, str | None]:
+    """Get mandatory control plane offers."""
+    openstack_tf_output = tfhelper.output()
+
+    tfvars = {
+        "keystone-offer-url": openstack_tf_output.get("keystone-offer-url"),
+        "database-offer-url": openstack_tf_output.get(
+            "cinder-volume-database-offer-url"
+        ),
+        "amqp-offer-url": openstack_tf_output.get("rabbitmq-offer-url"),
+    }
+    return tfvars
+
+
+def get_optional_control_plane_offers(
+    tfhelper: TerraformHelper,
+) -> dict[str, str | None]:
+    """Get optional control plane offers."""
+    openstack_tf_output = tfhelper.output()
+
+    tfvars = {
+        "cert-distributor-offer-url": openstack_tf_output.get(
+            "cert-distributor-offer-url"
+        ),
+    }
+    return tfvars
 
 
 class ValidateStoragePrerequisitesStep(BaseStep):
@@ -163,25 +192,6 @@ class ValidateStoragePrerequisitesStep(BaseStep):
                     ResultType.FAILED,
                     "No storage role found. Please add storage nodes to the cluster "
                     "before deploying storage backends.",
-                )
-
-            # 4. Check if cinder-volume application exists in OpenStack model
-            try:
-                cinder_volume_app = self.jhelper.get_application(
-                    "cinder-volume", self.OPENSTACK_MACHINE_MODEL
-                )
-                if not cinder_volume_app:
-                    return Result(
-                        ResultType.FAILED,
-                        "cinder-volume application not found in OpenStack model. "
-                        "Please deploy OpenStack storage services first.",
-                    )
-            except Exception as e:
-                LOG.debug(f"Failed to check cinder-volume application: {e}")
-                return Result(
-                    ResultType.FAILED,
-                    "Unable to verify cinder-volume application. "
-                    "Please ensure OpenStack storage services are deployed.",
                 )
 
             return Result(ResultType.COMPLETED)
@@ -648,19 +658,30 @@ class DeploySpecificCinderVolumeStep(BaseStep):
     def is_skip(self, context: StepContext) -> Result:
         """Determine if the step should be skipped.
 
+        Skip when a cinder-volume entry for this backend's principal
+        application already exists in the Terraform vars. Proceed when
+        no entry exists yet (first HA backend being enabled) or when
+        the config key has never been written.
+
         Returns:
             Result indicating whether to skip the step.
         """
         nodes = self.client.cluster.list_nodes_by_role(Role.STORAGE.name.lower())
         if not nodes:
             return Result(ResultType.FAILED, "No storage nodes found in the cluster.")
-        # For faster checks, skip if currently deployed backend
-        # supports main cinder-volume
-        if self.backend_instance.principal_application == APPLICATION:
+
+        try:
+            tfvars = read_config(self.client, self.backend_instance.tfvar_config_key)
+        except ConfigItemNotFoundException:
+            # Nothing deployed yet, proceed
+            return Result(ResultType.COMPLETED)
+
+        principal = self.backend_instance.principal_application
+        if principal in tfvars.get("cinder-volumes", {}):
             return Result(
                 ResultType.SKIPPED,
-                f"Backend {self.backend_name} supports main cinder-volume;"
-                " skipping specific cinder-volume deployment.",
+                f"Cinder-volume entry for {principal!r} already exists;"
+                " skipping deployment.",
             )
 
         return Result(ResultType.COMPLETED)
@@ -832,23 +853,42 @@ class DestroySpecificCinderVolumeStep(BaseStep):
     def is_skip(self, context: StepContext) -> Result:
         """Determine if the step should be skipped.
 
+        Skip when another backend still uses the same principal
+        application, or when there is nothing to destroy (the
+        principal entry does not exist in cinder-volumes tfvars).
+
         Returns:
             Result indicating whether to skip the step.
         """
-        if self.backend_instance.principal_application == APPLICATION:
+        try:
+            tfvars = read_config(self.client, self.backend_instance.tfvar_config_key)
+        except ConfigItemNotFoundException:
             return Result(
                 ResultType.SKIPPED,
-                f"Backend {self.backend_name} does not use specific cinder-volume;"
-                " skipping specific cinder-volume destruction.",
+                "No storage configuration found; nothing to destroy.",
             )
-        backends = self.client.cluster.get_storage_backends()
-        for backend in backends.root:
-            if self.backend_instance.principal_application == backend.principal:
+
+        principal = self.backend_instance.principal_application
+
+        # Check if any OTHER backend uses the same principal application
+        backends = tfvars.get("backends", {})
+        for name, backend_vars in backends.items():
+            if name == self.backend_name:
+                continue
+            if backend_vars.get("principal_application") == principal:
                 return Result(
                     ResultType.SKIPPED,
-                    "Another backend is using the same cinder-volume instance;"
-                    " skipping specific cinder-volume destruction.",
+                    f"Another backend {name!r} still uses principal"
+                    f" {principal!r}; skipping destruction.",
                 )
+
+        # No other backend needs the principal; check if it exists
+        if principal not in tfvars.get("cinder-volumes", {}):
+            return Result(
+                ResultType.SKIPPED,
+                f"Principal {principal!r} not found in cinder-volumes;"
+                " nothing to destroy.",
+            )
 
         return Result(ResultType.COMPLETED)
 
@@ -893,3 +933,178 @@ class DestroySpecificCinderVolumeStep(BaseStep):
     def get_application_timeout(self) -> int:
         """Return application timeout in seconds."""
         return CINDER_VOLUME_APP_TIMEOUT  # 20 minutes, same as cinder-volume
+
+
+STORAGE_BACKEND_TFVAR_CONFIG_KEY = "TerraformVarsStorageBackends"
+
+
+class ReapplyStorageBackendTerraformPlanStep(BaseStep):
+    """Reapply the storage-backend Terraform plan.
+
+    This step re-applies the storage-backend plan using the existing
+    Terraform variables stored in clusterd.  It is used during upgrades
+    to pick up charm channel / revision changes without rebuilding the
+    full configuration from scratch.
+    """
+
+    def __init__(
+        self,
+        deployment: Deployment,
+        client: Client,
+        tfhelper: TerraformHelper,
+        jhelper: JujuHelper,
+        manifest: Manifest,
+        model: str,
+    ):
+        super().__init__(
+            "Reapply Storage Backend Terraform plan",
+            "Reapplying Storage Backend Terraform plan",
+        )
+        self.deployment = deployment
+        self.client = client
+        self.tfhelper = tfhelper
+        self.jhelper = jhelper
+        self.manifest = manifest
+        self.model = model
+
+    def is_skip(self, context: StepContext) -> Result:
+        """Skip when no storage backends are configured."""
+        try:
+            tfvars = read_config(self.client, STORAGE_BACKEND_TFVAR_CONFIG_KEY)
+        except ConfigItemNotFoundException:
+            return Result(ResultType.SKIPPED, "No storage backends configured.")
+
+        if not tfvars.get("backends") and not tfvars.get("cinder-volumes"):
+            return Result(ResultType.SKIPPED, "No storage backends configured.")
+
+        return Result(ResultType.COMPLETED)
+
+    @tenacity.retry(
+        wait=tenacity.wait_fixed(60),
+        stop=tenacity.stop_after_delay(300),
+        retry=tenacity.retry_if_exception_type(TerraformStateLockedException),
+        retry_error_callback=friendly_terraform_lock_retry_callback,
+    )
+    def run(self, context: StepContext) -> Result:
+        """Reapply the storage backend Terraform plan."""
+        try:
+            tfvars = read_config(self.client, STORAGE_BACKEND_TFVAR_CONFIG_KEY)
+        except ConfigItemNotFoundException:
+            LOG.debug("No storage backend config found, nothing to reapply.")
+            return Result(ResultType.COMPLETED)
+
+        try:
+            self.tfhelper.update_tfvars_and_apply_tf(
+                self.client,
+                self.manifest,
+                tfvar_config=STORAGE_BACKEND_TFVAR_CONFIG_KEY,
+                override_tfvars=tfvars,
+                reporter=context.reporter,
+            )
+        except TerraformStateLockedException:
+            raise
+        except TerraformException as e:
+            LOG.exception("Error reapplying storage backend plan")
+            return Result(ResultType.FAILED, str(e))
+
+        return Result(ResultType.COMPLETED)
+
+
+CINDER_VOLUME_UNIT_TIMEOUT = 1800  # 30 minutes
+
+
+class CheckStorageNodeRemovalStep(BaseStep):
+    """Check if a storage node can safely be removed.
+
+    Prevents removing the last storage node when cinder-volume
+    is deployed, unless ``--force`` is specified.
+    """
+
+    def __init__(
+        self,
+        client: Client,
+        node_name: str,
+        jhelper: JujuHelper,
+        model: str,
+        force: bool = False,
+    ):
+        super().__init__(
+            "Check cinder-volume distribution",
+            "Checking if node hosts cinder-volume units",
+        )
+        self.client = client
+        self.node = node_name
+        self.jhelper = jhelper
+        self.model = model
+        self.force = force
+
+    def is_skip(self, context: StepContext) -> Result:
+        """Skip when the departing node is not a storage node."""
+        try:
+            node_info = self.client.cluster.get_node_info(self.node)
+        except NodeNotExistInClusterException:
+            return Result(
+                ResultType.SKIPPED,
+                f"Node {self.node} is not found in the cluster",
+            )
+
+        if Role.STORAGE.name.lower() not in node_info.get("role", ""):
+            LOG.debug("Node %s is not a storage node", self.node)
+            return Result(ResultType.SKIPPED)
+
+        # Check if cinder-volume application exists
+        try:
+            app = self.jhelper.get_application("cinder-volume", self.model)
+        except ApplicationNotFoundException:
+            LOG.debug("cinder-volume application not deployed")
+            return Result(ResultType.SKIPPED)
+
+        # Check if this node hosts a cinder-volume unit
+        machine_id = str(node_info.get("machineid"))
+        for unit_name, unit in app.units.items():
+            if unit.machine == machine_id:
+                LOG.debug("Unit %s is running on node %s", unit_name, self.node)
+                break
+        else:
+            LOG.debug("No cinder-volume units found on %s", self.node)
+            return Result(ResultType.SKIPPED)
+
+        return Result(ResultType.COMPLETED)
+
+    def run(self, context: StepContext) -> Result:
+        """Check whether removal would leave cinder-volume without nodes."""
+        nb_storage_nodes = len(self.client.cluster.list_nodes_by_role("storage"))
+        if nb_storage_nodes <= 1 and not self.force:
+            return Result(
+                ResultType.FAILED,
+                "Cannot remove the last storage node hosting cinder-volume."
+                " Use --force to override; volume capabilities will be lost.",
+            )
+
+        return Result(ResultType.COMPLETED)
+
+
+class RemoveStorageMachineUnitsStep(RemoveMachineUnitsStep):
+    """Remove cinder-volume units from a departing storage node."""
+
+    def __init__(
+        self,
+        client: Client,
+        node_name: str,
+        jhelper: JujuHelper,
+        model: str,
+    ):
+        super().__init__(
+            client,
+            node_name,
+            jhelper,
+            STORAGE_BACKEND_TFVAR_CONFIG_KEY,
+            "cinder-volume",
+            model,
+            "Remove cinder-volume units",
+            "Removing cinder-volume units from departing node",
+        )
+
+    def get_unit_timeout(self) -> int:
+        """Return unit timeout in seconds."""
+        return CINDER_VOLUME_UNIT_TIMEOUT

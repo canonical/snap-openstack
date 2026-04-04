@@ -12,6 +12,19 @@ variable "principal_application" {
   default     = "cinder-volume"
 }
 
+variable "application_name" {
+  description = "Juju application name for the deployed backend"
+  type        = string
+  default     = null
+}
+
+variable "units" {
+  description = "Requested unit count for the backend application"
+  type        = number
+  default     = 1
+  nullable    = true
+}
+
 variable "charm_name" {
   description = "Name of the Storage charm"
   type        = string
@@ -56,4 +69,14 @@ variable "secrets" {
   description = "Map of secret names to create. The key is the config option name, the value is key to use in the secret dict for the value."
   type        = map(string)
   default     = {}
+}
+
+variable "extra_integrations" {
+  description = "Additional juju integrations for this backend"
+  type = set(object({
+    application_name      = string
+    endpoint_name         = string
+    backend_endpoint_name = string
+  }))
+  default = []
 }
