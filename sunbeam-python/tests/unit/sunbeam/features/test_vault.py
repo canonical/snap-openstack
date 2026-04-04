@@ -2,10 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-from unittest.mock import MagicMock, Mock
+from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
+from sunbeam.clusterd.service import ConfigItemNotFoundException
 from sunbeam.core.common import ResultType
 from sunbeam.core.juju import (
     ActionFailedException,
@@ -19,6 +20,8 @@ from sunbeam.features.vault.feature import (
     VaultInitStep,
     VaultStatusStep,
     VaultUnsealStep,
+    migrate_vault_config_in_db,
+    vault_pki_config_key,
 )
 
 
@@ -540,3 +543,162 @@ class TestVaultStatusStep:
 
         assert result.result_type == ResultType.FAILED
         assert result.message == error_message
+
+
+class TestVaultPkiConfigKey:
+    @pytest.mark.parametrize(
+        "channel, expected_key",
+        [
+            ("1.16/stable", "common_name"),
+            ("1.17/stable", "common_name"),
+            ("1.17/edge", "common_name"),
+            ("1.18/stable", "pki_ca_common_name"),
+            ("1.18/edge", "pki_ca_common_name"),
+            ("1.19/stable", "pki_ca_common_name"),
+            ("2.0/stable", "pki_ca_common_name"),
+        ],
+    )
+    def test_returns_correct_key_for_channel(self, channel, expected_key):
+        assert vault_pki_config_key(channel) == expected_key
+
+    def test_unparseable_channel_defaults_to_new_key(self):
+        assert vault_pki_config_key("latest/stable") == "pki_ca_common_name"
+
+    def test_empty_channel_defaults_to_new_key(self):
+        assert vault_pki_config_key("") == "pki_ca_common_name"
+
+
+class TestMigrateVaultConfigInDb:
+    def test_migrates_common_name_to_pki_ca_common_name(self):
+        stored = {
+            "_computed_keys": ["vault-config"],
+            "vault-config": {"common_name": "example.com"},
+            "keystone-channel": "2024.1/stable",
+        }
+        client = Mock()
+        client.cluster.get_config.return_value = json.dumps(stored)
+
+        with patch("sunbeam.features.vault.feature.read_config", return_value=stored):
+            with patch("sunbeam.features.vault.feature.update_config") as mock_update:
+                migrate_vault_config_in_db(
+                    client, "TerraformVarsOpenstack", "1.18/stable"
+                )
+
+        mock_update.assert_called_once()
+        saved_data = mock_update.call_args.args[2]
+        assert saved_data["vault-config"]["pki_ca_common_name"] == "example.com"
+        assert "common_name" not in saved_data["vault-config"]
+        assert saved_data["vault-config"]["pki_allow_subdomains"] is True
+
+    def test_migrates_pki_ca_common_name_to_common_name(self):
+        stored = {
+            "_computed_keys": ["vault-config"],
+            "vault-config": {
+                "pki_ca_common_name": "example.com",
+                "pki_allow_subdomains": True,
+            },
+        }
+        client = Mock()
+
+        with patch("sunbeam.features.vault.feature.read_config", return_value=stored):
+            with patch("sunbeam.features.vault.feature.update_config") as mock_update:
+                migrate_vault_config_in_db(
+                    client, "TerraformVarsOpenstack", "1.16/stable"
+                )
+
+        mock_update.assert_called_once()
+        saved_data = mock_update.call_args.args[2]
+        assert saved_data["vault-config"] == {"common_name": "example.com"}
+        assert "pki_allow_subdomains" not in saved_data["vault-config"]
+
+    def test_both_keys_present_preserves_new_key(self):
+        stored = {
+            "vault-config": {
+                "common_name": "old.example.com",
+                "pki_ca_common_name": "example.com",
+                "pki_allow_subdomains": True,
+            },
+        }
+        client = Mock()
+
+        with patch("sunbeam.features.vault.feature.read_config", return_value=stored):
+            with patch("sunbeam.features.vault.feature.update_config") as mock_update:
+                migrate_vault_config_in_db(
+                    client, "TerraformVarsOpenstack", "1.18/stable"
+                )
+
+        mock_update.assert_called_once()
+        saved_data = mock_update.call_args.args[2]
+        assert saved_data["vault-config"]["pki_ca_common_name"] == "example.com"
+        assert "common_name" not in saved_data["vault-config"]
+
+    def test_noop_when_key_already_correct(self):
+        stored = {
+            "vault-config": {
+                "pki_ca_common_name": "example.com",
+                "pki_allow_subdomains": True,
+            },
+        }
+        client = Mock()
+
+        with patch("sunbeam.features.vault.feature.read_config", return_value=stored):
+            with patch("sunbeam.features.vault.feature.update_config") as mock_update:
+                migrate_vault_config_in_db(
+                    client, "TerraformVarsOpenstack", "1.18/stable"
+                )
+
+        mock_update.assert_not_called()
+
+    def test_adds_pki_allow_subdomains_when_missing_on_118(self):
+        stored = {
+            "vault-config": {"pki_ca_common_name": "example.com"},
+        }
+        client = Mock()
+
+        with patch("sunbeam.features.vault.feature.read_config", return_value=stored):
+            with patch("sunbeam.features.vault.feature.update_config") as mock_update:
+                migrate_vault_config_in_db(
+                    client, "TerraformVarsOpenstack", "1.18/stable"
+                )
+
+        mock_update.assert_called_once()
+        saved_data = mock_update.call_args.args[2]
+        assert saved_data["vault-config"]["pki_allow_subdomains"] is True
+
+    def test_noop_when_no_vault_config(self):
+        stored = {"keystone-channel": "2024.1/stable"}
+        client = Mock()
+
+        with patch("sunbeam.features.vault.feature.read_config", return_value=stored):
+            with patch("sunbeam.features.vault.feature.update_config") as mock_update:
+                migrate_vault_config_in_db(
+                    client, "TerraformVarsOpenstack", "1.18/stable"
+                )
+
+        mock_update.assert_not_called()
+
+    def test_noop_when_config_not_found(self):
+        client = Mock()
+
+        with patch(
+            "sunbeam.features.vault.feature.read_config",
+            side_effect=ConfigItemNotFoundException,
+        ):
+            with patch("sunbeam.features.vault.feature.update_config") as mock_update:
+                migrate_vault_config_in_db(
+                    client, "TerraformVarsOpenstack", "1.18/stable"
+                )
+
+        mock_update.assert_not_called()
+
+    def test_noop_when_vault_config_is_none(self):
+        stored = {"vault-config": None}
+        client = Mock()
+
+        with patch("sunbeam.features.vault.feature.read_config", return_value=stored):
+            with patch("sunbeam.features.vault.feature.update_config") as mock_update:
+                migrate_vault_config_in_db(
+                    client, "TerraformVarsOpenstack", "1.18/stable"
+                )
+
+        mock_update.assert_not_called()

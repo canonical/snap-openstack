@@ -21,12 +21,17 @@ from sunbeam.core.juju import (
 )
 from sunbeam.core.manifest import Manifest
 from sunbeam.core.openstack import OPENSTACK_MODEL
-from sunbeam.core.terraform import TerraformException, TerraformHelper
+from sunbeam.core.terraform import (
+    TerraformException,
+    TerraformHelper,
+    TerraformStateLockedException,
+)
 from sunbeam.features.interface.v1.openstack import OPENSTACK_TERRAFORM_VARS
 from sunbeam.features.vault.feature import (
     VaultCommandFailedException,
     VaultHelper,
     auto_unseal_vault,
+    migrate_vault_config_in_db,
 )
 from sunbeam.versions import VAULT_CHANNEL
 
@@ -60,6 +65,7 @@ class VaultCharmUpgradeStep(BaseStep, JujuStepHelper):
         self.tfhelper = tfhelper
         self.application = application
         self.tfvar_config = OPENSTACK_TERRAFORM_VARS
+        self._skip_charm_refresh = False
 
     def upgrade(
         self, revision: int | None = None, channel: str = VAULT_CHANNEL
@@ -75,18 +81,11 @@ class VaultCharmUpgradeStep(BaseStep, JujuStepHelper):
             trust=True,
         )
 
-    def is_skip(self, context: StepContext) -> Result:
-        """Determines if the step should be skipped or not.
+    def _needs_charm_refresh(self) -> Result:
+        """Determine whether the charm itself needs refreshing.
 
-        Skips when:
-        - application is not deployed
-        - channel pinned in manifest has track below VAULT_CHANNEL
-        - manifest pins a revision that matches the deployed charm
-        - no revision pinned and deployed charm is already at the latest
-          revision for the target channel
-
-        :return: ResultType.SKIPPED if the Step should be skipped,
-                ResultType.COMPLETED or ResultType.FAILED otherwise
+        Returns SKIPPED when the deployed charm already matches the target,
+        FAILED when the manifest channel is invalid, COMPLETED otherwise.
         """
         try:
             app = self.jhelper.get_application(self.application, OPENSTACK_MODEL)
@@ -105,8 +104,6 @@ class VaultCharmUpgradeStep(BaseStep, JujuStepHelper):
         if charm_manifest and charm_manifest.channel:
             target_track = target_channel.split("/")[0]
             minimum_vault_track = VAULT_CHANNEL.split("/")[0]
-            # Skip if the manifest pins a channel whose track is below the
-            # minimum supported channel.
             if target_track != minimum_vault_track and not self.channel_update_needed(
                 VAULT_CHANNEL, target_channel
             ):
@@ -129,11 +126,8 @@ class VaultCharmUpgradeStep(BaseStep, JujuStepHelper):
                 )
                 LOG.debug(msg)
                 return Result(ResultType.SKIPPED, msg)
-            # Proceed with upgrade if revision pinned in manifest differs from deployed.
             return Result(ResultType.COMPLETED)
 
-        # No revision pinned: Skip if deployed charm is already at the latest revision
-        # for the target channel.
         try:
             if app.base:
                 base = f"{app.base.name}@{app.base.channel}"
@@ -146,7 +140,6 @@ class VaultCharmUpgradeStep(BaseStep, JujuStepHelper):
                 )
         except JujuException as e:
             LOG.debug("Could not determine latest revision for %s: %s", CHARM_NAME, e)
-            # Proceed with refresh if we cannot confirm the revision.
             return Result(ResultType.COMPLETED)
 
         if deployed_channel == target_channel and app.charm_rev == latest_rev:
@@ -154,6 +147,28 @@ class VaultCharmUpgradeStep(BaseStep, JujuStepHelper):
                 ResultType.SKIPPED,
                 f"{CHARM_NAME} is already at the latest revision for "
                 f"channel {target_channel}",
+            )
+        return Result(ResultType.COMPLETED)
+
+    def is_skip(self, context: StepContext) -> Result:
+        """Determines if the step should be skipped or not.
+
+        Only skips when vault is not deployed or the manifest channel is
+        invalid.  The step always runs otherwise so that the DB migration
+        and terraform apply happen even when no charm refresh is needed.
+        """
+        result = self._needs_charm_refresh()
+        if result.result_type == ResultType.FAILED:
+            return result
+        # Remember whether the charm refresh itself can be skipped so that
+        # run() can avoid the unnecessary upgrade + wait cycle.
+        self._skip_charm_refresh = result.result_type == ResultType.SKIPPED
+        try:
+            self.jhelper.get_application(self.application, OPENSTACK_MODEL)
+        except ApplicationNotFoundException:
+            return Result(
+                ResultType.SKIPPED,
+                f"{self.application} application has not been deployed yet",
             )
         return Result(ResultType.COMPLETED)
 
@@ -165,45 +180,58 @@ class VaultCharmUpgradeStep(BaseStep, JujuStepHelper):
             charm_manifest.channel if charm_manifest else None
         ) or VAULT_CHANNEL
 
-        try:
-            self.update_status(context, f"Refreshing Vault to channel {target_channel}")
-            self.upgrade(revision=revision, channel=target_channel)
-        except JujuException as e:
-            LOG.error(f"Failed to refresh Vault: {e}")
-            return Result(
-                ResultType.FAILED,
-                f"Failed to refresh Vault: {e}",
-            )
+        if not self._skip_charm_refresh:
+            try:
+                self.update_status(
+                    context, f"Refreshing Vault to channel {target_channel}"
+                )
+                self.upgrade(revision=revision, channel=target_channel)
+            except JujuException as e:
+                LOG.error(f"Failed to refresh Vault: {e}")
+                return Result(
+                    ResultType.FAILED,
+                    f"Failed to refresh Vault: {e}",
+                )
 
-        try:
-            self.update_status(context, "Waiting for Vault to stabilise")
-            # Vault expected to be blocked and unsealed after refresh
-            self.jhelper.wait_until_desired_status(
-                OPENSTACK_MODEL,
-                [self.application],
-                status=["blocked"],
-                workload_status_message=["Please unseal Vault"],
-                timeout=VAULT_UPGRADE_TIMEOUT,
-            )
-        except (JujuWaitException, TimeoutError) as e:
-            LOG.error(f"Timed out waiting for {self.application}: {e}")
-            return Result(
-                ResultType.FAILED,
-                f"Timed out waiting for {self.application} to stabilise: {e}",
-            )
+            try:
+                self.update_status(context, "Waiting for Vault to stabilise")
+                # After refresh vault may be blocked on missing config
+                # (1.18+ requires pki_ca_common_name) or waiting to be unsealed.
+                self.jhelper.wait_until_desired_status(
+                    OPENSTACK_MODEL,
+                    [self.application],
+                    status=["blocked"],
+                    timeout=VAULT_UPGRADE_TIMEOUT,
+                )
+            except (JujuWaitException, TimeoutError) as e:
+                LOG.error(f"Timed out waiting for {self.application}: {e}")
+                return Result(
+                    ResultType.FAILED,
+                    f"Timed out waiting for {self.application} to stabilise: {e}",
+                )
 
         try:
             self.update_status(
                 context, "Updating terraform plan with new vault channel"
             )
+            migrate_vault_config_in_db(self.client, self.tfvar_config, target_channel)
             self.tfhelper.update_tfvars_and_apply_tf(
                 self.client,
                 self.manifest,
                 tfvar_config=self.tfvar_config,
                 override_tfvars={"vault-channel": target_channel},
             )
-        except TerraformException as e:
-            LOG.warning(f"Failed to reapply terraform plan after vault upgrade: {e}")
+        except (TerraformException, TerraformStateLockedException) as e:
+            return Result(
+                ResultType.FAILED,
+                f"Failed to apply terraform plan after vault config migration: {e}",
+            )
+
+        if self._skip_charm_refresh:
+            return Result(
+                ResultType.COMPLETED,
+                "Vault config migrated, no charm refresh needed.",
+            )
 
         try:
             self.update_status(
