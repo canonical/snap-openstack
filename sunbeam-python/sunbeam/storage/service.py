@@ -64,10 +64,13 @@ class StorageBackendService:
                     config=backend.config,
                 )
                 backends.append(backend_info)
-                LOG.debug(f"Found {backend.type} backend: {backend.name}")
+                LOG.debug("Found %s backend: %s", backend.type, backend.name)
             except Exception as e:
                 LOG.warning(
-                    f"Error processing {backend.type} backend {backend.name}: {e}"
+                    "Error processing %s backend %s: %r",
+                    backend.type,
+                    backend.name,
+                    e,
                 )
                 continue
         return backends
@@ -95,7 +98,7 @@ class StorageBackendService:
 
             return "not-found"
         except Exception as e:
-            LOG.debug(f"Failed to get status for application {app_name}: {e}")
+            LOG.debug("Failed to get status for application %s: %r", app_name, e)
             return "unknown"
 
     def _get_application_charm(self, jhelper: JujuHelper, app_name: str) -> str:
@@ -121,9 +124,8 @@ class StorageBackendService:
                 return charm_url
 
             return "Not Found"
-
         except Exception as e:
-            LOG.debug(f"Failed to get charm for application {app_name}: {e}")
+            LOG.debug("Failed to get charm for application %s: %r", app_name, e)
             return "Unknown"
 
     def backend_exists(self, backend_name: str, backend_type: str) -> bool:
@@ -143,5 +145,5 @@ class StorageBackendService:
         try:
             return client.cluster.get_storage_backend(backend_name)
         except StorageBackendNotFoundException as e:
-            LOG.debug(f"Storage backend not found: {backend_name}", exc_info=True)
+            LOG.debug("Storage backend not found: %s", backend_name, exc_info=True)
             raise BackendNotFoundException() from e

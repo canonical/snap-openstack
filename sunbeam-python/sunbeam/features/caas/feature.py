@@ -144,8 +144,10 @@ class SetupClusterAPI(BaseStep):
                 CLUSTER_API_VERSIONS.get(provider_name, "0.0.0")
             )
             LOG.debug(
-                f"{provider_name}: {provider_installed_version}"
-                f" {provider_required_version}"
+                "Provider %s: %s <- %s",
+                provider_name,
+                provider_installed_version,
+                provider_required_version,
             )
             if (
                 provider_installed_version.major != provider_required_version.major
@@ -369,7 +371,8 @@ class CreateKubeConfigSecretStep(BaseStep):
             self._grant_access_to_magnum(secret_id)
         except JujuException as e:
             LOG.debug(
-                f"Failed to grant magnum application access to juju secret {secret_id}",
+                "Failed to grant magnum application access to juju secret %s",
+                secret_id,
                 exc_info=True,
             )
             return Result(ResultType.FAILED, str(e))
@@ -413,7 +416,7 @@ class DeleteKubeConfigSecretStep(BaseStep):
             self.jhelper.remove_secret(OPENSTACK_MODEL, KUBECONFIG_SECRET_NAME)
         except JujuException as e:
             # Ignore the exception
-            LOG.debug(f"Unable to remove secret {KUBECONFIG_SECRET_NAME}: {str(e)}")
+            LOG.debug("Unable to remove secret %s: %r", KUBECONFIG_SECRET_NAME, e)
 
         return Result(ResultType.COMPLETED)
 
@@ -460,17 +463,19 @@ class DeleteClusterAPI(BaseStep):
         namespaces_in_cluster_list = [
             ns.metadata.name for ns in namespaces_in_cluster if ns.metadata
         ]
-        LOG.debug(f"Namespaces in the management cluster: {namespaces_in_cluster_list}")
+        LOG.debug(
+            "Namespaces in the management cluster: %s", namespaces_in_cluster_list
+        )
 
         namespaces_to_delete = set(capi_namespaces).intersection(
             namespaces_in_cluster_list
         )
         LOG.debug(
-            f"Namespaces to delete in the management cluster: {namespaces_to_delete}"
+            "Namespaces to delete in the management cluster: %s", namespaces_to_delete
         )
 
         for ns in namespaces_to_delete:
-            LOG.debug(f"Deleting namespace {ns}")
+            LOG.debug("Deleting namespace %s", ns)
             self.kube.delete(core_v1.Namespace, name=ns)
 
     def _delete_capi_crds(self) -> None:
@@ -495,7 +500,7 @@ class DeleteClusterAPI(BaseStep):
                 name="images.openstack.k-orc.cloud",
             )
         except l_exceptions.ApiError as e:
-            LOG.debug(f"Error in deleting ORC CRD: {str(e)}")
+            LOG.debug("Error in deleting ORC CRD: %r", e)
 
         # Delete Provider CRD, ignore if delete fails
         try:
@@ -505,7 +510,7 @@ class DeleteClusterAPI(BaseStep):
                 name="providers.clusterctl.cluster.x-k8s.io",
             )
         except l_exceptions.ApiError as e:
-            LOG.debug(f"Error in deleting provider CRD: {str(e)}")
+            LOG.debug("Error in deleting provider CRD: %r", e)
 
     def _delete_orc_resources(self) -> None:
         orc_cluster_roles = [
@@ -529,12 +534,12 @@ class DeleteClusterAPI(BaseStep):
             clusterroles_in_cluster_list
         )
         LOG.debug(
-            "ClusterRoles to delete in the management cluster: "
-            f"{clusterroles_to_delete}"
+            "ClusterRoles to delete in the management cluster: %s",
+            clusterroles_to_delete,
         )
 
         for clusterrole in clusterroles_to_delete:
-            LOG.debug(f"Deleting ClusterRole {clusterrole}")
+            LOG.debug("Deleting ClusterRole %s", clusterrole)
             self.kube.delete(rbac_authorization_v1.ClusterRole, clusterrole)
 
         # Delete ORC ClusterRoleBindings
@@ -550,12 +555,12 @@ class DeleteClusterAPI(BaseStep):
             clusterrolebindings_in_cluster_list
         )
         LOG.debug(
-            "ClusterRoleBindings to delete in the management cluster: "
-            f"{clusterrolebindings_to_delete}"
+            "ClusterRoleBindings to delete in the management cluster: %s",
+            clusterrolebindings_to_delete,
         )
 
         for clusterrolebinding in clusterrolebindings_to_delete:
-            LOG.debug(f"Deleting ClusterRoleBinding {clusterrolebinding}")
+            LOG.debug("Deleting ClusterRoleBinding %s", clusterrolebinding)
             self.kube.delete(
                 rbac_authorization_v1.ClusterRoleBinding, clusterrolebinding
             )
@@ -597,7 +602,7 @@ class DeleteClusterAPI(BaseStep):
         try:
             self._delete_capi_components()
         except subprocess.CalledProcessError as e:
-            LOG.debug(f"Error from clusterctl delete: {e.stderr}")
+            LOG.debug("Error from clusterctl delete: %s", e.stderr)
             # If CRDs are already deleted, the command results in following error
             # Error: failed to check Cluster API version:
             # customresourcedefinitions.apiextensions.k8s.io "clusters.cluster.x-k8s.io"
@@ -607,7 +612,7 @@ class DeleteClusterAPI(BaseStep):
                 message = f"Error in deleting Cluster API components: {str(e)}"
                 return Result(ResultType.FAILED, message)
             else:
-                LOG.debug("CRDs already deleted and so ignore clusterctl delete error")
+                LOG.debug("CRDs is already deleted, ignoring clusterctl delete error")
         except subprocess.TimeoutExpired as e:
             message = f"Timed out deleting Cluster API components: {str(e)}"
             return Result(ResultType.FAILED, message)

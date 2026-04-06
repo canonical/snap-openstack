@@ -1181,7 +1181,7 @@ class JujuHelper:
                 )
                 break
             except jubilant.CLIError as e:
-                LOG.error(f"Error occurred while waiting: {e}")
+                LOG.error("Error occurred while waiting: %r", e)
         else:
             raise TimeoutError(
                 f"Timed out after {timeout} seconds while waiting for status"
@@ -1215,11 +1215,11 @@ class JujuHelper:
             app = juju.status().apps.get(name)
             if not app:
                 return
-            LOG.debug(f"Application {name!r} is in status: {app.app_status.current!r}")
+            LOG.debug("Application %r is in status: %r", name, app.app_status.current)
             LOG.debug(
-                "Waiting for app status to be: {} {}".format(
-                    app.app_status.current, accepted_status
-                )
+                "Waiting for app status %r to be %r",
+                app.app_status.current,
+                accepted_status,
             )
             self._wait(_ready_callback, juju, delay=MODEL_DELAY, timeout=timeout)
 
@@ -1777,8 +1777,11 @@ class JujuHelper:
         relation_map = {}
         relation_ids = result.stdout.strip().splitlines()
         LOG.debug(
-            f"Relation IDs for interface {interface!r} on provider application "
-            f"{provider_app!r} in model {model!r}: {relation_ids}"
+            "Relation IDs for interface %r on provider application %r in model %r: %r",
+            interface,
+            provider_app,
+            model,
+            relation_ids,
         )
         for relation_id in relation_ids:
             cmd = f"relation-list -r {relation_id} --app"
@@ -1801,8 +1804,11 @@ class JujuHelper:
             relation_map[relation_id] = app_name
 
         LOG.debug(
-            f"Relation map for interface {interface!r} on provider application "
-            f"{provider_app!r} in model {model!r}: {relation_map}"
+            "Relation map for interface %r on provider application %r in model %r: %r",
+            interface,
+            provider_app,
+            model,
+            relation_map,
         )
         return relation_map
 
@@ -1838,9 +1844,11 @@ class JujuStepHelper:
         cmd.extend(args)
         cmd.extend(["--format", "json"])
 
-        LOG.debug(f"Running command {' '.join(cmd)}")
+        LOG.debug("Running command %s", " ".join(cmd))
         process = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        LOG.debug(f"Command finished. stdout={process.stdout}, stderr={process.stderr}")
+        LOG.debug(
+            "Command finished. stdout=%r, stderr=%r", process.stdout, process.stderr
+        )
 
         return json.loads(process.stdout.strip())
 
@@ -1862,13 +1870,15 @@ class JujuStepHelper:
             if controller:
                 cmd.extend(["--controller", controller])
         clouds_from_juju_cmd = self._juju_cmd(*cmd)
-        LOG.debug(f"Available clouds in juju are {clouds_from_juju_cmd.keys()}")
+        LOG.debug("Available clouds in juju are %s", list(clouds_from_juju_cmd.keys()))
 
         for name, details in clouds_from_juju_cmd.items():
             if details["type"] == cloud_type:
                 clouds.append(name)
 
-        LOG.debug(f"There are {len(clouds)} {cloud_type} clouds available: {clouds}")
+        LOG.debug(
+            "There are %d %s clouds available: %s", len(clouds), cloud_type, clouds
+        )
 
         return clouds
 
@@ -1897,8 +1907,10 @@ class JujuStepHelper:
             name for name, details in controllers.items() if details["cloud"] in clouds
         ]
         LOG.debug(
-            f"There are {len(existing_controllers)} existing {clouds} "
-            f"controllers running: {existing_controllers}"
+            "There are %d existing %s controllers running: %s",
+            len(existing_controllers),
+            clouds,
+            existing_controllers,
         )
         return existing_controllers
 
@@ -1921,7 +1933,7 @@ class JujuStepHelper:
         try:
             return self._juju_cmd("show-controller", controller)[controller]
         except subprocess.CalledProcessError as e:
-            LOG.debug(e)
+            LOG.debug("%s: %s", e, e.stderr)
             raise ControllerNotFoundException() from e
 
     def get_controller_ip(self, controller: str) -> str:
@@ -1963,10 +1975,10 @@ class JujuStepHelper:
             ]
             if controller:
                 cmd.extend(["--controller", controller, "--force"])
-            LOG.debug(f"Running command {' '.join(cmd)}")
+            LOG.debug("Running command %s", " ".join(cmd))
             process = subprocess.run(cmd, capture_output=True, text=True, check=True)
             LOG.debug(
-                f"Command finished. stdout={process.stdout}, stderr={process.stderr}"
+                "Command finished. stdout=%r, stderr=%r", process.stdout, process.stderr
             )
 
         return True
@@ -1986,12 +1998,12 @@ class JujuStepHelper:
 
             env = os.environ.copy()
             env.update({"KUBECONFIG": temp.name})
-            LOG.debug(f"Running command {' '.join(cmd)}")
+            LOG.debug("Running command %s", " ".join(cmd))
             process = subprocess.run(
                 cmd, capture_output=True, text=True, check=True, env=env
             )
             LOG.debug(
-                f"Command finished. stdout={process.stdout}, stderr={process.stderr}"
+                "Command finished. stdout=%r, stderr=%r", process.stdout, process.stderr
             )
 
     def add_credential(self, cloud: str, credential: dict, controller: str | None):
@@ -2014,10 +2026,10 @@ class JujuStepHelper:
                 cmd.extend(["--controller", controller])
             else:
                 cmd.extend(["--client"])
-            LOG.debug(f"Running command {' '.join(cmd)}")
+            LOG.debug("Running command %s", " ".join(cmd))
             process = subprocess.run(cmd, capture_output=True, text=True, check=True)
             LOG.debug(
-                f"Command finished. stdout={process.stdout}, stderr={process.stderr}"
+                "Command finished. stdout=%r, stderr=%r", process.stdout, process.stderr
             )
 
     def integrate(
@@ -2037,13 +2049,13 @@ class JujuStepHelper:
             requirer,
         ]
         try:
-            LOG.debug(f"Running command {' '.join(cmd)}")
+            LOG.debug("Running command %s", " ".join(cmd))
             process = subprocess.run(cmd, capture_output=True, text=True, check=True)
             LOG.debug(
-                f"Command finished. stdout={process.stdout}, stderr={process.stderr}"
+                "Command finished. stdout=%r, stderr=%r", process.stdout, process.stderr
             )
         except subprocess.CalledProcessError as e:
-            LOG.debug(e.stderr)
+            LOG.debug("%s: %s", e, e.stderr)
             if ignore_error_if_exists and "already exists" not in e.stderr:
                 raise e
 
@@ -2057,9 +2069,11 @@ class JujuStepHelper:
             provider,
             requirer,
         ]
-        LOG.debug(f"Running command {' '.join(cmd)}")
+        LOG.debug("Running command %s", " ".join(cmd))
         process = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        LOG.debug(f"Command finished. stdout={process.stdout}, stderr={process.stderr}")
+        LOG.debug(
+            "Command finished. stdout=%r, stderr=%r", process.stdout, process.stderr
+        )
 
     def get_charm_deployed_versions(self, model: str) -> dict:
         """Return charm deployed info for all the applications in model.
@@ -2117,7 +2131,11 @@ class JujuStepHelper:
             try:
                 return version.parse(current_track) < version.parse(new_track)
             except version.InvalidVersion:
-                LOG.error("Error: Could not compare tracks")
+                LOG.error(
+                    "Could not compare tracks between %r and %r channels",
+                    current_track,
+                    new_track,
+                )
                 return False
         if risks.index(current_risk) < risks.index(new_risk):
             return True
@@ -2229,7 +2247,7 @@ class JujuActionHelper:
         try:
             unit = JujuActionHelper.get_unit(client, jhelper, model, node, app)
             LOG.debug(
-                "Running action '%s' on unit '%s', params: %s",
+                "Running action %r on unit %r, params: %s",
                 action_name,
                 unit,
                 action_params,
@@ -2243,8 +2261,8 @@ class JujuActionHelper:
             )
             return action_result
         except UnitNotFoundException as e:
-            LOG.debug(f"Application {app} not found on node {node}")
+            LOG.debug("Application %r is not found on node %r: %r", app, node, e)
             raise e
         except ActionFailedException as e:
-            LOG.debug("Action '%s' failed on node '%s': %s", action_name, node, e)
+            LOG.debug("Action %r failed on node %r: %r", action_name, node, e)
             raise e

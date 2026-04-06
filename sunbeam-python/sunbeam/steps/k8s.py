@@ -430,12 +430,12 @@ class EnsureK8SUnitsTaggedStep(BaseStep):
         Raises K8SError if client not able to get nodes
         from k8s.
         """
-        LOG.debug(f"Matching K8S Node with name {hostname} and IPs {ips}")
+        LOG.debug("Matching K8S Node with name %s and IPs %s", hostname, ips)
         hostname_without_domain = hostname.split(".")[0]
         k8s_nodes = list_nodes(
             self.kube, labels={DEPLOYMENT_LABEL: self.deployment.name}
         )
-        LOG.debug(f"K8S nodes filtered by deployment label: {k8s_nodes}")
+        LOG.debug("K8S nodes filtered by deployment label: %s", k8s_nodes)
 
         for k8s_node in k8s_nodes:
             if k8s_node.metadata is None:
@@ -841,7 +841,7 @@ class AddK8SCloudStep(BaseStep, JujuStepHelper):
                 ResultType.COMPLETED or ResultType.FAILED otherwise
         """
         clouds = self.jhelper.get_clouds()
-        LOG.debug(f"Clouds registered in the controller: {clouds}")
+        LOG.debug("Clouds registered in the controller: %s", clouds)
         # TODO(hemanth): Need to check if cloud credentials are also created?
         if self.cloud_name in clouds.keys():
             return Result(ResultType.SKIPPED)
@@ -878,7 +878,7 @@ class AddK8SCloudInClientStep(BaseStep, JujuStepHelper):
                 ResultType.COMPLETED or ResultType.FAILED otherwise
         """
         clouds = self.get_clouds("k8s", local=True)
-        LOG.debug(f"Clouds registered in the client: {clouds}")
+        LOG.debug("Clouds registered in the client: %s", clouds)
         if self.cloud_name in clouds:
             return Result(ResultType.SKIPPED)
 
@@ -913,7 +913,7 @@ class UpdateK8SCloudStep(BaseStep, JujuStepHelper):
                 ResultType.COMPLETED or ResultType.FAILED otherwise
         """
         clouds = self.jhelper.get_clouds()
-        LOG.debug(f"Clouds registered in the controller: {clouds}")
+        LOG.debug("Clouds registered in the controller: %s", clouds)
         if self.cloud_name not in clouds.keys():
             return Result(
                 ResultType.SKIPPED,
@@ -958,8 +958,8 @@ class AddK8SCredentialStep(BaseStep, JujuStepHelper):
             if "not found" in e.stderr:
                 return Result(ResultType.COMPLETED)
 
-            LOG.debug(e.stderr)
-            LOG.exception("Error retrieving juju credentails from controller.")
+            LOG.debug("%s: %s", e, e.stderr)
+            LOG.exception("Error retrieving juju credentails from controller")
             return Result(ResultType.FAILED, str(e))
 
         if self.credential_name in credentials.get("controller-credentials", {}).keys():
@@ -1015,7 +1015,7 @@ class StoreK8SKubeConfigStep(BaseStep, JujuStepHelper):
             unit = self.jhelper.get_leader_unit(APPLICATION, self.model)
             machine = self.jhelper.get_leader_unit_machine(APPLICATION, self.model)
 
-            LOG.debug(unit)
+            LOG.debug("Leader unit: %s", unit)
             leader_unit_management_ip = self._get_management_server_ip(machine)
             LOG.debug("Leader unit management IP: %s", leader_unit_management_ip)
             run_action_kwargs = (
@@ -1030,7 +1030,7 @@ class StoreK8SKubeConfigStep(BaseStep, JujuStepHelper):
                 run_action_kwargs,
             )
 
-            LOG.debug(result)
+            LOG.debug("Result from getting kubeconfig for %s: %s", unit, result)
             if not result.get("kubeconfig"):
                 return Result(
                     ResultType.FAILED,
@@ -1921,7 +1921,7 @@ class PatchCoreDNSStep(BaseStep):
             coredns_hpa = self.kube.get(
                 autoscaling_v2.HorizontalPodAutoscaler, name=self.coredns_hpa
             )
-            LOG.debug(f"Existing coredns hpa: {coredns_hpa}")
+            LOG.debug("Existing coredns hpa: %s", coredns_hpa)
             coredns_hpa_spec = coredns_hpa.spec
             if coredns_hpa_spec is None:
                 LOG.debug("Coredns HPA has no spec")
@@ -1937,7 +1937,7 @@ class PatchCoreDNSStep(BaseStep):
                 LOG.debug("Failed to get coredns hpa", exc_info=True)
                 return Result(ResultType.FAILED, str(e))
             else:
-                LOG.debug(f"No hpa found for coredns: {str(e)}")
+                LOG.debug("No hpa found for coredns: %r", e)
 
         return Result(ResultType.COMPLETED)
 
@@ -1953,7 +1953,7 @@ class PatchCoreDNSStep(BaseStep):
                 self.juju_app_name, self.deployment.openstack_machines_model
             )
         except JujuException as e:
-            LOG.debug(f"Failed to get {self.juju_app_name} leader", exc_info=True)
+            LOG.debug("Failed to get %s leader", self.juju_app_name, exc_info=True)
             return Result(ResultType.FAILED, str(e))
 
         hpa_dict = copy.deepcopy(COREDNS_HPA)
@@ -1968,7 +1968,7 @@ class PatchCoreDNSStep(BaseStep):
                 "/snap/k8s/current/k8s/manifests/charts/coredns-*.tgz"
                 f" --reuse-values --set-json hpa='{hpa}',resources='{resources}'"
             )
-            LOG.debug(f"Running cmd in unit {leader}: {cmd_str}")
+            LOG.debug("Running cmd in unit %s: %s", leader, cmd_str)
 
             result = self.jhelper.run_cmd_on_machine_unit_payload(
                 leader,
@@ -1976,7 +1976,7 @@ class PatchCoreDNSStep(BaseStep):
                 cmd_str,
                 self.timeout,
             )
-            LOG.debug(f"Result: {result}")
+            LOG.debug("Result for patching coredns for %s: %s", leader, result)
 
             if result.return_code != 0:
                 return Result(

@@ -177,8 +177,8 @@ def set(
     try:
         _update_proxy(variables, deployment, show_hints)
     except (ClusterServiceUnavailableException, ConfigItemNotFoundException) as e:
-        LOG.debug(f"Exception in updating config {str(e)}")
-        click.echo("ERROR: Not able to update proxy config: str(e)")
+        LOG.debug("Exception in updating proxy config: %r", e)
+        click.echo(f"ERROR: Not able to update proxy config: {str(e)}")
         return
 
 
@@ -197,8 +197,8 @@ def clear(ctx: click.Context, show_hints: bool) -> None:
     try:
         _update_proxy(variables, deployment, show_hints)
     except (ClusterServiceUnavailableException, ConfigItemNotFoundException) as e:
-        LOG.debug(f"Exception in updating config {str(e)}")
-        click.echo("ERROR: Not able to clear proxy config: str(e)")
+        LOG.debug("Exception in clearing proxy config: %r", e)
+        click.echo(f"ERROR: Not able to clear proxy config: {str(e)}")
         return
 
 
@@ -281,7 +281,7 @@ class PromptForProxyStep(BaseStep):
         self.variables.setdefault("proxy", {})
 
         previous_answers = self.variables.get("proxy", {})
-        LOG.debug(f"Previous answers: {previous_answers}")
+        LOG.debug("Previous answers: %s", previous_answers)
         if not (
             previous_answers.get("http_proxy")
             and previous_answers.get("https_proxy")

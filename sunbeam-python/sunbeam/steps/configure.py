@@ -556,7 +556,7 @@ class SetExternalNetworkUnitsOptionsStep(BaseStep, UnitGetterMixin):
             is_network_node = "network" in node_roles
 
             if bridge_mapping is None and not split_roles:
-                LOG.debug(f"No NIC found for {name}, skipping.")
+                LOG.debug("No NIC found for %s, skipping.", name)
                 continue
 
             # When split-roles is active, only network nodes get

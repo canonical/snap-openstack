@@ -101,7 +101,7 @@ def remove_blocked_apps_from_features(jhelper: JujuHelper, model: str) -> list[s
     for app_name in APPS_BLOCKED_WHEN_FEATURE_ENABLED:
         try:
             app = jhelper.get_application(app_name, model)
-            LOG.debug(f"Application status for {app_name}: {app.app_status.current}")
+            LOG.debug("Application status for %s: %s", app_name, app.app_status.current)
             if app.app_status.current != "active":
                 apps_to_remove.append(app_name)
         except ApplicationNotFoundException:
@@ -279,7 +279,7 @@ def determine_target_topology(client: Client) -> str:
         topology = "multi"
     else:
         topology = "large"
-    LOG.debug(f"Auto-detected topology: {topology}")
+    LOG.debug("Auto-detected topology: %s", topology)
     return topology
 
 
@@ -702,7 +702,7 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
         try:
             previous_config = read_config(self.client, TOPOLOGY_KEY)
             self.database = previous_config.get("database", DEFAULT_DATABASE_TOPOLOGY)
-            LOG.debug(f"database topology {self.database}")
+            LOG.debug("Database topology: %s", self.database)
         except ConfigItemNotFoundException:
             # Config was never registered in database
             previous_config = {}
@@ -711,7 +711,7 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
 
         if self.topology == "auto":
             self.topology = determined_topology
-        LOG.debug(f"topology {self.topology}")
+        LOG.debug("Topology: %s", self.topology)
 
         # Check for storage size modifications in manifest
         # TODO: Force flag to update storage sizes once resize on k8s
@@ -791,12 +791,16 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
             LOG.info(
                 "The Terraform Juju provider does not currently support "
                 "cross-controller relations: "
-                "https://github.com/juju/terraform-provider-juju/issues/805."
+                "https://github.com/juju/terraform-provider-juju/issues/805"
             )
             LOG.info(
                 "The following offers must be consumed manually: "
-                f"{m}.keystone-credentials, {m}.keystone-endpoints "
-                f"{m}.keystone-ops, {m}.cert-distributor"
+                "%s.keystone-credentials, %s.keystone-endpoints "
+                "%s.keystone-ops, %s.cert-distributor",
+                m,
+                m,
+                m,
+                m,
             )
             extra_tfvars.update(
                 {
@@ -837,7 +841,7 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
         apps = list(set(apps) - set(self.remove_blocked_apps_from_role()))
         apps = list(set(apps) - set(self.remove_blocked_apps_from_ovn_provider()))
 
-        LOG.debug(f"Applications monitored for readiness: {apps}")
+        LOG.debug("Applications monitored for readiness: %s", apps)
         status_queue: queue.Queue[str] = queue.Queue()
         task = update_status_background(self, apps, status_queue, context.status)
         try:
@@ -849,7 +853,7 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
                 overlay=build_overlay_dict(apps),
             )
         except (JujuWaitException, TimeoutError) as e:
-            LOG.warning(str(e))
+            LOG.warning("Timed out waiting to deploy OpenStack control plane: %r", e)
             return Result(ResultType.FAILED, str(e))
         finally:
             task.stop()
@@ -1021,13 +1025,13 @@ class ReapplyOpenStackTerraformPlanStep(BaseStep, JujuStepHelper):
         apps = list(
             set(apps) - set(remove_blocked_apps_from_ovn_provider(self.ovn_manager))
         )
-        LOG.debug(f"Application monitored for readiness: {apps}")
+        LOG.debug("Application monitored for readiness: %s", apps)
         pre_status: dict[str, str] = {}
         try:
             pre_status = self.jhelper.snapshot_workload_status(self.model, apps)
         except Exception:
             LOG.debug("Could not fetch pre-wait status", exc_info=True)
-        LOG.debug(f"Pre-wait workload status for {self.model}: {pre_status}")
+        LOG.debug("Pre-wait workload status for %s: %s", self.model, pre_status)
         status_queue: queue.Queue[str] = queue.Queue()
         task = update_status_background(self, apps, status_queue, context.status)
         try:
@@ -1041,7 +1045,7 @@ class ReapplyOpenStackTerraformPlanStep(BaseStep, JujuStepHelper):
                 ),
             )
         except (JujuWaitException, TimeoutError) as e:
-            LOG.debug(str(e))
+            LOG.debug("Timed out waiting for reapplying OpenStack control plane: %r", e)
             return Result(ResultType.FAILED, str(e))
         finally:
             task.stop()
@@ -1134,7 +1138,7 @@ class PromptRegionStep(BaseStep):
 
         if region := self.variables.get("region"):
             # Region cannot be modified once set
-            LOG.debug(f"Region already set to {region}")
+            LOG.debug("Region is already set to %s", region)
             return
         preseed = {}
         if self.manifest:
@@ -1315,8 +1319,10 @@ class EndpointsConfigurationStep(BaseStep):
                     )
 
                 LOG.warning(
-                    f"Invalid IP address for {endpoint} endpoint: {ip}, "
-                    "IP is not in the configured load balancer range"
+                    "Invalid IP address for %s endpoint: %s, "
+                    "IP is not in the configured load balancer range",
+                    endpoint,
+                    ip,
                 )
                 ip = endpoint_bank.ip.ask()
 
@@ -1325,7 +1331,10 @@ class EndpointsConfigurationStep(BaseStep):
                     raise e
 
                 LOG.warning(
-                    f"Invalid IP address for {endpoint} endpoint: {ip}, error: {e}"
+                    "Invalid IP address for %s endpoint: %s, error: %r",
+                    endpoint,
+                    ip,
+                    e,
                 )
                 ip = endpoint_bank.ip.ask()
 
@@ -1413,7 +1422,7 @@ class PromptDatabaseTopologyStep(BaseStep):
 
         if database := self.variables.get("database"):
             # Region cannot be modified once set
-            LOG.debug(f"Database topology already set to {database}")
+            LOG.debug("Database topology is already set to %s", database)
             return
 
         preseed = {}

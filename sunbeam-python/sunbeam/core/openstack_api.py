@@ -66,7 +66,7 @@ def remove_compute_service(
     :param conn: Admin connection
     """
     for service in conn.compute.services(host=hypervisor_name):
-        LOG.info(f"Disabling {service.binary} on {service.host}")
+        LOG.info("Disabling %s on %s", service.binary, service.host)
         conn.compute.disable_service(service)
         conn.compute.delete_service(service)
 
@@ -80,7 +80,7 @@ def remove_network_service(
     :param conn: Admin connection
     """
     for service in conn.network.agents(host=hypervisor_name):
-        LOG.info(f"Disabling {service.binary} on {service.host}")
+        LOG.info("Disabling %s on %s", service.binary, service.host)
         conn.network.delete_agent(service)
 
 

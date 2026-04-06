@@ -77,7 +77,7 @@ class LocalDeployment(Deployment):
     def _load_juju_account(self) -> JujuAccount | None:
         try:
             juju_account = JujuAccount.load(snaphelpers.Snap().paths.user_data)
-            LOG.debug(f"Local account found: {juju_account.user}")
+            LOG.debug("Local account found: %s", juju_account.user)
             return juju_account
         except JujuAccountNotFound:
             LOG.debug("No juju account found", exc_info=True)

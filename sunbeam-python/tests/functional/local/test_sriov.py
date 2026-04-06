@@ -9,6 +9,8 @@ import pytest
 
 from . import snap, utils
 
+LOG = logging.getLogger(__name__)
+
 # The number of VFs to create if there aren't any existing ones.
 DEFAULT_NUM_VFS = 4
 
@@ -26,7 +28,7 @@ def test_sriov(
         pytest.skip("No SR-IOV interface specified, skipping SR-IOV tests.")
 
     pci_address = utils.get_iface_pci_address(sriov_interface_name)
-    logging.info("Detected SR-IOV interface PCI address: %s", pci_address)
+    LOG.info("Detected SR-IOV interface PCI address: %s", pci_address)
 
     if not utils.is_sriov_capable(pci_address):
         raise Exception(
@@ -35,7 +37,7 @@ def test_sriov(
         )
 
     has_hw_offload = utils.is_hw_offload_available(sriov_interface_name)
-    logging.info("Hardware offloading available: %s", has_hw_offload)
+    LOG.info("Hardware offloading available: %s", has_hw_offload)
 
     if has_hw_offload:
         utils.ensure_hw_offload_enabled(sriov_interface_name)
@@ -43,7 +45,7 @@ def test_sriov(
     num_vfs = utils.get_sriov_numvfs(pci_address)
     if num_vfs <= 0:
         num_vfs = DEFAULT_NUM_VFS
-        logging.info("No SR-IOV VFs defined, creating %s", num_vfs)
+        LOG.info("No SR-IOV VFs defined, creating %s", num_vfs)
         utils.set_sriov_numvfs(pci_address, num_vfs)
 
     # The device specs are expected to contain a physnet unless overlay
@@ -71,7 +73,7 @@ def test_sriov(
         base_manifest_path=manifest_path,
     )
 
-    logging.info("Applying SR-IOV configuration.")
+    LOG.info("Applying SR-IOV configuration.")
     utils.sunbeam_command(
         f"-v configure sriov -m {sriov_manifest_path} --accept-defaults"
     )

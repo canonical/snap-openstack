@@ -755,8 +755,10 @@ def log_gated_feature(feature_name: str, gate_key: str) -> None:
         gate_key: The snap config key for the gate
     """
     LOG.debug(
-        f"Feature '{feature_name}' is gated via '{gate_key}'. "
-        f"Enable with: snap set openstack {gate_key}=true"
+        "Feature %r is gated via %r. Enable with: snap set openstack %s=true",
+        feature_name,
+        gate_key,
+        gate_key,
     )
 
 
@@ -790,5 +792,5 @@ def get_feature_gate_from_cluster(
         gate = client.cluster.get_feature_gate(gate_key)
         return gate.enabled
     except Exception as e:
-        LOG.debug(f"Feature gate '{gate_key}' not found in cluster DB: {e}")
+        LOG.debug("Feature gate %r not found in cluster DB: %r", gate_key, e)
         return None

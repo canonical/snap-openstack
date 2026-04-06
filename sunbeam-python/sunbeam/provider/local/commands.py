@@ -649,8 +649,8 @@ def bootstrap(  # noqa: C901
             "The database topology can also be set via manifest."
         )
 
-    LOG.debug(f"Manifest used for deployment - core: {manifest.core}")
-    LOG.debug(f"Manifest used for deployment - features: {manifest.features}")
+    LOG.debug("Manifest used for deployment - core: %s", manifest.core)
+    LOG.debug("Manifest used for deployment - features: %s", manifest.features)
 
     # Bootstrap node must always have the control role or region controller
     # role.
@@ -676,7 +676,7 @@ def bootstrap(  # noqa: C901
 
     roles_str = ",".join(role.name for role in roles)
     pretty_roles = ", ".join(role.name.lower() for role in roles)
-    LOG.debug(f"Bootstrap node: roles {roles_str}")
+    LOG.debug("Bootstrap node: roles %s", roles_str)
 
     data_location = snap.paths.user_data
 
@@ -717,7 +717,7 @@ def bootstrap(  # noqa: C901
     try:
         local_management_ip = _resolve_local_ip_from_cidr(management_cidr)
     except ValueError as e:
-        LOG.error(f"Error resolving local management ip from cidr: {e}")
+        LOG.exception("Error resolving local management ip from cidr")
         raise click.ClickException("Cannot resolve local management ip") from e
 
     plan: list[BaseStep] = []
@@ -769,7 +769,7 @@ def bootstrap(  # noqa: C901
     # Store deployment type for feature gate sync behavior
     client.cluster.update_config(DEPLOYMENT_TYPE_CONFIG_KEY, deployment.type)
     proxy_settings = deployment.get_proxy_settings()
-    LOG.debug(f"Proxy settings: {proxy_settings}")
+    LOG.debug("Proxy settings: %s", proxy_settings)
 
     if juju_controller:
         plan11: list[BaseStep] = []
@@ -1013,7 +1013,7 @@ def configure_sriov(
     node = client.cluster.get_node_info(fqdn)
 
     if "compute" not in node["role"]:
-        LOG.info("SR-IOV can only be configured on compute nodes.")
+        LOG.info("SR-IOV can only be configured on compute nodes")
         return
 
     manifest = deployment.get_manifest(manifest_path)
@@ -1086,7 +1086,7 @@ def configure_dpdk(
     node = client.cluster.get_node_info(fqdn)
 
     if "compute" not in node["role"]:
-        LOG.info("DPDK can only be configured on compute nodes.")
+        LOG.info("DPDK can only be configured on compute nodes")
         return
 
     manifest = deployment.get_manifest(manifest_path)
@@ -1375,7 +1375,7 @@ def join(  # noqa: C901
 
     roles_str = roles_to_str_list(roles)
     pretty_roles = ", ".join(role_.name.lower() for role_ in roles)
-    LOG.debug(f"Node joining the cluster with roles: {pretty_roles}")
+    LOG.debug("Node joining the cluster with roles: %s", pretty_roles)
 
     preflight_checks: list[Check] = []
     preflight_checks.append(SystemRequirementsCheck())
@@ -1953,14 +1953,14 @@ def configure_cmd(
     # Validate manifest file
     manifest = deployment.get_manifest(manifest_path)
 
-    LOG.debug(f"Manifest used for deployment - core: {manifest.core}")
-    LOG.debug(f"Manifest used for deployment - features: {manifest.features}")
+    LOG.debug("Manifest used for deployment - core: %s", manifest.core)
+    LOG.debug("Manifest used for deployment - features: %s", manifest.features)
 
     name = utils.get_fqdn(deployment.get_management_cidr())
     jhelper = deployment.get_juju_helper()
     jhelper_keystone = deployment.get_juju_helper(keystone=True)
     if not jhelper.model_exists(OPENSTACK_MODEL):
-        LOG.error(f"Expected model {OPENSTACK_MODEL} missing")
+        LOG.error("Expected model %s is missing", OPENSTACK_MODEL)
         raise click.ClickException("Please run `sunbeam cluster bootstrap` first")
     # Check if the node is a network node
     node = client.cluster.get_node_info(name)

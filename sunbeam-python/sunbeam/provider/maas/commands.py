@@ -329,8 +329,8 @@ def bootstrap(
     # Validate manifest file
     manifest = deployment.get_manifest(manifest_path)
 
-    LOG.debug(f"Manifest used for deployment - core: {manifest.core}")
-    LOG.debug(f"Manifest used for deployment - features: {manifest.features}")
+    LOG.debug("Manifest used for deployment - core: %s", manifest.core)
+    LOG.debug("Manifest used for deployment - features: %s", manifest.features)
 
     deployments = DeploymentsConfig.load(deployment_path(Snap()))
 
@@ -535,11 +535,11 @@ def bootstrap(
         deployments.update_deployment(deployment)
 
     if proxy_from_user and isinstance(proxy_from_user, dict):
-        LOG.debug(f"Writing proxy information to clusterdb: {proxy_from_user}")
+        LOG.debug("Writing proxy information to clusterdb: %s", proxy_from_user)
         client.cluster.update_config(PROXY_CONFIG_KEY, json.dumps(proxy_from_user))
 
     # Store deployment type for feature gate sync behavior
-    LOG.debug(f"Writing deployment type to clusterdb: {deployment.type}")
+    LOG.debug("Writing deployment type to clusterdb: %s", deployment.type)
     client.cluster.update_config(DEPLOYMENT_TYPE_CONFIG_KEY, deployment.type)
 
     console.print("Bootstrap controller components complete.")
@@ -622,8 +622,8 @@ def deploy(
 
     manifest = deployment.get_manifest(manifest_path)
 
-    LOG.debug(f"Manifest used for deployment - core: {manifest.core}")
-    LOG.debug(f"Manifest used for deployment - features: {manifest.features}")
+    LOG.debug("Manifest used for deployment - core: %s", manifest.core)
+    LOG.debug("Manifest used for deployment - features: %s", manifest.features)
     proxy_settings = deployment.get_proxy_settings()
 
     tfhelper_sunbeam_machine = deployment.get_tfhelper("sunbeam-machine-plan")
@@ -1000,12 +1000,12 @@ def configure_cmd(
     # Validate manifest file
     manifest = deployment.get_manifest(manifest_path)
 
-    LOG.debug(f"Manifest used for deployment - core: {manifest.core}")
-    LOG.debug(f"Manifest used for deployment - features: {manifest.features}")
+    LOG.debug("Manifest used for deployment - core: %s", manifest.core)
+    LOG.debug("Manifest used for deployment - features: %s", manifest.features)
 
     jhelper = JujuHelper(deployment.juju_controller)
     if not jhelper.model_exists(OPENSTACK_MODEL):
-        LOG.error(f"Expected model {OPENSTACK_MODEL} missing")
+        LOG.error("Expected model %s is missing", OPENSTACK_MODEL)
         raise click.ClickException("Please run `sunbeam cluster bootstrap` first")
     admin_credentials = retrieve_admin_credentials(jhelper, deployment, OPENSTACK_MODEL)
     # Add OS_INSECURE as https not working with terraform openstack provider.
@@ -1458,7 +1458,7 @@ def _run_maas_checks(checks: list[DiagnosticsCheck], console: Console) -> list[d
     """
     check_results = []
     for check in checks:
-        LOG.debug(f"Starting check {check.name!r}")
+        LOG.debug("Starting check %r", check.name)
         message = f"{check.description}..."
         with console.status(message):
             results = check.run()
@@ -1470,7 +1470,12 @@ def _run_maas_checks(checks: list[DiagnosticsCheck], console: Console) -> list[d
 
             for result in results:
                 passed = result.passed.value
-                LOG.debug(f"{result.name=!r}, {passed=!r}, {result.message=!r}")
+                LOG.debug(
+                    "Result for %r: passed=%r, message=%r",
+                    result.name,
+                    passed,
+                    result.message,
+                )
                 console.print(
                     message,
                     result.message,
@@ -1492,7 +1497,7 @@ def _run_maas_meta_checks(
     check_results = []
 
     for check in checks:
-        LOG.debug(f"Starting check {check.name!r}")
+        LOG.debug("Starting check %r", check.name)
         message = f"{check.description}..."
         with console.status(message):
             results = check.run()
@@ -1541,7 +1546,7 @@ def validate_machine_cmd(ctx: click.Context, machine: str):
     with console.status(f"Fetching {machine} ..."):
         try:
             machine_obj = get_machine(client, machine)
-            LOG.debug(f"{machine_obj=!r}")
+            LOG.debug("Fetched machine: %r", machine_obj)
         except ValueError as e:
             console.print("Error:", e)
             sys.exit(1)
