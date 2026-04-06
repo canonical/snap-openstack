@@ -623,6 +623,23 @@ class TestSelfSignedTlsFeature:
         parent_pre_enable.assert_called_once_with(deployment, config, False)
         assert config.ca == encode_base64_as_string("pem-ca")
 
+    def test_pre_enable_primary_raises_when_leader_not_found(self, deployment):
+        feature = self_signed.SelfSignedTlsFeature()
+        config = tls.TlsFeatureConfig(endpoints=["public"])
+        deployment.juju_controller = "test-controller"
+        deployment.region_ctrl_juju_controller = None
+
+        with (
+            patch.object(tls.TlsFeature, "pre_enable"),
+            patch.object(self_signed, "JujuHelper") as juju_helper,
+        ):
+            juju_helper.return_value.get_leader_unit.side_effect = (
+                LeaderNotFoundException("no leader")
+            )
+
+            with pytest.raises(click.ClickException, match="not ready"):
+                feature.pre_enable(deployment, config, False)
+
     def test_pre_enable_raises_when_provider_returns_invalid_ca(self, deployment):
         feature = self_signed.SelfSignedTlsFeature()
         config = tls.TlsFeatureConfig(endpoints=["public"])
@@ -642,6 +659,44 @@ class TestSelfSignedTlsFeature:
             }
 
             with pytest.raises(click.ClickException):
+                feature.pre_enable(deployment, config, False)
+
+    def test_pre_enable_secondary_raises_when_action_fails(self, deployment):
+        feature = self_signed.SelfSignedTlsFeature()
+        config = tls.TlsFeatureConfig(endpoints=["public"])
+        deployment.juju_controller = "test-controller"
+        deployment.region_ctrl_juju_controller = Mock()
+
+        with (
+            patch.object(tls.TlsFeature, "pre_enable"),
+            patch.object(self_signed, "JujuHelper") as juju_helper,
+        ):
+            juju_helper.return_value.get_leader_unit.return_value = (
+                "certificate-authority/0"
+            )
+            juju_helper.return_value.run_action.side_effect = ActionFailedException(
+                "action failed"
+            )
+
+            with pytest.raises(click.ClickException, match="not ready"):
+                feature.pre_enable(deployment, config, False)
+
+    def test_pre_enable_secondary_raises_when_no_ca_returned(self, deployment):
+        feature = self_signed.SelfSignedTlsFeature()
+        config = tls.TlsFeatureConfig(endpoints=["public"])
+        deployment.juju_controller = "test-controller"
+        deployment.region_ctrl_juju_controller = Mock()
+
+        with (
+            patch.object(tls.TlsFeature, "pre_enable"),
+            patch.object(self_signed, "JujuHelper") as juju_helper,
+        ):
+            juju_helper.return_value.get_leader_unit.return_value = (
+                "certificate-authority/0"
+            )
+            juju_helper.return_value.run_action.return_value = {}
+
+            with pytest.raises(click.ClickException, match="did not return"):
                 feature.pre_enable(deployment, config, False)
 
     def test_post_enable_primary_region_waits_and_updates_provider_config(
@@ -672,6 +727,64 @@ class TestSelfSignedTlsFeature:
             tls.CERTIFICATE_FEATURE_KEY,
             {"provider": feature.name, "endpoints": ["public"]},
         )
+
+    def test_post_enable_primary_includes_storage_when_present(self, deployment):
+        feature = self_signed.SelfSignedTlsFeature()
+        deployment.region_ctrl_juju_controller = None
+        deployment.external_keystone_model = None
+        deployment.get_client.return_value = Mock()
+        deployment.get_client.return_value.cluster.list_nodes_by_role.return_value = [
+            "node-1"
+        ]
+        local_jhelper = Mock()
+        deployment.get_juju_helper.return_value = local_jhelper
+        config = tls.TlsFeatureConfig(endpoints=["public", "rgw"])
+
+        with (
+            patch.object(self_signed, "run_plan") as run_plan,
+            patch.object(self_signed, "update_config"),
+        ):
+            feature.post_enable(deployment, config, False)
+
+        plan = run_plan.call_args.args[0]
+        assert len(plan) == 1
+        assert isinstance(plan[0], tls.WaitForApplicationsStep)
+        assert set(plan[0].apps) == {"traefik-public", "traefik-rgw", "keystone"}
+
+    def test_post_enable_secondary_includes_storage_when_present(self, deployment):
+        feature = self_signed.SelfSignedTlsFeature()
+        deployment.region_ctrl_juju_controller = Mock()
+        deployment.external_keystone_model = "primary-controller:admin/openstack"
+        deployment.get_region_name.return_value = "RegionTwo"
+        deployment.get_client.return_value = Mock()
+        deployment.get_client.return_value.cluster.list_nodes_by_role.return_value = [
+            "node-1"
+        ]
+        local_jhelper = Mock()
+        remote_jhelper = Mock()
+        deployment.get_juju_helper.side_effect = lambda keystone=False: (
+            remote_jhelper if keystone else local_jhelper
+        )
+        config = tls.TlsFeatureConfig(
+            endpoints=["public", "rgw"], ca=encode_base64_as_string("pem-ca")
+        )
+
+        with (
+            patch.object(self_signed, "run_plan") as run_plan,
+            patch.object(self_signed, "update_config"),
+        ):
+            feature.post_enable(deployment, config, False)
+
+        plan = run_plan.call_args.args[0]
+        assert isinstance(plan[0], tls.AddCACertsToKeystoneStep)
+        local_wait = plan[1]
+        assert isinstance(local_wait, tls.WaitForApplicationsStep)
+        assert local_wait.jhelper is local_jhelper
+        assert set(local_wait.apps) == {"traefik-public", "traefik-rgw"}
+        remote_wait = plan[2]
+        assert isinstance(remote_wait, tls.WaitForApplicationsStep)
+        assert remote_wait.jhelper is remote_jhelper
+        assert remote_wait.apps == ["keystone"]
 
     def test_post_enable_secondary_region_splits_local_and_remote_waits(
         self, deployment
@@ -707,6 +820,34 @@ class TestSelfSignedTlsFeature:
         assert isinstance(plan[2], tls.WaitForApplicationsStep)
         assert plan[2].jhelper is remote_jhelper
         assert plan[2].apps == ["keystone"]
+
+    def test_post_enable_secondary_ca_cert_name_includes_region(self, deployment):
+        """Verify that the CA cert pushed to keystone is scoped by region name."""
+        feature = self_signed.SelfSignedTlsFeature()
+        deployment.region_ctrl_juju_controller = Mock()
+        deployment.external_keystone_model = "primary-controller:admin/openstack"
+        deployment.get_region_name.return_value = "RegionTwo"
+        deployment.get_client.return_value = Mock()
+        deployment.get_client.return_value.cluster.list_nodes_by_role.return_value = []
+        local_jhelper = Mock()
+        remote_jhelper = Mock()
+        deployment.get_juju_helper.side_effect = lambda keystone=False: (
+            remote_jhelper if keystone else local_jhelper
+        )
+        config = tls.TlsFeatureConfig(
+            endpoints=["public"], ca=encode_base64_as_string("pem-ca")
+        )
+
+        with (
+            patch.object(self_signed, "run_plan") as run_plan,
+            patch.object(self_signed, "update_config"),
+        ):
+            feature.post_enable(deployment, config, False)
+
+        ca_step = run_plan.call_args.args[0][0]
+        assert isinstance(ca_step, tls.AddCACertsToKeystoneStep)
+        assert "regiontwo" in ca_step.cert_name
+        assert ca_step.ca_cert == encode_base64_as_string("pem-ca")
 
     def test_post_disable_primary_region_waits_and_clears_provider_config(
         self, deployment
