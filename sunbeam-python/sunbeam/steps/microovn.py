@@ -207,8 +207,8 @@ class ReapplyMicroOVNTerraformPlanStep(BaseStep):
 
         if network_configs:
             LOG.debug(
-                "Add external network configs from DemoSetup to extra tfvars: "
-                f"{network_configs}"
+                "Add external network configs from DemoSetup to extra tfvars: %s",
+                network_configs,
             )
             self.extra_tfvars["charm_openstack_network_agents_config"].update(
                 network_configs
@@ -233,7 +233,7 @@ class ReapplyMicroOVNTerraformPlanStep(BaseStep):
                 timeout=MICROOVN_UNIT_TIMEOUT,
             )
         except TimeoutError as e:
-            LOG.warning(str(e))
+            LOG.warning("Timed out waiting for reapplying MicroOVN: %r", e)
             return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.COMPLETED)
@@ -292,24 +292,26 @@ class EnableMicroOVNStep(BaseStep, JujuStepHelper):
             node = self.client.cluster.get_node_info(self.node)
             self.machine_id = str(node.get("machineid"))
         except NodeNotExistInClusterException:
-            LOG.debug(f"Machine {self.node} does not exist, skipping.")
+            LOG.debug("Machine %s does not exist, skipping.", self.node)
             return Result(ResultType.SKIPPED)
 
         try:
             application = self.jhelper.get_application(APPLICATION, self.model)
         except ApplicationNotFoundException as e:
-            LOG.debug(str(e))
+            LOG.debug("MicroOVN application is not found: %r", e)
             return Result(
                 ResultType.SKIPPED, "microovn application has not been deployed yet"
             )
 
         for unit_name, unit in application.units.items():
             if unit.machine == self.machine_id:
-                LOG.debug(f"Unit {unit_name} is deployed on machine: {self.machine_id}")
+                LOG.debug(
+                    "Unit %s is deployed on machine: %s", unit_name, self.machine_id
+                )
                 self.unit = unit_name
                 break
         if not self.unit:
-            LOG.debug(f"Unit is not deployed on machine: {self.machine_id}, skipping.")
+            LOG.debug("Unit is not deployed on machine: %s, skipping", self.machine_id)
             return Result(ResultType.SKIPPED)
         return Result(ResultType.COMPLETED)
 

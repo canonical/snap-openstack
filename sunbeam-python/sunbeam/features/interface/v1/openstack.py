@@ -412,15 +412,16 @@ class OpenStackControlPlaneFeature(EnableDisableFeature, typing.Generic[ConfigTy
         :param upgrade_release: Whether to upgrade release
         """
         if upgrade_release:
-            LOG.debug(f"Release upgrade not supported for feature {self.name}")
+            LOG.debug("Release upgrade is not supported for feature %s", self.name)
             return
 
         # Nothig to do if the plan is openstack-plan as it is taken
         # care during control plane refresh
         if self.tf_plan_location == TerraformPlanLocation.SUNBEAM_TERRAFORM_REPO:
             LOG.debug(
-                f"Ignore upgrade_hook for feature {self.name}, the corresponding apps"
-                f" will be refreshed as part of Control plane refresh"
+                "Ignore upgrade_hook for feature %s, the corresponding apps"
+                " will be refreshed as part of Control plane refresh",
+                self.name,
             )
             return
 
@@ -463,7 +464,7 @@ class UpgradeOpenStackApplicationStep(BaseStep, JujuStepHelper):
 
     def run(self, context: StepContext) -> Result:
         """Run feature upgrade."""
-        LOG.debug(f"Upgrading feature {self.feature.name}")
+        LOG.debug("Upgrading feature %s", self.feature.name)
         expected_wls = ["active", "blocked", "unknown"]
         tfvar_map = self.feature.manifest_attributes_tfvar_map()
         charms = list(tfvar_map.get(self.feature.tfplan, {}).get("charms", {}).keys())
@@ -480,7 +481,7 @@ class UpgradeOpenStackApplicationStep(BaseStep, JujuStepHelper):
                 reporter=context.reporter,
             )
         except TerraformException as e:
-            LOG.exception(f"Error upgrading feature {self.feature.name}")
+            LOG.exception("Error upgrading feature %s", self.feature.name)
             return Result(ResultType.FAILED, str(e))
         status_queue: queue.Queue[str] = queue.Queue()
         task = update_status_background(self, apps, status_queue, context.status)
@@ -494,7 +495,7 @@ class UpgradeOpenStackApplicationStep(BaseStep, JujuStepHelper):
                 overlay=build_overlay_dict(apps),
             )
         except (JujuWaitException, TimeoutError) as e:
-            LOG.debug(str(e))
+            LOG.debug("Timed out upgrading %s: %r", self.feature.name, e)
             return Result(ResultType.FAILED, str(e))
         finally:
             task.stop()
@@ -584,7 +585,7 @@ class EnableOpenStackApplicationStep(
             return Result(ResultType.FAILED, str(e))
 
         apps = self.feature.set_application_names(self.deployment)
-        LOG.debug(f"Application monitored for readiness: {apps}")
+        LOG.debug("Application monitored for readiness: %s", apps)
         status_queue: queue.Queue[str] = queue.Queue()
         task = update_status_background(self, apps, status_queue, context.status)
         overlay = {**build_overlay_dict(apps), **self.extra_overlay}
@@ -599,7 +600,7 @@ class EnableOpenStackApplicationStep(
                 overlay=overlay,
             )
         except (JujuWaitException, TimeoutError) as e:
-            LOG.warning(str(e))
+            LOG.warning("Timed out enabling %s: %r", self.feature.name, e)
             return Result(ResultType.FAILED, str(e))
         finally:
             task.stop()
@@ -685,7 +686,7 @@ class DisableOpenStackApplicationStep(
             return Result(ResultType.FAILED, str(e))
 
         apps = self.feature.set_application_names(self.deployment)
-        LOG.debug(f"Application monitored for removal: {apps}")
+        LOG.debug("Application monitored for removal: %s", apps)
         try:
             self.jhelper.wait_application_gone(
                 apps,
@@ -695,7 +696,7 @@ class DisableOpenStackApplicationStep(
                 ),
             )
         except TimeoutError as e:
-            LOG.debug(f"Failed to destroy {apps}", exc_info=True)
+            LOG.debug("Failed to destroy %s", apps, exc_info=True)
             return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.COMPLETED)
@@ -715,7 +716,7 @@ class WaitForApplicationsStep(BaseStep):
 
     def run(self, context: StepContext) -> Result:
         """Wait for applications to be idle."""
-        LOG.debug(f"Application monitored for readiness: {self.apps}")
+        LOG.debug("Application monitored for readiness: %s", self.apps)
         status_queue: queue.Queue[str] = queue.Queue()
         task = update_status_background(self, self.apps, status_queue, context.status)
         try:

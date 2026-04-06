@@ -217,7 +217,7 @@ class DeployConsulClientStep(BaseStep):
             return Result(ResultType.FAILED, str(e))
 
         apps = ConsulFeature.set_consul_client_application_names(self.deployment)
-        LOG.debug(f"Application monitored for readiness: {apps}")
+        LOG.debug("Application monitored for readiness: %s", apps)
         status_queue: queue.Queue[str] = queue.Queue()
         task = update_status_background(self, apps, status_queue, context.status)
         try:
@@ -264,7 +264,7 @@ class RemoveConsulClientStep(BaseStep):
             return Result(ResultType.FAILED, str(e))
 
         apps = ConsulFeature.set_consul_client_application_names(self.deployment)
-        LOG.debug(f"Application monitored for removal: {apps}")
+        LOG.debug("Application monitored for removal: %s", apps)
         try:
             self.jhelper.wait_application_gone(
                 apps,
@@ -272,7 +272,7 @@ class RemoveConsulClientStep(BaseStep):
                 timeout=APPLICATION_DEPLOY_TIMEOUT,
             )
         except TimeoutError as e:
-            LOG.debug(f"Failed to destroy {apps}", exc_info=True)
+            LOG.debug("Failed to destroy %s", apps, exc_info=True)
             return Result(ResultType.FAILED, str(e))
 
         extra_tfvars = {

@@ -88,7 +88,7 @@ class ValidateStoragePrerequisitesStep(BaseStep):
             # If we can list models, we're authenticated
             models = self.jhelper.models()
             LOG.debug(
-                f"Juju authentication check successful, found {len(models)} models"
+                "Juju authentication check successful, found %d models", len(models)
             )
             return Result(ResultType.COMPLETED)
 
@@ -177,7 +177,7 @@ class ValidateStoragePrerequisitesStep(BaseStep):
                         "Please deploy OpenStack storage services first.",
                     )
             except Exception as e:
-                LOG.debug(f"Failed to check cinder-volume application: {e}")
+                LOG.debug("Failed to check cinder-volume application: %r", e)
                 return Result(
                     ResultType.FAILED,
                     "Unable to verify cinder-volume application. "
@@ -187,7 +187,7 @@ class ValidateStoragePrerequisitesStep(BaseStep):
             return Result(ResultType.COMPLETED)
 
         except Exception as e:
-            LOG.error(f"Failed to validate storage prerequisites: {e}")
+            LOG.error("Failed to validate storage prerequisites: %r", e)
             return Result(ResultType.FAILED, str(e))
 
 
@@ -368,7 +368,7 @@ class BaseStorageBackendDeployStep(BaseStep):
                 self.variables, by_name=True
             )
         except pydantic.ValidationError as e:
-            LOG.error(f"Invalid configuration: {e}")
+            LOG.error("Invalid configuration: %r", e)
             raise e
 
         write_answers(self.client, self.config_key, self.variables)
@@ -396,8 +396,8 @@ class BaseStorageBackendDeployStep(BaseStep):
         # Ensure fresh Juju credentials and Terraform env before applying
         try:
             self.deployment.reload_tfhelpers()
-        except Exception as cred_err:
-            LOG.debug(f"Failed to reload credentials/env: {cred_err}")
+        except Exception as e:
+            LOG.debug("Failed to reload credentials/env: %r", e)
 
         # Merge with existing backends so we don't overwrite them
         backend_key = self.backend_name
@@ -438,8 +438,10 @@ class BaseStorageBackendDeployStep(BaseStep):
             raise e
         except Exception as e:
             LOG.error(
-                f"Failed to deploy {self.backend_instance.display_name} "
-                f"backend {self.backend_name}: {e}"
+                "Failed to deploy %s backend %s: %r",
+                self.backend_instance.display_name,
+                self.backend_name,
+                e,
             )
             return Result(ResultType.FAILED, str(e))
         # Let's save backend if not present
@@ -464,7 +466,12 @@ class BaseStorageBackendDeployStep(BaseStep):
                 timeout=self.get_application_timeout(),
             )
         except TimeoutError as e:
-            LOG.warning(str(e))
+            LOG.warning(
+                "Timed out deploying %s backend %s: %r",
+                self.backend_instance.display_name,
+                self.backend_name,
+                e,
+            )
             return Result(ResultType.FAILED, str(e))
 
         self.backend_instance.enable_backend(self.client)
@@ -538,14 +545,14 @@ class BaseStorageBackendDestroyStep(BaseStep):
         # Ensure fresh Juju credentials and Terraform env before destroying/applying
         try:
             self.deployment.reload_tfhelpers()
-        except Exception as cred_err:
-            LOG.debug(f"Failed to reload credentials/env: {cred_err}")
+        except Exception as e:
+            LOG.debug("Failed to reload credentials/env: %r", e)
 
         # First, read and validate the current configuration
         try:
             tfvars = read_config(self.client, self.backend_instance.tfvar_config_key)
         except ConfigItemNotFoundException:
-            LOG.warning(f"No configuration found for backend {self.backend_name}")
+            LOG.warning("No configuration found for backend %s", self.backend_name)
             tfvars = {}
 
         backends = tfvars.get("backends", {})
@@ -554,8 +561,10 @@ class BaseStorageBackendDestroyStep(BaseStep):
         backends.pop(self.backend_name, None)
 
         # For removal: update config and apply atomically
-        LOG.info(f"Performing removal for backend {self.backend_name}")
-        LOG.info(f"Remaining backends after removal: {list(tfvars['backends'].keys())}")
+        LOG.info("Performing removal for backend %s", self.backend_name)
+        LOG.info(
+            "Remaining backends after removal: %s", list(tfvars["backends"].keys())
+        )
 
         # First update the configuration
         update_config(
@@ -567,8 +576,8 @@ class BaseStorageBackendDestroyStep(BaseStep):
 
         try:
             LOG.info(
-                f"Writing Terraform variables with backends: "
-                f"{list(tfvars.get('backends', {}).keys())}"
+                "Writing Terraform variables with backends: %s",
+                list(tfvars.get("backends", {}).keys()),
             )
             self.tfhelper.update_tfvars_and_apply_tf(
                 self.client,
@@ -579,7 +588,7 @@ class BaseStorageBackendDestroyStep(BaseStep):
             )
         except TerraformStateLockedException as e:
             # Bubble up to trigger retry
-            LOG.debug("Error: Terraform state locked")
+            LOG.debug("Terraform state locked")
             raise e
         except TerraformException:
             # Restore the backend configuration if apply fails
@@ -592,7 +601,7 @@ class BaseStorageBackendDestroyStep(BaseStep):
         try:
             self.client.cluster.delete_storage_backend(self.backend_name)
         except StorageBackendNotFoundException:
-            LOG.debug(f"Backend {self.backend_name} not found in clusterd")
+            LOG.debug("Backend %s is not found in clusterd", self.backend_name)
 
         try:
             # Wipe previously saved answers
@@ -601,7 +610,8 @@ class BaseStorageBackendDestroyStep(BaseStep):
             )
         except ConfigItemNotFoundException:
             LOG.debug(
-                f"Configuration for backend {self.backend_name} not found in clusterd"
+                "Configuration for backend %s is not found in clusterd",
+                self.backend_name,
             )
 
         return Result(ResultType.COMPLETED)
@@ -771,8 +781,9 @@ class DeploySpecificCinderVolumeStep(BaseStep):
             )
         except Exception as e:
             LOG.error(
-                f"Failed to deploy non-HA cinder-volume for backend "
-                f"{self.backend_name}: {e}"
+                "Failed to deploy non-HA cinder-volume for backend %s: %r",
+                self.backend_name,
+                e,
             )
             return Result(ResultType.FAILED, str(e))
 
@@ -784,7 +795,11 @@ class DeploySpecificCinderVolumeStep(BaseStep):
                 timeout=self.get_application_timeout(),
             )
         except TimeoutError as e:
-            LOG.warning(str(e))
+            LOG.warning(
+                "Timed out deploying non-HA cinder-volume for backend %s: %r",
+                self.backend_name,
+                e,
+            )
             return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.COMPLETED)
@@ -873,8 +888,9 @@ class DestroySpecificCinderVolumeStep(BaseStep):
             )
         except Exception as e:
             LOG.error(
-                f"Failed to destroy non-HA cinder-volume for backend "
-                f"{self.backend_name}: {e}"
+                "Failed to destroy non-HA cinder-volume for backend %s: %r",
+                self.backend_name,
+                e,
             )
             return Result(ResultType.FAILED, str(e))
 
@@ -885,7 +901,11 @@ class DestroySpecificCinderVolumeStep(BaseStep):
                 timeout=self.get_application_timeout(),
             )
         except TimeoutError as e:
-            LOG.warning(str(e))
+            LOG.warning(
+                "Timed out destroying non-HA cinder-volume for backend %s: %r",
+                self.backend_name,
+                e,
+            )
             return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.COMPLETED)

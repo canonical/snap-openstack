@@ -9,6 +9,8 @@ import pytest
 
 from . import utils
 
+LOG = logging.getLogger(__name__)
+
 
 @pytest.fixture(scope="module")
 def ensure_network_node_cluster(manifest_path, openstack_snap_channel):
@@ -20,16 +22,16 @@ def ensure_network_node_cluster(manifest_path, openstack_snap_channel):
     deployments = info.get("deployments") or []
 
     if deployments:
-        logging.warning(
+        LOG.warning(
             "Until the ability to run multi-node functional tests is added, "
-            "skip the tests if there's an existing deployment."
+            "skip the tests if there's an existing deployment"
         )
         return
 
     utils.ensure_openstack_snap_installed(openstack_snap_channel)
     utils.install_bootstrap_prerequisites()
 
-    logging.info("Bootstrapping cluster with network node role.")
+    LOG.info("Bootstrapping cluster with network node role")
     cmd = "cluster bootstrap --accept-defaults --role network"
     if manifest_path:
         cmd += f" --manifest {manifest_path}"
@@ -58,7 +60,7 @@ def test_network_node(
         base_manifest_path=manifest_path,
     )
 
-    logging.info("Configuring network node deployment.")
+    LOG.info("Configuring network node deployment")
     utils.sunbeam_command(
         f"-v configure deployment -m {network_manifest_path} --accept-defaults"
     )
@@ -86,7 +88,7 @@ def test_network_node(
             if heading == "external_ids":
                 external_ids = utils.parse_ovsdb_data(record[position])
 
-    logging.info("Checking OVN configuration.")
+    LOG.info("Checking OVN configuration")
 
     # Verify bridge mappings
     assert "ovn-bridge-mappings" in external_ids

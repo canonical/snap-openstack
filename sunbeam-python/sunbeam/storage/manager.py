@@ -75,11 +75,11 @@ class StorageBackendManager:
 
             # Check if the backend.py file exists in the backend directory
             if not backend_module_path.exists():
-                LOG.debug(f"Skipping {backend_name}: no backend.py file found")
+                LOG.debug("Skipping %s: no backend.py file found", backend_name)
                 continue
 
             try:
-                LOG.debug(f"Loading storage backend: {backend_name}")
+                LOG.debug("Loading storage backend: %s", backend_name)
                 # Import the backend module from the backend subdirectory
                 mod = importlib.import_module(
                     f"sunbeam.storage.backends.{backend_name}.backend"
@@ -96,13 +96,13 @@ class StorageBackendManager:
                         backend_instance = attr()
                         self._backends[backend_instance.backend_type] = backend_instance
                         LOG.debug(
-                            "Registered storage backend: "
-                            + backend_instance.backend_type
+                            "Registered storage backend: %s",
+                            backend_instance.backend_type,
                         )
 
             except Exception as e:
                 LOG.debug("Failed to load storage backend", exc_info=True)
-                LOG.warning(f"Failed to load storage backend {backend_name}: {e}")
+                LOG.warning("Failed to load storage backend %s: %r", backend_name, e)
 
         self._loaded = True
 
@@ -138,7 +138,7 @@ class StorageBackendManager:
             self.register_cli_commands(storage, deployment)
             LOG.debug("Storage backend commands registered successfully")
         except Exception as e:
-            LOG.error(f"Failed to register storage backend commands: {e}")
+            LOG.error("Failed to register storage backend commands: %r", e)
             raise e
 
     def register_cli_commands(  # noqa: C901
@@ -268,7 +268,7 @@ class StorageBackendManager:
             except Exception as e:
                 backend_name = getattr(backend, "name", "unknown")
                 LOG.warning(
-                    "Backend %s failed to register CLI: %s",
+                    "Backend %s failed to register CLI: %r",
                     backend_name,
                     e,
                 )

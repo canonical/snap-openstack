@@ -778,6 +778,8 @@ select = [
     "S",   # bandit
     "I",   # isort
     "CPY", # flake8-copyright
+    "LOG", # flake8-logging
+    "G",   # flake8-logging-format
 ]
 ignore = [
     "F821",

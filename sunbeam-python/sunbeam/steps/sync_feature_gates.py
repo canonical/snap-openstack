@@ -32,18 +32,20 @@ class SyncFeatureGatesToCluster(BaseStep):
 
     def run(self, context: StepContext) -> Result:
         """Sync feature gates from snap configuration to cluster database."""
-        LOG.debug("Syncing snap config feature gates to cluster database")
+        LOG.debug("Syncing snap config feature gates to the cluster database")
 
         try:
             from sunbeam.hooks import sync_feature_gates_from_snap_to_cluster
 
             sync_feature_gates_from_snap_to_cluster(self.client)
-            LOG.info("Successfully synced feature gates from snap config to cluster")
+            LOG.info(
+                "Successfully synced feature gates from snap config to the cluster"
+            )
             return Result(ResultType.COMPLETED)
 
         except Exception as e:
             # Don't fail the step if sync fails - feature gates can be set later
-            LOG.warning(f"Failed to sync feature gates to cluster: {e}")
+            LOG.warning("Failed to sync feature gates to the cluster: %r", e)
             return Result(
                 ResultType.COMPLETED,
                 "Feature gate sync failed but continuing (non-fatal)",

@@ -37,7 +37,7 @@ class DeploymentsConfig(pydantic.BaseModel):
     @classmethod
     def load(cls, path: Path) -> "DeploymentsConfig":
         """Load deployment configuration from file."""
-        LOG.debug(f"Loading deployment configuration from {str(path)!r}")
+        LOG.debug("Loading deployment configuration from %r", str(path))
         with path.open() as fd:
             data = yaml.safe_load(fd)
         if data is None:
@@ -62,7 +62,7 @@ class DeploymentsConfig(pydantic.BaseModel):
         # so workaround to add each deployment based on provider
         deployments = [d.model_dump(by_alias=True) for d in self.deployments]
         self_dict["deployments"] = deployments
-        LOG.debug(f"Writing deployment configuration to {str(self.path)!r}")
+        LOG.debug("Writing deployment configuration to %r", str(self.path))
         yaml.SafeDumper.add_representer(str, str_presenter)
         with tempfile.NamedTemporaryFile("w") as tmp:
             yaml.safe_dump(self_dict, tmp)

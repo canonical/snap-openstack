@@ -163,8 +163,10 @@ class TelemetryFeature(OpenStackControlPlaneFeature):
                         principal_app = backend_instance.principal_application
                         if principal_app in processed_principals:
                             LOG.debug(
-                                f"Skipping {backend_name}: principal application "
-                                f"{principal_app} already processed"
+                                "Skipping %s: principal application %s is already"
+                                " processed",
+                                backend_name,
+                                principal_app,
                             )
                             continue
 
@@ -186,8 +188,9 @@ class TelemetryFeature(OpenStackControlPlaneFeature):
                         )
                 except Exception as e:
                     LOG.warning(
-                        f"Failed to add specific cinder-volume step for backend "
-                        f"{backend_name}: {e}"
+                        "Failed to add specific cinder-volume step for backend %s: %r",
+                        backend_name,
+                        e,
                     )
 
             if len(plan3) > 1:  # More than just TerraformInitStep
@@ -261,8 +264,10 @@ class TelemetryFeature(OpenStackControlPlaneFeature):
                         principal_app = backend_instance.principal_application
                         if principal_app in processed_principals:
                             LOG.debug(
-                                f"Skipping {backend_name}: principal application "
-                                f"{principal_app} already processed"
+                                "Skipping %s: principal application %s is already"
+                                " processed",
+                                backend_name,
+                                principal_app,
                             )
                             continue
 
@@ -285,8 +290,9 @@ class TelemetryFeature(OpenStackControlPlaneFeature):
                         )
                 except Exception as e:
                     LOG.warning(
-                        f"Failed to add specific cinder-volume step for backend "
-                        f"{backend_name}: {e}"
+                        "Failed to add specific cinder-volume step for backend %s: %r",
+                        backend_name,
+                        e,
                     )
 
             if len(plan2) > 1:  # More than just TerraformInitStep
