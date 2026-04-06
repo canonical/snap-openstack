@@ -75,7 +75,7 @@ class GenerateCloudConfigStep(BaseStep):
             self.client, CLOUD_CONFIG_SECTION
         )
         if "user" not in self.variables:
-            LOG.debug("Demo setup not yet done")
+            LOG.debug("Demo setup is not yet done")
             return Result(ResultType.SKIPPED)
         if self.variables["user"]["run_demo_setup"]:
             return Result(ResultType.COMPLETED)
@@ -146,7 +146,7 @@ class GenerateCloudConfigStep(BaseStep):
         If cloud yaml is not present, create a file along with parent
         directories.
         """
-        LOG.debug(f"Creating {clouds_yaml} if it does not exist")
+        LOG.debug("Creating %s if it does not exist", clouds_yaml)
         clouds_yaml.parent.mkdir(mode=0o775, parents=True, exist_ok=True)
         if not clouds_yaml.exists():
             clouds_yaml.touch()
@@ -166,7 +166,7 @@ class GenerateCloudConfigStep(BaseStep):
         """
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
         clouds_yaml_backup = Path(clouds_yaml.parent) / f"clouds.yaml.bk.{timestamp}"
-        LOG.debug(f"Backing up clouds.yaml to {clouds_yaml_backup}")
+        LOG.debug("Backing up clouds.yaml to %s", clouds_yaml_backup)
         shutil.copy(clouds_yaml, clouds_yaml_backup)
         clouds_yaml_backup.chmod(0o660)
 
@@ -255,7 +255,7 @@ def cloud_config(
     run_preflight_checks(preflight_checks, console)
     jhelper_keystone = deployment.get_juju_helper(keystone=True)
     if not jhelper_keystone.model_exists(OPENSTACK_MODEL):
-        LOG.error(f"Expected model {OPENSTACK_MODEL} missing")
+        LOG.error("Expected model %s is missing", OPENSTACK_MODEL)
         raise click.ClickException("Please run `sunbeam cluster bootstrap` first")
     admin_credentials = retrieve_admin_credentials(
         jhelper_keystone, deployment, OPENSTACK_MODEL

@@ -166,7 +166,7 @@ class DeployObservabilityStackStep(BaseStep, JujuStepHelper):
             return Result(ResultType.FAILED, str(e))
 
         apps = self.jhelper.get_application_names(self.model)
-        LOG.debug(f"Application monitored for readiness: {apps}")
+        LOG.debug("Application monitored for readiness: %s", apps)
         status_queue: queue.Queue[str] = queue.Queue()
         task = update_status_background(self, apps, status_queue, context.status)
         try:
@@ -287,7 +287,7 @@ class DeployObservabilityAgentStep(BaseStep, JujuStepHelper):
             return Result(ResultType.FAILED, str(e))
 
         app = "opentelemetry-collector"
-        LOG.debug(f"Application monitored for readiness: {app}")
+        LOG.debug("Application monitored for readiness: %s", app)
         try:
             self.jhelper.wait_application_ready(
                 app,
@@ -463,7 +463,7 @@ class IntegrateRemoteCosOffersStep(BaseStep, JujuStepHelper):
             self.deployment.openstack_machines_model,
         ]:
             app = "opentelemetry-collector"
-            LOG.debug(f"Application monitored for readiness: {app}")
+            LOG.debug("Application monitored for readiness: %s", app)
             try:
                 self.jhelper.wait_application_ready(
                     app,
@@ -524,7 +524,7 @@ class RemoveRemoteCosOffersStep(BaseStep, JujuStepHelper):
             self.deployment.openstack_machines_model,
         ]:
             relations = self._get_relations(model, self.endpoints)
-            LOG.debug(f"List of relations to remove in model {model}: {relations}")
+            LOG.debug("List of relations to remove in model %s: %s", model, relations)
             for relation_pair in relations:
                 self.remove_relation(
                     model,
@@ -537,7 +537,7 @@ class RemoveRemoteCosOffersStep(BaseStep, JujuStepHelper):
             self.deployment.openstack_machines_model,
         ]:
             app = "opentelemetry-collector"
-            LOG.debug(f"Application monitored for readiness: {app}")
+            LOG.debug("Application monitored for readiness: %s", app)
             try:
                 self.jhelper.wait_application_ready(
                     app,

@@ -81,9 +81,9 @@ def load_upgrade_state(client: Client) -> dict:
     try:
         state = json.loads(client.cluster.get_config(MYSQL_UPGRADE_CONFIG_KEY))
     except ConfigItemNotFoundException as e:
-        LOG.debug(f"{MYSQL_UPGRADE_CONFIG_KEY} not found: " + str(e))
+        LOG.debug("Config item for %s not found: %r", MYSQL_UPGRADE_CONFIG_KEY, e)
     except (json.JSONDecodeError, TypeError) as e:
-        LOG.warning(f"Found malformed mysql upgrade state from clusterd: {str(e)}. ")
+        LOG.warning("Found malformed mysql upgrade state from clusterd: %r", e)
     return state
 
 
@@ -132,7 +132,7 @@ class MySQLCharmUpgradeStep(BaseStep, JujuStepHelper):
         self.original_revision: int | None = None
         self.original_scale: int | None = None
         if reset_mysql_upgrade_state:
-            LOG.debug("Resetting mysql upgrade state.")
+            LOG.debug("Resetting mysql upgrade state")
             self._reset_state()
 
     def _get_upgrade_stack(self, unit_data: dict) -> list[str]:
@@ -145,7 +145,7 @@ class MySQLCharmUpgradeStep(BaseStep, JujuStepHelper):
                 try:
                     return json.loads(raw)
                 except json.JSONDecodeError:
-                    LOG.warning(f"Failed to parse upgrade stack: {raw}")
+                    LOG.warning("Failed to parse upgrade stack: %s", raw)
 
         return []
 
@@ -164,17 +164,17 @@ class MySQLCharmUpgradeStep(BaseStep, JujuStepHelper):
                 "original_scale": self.original_scale,
             },
         )
-        LOG.debug("mysql upgrade state %s", state.name)
+        LOG.debug("MySQL upgrade state %s", state.name)
 
     def _reset_state(self):
-        LOG.debug("mysql resetting upgrade state")
+        LOG.debug("Resetting MySQL upgrade state")
         self.original_revision = None
         self.original_scale = None
         self.state = MySQLUpgradeState.INIT
         try:
             self.client.cluster.delete_config(MYSQL_UPGRADE_CONFIG_KEY)
         except ConfigItemNotFoundException as e:
-            LOG.warning("mysql-k8s upgrade state not found in clusterd: %s", e)
+            LOG.warning("mysql-k8s upgrade state not found in clusterd: %r", e)
 
     def _target_scale_for_upgrade(self, original_scale: int) -> int:
         """Calculate target scale for upgrading mysql-k8s.
@@ -199,8 +199,9 @@ class MySQLCharmUpgradeStep(BaseStep, JujuStepHelper):
         self.original_revision = app.charm_rev
         self.original_scale = app.scale
         LOG.debug(
-            f"Recorded original mysql-k8s revision: {self.original_revision}, "
-            f"scale: {self.original_scale}"
+            "Recorded original mysql-k8s revision: %d, scale: %d",
+            self.original_revision,
+            self.original_scale,
         )
         self._set_state(MySQLUpgradeState.ORIGINAL_STATE_RECORDED)
 
@@ -421,10 +422,11 @@ class MySQLCharmUpgradeStep(BaseStep, JujuStepHelper):
             )
             self.jhelper.wait_until_active(self.model, apps=[self.application])
             self._set_state(MySQLUpgradeState.SCALED_BACK)
-        except (JujuException, JujuWaitException, TimeoutError) as exc:
+        except (JujuException, JujuWaitException, TimeoutError) as e:
             LOG.warning(
-                f"Upgrade completed but scale-back to original scale: "
-                f"{self.original_scale} failed: {str(exc)}",
+                "Upgrade completed but scale-back to original scale of %d failed: %r",
+                self.original_scale,
+                e,
             )
 
     def is_skip(self, context: StepContext) -> Result:
@@ -486,7 +488,7 @@ class MySQLCharmUpgradeStep(BaseStep, JujuStepHelper):
                 arch="amd64",
             )
         else:
-            LOG.debug("Could not determine base for mysql-k8s.")
+            LOG.debug("Could not determine base for mysql-k8s")
             latest = self.jhelper.get_available_charm_revision(
                 MYSQL_CHARM,
                 deployed_channel,
@@ -527,7 +529,7 @@ class MySQLCharmUpgradeStep(BaseStep, JujuStepHelper):
         try:
             self.state = MySQLUpgradeState[state_name]
         except KeyError:
-            LOG.warning(f"Invalid mysql-k8s upgrade state: {state_name}")
+            LOG.warning("Invalid mysql-k8s upgrade state: %s", state_name)
             self.state = MySQLUpgradeState.INIT
         self.original_revision = persisted.get("original_revision")
         self.original_scale = persisted.get("original_scale")

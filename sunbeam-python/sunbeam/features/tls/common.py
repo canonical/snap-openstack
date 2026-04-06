@@ -262,16 +262,16 @@ class AddCACertsToKeystoneStep(BaseStep):
         try:
             unit = self.jhelper.get_leader_unit(self.app, self.model)
         except LeaderNotFoundException as e:
-            LOG.debug(f"Unable to get {self.app} leader")
+            LOG.debug("Unable to get %s leader", self.app)
             return Result(ResultType.FAILED, str(e))
 
         try:
             action_result = self.jhelper.run_action(unit, self.model, action_cmd)
         except ActionFailedException as e:
-            LOG.debug(f"Running action {action_cmd} on {unit} failed")
+            LOG.debug("Running action %s on %s failed", action_cmd, unit)
             return Result(ResultType.FAILED, str(e))
 
-        LOG.debug(f"Result from action {action_cmd}: {action_result}")
+        LOG.debug("Result from action %s: %s", action_cmd, action_result)
 
         ca_list = action_result
         if self.cert_name in ca_list:
@@ -285,7 +285,7 @@ class AddCACertsToKeystoneStep(BaseStep):
         try:
             unit = self.jhelper.get_leader_unit(self.app, self.model)
         except LeaderNotFoundException as e:
-            LOG.debug(f"Unable to get {self.app} leader")
+            LOG.debug("Unable to get %s leader", self.app)
             return Result(ResultType.FAILED, str(e))
 
         action_params = {
@@ -296,10 +296,10 @@ class AddCACertsToKeystoneStep(BaseStep):
             action_params["chain"] = self.ca_chain
 
         try:
-            LOG.debug(f"Running action {action_cmd} with params {action_params}")
+            LOG.debug("Running action %s with params %s", action_cmd, action_params)
             self.jhelper.run_action(unit, self.model, action_cmd, action_params)
         except ActionFailedException as e:
-            LOG.debug(f"Running action {action_cmd} on {unit} failed")
+            LOG.debug("Running action %s on %s failed", action_cmd, unit)
             return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.COMPLETED)
@@ -333,16 +333,16 @@ class RemoveCACertsFromKeystoneStep(BaseStep):
         try:
             unit = self.jhelper.get_leader_unit(self.app, self.model)
         except LeaderNotFoundException as e:
-            LOG.debug(f"Unable to get {self.app} leader")
+            LOG.debug("Unable to get %s leader", self.app)
             return Result(ResultType.FAILED, str(e))
 
         try:
             action_result = self.jhelper.run_action(unit, self.model, action_cmd)
         except ActionFailedException as e:
-            LOG.debug(f"Running action {action_cmd} on {unit} failed")
+            LOG.debug("Running action %s on %s failed", action_cmd, unit)
             return Result(ResultType.FAILED, str(e))
 
-        LOG.debug(f"Result from action {action_cmd}: {action_result}")
+        LOG.debug("Result from action %s: %s", action_cmd, action_result)
 
         ca_list = action_result
         # Replace any dot with hyphen in ca cert name.
@@ -359,34 +359,34 @@ class RemoveCACertsFromKeystoneStep(BaseStep):
         try:
             unit = self.jhelper.get_leader_unit(self.app, self.model)
         except LeaderNotFoundException as e:
-            LOG.debug(f"Unable to get {self.app} leader")
+            LOG.debug("Unable to get %s leader", self.app)
             return Result(ResultType.FAILED, str(e))
 
         retry_with_feature_key = False
         action_params = {"name": self.cert_name}
-        LOG.debug(f"Running action {action_cmd} with params {action_params}")
+        LOG.debug("Running action %s with params %s", action_cmd, action_params)
         try:
             action_result = self.jhelper.run_action(
                 unit, self.model, action_cmd, action_params
             )
         except ActionFailedException as e:
-            LOG.debug(f"Running action {action_cmd} on {unit} failed: {str(e)}")
+            LOG.debug("Running action %s on %s failed: %s", action_cmd, unit, str(e))
             retry_with_feature_key = True
 
         # For backward compatiblity reasons, try to run remove-ca-cert action
         # with feature_key as ca cert name
         if retry_with_feature_key:
             action_params = {"name": self.feature_key}
-            LOG.debug(f"Running action {action_cmd} with params {action_params}")
+            LOG.debug("Running action %s with params %s", action_cmd, action_params)
             try:
                 action_result = self.jhelper.run_action(
                     unit, self.model, action_cmd, action_params
                 )
             except ActionFailedException as e:
-                LOG.debug(f"Running action {action_cmd} on {unit} failed")
+                LOG.debug("Running action %s on %s failed", action_cmd, unit)
                 return Result(ResultType.FAILED, str(e))
 
-        LOG.debug(f"Result from action {action_cmd}: {action_result}")
+        LOG.debug("Result from action %s: %s", action_cmd, action_result)
 
         return Result(ResultType.COMPLETED)
 
@@ -447,13 +447,13 @@ def handle_list_outstanding_csrs(
             ca_provider_app, model, jhelper
         )
     except LeaderNotFoundException as e:
-        LOG.debug(f"Unable to get {ca_provider_app} leader to print CSRs")
+        LOG.debug("Unable to get %s leader to print CSRs", ca_provider_app)
         raise click.ClickException(str(e))
     except ActionFailedException as e:
-        LOG.debug(f"Running action {action_cmd} failed")
+        LOG.debug("Running action %s failed", action_cmd)
         raise click.ClickException(str(e))
 
-    LOG.debug(f"Result from action {action_cmd}: {action_result}")
+    LOG.debug("Result from action %s: %s", action_cmd, action_result)
     if action_result.get("return-code", 0) > 1:
         raise click.ClickException(
             "Unable to get outstanding certificate requests from CA"
@@ -556,7 +556,7 @@ class ConfigureTLSCertificatesStep(BaseStep):
             self.app, self.model, self.jhelper
         )
 
-        LOG.debug(f"Result from action {action_cmd}: {action_result}")
+        LOG.debug("Result from action %s: %s", action_cmd, action_result)
         if action_result.get("return-code", 0) > 1:
             raise click.ClickException(
                 "Unable to get outstanding certificate requests from CA"
@@ -651,10 +651,10 @@ class ConfigureTLSCertificatesStep(BaseStep):
         try:
             unit = self.jhelper.get_leader_unit(self.app, self.model)
         except LeaderNotFoundException as e:
-            LOG.debug(f"Unable to get {self.app} leader")
+            LOG.debug("Unable to get %s leader", self.app)
             return Result(ResultType.FAILED, str(e))
 
-        LOG.debug(f"Process certs: {self.process_certs}")
+        LOG.debug("Process certs: %s", self.process_certs)
         for subject, request in self.process_certs.items():
             csr = request.get("csr")
             csr = encode_base64_as_string(csr)
@@ -681,19 +681,19 @@ class ConfigureTLSCertificatesStep(BaseStep):
                         request.get("certificate"), self.ca_cert, self.ca_chain
                     )
                 except binascii.Error as e:
-                    LOG.debug(f"Unable to encode CA chain: {str(e)}")
+                    LOG.debug("Unable to encode CA chain: %r", e)
                     return Result(ResultType.FAILED, "Unable to encode CA chain")
 
-            LOG.debug(f"Running action {action_cmd} with params {action_params}")
+            LOG.debug("Running action %s with params %s", action_cmd, action_params)
             try:
                 action_result = self.jhelper.run_action(
                     unit, self.model, action_cmd, action_params
                 )
             except ActionFailedException as e:
-                LOG.debug(f"Running action {action_cmd} on {unit} failed")
+                LOG.debug("Running action %s on %s failed", action_cmd, unit)
                 return Result(ResultType.FAILED, str(e))
 
-            LOG.debug(f"Result from action {action_cmd}: {action_result}")
+            LOG.debug("Result from action %s: %s", action_cmd, action_result)
             if action_result.get("return-code", 0) > 1:
                 return Result(
                     ResultType.FAILED, f"Action {action_cmd} on {unit} returned error"

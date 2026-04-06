@@ -82,12 +82,12 @@ class ClusterInitStep(BaseStep):
         self.fqdn = utils.get_fqdn(self.management_cidr)
         try:
             members = self.client.cluster.get_cluster_members()
-            LOG.info(members)
+            LOG.info("Cluster members: %s", members)
             member_names = [member.get("name") for member in members]
             if self.fqdn in member_names:
                 return Result(ResultType.SKIPPED)
         except ClusterServiceUnavailableException as e:
-            LOG.debug(e)
+            LOG.debug("Failed to get cluster members: %r", e)
             if "Sunbeam Cluster not initialized" in str(e):
                 return Result(ResultType.COMPLETED)
             return Result(ResultType.FAILED, str(e))
@@ -112,7 +112,7 @@ class ClusterInitStep(BaseStep):
             LOG.debug("Bootstrapped clusterd on %s", address)
             return Result(ResultType.COMPLETED)
         except ClusterAlreadyBootstrappedException:
-            LOG.debug("Cluster already bootstrapped")
+            LOG.debug("Cluster is already bootstrapped")
             return Result(ResultType.COMPLETED)
         except Exception as e:
             return Result(ResultType.FAILED, str(e))
@@ -248,7 +248,7 @@ class ClusterAddNodeStep(BaseStep):
         """
         try:
             members = self.client.cluster.get_cluster_members()
-            LOG.debug(members)
+            LOG.debug("Cluster members: %s", members)
             member_names = [member.get("name") for member in members]
             if self.node_name in member_names:
                 return Result(ResultType.SKIPPED)
@@ -261,7 +261,7 @@ class ClusterAddNodeStep(BaseStep):
                 LOG.warning("Reusing existing token for %s", self.node_name)
                 return Result(ResultType.SKIPPED, token_d.get(self.node_name))
         except ClusterServiceUnavailableException as e:
-            LOG.debug(e)
+            LOG.debug("Failed to check existing token for %s: %r", self.node_name, e)
             return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.COMPLETED)
@@ -273,7 +273,7 @@ class ClusterAddNodeStep(BaseStep):
             LOG.debug("Generated token for node %s", self.node_name)
             return Result(result_type=ResultType.COMPLETED, message=token)
         except TokenAlreadyGeneratedException as e:
-            LOG.warning(e)
+            LOG.warning("Token for %s is already generated: %r", self.node_name, e)
             return Result(ResultType.FAILED, str(e))
 
 
@@ -305,12 +305,12 @@ class ClusterJoinNodeStep(BaseStep):
         """
         try:
             members = self.client.cluster.get_cluster_members()
-            LOG.info(members)
+            LOG.info("Cluster members: %s", members)
             member_names = [member.get("name") for member in members]
             if self.fqdn in member_names:
                 return Result(ResultType.SKIPPED)
         except ClusterServiceUnavailableException as e:
-            LOG.debug(e)
+            LOG.debug("Failed to get cluster members: %r", e)
             if "Sunbeam Cluster not initialized" in str(e):
                 return Result(ResultType.COMPLETED)
             return Result(ResultType.FAILED, str(e))
@@ -326,10 +326,10 @@ class ClusterJoinNodeStep(BaseStep):
                 token=self.token,
                 role=self.role,
             )
-            LOG.info(self.token)
+            LOG.info("Node joined successfully with token: %s", self.token)
             return Result(result_type=ResultType.COMPLETED, message=self.token)
         except (NodeAlreadyExistsException, NodeJoinException) as e:
-            LOG.warning(e)
+            LOG.warning("Failed to join the cluster: %r", e)
             return Result(ResultType.FAILED, str(e))
 
 
@@ -344,9 +344,9 @@ class ClusterListNodeStep(BaseStep):
         """List nodes in the sunbeam cluster."""
         try:
             members = self.client.cluster.get_cluster_members()
-            LOG.debug(f"Members: {members}")
+            LOG.debug("Cluster members: %s", members)
             nodes = self.client.cluster.list_nodes()
-            LOG.debug(f"Nodes: {nodes}")
+            LOG.debug("Nodes: %s", nodes)
 
             nodes_dict = {
                 member.get("name"): {"status": member.get("status")}
@@ -357,7 +357,7 @@ class ClusterListNodeStep(BaseStep):
 
             return Result(result_type=ResultType.COMPLETED, message=nodes_dict)
         except ClusterServiceUnavailableException as e:
-            LOG.debug(e)
+            LOG.debug("Failed to list nodes: %r", e)
             return Result(ResultType.FAILED, str(e))
 
 
@@ -385,7 +385,7 @@ class ClusterUpdateNodeStep(BaseStep):
             )
             return Result(result_type=ResultType.COMPLETED)
         except ClusterServiceUnavailableException as e:
-            LOG.debug(e)
+            LOG.debug("Failed to update node info for %s: %r", self.node_name, e)
             return Result(ResultType.FAILED, str(e))
 
 
@@ -409,10 +409,10 @@ class ClusterRemoveNodeStep(BaseStep):
             NodeNotExistInClusterException,
         ) as e:
             # Consider these exceptions as soft ones
-            LOG.debug(e)
+            LOG.debug("Failed to remove node %s: %r", self.node_name, e)
             return Result(ResultType.COMPLETED)
         except (LastNodeRemovalFromClusterException, Exception) as e:
-            LOG.debug(e)
+            LOG.debug("Failed to remove node %s: %r", self.node_name, e)
             return Result(ResultType.FAILED, str(e))
 
 
@@ -482,7 +482,7 @@ class PromptCheckNodeExistStep(BaseStep):
                     continue_operation = question_bank.continue_operation.ask()
                 self.continue_operation = continue_operation
         except ClusterServiceUnavailableException as e:
-            LOG.debug(e)
+            LOG.debug("Failed to check for node and prompt user: %r", e)
             self.cluster_unavailable = True
 
     def run(self, context: StepContext) -> Result:
@@ -527,9 +527,9 @@ class ClusterAddJujuUserStep(BaseStep):
         """
         try:
             user = self.client.cluster.get_juju_user(self.username)
-            LOG.debug(f"JujuUser {user} found in database.")
+            LOG.debug("JujuUser %s found in database", user)
         except ClusterServiceUnavailableException as e:
-            LOG.debug(e)
+            LOG.debug("Failed to get Juju user %s from cluster: %r", self.username, e)
             return Result(ResultType.FAILED, str(e))
         except JujuUserNotFoundException:
             return Result(ResultType.COMPLETED)
@@ -542,7 +542,7 @@ class ClusterAddJujuUserStep(BaseStep):
             self.client.cluster.add_juju_user(self.username, self.token)
             return Result(result_type=ResultType.COMPLETED)
         except ClusterServiceUnavailableException as e:
-            LOG.debug(e)
+            LOG.debug("Failed to add Juju user %s to cluster: %r", self.username, e)
             return Result(ResultType.FAILED, str(e))
 
 
@@ -567,16 +567,18 @@ class ClusterUpdateJujuUserStep(BaseStep):
         """
         try:
             user = self.client.cluster.get_juju_user(self.username)
-            LOG.debug("Juju user %s is found in database.", self.username)
+            LOG.debug("Juju user %s is found in the database", self.username)
             if user.get("token") == self.token:
-                LOG.debug("Juju user token is up to date, skipping update.")
+                LOG.debug(
+                    "Juju user %s token is up to date, skipping update", self.username
+                )
                 return Result(ResultType.SKIPPED)
         except ClusterServiceUnavailableException as e:
-            LOG.debug(e)
+            LOG.debug("Failed to get Juju user %s from cluster: %r", self.username, e)
             return Result(ResultType.FAILED, str(e))
         except JujuUserNotFoundException:
             LOG.debug(
-                "Juju user %s is not found in database, adding user.", self.username
+                "Juju user %s is not found in the database, adding user", self.username
             )
 
         return Result(ResultType.COMPLETED)
@@ -588,11 +590,12 @@ class ClusterUpdateJujuUserStep(BaseStep):
                 self.client.cluster.update_juju_user(self.username, self.token)
             except JujuUserNotFoundException:
                 LOG.debug(
-                    "Juju user %s is not found in database, adding user.", self.username
+                    "Juju user %s is not found in the database, adding user",
+                    self.username,
                 )
                 self.client.cluster.add_juju_user(self.username, self.token)
         except ClusterServiceUnavailableException as e:
-            LOG.debug(e)
+            LOG.debug("Failed to update Juju user %s in cluster: %r", self.username, e)
             return Result(ResultType.FAILED, str(e))
 
         return Result(result_type=ResultType.COMPLETED)
@@ -666,7 +669,7 @@ class ClusterUpdateJujuControllerStep(BaseStep, JujuStepHelper):
             self.networks = variables.get("bootstrap", {}).get("management_cidr")
 
             juju_controller = JujuController.load(self.client)
-            LOG.debug(f"Controller(s) present at: {juju_controller.api_endpoints}")
+            LOG.debug("Controller(s) present at: %s", juju_controller.api_endpoints)
             if not juju_controller.api_endpoints:
                 LOG.debug(
                     "Controller endpoints are empty in database, so update the "
@@ -680,13 +683,13 @@ class ClusterUpdateJujuControllerStep(BaseStep, JujuStepHelper):
                 # Controller found, and parsed successfully
                 return Result(ResultType.SKIPPED)
         except ClusterServiceUnavailableException as e:
-            LOG.debug(e)
+            LOG.debug("Failed to get controller endpoints: %r", e)
             return Result(ResultType.FAILED, str(e))
         except ConfigItemNotFoundException:
             pass  # Credentials missing, schedule for record
         except TypeError as e:
             # Note(gboutry): Credentials invalid, schedule for record
-            LOG.warning(e)
+            LOG.warning("Failed to get controller endpoints: %r", e)
 
         return Result(ResultType.COMPLETED)
 
@@ -703,7 +706,7 @@ class ClusterUpdateJujuControllerStep(BaseStep, JujuStepHelper):
         try:
             juju_controller.write(self.client)
         except ClusterServiceUnavailableException as e:
-            LOG.debug(e)
+            LOG.debug("Failed to update controller endpoints: %r", e)
             return Result(ResultType.FAILED, str(e))
 
         return Result(result_type=ResultType.COMPLETED)
@@ -777,7 +780,7 @@ class DeploySunbeamClusterdApplicationStep(BaseStep):
                 timeout=SUNBEAM_CLUSTERD_APP_TIMEOUT,
             )
         except (JujuWaitException, TimeoutError) as e:
-            LOG.warning(str(e))
+            LOG.warning("Failed to deploy sunbeam-clusterd application: %r", e)
             return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.COMPLETED)

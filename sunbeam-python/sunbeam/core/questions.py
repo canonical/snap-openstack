@@ -74,7 +74,7 @@ def get_stdin_reopen_tty() -> str:
             sys.stdin.close()
             sys.stdin = open("/dev/tty", "r")
         except OSError as e:
-            LOG.debug("Failed to reopen stdin to /dev/tty: %s", e)
+            LOG.debug("Failed to reopen stdin to /dev/tty: %r", e)
             raise SunbeamException("Failed to open terminal for input") from e
         # note(gboutry): Reassign stream wrapper read_stream
         # to the new stdin.
@@ -167,7 +167,7 @@ class Question(typing.Generic[T]):
         elif self.default_function:
             default = self.default_function()
             if not self.password:
-                LOG.debug("Value from default function {}".format(default))
+                LOG.debug("Value from default function %s", default)
         elif self.default_value is not None:
             default = self.default_value
         return default
@@ -209,7 +209,7 @@ class Question(typing.Generic[T]):
             try:
                 self.validation_function(self.answer)  # type: ignore
             except ValueError as e:
-                message = f"Invalid value for {self.question!r}: {e}"
+                message = f"Invalid value for {self.question!r}: {e!r}"
                 if self.preseed is not None:
                     LOG.error(message)
                     raise
@@ -331,7 +331,7 @@ def load_answers(client: Client, key: str) -> dict:
     try:
         variables = json.loads(client.cluster.get_config(key))
     except ConfigItemNotFoundException as e:
-        LOG.debug(f"{key}: " + str(e))
+        LOG.debug("%s: %r", key, e)
     return variables
 
 

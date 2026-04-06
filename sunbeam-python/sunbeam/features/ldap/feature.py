@@ -110,7 +110,7 @@ class DisableLDAPDomainStep(BaseStep, JujuStepHelper):
                 timeout=APPLICATION_REMOVE_TIMEOUT,
             )
         except (JujuWaitException, TimeoutError) as e:
-            LOG.warning(str(e))
+            LOG.warning("Timed out disabling LDAP domain: %r", e)
             return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.COMPLETED)
@@ -167,7 +167,7 @@ class UpdateLDAPDomainStep(BaseStep, JujuStepHelper):
             return Result(ResultType.FAILED, str(e))
         charm_name = "keystone-ldap-{}".format(self.charm_config["domain-name"])
         apps = ["keystone", charm_name]
-        LOG.debug(f"Application monitored for readiness: {apps}")
+        LOG.debug("Application monitored for readiness: %s", apps)
         status_queue: queue.Queue[str] = queue.Queue()
         task = update_status_background(self, apps, status_queue, context.status)
         try:
@@ -178,7 +178,7 @@ class UpdateLDAPDomainStep(BaseStep, JujuStepHelper):
                 queue=status_queue,
             )
         except (JujuWaitException, TimeoutError) as e:
-            LOG.warning(str(e))
+            LOG.warning("Timed out updating LDAP domain: %r", e)
             return Result(ResultType.FAILED, str(e))
         finally:
             task.stop()
@@ -237,7 +237,7 @@ class AddLDAPDomainStep(BaseStep, JujuStepHelper):
             return Result(ResultType.FAILED, str(e))
         charm_name = "keystone-ldap-{}".format(self.charm_config["domain-name"])
         apps = ["keystone", charm_name]
-        LOG.debug(f"Application monitored for readiness: {apps}")
+        LOG.debug("Application monitored for readiness: %s", apps)
         status_queue: queue.Queue[str] = queue.Queue()
         task = update_status_background(self, apps, status_queue, context.status)
         try:
@@ -248,7 +248,7 @@ class AddLDAPDomainStep(BaseStep, JujuStepHelper):
                 queue=status_queue,
             )
         except (JujuWaitException, TimeoutError) as e:
-            LOG.warning(str(e))
+            LOG.warning("Timed out adding LDAP domain: %r", e)
             return Result(ResultType.FAILED, str(e))
         finally:
             task.stop()

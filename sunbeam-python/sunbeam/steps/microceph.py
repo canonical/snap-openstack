@@ -72,7 +72,7 @@ def microceph_questions():
 )
 def list_disks(jhelper: JujuHelper, model: str, unit: str) -> tuple[dict, dict]:
     """Call list-disks action on an unit."""
-    LOG.debug("Running list-disks on : %r", unit)
+    LOG.debug("Running list-disks on: %r", unit)
     action_result = jhelper.run_action(
         unit, model, "list-disks", action_params={"host-only": True}
     )
@@ -283,11 +283,11 @@ class ConfigureMicrocephOSDStep(BaseStep):
                 disk.get("path") for disk in unpartitioned_disks_dict
             ]
             self.osd_disks = [disk.get("path") for disk in osd_disks_dict]
-            LOG.debug(f"Unpartitioned disks: {self.unpartitioned_disks}")
-            LOG.debug(f"OSD disks: {self.osd_disks}")
+            LOG.debug("Unpartitioned disks: %s", self.unpartitioned_disks)
+            LOG.debug("OSD disks: %s", self.osd_disks)
 
         except (UnitNotFoundException, ActionFailedException) as e:
-            LOG.debug(str(e))
+            LOG.debug("Failed to list disks: %r", e)
             raise SunbeamException("Unable to list disks")
 
     def prompt(
@@ -343,7 +343,7 @@ class ConfigureMicrocephOSDStep(BaseStep):
         # note(gboutry): wipe disks option is never saved in clusterd, always
         # read when needed in the manifest.
 
-        LOG.debug(self.variables)
+        LOG.debug("Microceph variables: %s", self.variables)
         questions.write_answers(self.client, self._CONFIG, self.variables)
 
     def has_prompts(self) -> bool:
@@ -386,14 +386,14 @@ class ConfigureMicrocephOSDStep(BaseStep):
             unit = self.jhelper.get_unit_from_machine(
                 APPLICATION, self.machine_id, self.model
             )
-            LOG.debug(f"Running action add-osd on {unit}")
+            LOG.debug("Running action add-osd on %s", unit)
             action_result = self.jhelper.run_action(
                 unit,
                 self.model,
                 "add-osd",
                 action_params=action_params,
             )
-            LOG.debug(f"Result after running action add-osd: {action_result}")
+            LOG.debug("Result after running action add-osd: %s", action_result)
         except UnitNotFoundException as e:
             message = f"Microceph Adding disks {self.disks} failed: {str(e)}"
             failed = True
@@ -408,12 +408,12 @@ class ConfigureMicrocephOSDStep(BaseStep):
                         # disk already added to microceph, ignore the error
                         if "entry already exists" in result.get("message"):
                             disk = result.get("spec")
-                            LOG.debug(f"Disk {disk} already added")
+                            LOG.debug("Disk %s is already added", disk)
                             continue
                         else:
                             failed = True
-            except Exception as ex:
-                LOG.debug(f"Exception in eval action output: {str(ex)}")
+            except Exception as e:
+                LOG.debug("Exception in eval action output: %r", e)
                 return Result(ResultType.FAILED, message)
 
         if failed:
@@ -463,7 +463,7 @@ class SetCephMgrPoolSizeStep(BaseStep):
                 "size": ceph_replica_scale(len(self.storage_nodes)),
             }
             LOG.debug(
-                f"Running microceph action set-pool-size with params {action_params}"
+                "Running microceph action set-pool-size with params %s", action_params
             )
             result = self.jhelper.run_action(
                 unit, self.model, "set-pool-size", action_params
@@ -478,7 +478,7 @@ class SetCephMgrPoolSizeStep(BaseStep):
             LeaderNotFoundException,
             ActionFailedException,
         ) as e:
-            LOG.debug(f"Failed to update pool size for {pools}", exc_info=True)
+            LOG.debug("Failed to update pool size for %s", pools, exc_info=True)
             return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.COMPLETED)
@@ -592,7 +592,7 @@ class DestroyMicrocephApplicationStep(DestroyMachineApplicationStep):
         try:
             resources = self.tfhelper.state_list()
         except TerraformException as e:
-            LOG.debug(f"Failed to list terraform state: {str(e)}")
+            LOG.debug("Failed to list terraform state: %r", e)
             return Result(ResultType.FAILED, "Failed to list terraform state")
 
         for resource in resources:
@@ -600,7 +600,7 @@ class DestroyMicrocephApplicationStep(DestroyMachineApplicationStep):
                 try:
                     self.tfhelper.state_rm(resource)
                 except TerraformException as e:
-                    LOG.debug(f"Failed to remove resource {resource}: {str(e)}")
+                    LOG.debug("Failed to remove resource %s: %r", resource, e)
                     return Result(
                         ResultType.FAILED,
                         f"Failed to remove resource {resource} from state",

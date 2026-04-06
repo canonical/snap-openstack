@@ -38,7 +38,7 @@ def run_preflight_checks(checks: Sequence["Check"], console: Console):
     Raise ClickException in case of Result Failures.
     """
     for check in checks:
-        LOG.debug(f"Starting pre-flight check {check.name}")
+        LOG.debug("Starting pre-flight check %s", check.name)
         message = f"{check.description} ... "
         with console.status(message):
             if not check.run():
