@@ -1555,15 +1555,8 @@ class TestMaasDeployK8SApplicationStep:
         step.ranges = "10.0.0.0/28"
         step.client.cluster.get_config.return_value = "{}"
         expected_tfvars = {
-            "endpoint_bindings": [
-                {"space": "data"},
-                {"endpoint": "cluster", "space": "internal_space"},
-            ],
+            "endpoint_bindings": [{"space": "data"}],
             "k8s_config": {
-                "cluster-annotations": (
-                    "k8sd/v1alpha1/cilium/devices="
-                    "!br-ex,!br-int,!br-phys+,br-bond+,bond+,eth+,eno+,ens+,enp+,em+,vlan+"
-                ),
                 "load-balancer-cidrs": "10.0.0.0/28",
                 "load-balancer-enabled": True,
                 "load-balancer-l2-mode": True,

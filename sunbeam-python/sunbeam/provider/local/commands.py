@@ -155,6 +155,7 @@ from sunbeam.steps.k8s import (
     CordonK8SUnitStep,
     DeployK8SApplicationStep,
     DrainK8SUnitStep,
+    EnsureCiliumDeviceByHostStep,
     EnsureDefaultL2AdvertisementMutedStep,
     EnsureK8SUnitsTaggedStep,
     EnsureL2AdvertisementByHostStep,
@@ -303,6 +304,13 @@ def get_k8s_plans(
                 deployment, client, jhelper, deployment.openstack_machines_model
             ),
             EnsureK8SUnitsTaggedStep(
+                deployment,
+                client,
+                jhelper,
+                deployment.openstack_machines_model,
+                fqdn,
+            ),
+            EnsureCiliumDeviceByHostStep(
                 deployment,
                 client,
                 jhelper,
@@ -1517,6 +1525,15 @@ def join(  # noqa: C901
         )
         plan4.append(EnsureDefaultL2AdvertisementMutedStep(deployment, client, jhelper))
         plan4.append(
+            EnsureCiliumDeviceByHostStep(
+                deployment,
+                client,
+                jhelper,
+                deployment.openstack_machines_model,
+                name,
+            ),
+        )
+        plan4.append(
             EnsureL2AdvertisementByHostStep(
                 deployment,
                 client,
@@ -1881,6 +1898,12 @@ def remove(ctx: click.Context, name: str, force: bool, show_hints: bool) -> None
             ),
             RemoveK8SUnitsStep(
                 client, name, jhelper, deployment.openstack_machines_model
+            ),
+            EnsureCiliumDeviceByHostStep(
+                deployment,
+                client,
+                jhelper,
+                deployment.openstack_machines_model,
             ),
             EnsureL2AdvertisementByHostStep(
                 deployment,

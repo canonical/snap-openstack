@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import copy
-import datetime
 import ipaddress
 import json
 import logging
@@ -103,22 +102,6 @@ K8S_DESTROY_TIMEOUT = 900
 K8S_UNIT_TIMEOUT = 1800  # 30 minutes, adding / removing units can take a long time
 K8S_ENABLE_ADDONS_TIMEOUT = 300  # 5 minutes
 K8SD_SNAP_SOCKET = "/var/snap/k8s/common/var/lib/k8sd/state/control.socket"
-CILIUM_DEVICES_ANNOTATION_KEY = "k8sd/v1alpha1/cilium/devices"
-CILIUM_DEVICES_ANNOTATION_DEFAULT = ",".join(
-    (
-        "!br-ex",
-        "!br-int",
-        "!br-phys+",
-        "br-bond+",
-        "bond+",
-        "eth+",
-        "eno+",
-        "ens+",
-        "enp+",
-        "em+",
-        "vlan+",
-    )
-)
 
 COREDNS_HPA = {
     "enabled": True,
@@ -281,16 +264,6 @@ class DeployK8SApplicationStep(DeployMachineApplicationStep):
         """Return application timeout."""
         return K8S_APP_TIMEOUT
 
-    def is_skip(self, context: StepContext) -> Result:
-        """Determines if the step should be skipped or not."""
-        try:
-            # note(gboutry): validate in the is_skip phase to avoid
-            # failing in the middle of the plan.
-            self._get_k8s_config_tfvars()
-        except SunbeamException as e:
-            return Result(ResultType.FAILED, str(e))
-        return Result(ResultType.COMPLETED)
-
     def _get_loadbalancer_range(self) -> str | None:
         """Return loadbalancer range stored in cluster db."""
         variables = load_answers(self.client, self._ADDONS_CONFIG)
@@ -300,28 +273,11 @@ class DeployK8SApplicationStep(DeployMachineApplicationStep):
         config_tfvars: dict[str, bool | str | None] = {
             "load-balancer-enabled": True,
             "load-balancer-l2-mode": True,
-            "cluster-annotations": (
-                CILIUM_DEVICES_ANNOTATION_KEY + "=" + CILIUM_DEVICES_ANNOTATION_DEFAULT
-            ),
         }
 
         charm_manifest = self.manifest.core.software.charms.get("k8s")
         if charm_manifest and charm_manifest.config:
             config_tfvars.update(charm_manifest.config)
-
-        cluster_annotations = str(config_tfvars.get("cluster-annotations", ""))
-        prefix = CILIUM_DEVICES_ANNOTATION_KEY + "="
-        if prefix in cluster_annotations:
-            after_key = cluster_annotations.split(prefix, 1)[1]
-            tokens = after_key.split()
-            # First token is the devices value; remaining tokens without "="
-            # are stray space-separated device values
-            stray = [t for t in tokens[1:] if "=" not in t]
-            if stray:
-                raise SunbeamException(
-                    "Cilium devices annotation value must be comma-separated,"
-                    f" not space-separated: {prefix}{after_key.strip()}"
-                )
 
         lb_range = self._get_loadbalancer_range()
         if lb_range:
@@ -340,10 +296,6 @@ class DeployK8SApplicationStep(DeployMachineApplicationStep):
         tfvars = {
             "endpoint_bindings": [
                 {"space": self.deployment.get_space(Networks.MANAGEMENT)},
-                {
-                    "endpoint": "cluster",
-                    "space": self.deployment.get_space(Networks.INTERNAL),
-                },
             ],
             "k8s_config": self._get_k8s_config_tfvars(),
         }
@@ -376,9 +328,9 @@ class EnsureK8SUnitsTaggedStep(BaseStep):
     This step ensures that every k8s node is tagged with the
     HOSTNAME_LABEL, to ensure sunbeam can query the correct nodes
     afterwards.
-    Match is done on the IP addresses from the space configured as
-    Networks.INTERNAL. Node IP in k8s is guaranteed by the cluster
-    space binding.
+    Match is done on management ip address. Node IP in k8s is guaranteed by
+    the cluster space binding, which is always bound to the management
+    space.
     """
 
     def __init__(
@@ -399,16 +351,18 @@ class EnsureK8SUnitsTaggedStep(BaseStep):
         self.fqdn = fqdn
         self.to_update: dict[str, str] = {}
 
-    def _get_cluster_ips(
+    def _get_management_ips(
         self, juju_machine: "jubilant.statustypes.MachineStatus"
     ) -> list[str]:
-        cluster_space = self.deployment.get_space(Networks.INTERNAL)
-        cluster_networks = self.jhelper.get_space_networks(self.model, cluster_space)
+        management_space = self.deployment.get_space(Networks.MANAGEMENT)
+        management_networks = self.jhelper.get_space_networks(
+            self.model, management_space
+        )
 
         return _get_machines_space_ips(
             juju_machine.network_interfaces,
-            cluster_space,
-            cluster_networks,
+            management_space,
+            management_networks,
         )
 
     @tenacity.retry(
@@ -484,18 +438,18 @@ class EnsureK8SUnitsTaggedStep(BaseStep):
                 raise SunbeamException(
                     f"{sunbeam_name!r} not found in Juju, expected id {machine_id!r}"
                 )
-            cluster_ips = self._get_cluster_ips(juju_machine)
-            if not cluster_ips:
-                LOG.debug("No cluster IPs found for machine %s", machine_id)
-                raise SunbeamException(f"{sunbeam_name!r} has no cluster IPs")
+            management_ips = self._get_management_ips(juju_machine)
+            if not management_ips:
+                LOG.debug("No management IPs found for machine %s", machine_id)
+                raise SunbeamException(f"{sunbeam_name!r} has no management IPs")
 
             try:
-                k8s_node = self._find_matching_k8s_node(sunbeam_name, cluster_ips)
+                k8s_node = self._find_matching_k8s_node(sunbeam_name, management_ips)
             except ValueError:
                 LOG.debug(
-                    "No matching k8s node found for %s, cluster IPs %s",
+                    "No matching k8s node found for %s, management IPs %s",
                     sunbeam_name,
-                    cluster_ips,
+                    management_ips,
                 )
                 raise SunbeamException(f"{sunbeam_name} has no matching k8s node")
             except K8SError as e:
@@ -584,214 +538,6 @@ class EnsureK8SUnitsTaggedStep(BaseStep):
                 )
 
         return Result(ResultType.COMPLETED)
-
-
-class EnsureCiliumOnCorrectSpaceStep(BaseStep):
-    """Ensure Cilium DaemonSet is bound to the correct (internal) space.
-
-    After a cluster refresh that changes the k8s 'cluster' endpoint binding from
-    the management space to the internal space, k8sd reconfigures the node's
-    InternalIP to the internal-space address. However, the Cilium DaemonSet pods
-    do not automatically restart and remain attached to the old network interface.
-
-    This step detects that mismatch by comparing each k8s node's live InternalIP
-    against the subnets of the configured internal space. If any node's InternalIP
-    falls outside those subnets, the step triggers a rolling restart of the Cilium
-    DaemonSet (equivalent to ``kubectl rollout restart ds/cilium -n kube-system``).
-
-    The step is a no-op when management and internal spaces are the same, or when
-    all nodes are already on the correct space.
-    """
-
-    _CILIUM_DAEMONSET = "cilium"
-    _CILIUM_NAMESPACE = "kube-system"
-    _ROLLOUT_TIMEOUT = 300  # seconds
-
-    def __init__(
-        self,
-        deployment: Deployment,
-        client: Client,
-        jhelper: JujuHelper,
-        model: str,
-    ):
-        super().__init__(
-            "Ensure Cilium on correct space",
-            "Checking Cilium is bound to the correct network space",
-        )
-        self.deployment = deployment
-        self.client = client
-        self.jhelper = jhelper
-        self.model = model
-        self.needs_restart = False
-
-    def _get_internal_space_networks(
-        self,
-    ) -> list[ipaddress.IPv4Network | ipaddress.IPv6Network]:
-        internal_space = self.deployment.get_space(Networks.INTERNAL)
-        return self.jhelper.get_space_networks(self.model, internal_space)
-
-    def _node_internal_ip_in_space(
-        self,
-        node: "core_v1.Node",
-        internal_networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network],
-    ) -> bool:
-        """Return True if any node InternalIP falls within the internal space.
-
-        Evaluates all InternalIP entries to support dual-stack nodes.
-        """
-        if node.status is None or node.status.addresses is None:
-            return True  # can't determine; skip this node
-        found_internal_ip = False
-        for address in node.status.addresses:
-            if address.type == "InternalIP":
-                found_internal_ip = True
-                try:
-                    ip = ipaddress.ip_address(address.address)
-                except ValueError:
-                    LOG.debug("Invalid InternalIP %s on node", address.address)
-                    continue
-                if any(ip in net for net in internal_networks):
-                    return True
-        if not found_internal_ip:
-            return True  # no InternalIP found; skip this node
-        return False
-
-    def is_skip(self, context: StepContext) -> Result:
-        """Determines if the step should be skipped or not.
-
-        :return: ResultType.SKIPPED if Cilium is already on the correct space
-                 or management and internal spaces are the same,
-                 ResultType.COMPLETED if Cilium needs a restart,
-                 ResultType.FAILED on error.
-        """
-        # Reset restart flag to ensure this check is idempotent across calls.
-        self.needs_restart = False
-        management_space = self.deployment.get_space(Networks.MANAGEMENT)
-        internal_space = self.deployment.get_space(Networks.INTERNAL)
-        if management_space == internal_space:
-            LOG.debug(
-                "Management and internal spaces are identical (%s), skipping",
-                internal_space,
-            )
-            return Result(ResultType.SKIPPED)
-
-        try:
-            self.kube = get_kube_client(self.client)
-        except KubeClientError as e:
-            LOG.debug("Failed to create k8s client", exc_info=True)
-            return Result(ResultType.FAILED, str(e))
-
-        try:
-            internal_networks = self._get_internal_space_networks()
-        except JujuException as e:
-            LOG.debug("Failed to get internal space networks", exc_info=True)
-            return Result(ResultType.FAILED, str(e))
-
-        try:
-            k8s_nodes = list_nodes(
-                self.kube, labels={DEPLOYMENT_LABEL: self.deployment.name}
-            )
-        except K8SError as e:
-            LOG.debug("Failed to list k8s nodes", exc_info=True)
-            return Result(ResultType.FAILED, str(e))
-
-        for node in k8s_nodes:
-            node_name = node.metadata.name if node.metadata else "<unknown>"
-            if not self._node_internal_ip_in_space(node, internal_networks):
-                LOG.debug(
-                    "Node %s has InternalIP outside internal space — "
-                    "Cilium restart required",
-                    node_name,
-                )
-                self.needs_restart = True
-                break
-
-        if not self.needs_restart:
-            LOG.debug("All k8s nodes have InternalIP in the internal space, skipping")
-            return Result(ResultType.SKIPPED)
-
-        return Result(ResultType.COMPLETED)
-
-    def run(self, context: StepContext) -> Result:
-        """Restart the Cilium DaemonSet so it rebinds to the correct interface."""
-        restart_annotation = datetime.datetime.now(tz=datetime.timezone.utc).isoformat()
-        patch = {
-            "spec": {
-                "template": {
-                    "metadata": {
-                        "annotations": {
-                            "kubectl.kubernetes.io/restartedAt": restart_annotation,
-                        }
-                    }
-                }
-            }
-        }
-        LOG.debug("Patching Cilium DaemonSet with restartedAt=%s", restart_annotation)
-        try:
-            self.kube.patch(
-                apps_v1.DaemonSet,
-                self._CILIUM_DAEMONSET,
-                patch,
-                namespace=self._CILIUM_NAMESPACE,
-            )
-        except l_exceptions.ApiError as e:
-            LOG.debug("Failed to patch Cilium DaemonSet", exc_info=True)
-            return Result(
-                ResultType.FAILED,
-                f"Failed to restart Cilium DaemonSet: {e}",
-            )
-
-        LOG.debug("Waiting for Cilium DaemonSet rollout to complete")
-        try:
-            self._wait_for_rollout()
-        except SunbeamException as e:
-            return Result(ResultType.FAILED, str(e))
-
-        return Result(ResultType.COMPLETED)
-
-    def _wait_for_rollout(self) -> None:
-        """Wait until the Cilium DaemonSet rollout is complete.
-
-        Polls the DaemonSet status until both updatedNumberScheduled and
-        numberAvailable equal desiredNumberScheduled (for a non-zero desired
-        count), or until _ROLLOUT_TIMEOUT seconds elapse.
-        """
-        deadline = time.monotonic() + self._ROLLOUT_TIMEOUT
-        while time.monotonic() < deadline:
-            try:
-                ds = self.kube.get(
-                    apps_v1.DaemonSet,
-                    self._CILIUM_DAEMONSET,
-                    namespace=self._CILIUM_NAMESPACE,
-                )
-            except l_exceptions.ApiError as e:
-                raise SunbeamException(
-                    f"Failed to get Cilium DaemonSet during rollout wait: {e}"
-                ) from e
-
-            ds_status = ds.status
-            if ds_status is None:
-                time.sleep(5)
-                continue
-
-            desired = ds_status.desiredNumberScheduled or 0
-            updated = ds_status.updatedNumberScheduled or 0
-            available = ds_status.numberAvailable or 0
-            LOG.debug(
-                "Cilium rollout: desired=%d updated=%d available=%d",
-                desired,
-                updated,
-                available,
-            )
-            if desired > 0 and updated == desired and available == desired:
-                LOG.debug("Cilium DaemonSet rollout complete")
-                return
-
-            time.sleep(5)
-
-        raise SunbeamException(
-            f"Cilium DaemonSet rollout did not complete within {self._ROLLOUT_TIMEOUT}s"
-        )
 
 
 class RemoveK8SUnitsStep(RemoveMachineUnitsStep):
@@ -1503,13 +1249,418 @@ class DestroyK8SApplicationStep(DestroyMachineApplicationStep):
         return K8S_DESTROY_TIMEOUT
 
 
-class EnsureL2AdvertisementByHostStep(BaseStep):
+class _PerHostK8SResourceStep(BaseStep):
+    """Base class for steps that manage per-host k8s resources.
+
+    Provides common logic for looking up control nodes, creating a kube client,
+    finding the juju-space interface for each node, and determining which nodes
+    have outdated resources.
+
+    Subclasses must implement:
+      - _get_outdated_resources(nodes, kube) -> (outdated, deleted)
+      - run(context) -> Result
+    """
+
+    class _InterfaceError(SunbeamException):
+        pass
+
+    def __init__(
+        self,
+        name: str,
+        description: str,
+        deployment: Deployment,
+        client: Client,
+        jhelper: JujuHelper,
+        model: str,
+        network: Networks,
+        kube_namespace: str | None = None,
+        fqdn: str | None = None,
+    ):
+        super().__init__(name, description)
+        self.deployment = deployment
+        self.client = client
+        self.jhelper = jhelper
+        self.model = model
+        self.network = network
+        self.kube_namespace = kube_namespace
+        self.fqdn = fqdn
+        self.to_update: list[dict] = []
+        self.to_delete: list[dict] = []
+        self._ifnames: dict[str, str] = {}
+
+    def _get_interface(self, node: dict) -> str:
+        """Get the network interface for the node in the configured space."""
+        name = node["name"]
+        if name in self._ifnames:
+            return self._ifnames[name]
+        machine_id = str(node["machineid"])
+        machine_interfaces = self.jhelper.get_machine_interfaces(self.model, machine_id)
+        LOG.debug("Machine %r interfaces: %r", machine_id, machine_interfaces)
+        network_space = self.deployment.get_space(self.network)
+        for ifname, iface in machine_interfaces.items():
+            if (spaces := iface.space) and network_space in spaces.split():
+                self._ifnames[name] = ifname
+                return ifname
+        raise self._InterfaceError(
+            f"Node {node['name']} has no interface in {self.network.name} space"
+        )
+
+    def _get_outdated_resources(
+        self, nodes: list[dict], kube: "l_client.Client"
+    ) -> tuple[list[str], list[str]]:
+        """Return (outdated, deleted) node name lists.
+
+        Must be implemented by subclasses.
+        """
+        raise NotImplementedError
+
+    def is_skip(self, context: StepContext) -> Result:
+        """Determines if the step should be skipped or not."""
+        self.to_update = []
+        self.to_delete = []
+        control = Role.CONTROL.name.lower()
+        region_controller = Role.REGION_CONTROLLER.name.lower()
+        if self.fqdn:
+            node = self.client.cluster.get_node_info(self.fqdn)
+            node_roles = node.get("role", [])
+            if control not in node_roles and region_controller not in node_roles:
+                return Result(ResultType.FAILED, f"{self.fqdn} is not a control node")
+            self.control_nodes = [node]
+        else:
+            self.control_nodes = self.client.cluster.list_nodes_by_role(control)
+
+        try:
+            self.kube = get_kube_client(self.client, self.kube_namespace)
+        except KubeClientError as e:
+            LOG.debug("Failed to create k8s client", exc_info=True)
+            return Result(ResultType.FAILED, str(e))
+
+        try:
+            outdated, deleted = self._get_outdated_resources(
+                self.control_nodes, self.kube
+            )
+        except (l_exceptions.ApiError, self._InterfaceError) as e:
+            LOG.debug("Failed to get outdated resources", exc_info=True)
+            return Result(ResultType.FAILED, str(e))
+
+        if self.fqdn:
+            # Single-node mode (join/bootstrap): only create/update for the
+            # target node.  Defer deletion of stale resources to full
+            # reconciliation (refresh, where fqdn is None).
+            deleted = []
+
+        if not (outdated or deleted):
+            LOG.debug("No resources to update")
+            return Result(ResultType.SKIPPED)
+
+        for node in self.control_nodes:
+            if node["name"] in outdated:
+                self.to_update.append(node)
+
+        # Deleted hostnames correspond to nodes no longer in control_nodes,
+        # so we build synthetic entries with just the name for cleanup.
+        for hostname in deleted:
+            self.to_delete.append({"name": hostname})
+
+        return Result(ResultType.COMPLETED)
+
+
+class EnsureCiliumDeviceByHostStep(_PerHostK8SResourceStep):
+    """Ensure each control node has a CiliumNodeConfig for its internal-space device."""
+
+    _CILIUM_NAMESPACE = "kube-system"
+    _RESTART_TIMEOUT = 300
+    _RESTART_POLL_INTERVAL = 5
+    _RESTART_PENDING_ANNOTATION = "sunbeam/restart-pending"
+
+    def __init__(
+        self,
+        deployment: Deployment,
+        client: Client,
+        jhelper: JujuHelper,
+        model: str,
+        fqdn: str | None = None,
+    ):
+        super().__init__(
+            "Ensure Cilium device config",
+            "Ensuring Cilium device config per host",
+            deployment,
+            client,
+            jhelper,
+            model,
+            Networks.INTERNAL,
+            kube_namespace=self._CILIUM_NAMESPACE,
+            fqdn=fqdn,
+        )
+        self.cilium_node_config_resource = (
+            K8SHelper.get_lightkube_cilium_node_config_resource()
+        )
+
+    def _cilium_node_config_name(self, hostname: str) -> str:
+        return f"cilium-devices-{hostname}"
+
+    def _labels(self, hostname: str) -> dict[str, str]:
+        return {
+            "app.kubernetes.io/managed-by": self.deployment.name,
+            HOSTNAME_LABEL: hostname,
+        }
+
+    def _get_outdated_resources(
+        self, nodes: list[dict], kube: "l_client.Client"
+    ) -> tuple[list[str], list[str]]:
+        node_names = {node["name"] for node in nodes}
+        outdated: list[str] = [node["name"] for node in nodes]
+        deleted: list[str] = []
+
+        configs = kube.list(
+            self.cilium_node_config_resource,
+            namespace=self._CILIUM_NAMESPACE,
+            labels={"app.kubernetes.io/managed-by": self.deployment.name},
+        )
+
+        for config in configs:
+            if config.metadata is None or config.metadata.labels is None:
+                LOG.debug("CiliumNodeConfig has no metadata or labels")
+                continue
+            hostname = config.metadata.labels.get(HOSTNAME_LABEL)
+            if hostname is None:
+                LOG.debug(
+                    "CiliumNodeConfig %s has no hostname label",
+                    config.metadata.name,
+                )
+                continue
+            if config.spec is None:
+                LOG.debug("CiliumNodeConfig %r has no spec", hostname)
+                continue
+            if hostname not in node_names:
+                LOG.debug(
+                    "CiliumNodeConfig %s has no matching node",
+                    config.metadata.name,
+                )
+                deleted.append(hostname)
+                continue
+
+            # Validate nodeSelector
+            node_selector = config.spec.get("nodeSelector", {})
+            match_labels = node_selector.get("matchLabels", {})
+            if match_labels.get(HOSTNAME_LABEL) != hostname:
+                LOG.debug(
+                    "CiliumNodeConfig %s has wrong nodeSelector",
+                    config.metadata.name,
+                )
+                continue
+
+            # Validate device
+            defaults = config.spec.get("defaults", {})
+            interface = None
+            for node in nodes:
+                if node["name"] == hostname:
+                    interface = self._get_interface(node)
+            if not interface:
+                LOG.debug(
+                    "CiliumNodeConfig %s: no interface for node",
+                    config.metadata.name,
+                )
+                continue
+            if defaults.get("devices") != interface:
+                LOG.debug(
+                    "CiliumNodeConfig %s has wrong device (got %s, want %s)",
+                    config.metadata.name,
+                    defaults.get("devices"),
+                    interface,
+                )
+                continue
+
+            # Check if a previous restart failed and needs retry
+            annotations = (
+                config.metadata.annotations if config.metadata.annotations else {}
+            )
+            if annotations.get(self._RESTART_PENDING_ANNOTATION) == "true":
+                LOG.debug(
+                    "CiliumNodeConfig %s has pending restart",
+                    config.metadata.name,
+                )
+                continue
+
+            outdated.remove(hostname)
+        return outdated, deleted
+
+    def _find_cilium_pod(self, node_name: str) -> "core_v1.Pod":
+        pods = list(
+            self.kube.list(
+                core_v1.Pod,
+                namespace=self._CILIUM_NAMESPACE,
+                labels={"k8s-app": "cilium"},
+            )
+        )
+        for pod in pods:
+            if pod.spec and pod.spec.nodeName == node_name:
+                return pod
+        raise SunbeamException(f"No cilium pod found on node {node_name}")
+
+    def _wait_for_cilium_ready(self, node_name: str, deleted_pod_name: str) -> None:
+        """Wait until a NEW Ready cilium pod exists on the given node.
+
+        Skips pods matching ``deleted_pod_name`` so the terminating pod
+        cannot satisfy the readiness check.
+        """
+        deadline = time.monotonic() + self._RESTART_TIMEOUT
+        while time.monotonic() < deadline:
+            try:
+                pods = list(
+                    self.kube.list(
+                        core_v1.Pod,
+                        namespace=self._CILIUM_NAMESPACE,
+                        labels={"k8s-app": "cilium"},
+                    )
+                )
+            except l_exceptions.ApiError as e:
+                raise SunbeamException(
+                    f"Failed to list cilium pods during restart wait: {e}"
+                ) from e
+
+            for pod in pods:
+                if pod.spec and pod.spec.nodeName == node_name:
+                    pod_name = (
+                        pod.metadata.name
+                        if pod.metadata and pod.metadata.name
+                        else None
+                    )
+                    if pod_name == deleted_pod_name:
+                        continue  # skip the terminating pod
+                    if pod.status and pod.status.conditions:
+                        for condition in pod.status.conditions:
+                            if condition.type == "Ready" and condition.status == "True":
+                                LOG.debug(
+                                    "New cilium pod %s on %s is Ready",
+                                    pod_name,
+                                    node_name,
+                                )
+                                return
+            LOG.debug("Waiting for cilium pod on %s to be Ready", node_name)
+            time.sleep(self._RESTART_POLL_INTERVAL)
+
+        raise SunbeamException(
+            f"Cilium pod on {node_name} did not become Ready "
+            f"within {self._RESTART_TIMEOUT}s"
+        )
+
+    def _restart_cilium_on_node(self, node_name: str) -> None:
+        pod = self._find_cilium_pod(node_name)
+        pod_name = (
+            pod.metadata.name if pod.metadata and pod.metadata.name else "unknown"
+        )
+        LOG.debug("Deleting cilium pod %s on node %s", pod_name, node_name)
+        self.kube.delete(core_v1.Pod, pod_name, namespace=self._CILIUM_NAMESPACE)
+        self._wait_for_cilium_ready(node_name, deleted_pod_name=pod_name)
+
+    def run(self, context: StepContext) -> Result:
+        """Apply or delete CiliumNodeConfig resources and restart cilium pods."""
+        for node in self.to_update:
+            name = node["name"]
+            try:
+                interface = self._get_interface(node)
+            except MachineNotFoundException:
+                LOG.debug(
+                    "Failed to get machine for CiliumNodeConfig on %s",
+                    name,
+                    exc_info=True,
+                )
+                return Result(
+                    ResultType.FAILED,
+                    f"Machine not found for node {name}",
+                )
+
+            try:
+                self.kube.apply(
+                    self.cilium_node_config_resource(
+                        metadata=meta_v1.ObjectMeta(
+                            name=self._cilium_node_config_name(name),
+                            labels=self._labels(name),
+                            annotations={
+                                self._RESTART_PENDING_ANNOTATION: "true",
+                            },
+                        ),
+                        spec={
+                            "nodeSelector": {
+                                "matchLabels": {
+                                    HOSTNAME_LABEL: name,
+                                },
+                            },
+                            "defaults": {
+                                "devices": interface,
+                            },
+                        },
+                    ),
+                    field_manager=self.deployment.name,
+                    force=True,
+                )
+            except l_exceptions.ApiError:
+                LOG.debug("Failed to apply CiliumNodeConfig", exc_info=True)
+                return Result(
+                    ResultType.FAILED,
+                    f"Failed to apply CiliumNodeConfig for {name}",
+                )
+
+            try:
+                self._restart_cilium_on_node(name)
+            except SunbeamException as e:
+                return Result(ResultType.FAILED, str(e))
+
+            # Clear restart-pending after successful restart
+            try:
+                self.kube.patch(
+                    self.cilium_node_config_resource,
+                    self._cilium_node_config_name(name),
+                    {
+                        "metadata": {
+                            "annotations": {
+                                self._RESTART_PENDING_ANNOTATION: "false",
+                            }
+                        }
+                    },
+                    namespace=self._CILIUM_NAMESPACE,
+                )
+            except l_exceptions.ApiError:
+                LOG.debug(
+                    "Failed to clear restart-pending annotation for %s",
+                    name,
+                    exc_info=True,
+                )
+
+        for node in self.to_delete:
+            name = node["name"]
+            try:
+                self.kube.delete(
+                    self.cilium_node_config_resource,
+                    self._cilium_node_config_name(name),
+                    namespace=self._CILIUM_NAMESPACE,
+                )
+            except l_exceptions.ApiError:
+                LOG.debug(
+                    "Failed to delete CiliumNodeConfig for %s",
+                    name,
+                    exc_info=True,
+                )
+                continue
+
+            try:
+                self._restart_cilium_on_node(name)
+            except SunbeamException:
+                LOG.debug(
+                    "Failed to restart cilium on %s after config deletion",
+                    name,
+                    exc_info=True,
+                )
+                continue
+
+        return Result(ResultType.COMPLETED)
+
+
+class EnsureL2AdvertisementByHostStep(_PerHostK8SResourceStep):
     """Ensure IP Pool is advertised by L2Advertisement resources."""
 
     _APPLICATION = APPLICATION
-
-    class _L2AdvertisementError(SunbeamException):
-        pass
 
     def __init__(
         self,
@@ -1521,21 +1672,22 @@ class EnsureL2AdvertisementByHostStep(BaseStep):
         pool: str,
         fqdn: str | None = None,
     ):
-        super().__init__("Ensure L2 advertisement", "Ensuring L2 advertisement")
-        self.deployment = deployment
-        self.client = client
-        self.jhelper = jhelper
-        self.model = model
-        self.network = network
+        super().__init__(
+            "Ensure L2 advertisement",
+            "Ensuring L2 advertisement",
+            deployment,
+            client,
+            jhelper,
+            model,
+            network,
+            kube_namespace=K8SHelper.get_loadbalancer_namespace(),
+            fqdn=fqdn,
+        )
         self.pool = pool
-        self.fqdn = fqdn
         self.l2_advertisement_resource = (
             K8SHelper.get_lightkube_l2_advertisement_resource()
         )
         self.l2_advertisement_namespace = K8SHelper.get_loadbalancer_namespace()
-        self.to_update: list[dict] = []
-        self.to_delete: list[dict] = []
-        self._ifnames: dict[str, str] = {}
 
     def _labels(self, name: str, space: str) -> dict[str, str]:
         """Return labels for the L2 advertisement."""
@@ -1562,10 +1714,11 @@ class EnsureL2AdvertisementByHostStep(BaseStep):
         """Return instance label for the L2 advertisement."""
         return self._name_label(network) + "-" + name
 
-    def _get_outdated_l2_advertisement(
+    def _get_outdated_resources(
         self, nodes: list[dict], kube: "l_client.Client"
     ) -> tuple[list[str], list[str]]:
         """Get outdated L2 advertisement."""
+        node_names = {node["name"] for node in nodes}
         outdated: list[str] = [node["name"] for node in nodes]
         deleted: list[str] = []
 
@@ -1590,7 +1743,7 @@ class EnsureL2AdvertisementByHostStep(BaseStep):
             if l2_ad.spec is None:
                 LOG.debug("L2 advertisement %r has no spec", hostname)
                 continue
-            if hostname not in outdated:
+            if hostname not in node_names:
                 LOG.debug(
                     "L2 advertisement %s has no matching node",
                     l2_ad.metadata.name,
@@ -1606,7 +1759,7 @@ class EnsureL2AdvertisementByHostStep(BaseStep):
             interface = None
             for node in nodes:
                 if node["name"] == hostname:
-                    interface = self._get_interface(node, self.network)
+                    interface = self._get_interface(node)
             if not interface:
                 LOG.debug(
                     "L2 advertisement %s has no allocated interface",
@@ -1621,73 +1774,6 @@ class EnsureL2AdvertisementByHostStep(BaseStep):
                 continue
             outdated.remove(hostname)
         return outdated, deleted
-
-    def _get_interface(
-        self,
-        node: dict,
-        network: Networks,
-    ) -> str:
-        """Get interface for the node depending on the pool."""
-        name = node["name"]
-        if name in self._ifnames:
-            return self._ifnames[name]
-        machine_id = str(node["machineid"])
-        machine_interfaces = self.jhelper.get_machine_interfaces(self.model, machine_id)
-        LOG.debug("Machine %r interfaces: %r", machine_id, machine_interfaces)
-        network_space = self.deployment.get_space(network)
-        for ifname, iface in machine_interfaces.items():
-            if (spaces := iface.space) and network_space in spaces.split():
-                self._ifnames[name] = ifname
-                return ifname
-        raise self._L2AdvertisementError(
-            f"Node {node['name']} has no interface in {network.name} space"
-        )
-
-    def is_skip(self, context: StepContext) -> Result:
-        """Determines if the step should be skipped or not.
-
-        :return: ResultType.SKIPPED if the Step should be skipped,
-                 ResultType.COMPLETED or ResultType.FAILED otherwise
-        """
-        control = Role.CONTROL.name.lower()
-        region_controller = Role.REGION_CONTROLLER.name.lower()
-        if self.fqdn:
-            node = self.client.cluster.get_node_info(self.fqdn)
-            node_roles = node.get("role", [])
-            if control not in node_roles and region_controller not in node_roles:
-                return Result(ResultType.FAILED, f"{self.fqdn} is not a control node")
-            self.control_nodes = [node]
-        else:
-            self.control_nodes = self.client.cluster.list_nodes_by_role(control)
-
-        try:
-            self.kube = get_kube_client(
-                self.client,
-                self.l2_advertisement_namespace,
-            )
-        except KubeClientError as e:
-            LOG.debug("Failed to create k8s client", exc_info=True)
-            return Result(ResultType.FAILED, str(e))
-
-        try:
-            outdated, deleted = self._get_outdated_l2_advertisement(
-                self.control_nodes, self.kube
-            )
-        except (l_exceptions.ApiError, self._L2AdvertisementError) as e:
-            LOG.debug("Failed to get outdated L2 advertisement", exc_info=True)
-            return Result(ResultType.FAILED, str(e))
-
-        if not (outdated or deleted):
-            LOG.debug("No L2 advertisement to update")
-            return Result(ResultType.SKIPPED)
-
-        for node in self.control_nodes:
-            if node["name"] in outdated:
-                self.to_update.append(node)
-            if node["name"] in deleted:
-                self.to_delete.append(node)
-
-        return Result(ResultType.COMPLETED)
 
     @tenacity.retry(
         wait=tenacity.wait_fixed(15),
@@ -1737,7 +1823,7 @@ class EnsureL2AdvertisementByHostStep(BaseStep):
         for node in self.to_update:
             name = node["name"]
             try:
-                interface = self._get_interface(node, self.network)
+                interface = self._get_interface(node)
             except MachineNotFoundException:
                 LOG.debug(
                     "Failed to get the machine for L2 advertisement on %s",
