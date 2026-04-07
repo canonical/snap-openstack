@@ -10,7 +10,7 @@ variable "machine_ids" {
 variable "charm_channel" {
   description = "Charm channel to deploy sunbeam-machine charm from"
   type        = string
-  default     = "2024.1/stable"
+  default     = "2026.1/stable"
 }
 
 variable "charm_revision" {
@@ -39,7 +39,7 @@ variable "endpoint_bindings" {
 variable "charm_epa_orchestrator_channel" {
   description = "Operator channel for epa-orchestrator deployment"
   type        = string
-  default     = "2024.1/stable"
+  default     = "2026.1/stable"
 }
 
 variable "charm_epa_orchestrator_revision" {

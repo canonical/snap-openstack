@@ -4,7 +4,7 @@
 variable "charm_cinder_volume_channel" {
   description = "Operator channel for cinder_volume deployment"
   type        = string
-  default     = "2024.1/stable"
+  default     = "2026.1/stable"
 }
 
 variable "charm_cinder_volume_revision" {
@@ -21,13 +21,13 @@ variable "charm_cinder_volume_config" {
 
 variable "cinder_volume_channel" {
   description = "Cinder Volume channel to deploy, not the operator channel"
-  default     = "2024.1/stable"
+  default     = "2026.1/stable"
 }
 
 variable "charm_cinder_volume_ceph_channel" {
   description = "Operator channel for cinder_volume_ceph deployment"
   type        = string
-  default     = "2024.1/stable"
+  default     = "2026.1/stable"
 }
 
 variable "charm_cinder_volume_ceph_revision" {
