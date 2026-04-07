@@ -614,23 +614,31 @@ class JujuGrantModelAccessStep(BaseStep, JujuStepHelper):
                 "admin",
                 model_with_owner,
             ]
-            LOG.debug(f"Running command {' '.join(cmd)}")
+            LOG.debug("Running command %r", " ".join(cmd))
             process = subprocess.run(cmd, capture_output=True, text=True, check=True)
             LOG.debug(
-                f"Command finished. stdout={process.stdout}, stderr={process.stderr}"
+                "Command finished. stdout=%r, stderr=%r",
+                process.stdout,
+                process.stderr,
             )
 
             return Result(ResultType.COMPLETED)
         except ModelNotFoundException as e:
             return Result(ResultType.FAILED, str(e))
         except subprocess.CalledProcessError as e:
-            LOG.debug(e.stderr)
             if 'user already has "admin" access or greater' in e.stderr:
+                LOG.debug(
+                    'User %r already has "admin" access or greater on model %r',
+                    self.username,
+                    model_with_owner,
+                )
                 return Result(ResultType.COMPLETED)
 
             LOG.exception(
-                f"Error granting user {self.username} admin access on model "
-                f"{self.model}"
+                "Error granting user %r admin access on model %r: %s",
+                self.username,
+                model_with_owner,
+                e.stderr,
             )
             return Result(ResultType.FAILED, str(e))
 
