@@ -810,6 +810,9 @@ extend-ignore = ["E203"]
     "N806",
     "S",    # Disable bandit rules in tests
 ]
+"../tools/*" = [
+    "S310", # URL scheme is validated before urlopen
+]
 "setup.py" = ["D100"]
 "**/__init__.py" = ["D104"]
 
