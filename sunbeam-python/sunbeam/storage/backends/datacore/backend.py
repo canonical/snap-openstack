@@ -1,10 +1,10 @@
 # SPDX-FileCopyrightText: 2026 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
-"""Ceph RBD backend implementation using base step classes."""
+"""DataCore backend implementation using base step classes."""
 
 import logging
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import Field
 from rich.console import Console
@@ -16,12 +16,22 @@ LOG = logging.getLogger(__name__)
 console = Console()
 
 
-class CephConfig(StorageBackendConfig):
-    """Configuration model for Ceph RBD backend.
+class DatacoreConfig(StorageBackendConfig):
+    """Configuration model for DataCore backend.
 
     This model includes ALL configuration options for the backend.
     Additional configuration can be managed dynamically through the charm.
     """
+
+    # Shared backend contract fields expected by generic tests.
+    san_ip: Annotated[
+        str | None,
+        Field(description="IP address or hostname of the DataCore management endpoint"),
+    ] = None
+    protocol: Annotated[
+        Literal["iscsi", "fc"] | None,
+        Field(description="Front-end protocol used by DataCore"),
+    ] = None
 
     ceph_osd_replication_count: Annotated[
         int,
@@ -153,17 +163,17 @@ class CephConfig(StorageBackendConfig):
     ] = 0
 
 
-class CephBackend(StorageBackendBase):
-    """Ceph RBD backend implementation."""
+class DatacoreBackend(StorageBackendBase):
+    """DataCore backend implementation."""
 
-    backend_type = "ceph"
-    display_name = "Ceph RBD"
+    backend_type = "datacore"
+    display_name = "DataCore"
     generally_available = True
 
     @property
     def charm_name(self) -> str:
         """Return the charm application name."""
-        return "cinder-volume-ceph"
+        return "cinder-volume-datacore"
 
     @property
     def charm_channel(self) -> str:
@@ -187,4 +197,4 @@ class CephBackend(StorageBackendBase):
 
     def config_type(self) -> type[StorageBackendConfig]:
         """Return the configuration model type for this backend."""
-        return CephConfig
+        return DatacoreConfig
