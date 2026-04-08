@@ -112,7 +112,7 @@ def _update_proxy(proxy: dict, deployment: Deployment, show_hints: bool):
         plan.append(TerraformInitStep(openstack_tfhelper))
         plan.append(
             UpdateOpenStackModelConfigStep(
-                client, openstack_tfhelper, manifest, model_config
+                deployment, openstack_tfhelper, manifest, model_config
             )
         )
     run_plan(plan, console, show_hints)
