@@ -5,7 +5,7 @@
 
 import logging
 from enum import StrEnum
-from typing import Annotated, Literal
+from typing import Annotated
 
 from pydantic import Field
 from rich.console import Console
@@ -24,7 +24,7 @@ class Protocol(StrEnum):
     ISCSI = "iscsi"
 
 
-class DellpowervaultConfig(StorageBackendConfig):
+class DellPowerVaultConfig(StorageBackendConfig):
     """Configuration model for Dell PowerVault backend.
 
     This model includes ALL configuration options for the backend.
@@ -37,7 +37,7 @@ class DellpowervaultConfig(StorageBackendConfig):
     ]
 
     protocol: Annotated[
-        Literal["fc", "iscsi"],
+        Protocol,
         Field(description="Protocol selector: fc, iscsi."),
     ]
 
@@ -60,12 +60,12 @@ class DellpowervaultConfig(StorageBackendConfig):
     ] = None
 
 
-class DellpowervaultBackend(StorageBackendBase):
+class DellPowerVaultBackend(StorageBackendBase):
     """Dell PowerVault backend implementation."""
 
     backend_type = "dellpowervault"
     display_name = "Dell PowerVault"
-    generally_available = True
+    generally_available = False
 
     @property
     def charm_name(self) -> str:
@@ -94,4 +94,4 @@ class DellpowervaultBackend(StorageBackendBase):
 
     def config_type(self) -> type[StorageBackendConfig]:
         """Return the configuration model type for this backend."""
-        return DellpowervaultConfig
+        return DellPowerVaultConfig
