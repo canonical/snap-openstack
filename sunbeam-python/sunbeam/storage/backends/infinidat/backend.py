@@ -109,11 +109,6 @@ class InfinidatBackend(StorageBackendBase):
         """Return the target base for this charm."""
         return "ubuntu@24.04"
 
-    @property
-    def supports_ha(self) -> bool:
-        """Whether this backend supports HA deployments."""
-        return False
-
     def config_type(self) -> type[StorageBackendConfig]:
         """Return the configuration model type for this backend."""
         return InfinidatConfig
