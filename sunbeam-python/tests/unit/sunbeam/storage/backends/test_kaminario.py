@@ -25,11 +25,11 @@ class TestKaminarioBackend(BaseBackendTests):
         """Test that charm name is cinder-volume-kaminario."""
         assert backend.charm_name == "cinder-volume-kaminario"
 
-    def test_config_has_required_fields(self, backend):
-        """Test that Kaminario config has required fields."""
+    def test_config_has_expected_fields(self, backend):
+        """Test that Kaminario config exposes expected fields."""
         fields = backend.config_type().model_fields
         for field in ("san_ip", "protocol"):
-            assert field in fields, f"Required field {field} not found in config"
+            assert field in fields, f"Expected field {field} not found in config"
 
 
 class TestKaminarioConfigValidation:
