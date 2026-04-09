@@ -7,7 +7,7 @@ import pytest
 
 from sunbeam.storage.backends.dellsc.backend import DellSCBackend
 from sunbeam.storage.backends.hitachi.backend import HitachiBackend
-from sunbeam.storage.backends.ibmstorwizesvc.backend import IbmstorwizesvcBackend
+from sunbeam.storage.backends.ibmstorwizesvc.backend import IbmStorwizeSVCBackend
 from sunbeam.storage.backends.purestorage.backend import PureStorageBackend
 
 
@@ -32,7 +32,7 @@ def dellsc_backend():
 @pytest.fixture
 def ibmstorwizesvc_backend():
     """Provide an IBM Storwize SVC backend instance."""
-    return IbmstorwizesvcBackend()
+    return IbmStorwizeSVCBackend()
 
 
 @pytest.fixture(params=["hitachi", "purestorage", "dellsc", "ibmstorwizesvc"])
@@ -42,6 +42,6 @@ def any_backend(request):
         "hitachi": HitachiBackend(),
         "purestorage": PureStorageBackend(),
         "dellsc": DellSCBackend(),
-        "ibmstorwizesvc": IbmstorwizesvcBackend(),
+        "ibmstorwizesvc": IbmStorwizeSVCBackend(),
     }
     return backends[request.param]
