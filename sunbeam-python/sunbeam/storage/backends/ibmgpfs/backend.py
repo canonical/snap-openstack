@@ -75,9 +75,7 @@ class IbmgpfsConfig(StorageBackendConfig):
             description="Comma-separated list of IP address or hostnames of GPFS nodes."
         ),
     ] = None
-    gpfs_user_login: Annotated[
-        str | None, Field(description="Username for GPFS nodes.")
-    ] = None
+    gpfs_user_login: Annotated[str, Field(description="Username for GPFS nodes.")]
     gpfs_user_password: Annotated[
         str,
         Field(description="Password for GPFS node user."),
