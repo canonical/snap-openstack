@@ -6,7 +6,7 @@
 import logging
 from typing import Annotated, Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from sunbeam.core.manifest import StorageBackendConfig
 from sunbeam.storage.base import StorageBackendBase
@@ -22,7 +22,7 @@ class InfinidatConfig(StorageBackendConfig):
     san_ip: Annotated[str, Field(description="InfiniBox Management IP")]
     infinidat_pool_name: Annotated[str, Field(description="InfiniBox Pool Name")]
     protocol: Annotated[
-        Literal["iscsi", "fc"] | None,
+        Literal["iscsi", "fc"],
         Field(description="Storage Protocol (iscsi or fc)"),
     ] = "iscsi"
     infinidat_iscsi_netspaces: Annotated[
@@ -30,7 +30,7 @@ class InfinidatConfig(StorageBackendConfig):
     ] = None
     use_chap_auth: Annotated[
         bool | None, Field(description="Use CHAP authentication")
-    ] = True
+    ] = None
 
     # Secrets
     san_login: Annotated[
@@ -63,6 +63,26 @@ class InfinidatConfig(StorageBackendConfig):
         float | None,
         Field(description="Maximum oversubscription ratio for thin provisioning"),
     ] = None
+
+    @model_validator(mode="after")
+    def chap_credentials_required_when_enabled(self) -> "InfinidatConfig":
+        """Validate CHAP credentials are provided when CHAP auth is enabled."""
+        if self.use_chap_auth:
+            missing = [
+                name
+                for name, val in [
+                    ("chap_username", self.chap_username),
+                    ("chap_password", self.chap_password),
+                ]
+                if not val
+            ]
+            if missing:
+                raise ValueError(
+                    "Status: Blocked - "
+                    + ", ".join(missing)
+                    + " required when use_chap_auth is enabled"
+                )
+        return self
 
 
 class InfinidatBackend(StorageBackendBase):

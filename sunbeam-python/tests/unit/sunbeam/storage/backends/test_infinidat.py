@@ -165,13 +165,14 @@ class TestInfinidatBackend(BaseBackendTests):
         # Verify optional fields default to expected values
         assert config.protocol == "iscsi"  # defaults to iscsi
         assert config.infinidat_iscsi_netspaces is None
+        assert config.use_chap_auth is None
         assert config.chap_username is None
         assert config.chap_password is None
         assert config.volume_backend_name is None
         assert config.backend_availability_zone is None
 
-    def test_infinidat_use_chap_auth_defaults_to_true(self, backend):
-        """Test that use_chap_auth defaults to True."""
+    def test_infinidat_use_chap_auth_defaults_to_none(self, backend):
+        """Test that use_chap_auth defaults to None (defers to charm)."""
         config_class = backend.config_type()
 
         config = config_class.model_validate(
@@ -182,7 +183,7 @@ class TestInfinidatBackend(BaseBackendTests):
                 "san-password": "secret",
             }
         )
-        assert config.use_chap_auth is True
+        assert config.use_chap_auth is None
 
     def test_infinidat_supports_ha(self, backend):
         """Test that Infinidat backend supports HA deployments."""
@@ -497,3 +498,85 @@ class TestInfinidatBuildTerraformVars:
             "secrets",
         }
         assert set(result.keys()) == expected_keys
+
+
+class TestInfinidatChapValidation:
+    """Test CHAP authentication cross-field validation.
+
+    When use_chap_auth is enabled, chap_username and chap_password
+    must be provided or validation raises a blocked status error.
+    """
+
+    BASE_CONFIG = {
+        "san-ip": "192.168.1.1",
+        "infinidat-pool-name": "pool1",
+        "san-login": "admin",
+        "san-password": "secret",
+    }
+
+    def test_chap_enabled_both_missing_raises_blocked(self):
+        """CHAP enabled with no credentials raises blocked error."""
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError, match="Blocked"):
+            InfinidatConfig.model_validate(
+                {**self.BASE_CONFIG, "use-chap-auth": True}
+            )
+
+    def test_chap_enabled_username_missing_raises_blocked(self):
+        """CHAP enabled with only password raises blocked error."""
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError, match="chap_username"):
+            InfinidatConfig.model_validate(
+                {
+                    **self.BASE_CONFIG,
+                    "use-chap-auth": True,
+                    "chap-password": "pass",
+                }
+            )
+
+    def test_chap_enabled_password_missing_raises_blocked(self):
+        """CHAP enabled with only username raises blocked error."""
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError, match="chap_password"):
+            InfinidatConfig.model_validate(
+                {
+                    **self.BASE_CONFIG,
+                    "use-chap-auth": True,
+                    "chap-username": "user",
+                }
+            )
+
+    def test_chap_enabled_both_provided_passes(self):
+        """CHAP enabled with both credentials passes validation."""
+        config = InfinidatConfig.model_validate(
+            {
+                **self.BASE_CONFIG,
+                "use-chap-auth": True,
+                "chap-username": "user",
+                "chap-password": "pass",
+            }
+        )
+        assert config.use_chap_auth is True
+        assert config.chap_username == "user"
+        assert config.chap_password == "pass"
+
+    def test_chap_disabled_no_credentials_passes(self):
+        """CHAP disabled without credentials passes validation."""
+        config = InfinidatConfig.model_validate(
+            {**self.BASE_CONFIG, "use-chap-auth": False}
+        )
+        assert config.use_chap_auth is False
+        assert config.chap_username is None
+        assert config.chap_password is None
+
+    def test_chap_none_no_credentials_passes(self):
+        """CHAP set to None without credentials passes validation."""
+        config = InfinidatConfig.model_validate(
+            {**self.BASE_CONFIG, "use-chap-auth": None}
+        )
+        assert config.use_chap_auth is None
+        assert config.chap_username is None
+        assert config.chap_password is None
