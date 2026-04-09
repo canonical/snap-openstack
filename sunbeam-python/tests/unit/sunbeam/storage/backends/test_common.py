@@ -157,10 +157,15 @@ class TestAllBackends(BaseBackendTests):
 
 
 def test_all_backends_have_unique_types(
-    hitachi_backend, purestorage_backend, dellsc_backend
+    hitachi_backend, purestorage_backend, dellsc_backend, inspuras13000_backend
 ):
     """Test that all backends have unique type identifiers."""
-    backends = [hitachi_backend, purestorage_backend, dellsc_backend]
+    backends = [
+        hitachi_backend,
+        purestorage_backend,
+        dellsc_backend,
+        inspuras13000_backend,
+    ]
     types = [b.backend_type for b in backends]
 
     # Check no duplicates
@@ -168,10 +173,15 @@ def test_all_backends_have_unique_types(
 
 
 def test_all_backends_have_unique_charm_names(
-    hitachi_backend, purestorage_backend, dellsc_backend
+    hitachi_backend, purestorage_backend, dellsc_backend, inspuras13000_backend
 ):
     """Test that all backends have unique charm names."""
-    backends = [hitachi_backend, purestorage_backend, dellsc_backend]
+    backends = [
+        hitachi_backend,
+        purestorage_backend,
+        dellsc_backend,
+        inspuras13000_backend,
+    ]
     charm_names = [b.charm_name for b in backends]
 
     # Check no duplicates
@@ -186,6 +196,7 @@ def test_all_backends_have_unique_charm_names(
         ("hitachi", "hitachi"),
         ("purestorage", "purestorage"),
         ("dellsc", "dellsc"),
+        ("inspuras13000", "inspuras13000"),
     ],
 )
 def test_backend_types_match_expected(any_backend, backend_type, expected_type):
@@ -200,6 +211,7 @@ def test_backend_types_match_expected(any_backend, backend_type, expected_type):
         ("hitachi", "cinder-volume-hitachi"),
         ("purestorage", "cinder-volume-purestorage"),
         ("dellsc", "cinder-volume-dellsc"),
+        ("inspuras13000", "cinder-volume-inspuras13000"),
     ],
 )
 def test_backend_charm_names_match_expected(any_backend, backend_type, expected_charm):
