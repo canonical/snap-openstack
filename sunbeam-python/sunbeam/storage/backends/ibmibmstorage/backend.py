@@ -7,7 +7,7 @@ import logging
 from enum import StrEnum
 from typing import Annotated, Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from rich.console import Console
 
 from sunbeam.core.manifest import StorageBackendConfig
@@ -71,7 +71,12 @@ class IbmibmstorageConfig(StorageBackendConfig):
     ] = None
     ds8k_host_type: Annotated[
         str | None,
-        Field(description="<expr>"),
+        Field(
+            description=(
+                'DS8K host type identifier. Use "auto" for automatic host '
+                "type selection, or provide a value supported by the array."
+            )
+        ),
     ] = "auto"
     proxy: Annotated[
         str | None,
@@ -99,6 +104,24 @@ class IbmibmstorageConfig(StorageBackendConfig):
         bool | None,
         Field(description="Enable multipathing for image transfer operations."),
     ] = True
+
+    @model_validator(mode="after")
+    def validate_protocol_connection_consistency(self):
+        """Ensure protocol and connection_type do not conflict when both set."""
+        if self.protocol is None or self.connection_type is None:
+            return self
+
+        expected = (
+            ConnectionType.FIBRE_CHANNEL
+            if self.protocol == "fc"
+            else ConnectionType.ISCSI
+        )
+        if self.connection_type != expected:
+            raise ValueError(
+                "protocol and connection_type must be consistent "
+                "(fc<->fibre_channel, iscsi<->iscsi)"
+            )
+        return self
 
 
 class IbmibmstorageBackend(StorageBackendBase):
