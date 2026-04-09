@@ -1,8 +1,7 @@
 # SPDX-FileCopyrightText: 2026 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
-# ruff: noqa: E501
 
-"""VStorage FC backend implementation using base step classes."""
+"""VStorage backend implementation using base step classes."""
 
 import logging
 from enum import StrEnum
@@ -26,7 +25,7 @@ class Protocol(StrEnum):
 
 
 class NecvConfig(StorageBackendConfig):
-    """Configuration model for VStorage FC backend.
+    """Configuration model for VStorage backend.
 
     This model includes ALL configuration options for the backend.
     Additional configuration can be managed dynamically through the charm.
@@ -54,61 +53,90 @@ class NecvConfig(StorageBackendConfig):
     nec_v_ldev_range: Annotated[
         str | None,
         Field(
-            description="Range of the LDEV numbers in the format of 'xxxx-yyyy' that can be used by the driver."
+            description=(
+                "Range of the LDEV numbers in the format of "
+                "'xxxx-yyyy' that can be used by the driver."
+            )
         ),
     ] = None
     nec_v_target_ports: Annotated[
         str | None,
         Field(
-            description="IDs of the storage ports used to attach volumes to the controller node."
+            description=(
+                "IDs of the storage ports used to attach volumes "
+                "to the controller node."
+            )
         ),
     ] = None
     nec_v_compute_target_ports: Annotated[
         str | None,
         Field(
-            description="IDs of the storage ports used to attach volumes to compute nodes."
+            description=(
+                "IDs of the storage ports used to attach volumes to compute nodes."
+            )
         ),
     ] = None
     nec_v_group_create: Annotated[
         bool | None,
         Field(
-            description="If True, the driver will create host groups or iSCSI targets on storage ports as needed."
+            description=(
+                "If True, the driver will create host groups or iSCSI "
+                "targets on storage ports as needed."
+            )
         ),
     ] = None
     nec_v_group_delete: Annotated[
         bool | None,
         Field(
-            description="If True, the driver will delete host groups or iSCSI targets on storage ports as needed."
+            description=(
+                "If True, the driver will delete host groups or iSCSI "
+                "targets on storage ports as needed."
+            )
         ),
     ] = None
     nec_v_copy_speed: Annotated[
         int | None,
         Field(
-            description="Copy speed of storage system. 1 or 2 indicates low speed, 3 indicates middle speed, and a value between 4 and 15 indicates high speed."
+            description=(
+                "Copy speed of storage system. 1 or 2 indicates low speed, "
+                "3 indicates middle speed, and a value between 4 and 15 "
+                "indicates high speed."
+            )
         ),
     ] = None
     nec_v_copy_check_interval: Annotated[
         int | None,
         Field(
-            description="Interval in seconds to check copying status during a volume copy."
+            description=(
+                "Interval in seconds to check copying status during a volume copy."
+            )
         ),
     ] = None
     nec_v_async_copy_check_interval: Annotated[
         int | None,
         Field(
-            description="Interval in seconds to check asynchronous copying status during a copy pair deletion or data restoration."
+            description=(
+                "Interval in seconds to check asynchronous copying status "
+                "during copy pair deletion or data restoration."
+            )
         ),
     ] = None
     nec_v_manage_drs_volumes: Annotated[
         bool | None,
         Field(
-            description="If true, the driver will create a driver managed vClone parent for each non-cloned DRS volume it creates."
+            description=(
+                "If true, the driver creates a driver-managed vClone "
+                "parent for each non-cloned DRS volume."
+            )
         ),
     ] = None
     nec_v_rest_disable_io_wait: Annotated[
         bool | None,
         Field(
-            description="It may take some time to detach volume after I/O. This option will allow detaching volume to complete immediately."
+            description=(
+                "It may take time to detach volume after I/O. This option "
+                "allows detaching volume to complete immediately."
+            )
         ),
     ] = None
     nec_v_rest_tcp_keepalive: Annotated[
@@ -130,13 +158,17 @@ class NecvConfig(StorageBackendConfig):
     nec_v_restore_timeout: Annotated[
         int | None,
         Field(
-            description="Maximum wait time in seconds for the restore operation to complete."
+            description=(
+                "Maximum wait time in seconds for the restore operation to complete."
+            )
         ),
     ] = None
     nec_v_state_transition_timeout: Annotated[
         int | None,
         Field(
-            description="Maximum wait time in seconds for a volume transition to complete."
+            description=(
+                "Maximum wait time in seconds for a volume transition to complete."
+            )
         ),
     ] = None
     nec_v_lock_timeout: Annotated[
@@ -146,13 +178,17 @@ class NecvConfig(StorageBackendConfig):
     nec_v_rest_timeout: Annotated[
         int | None,
         Field(
-            description="Maximum wait time in seconds for REST API execution to complete."
+            description=(
+                "Maximum wait time in seconds for REST API execution to complete."
+            )
         ),
     ] = None
     nec_v_extend_timeout: Annotated[
         int | None,
         Field(
-            description="Maximum wait time in seconds for a volume extention to complete."
+            description=(
+                "Maximum wait time in seconds for a volume extension to complete."
+            )
         ),
     ] = None
     nec_v_exec_retry_interval: Annotated[
@@ -162,7 +198,9 @@ class NecvConfig(StorageBackendConfig):
     nec_v_rest_connect_timeout: Annotated[
         int | None,
         Field(
-            description="Maximum wait time in seconds for REST API connection to complete."
+            description=(
+                "Maximum wait time in seconds for REST API connection to complete."
+            )
         ),
     ] = None
     nec_v_rest_job_api_response_timeout: Annotated[
@@ -172,7 +210,10 @@ class NecvConfig(StorageBackendConfig):
     nec_v_rest_get_api_response_timeout: Annotated[
         int | None,
         Field(
-            description="Maximum wait time in seconds for a response against GET method of REST API."
+            description=(
+                "Maximum wait time in seconds for a response "
+                "against GET method of REST API."
+            )
         ),
     ] = None
     nec_v_rest_server_busy_timeout: Annotated[
@@ -211,16 +252,20 @@ class NecvConfig(StorageBackendConfig):
     nec_v_zoning_request: Annotated[
         bool | None,
         Field(
-            description="If True, the driver will configure FC zoning between the server and the storage system provided that FC zoning manager is enabled."
+            description=(
+                "If True, the driver will configure FC zoning between "
+                "the server and storage system when FC zoning manager "
+                "is enabled."
+            )
         ),
     ] = None
 
 
 class NecvBackend(StorageBackendBase):
-    """VStorage FC backend implementation."""
+    """VStorage backend implementation."""
 
     backend_type = "necv"
-    display_name = "VStorage FC"
+    display_name = "VStorage"
     generally_available = True
 
     @property
