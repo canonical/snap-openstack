@@ -1485,7 +1485,39 @@ class EnsureCiliumDeviceByHostStep(_PerHostK8SResourceStep):
             outdated.remove(hostname)
         return outdated, deleted
 
-    def _find_cilium_pod(self, node_name: str) -> "core_v1.Pod":
+    def _resolve_k8s_node_name(self, sunbeam_name: str) -> str:
+        """Resolve the K8s node name from the sunbeam hostname label.
+
+        Sunbeam identifies nodes by FQDN while Kubernetes may use a short
+        hostname for ``metadata.name`` and ``spec.nodeName``.  Look up the
+        K8s node by its ``sunbeam/hostname`` label (set by
+        ``EnsureK8SUnitsTaggedStep``) and return the authoritative
+        ``metadata.name``.
+        """
+        try:
+            nodes = list_nodes(self.kube, labels={HOSTNAME_LABEL: sunbeam_name})
+        except K8SError as e:
+            raise SunbeamException(
+                f"Failed to resolve K8s node name for {sunbeam_name}"
+            ) from e
+        if not nodes:
+            raise SunbeamException(
+                f"No K8s node found with label {HOSTNAME_LABEL}={sunbeam_name}"
+            )
+        if len(nodes) > 1:
+            names = [
+                str(n.metadata.name) if n.metadata else "<no metadata>" for n in nodes
+            ]
+            raise SunbeamException(
+                f"Multiple K8s nodes found with label "
+                f"{HOSTNAME_LABEL}={sunbeam_name}: {names}"
+            )
+        node = nodes[0]
+        if node.metadata is None or node.metadata.name is None:
+            raise SunbeamException(f"K8s node for {sunbeam_name} has no metadata.name")
+        return str(node.metadata.name)
+
+    def _find_cilium_pod(self, k8s_node_name: str) -> "core_v1.Pod":
         pods = list(
             self.kube.list(
                 core_v1.Pod,
@@ -1494,11 +1526,11 @@ class EnsureCiliumDeviceByHostStep(_PerHostK8SResourceStep):
             )
         )
         for pod in pods:
-            if pod.spec and pod.spec.nodeName == node_name:
+            if pod.spec and pod.spec.nodeName == k8s_node_name:
                 return pod
-        raise SunbeamException(f"No cilium pod found on node {node_name}")
+        raise SunbeamException(f"No cilium pod found on node {k8s_node_name}")
 
-    def _wait_for_cilium_ready(self, node_name: str, deleted_pod_name: str) -> None:
+    def _wait_for_cilium_ready(self, k8s_node_name: str, deleted_pod_name: str) -> None:
         """Wait until a NEW Ready cilium pod exists on the given node.
 
         Skips pods matching ``deleted_pod_name`` so the terminating pod
@@ -1520,7 +1552,7 @@ class EnsureCiliumDeviceByHostStep(_PerHostK8SResourceStep):
                 ) from e
 
             for pod in pods:
-                if pod.spec and pod.spec.nodeName == node_name:
+                if pod.spec and pod.spec.nodeName == k8s_node_name:
                     pod_name = (
                         pod.metadata.name
                         if pod.metadata and pod.metadata.name
@@ -1534,25 +1566,26 @@ class EnsureCiliumDeviceByHostStep(_PerHostK8SResourceStep):
                                 LOG.debug(
                                     "New cilium pod %s on %s is Ready",
                                     pod_name,
-                                    node_name,
+                                    k8s_node_name,
                                 )
                                 return
-            LOG.debug("Waiting for cilium pod on %s to be Ready", node_name)
+            LOG.debug("Waiting for cilium pod on %s to be Ready", k8s_node_name)
             time.sleep(self._RESTART_POLL_INTERVAL)
 
         raise SunbeamException(
-            f"Cilium pod on {node_name} did not become Ready "
+            f"Cilium pod on {k8s_node_name} did not become Ready "
             f"within {self._RESTART_TIMEOUT}s"
         )
 
-    def _restart_cilium_on_node(self, node_name: str) -> None:
-        pod = self._find_cilium_pod(node_name)
+    def _restart_cilium_on_node(self, sunbeam_node_name: str) -> None:
+        k8s_node_name = self._resolve_k8s_node_name(sunbeam_node_name)
+        pod = self._find_cilium_pod(k8s_node_name)
         pod_name = (
             pod.metadata.name if pod.metadata and pod.metadata.name else "unknown"
         )
-        LOG.debug("Deleting cilium pod %s on node %s", pod_name, node_name)
+        LOG.debug("Deleting cilium pod %s on node %s", pod_name, k8s_node_name)
         self.kube.delete(core_v1.Pod, pod_name, namespace=self._CILIUM_NAMESPACE)
-        self._wait_for_cilium_ready(node_name, deleted_pod_name=pod_name)
+        self._wait_for_cilium_ready(k8s_node_name, deleted_pod_name=pod_name)
 
     def run(self, context: StepContext) -> Result:
         """Apply or delete CiliumNodeConfig resources and restart cilium pods."""

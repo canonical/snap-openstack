@@ -21,6 +21,8 @@ from sunbeam.core.juju import (
     LeaderNotFoundException,
     MachineNotFoundException,
 )
+from sunbeam.core.k8s import K8SError
+from sunbeam.errors import SunbeamException
 from sunbeam.steps.k8s import (
     CREDENTIAL_SUFFIX,
     K8S_CLOUD_SUFFIX,
@@ -1605,6 +1607,7 @@ class TestEnsureCiliumDeviceByHostStep:
         step.to_update = [{"name": "node1", "machineid": "1"}]
         step.to_delete = []
         step._get_interface = Mock(return_value="eth0")
+        step._resolve_k8s_node_name = Mock(return_value="node1")
         step.kube.apply = Mock()
         step.kube.patch = Mock()
 
@@ -1642,6 +1645,7 @@ class TestEnsureCiliumDeviceByHostStep:
         ]
         step.to_delete = []
         step._get_interface = Mock(side_effect=["eth0", "eth1"])
+        step._resolve_k8s_node_name = Mock(side_effect=lambda n: n)
         step.kube.apply = Mock()
         step.kube.patch = Mock()
 
@@ -1684,6 +1688,7 @@ class TestEnsureCiliumDeviceByHostStep:
     def test_run_deletes_stale_config(self, step):
         step.to_update = []
         step.to_delete = [{"name": "node2"}]
+        step._resolve_k8s_node_name = Mock(return_value="node2")
         step.kube.delete = Mock()
 
         old_pod = Mock()
@@ -1735,6 +1740,7 @@ class TestEnsureCiliumDeviceByHostStep:
         step.to_update = [{"name": "node1", "machineid": "1"}]
         step.to_delete = []
         step._get_interface = Mock(return_value="eth0")
+        step._resolve_k8s_node_name = Mock(return_value="node1")
         step.kube.apply = Mock()
         step.kube.list = Mock(return_value=[])
 
@@ -1747,6 +1753,7 @@ class TestEnsureCiliumDeviceByHostStep:
         step.to_update = [{"name": "node1", "machineid": "1"}]
         step.to_delete = []
         step._get_interface = Mock(return_value="eth0")
+        step._resolve_k8s_node_name = Mock(return_value="node1")
         step.kube.apply = Mock()
 
         old_pod = Mock()
@@ -1783,6 +1790,7 @@ class TestEnsureCiliumDeviceByHostStep:
         step.to_update = [{"name": "node1", "machineid": "1"}]
         step.to_delete = []
         step._get_interface = Mock(return_value="eth0")
+        step._resolve_k8s_node_name = Mock(return_value="node1")
         step.kube.apply = Mock()
         step.kube.patch = Mock()
 
@@ -1837,3 +1845,106 @@ class TestEnsureCiliumDeviceByHostStep:
         step.kube.list = Mock(return_value=[config])
         outdated, deleted = step._get_outdated_resources(control_nodes, step.kube)
         assert "node1" in outdated
+
+    def test_resolve_k8s_node_name(self, step):
+        """_resolve_k8s_node_name queries K8s node by sunbeam/hostname label."""
+        k8s_node = Mock()
+        k8s_node_meta = Mock()
+        k8s_node_meta.name = "node1"
+        k8s_node.metadata = k8s_node_meta
+
+        with patch("sunbeam.steps.k8s.list_nodes", return_value=[k8s_node]):
+            result = step._resolve_k8s_node_name("node1.maas")
+
+        assert result == "node1"
+
+    def test_resolve_k8s_node_name_not_found(self, step):
+        """_resolve_k8s_node_name raises when no K8s node matches."""
+        with patch("sunbeam.steps.k8s.list_nodes", return_value=[]):
+            with pytest.raises(SunbeamException, match="No K8s node found"):
+                step._resolve_k8s_node_name("node1.maas")
+
+    def test_run_fqdn_vs_short_hostname(self, step):
+        """Full flow: sunbeam FQDN resolved to K8s short hostname for pod lookup."""
+        step.to_update = [{"name": "node1.maas", "machineid": "1"}]
+        step.to_delete = []
+        step._get_interface = Mock(return_value="eth0")
+        step.kube.apply = Mock()
+        step.kube.patch = Mock()
+
+        # _resolve_k8s_node_name returns the short hostname
+        k8s_node = Mock()
+        k8s_node_meta = Mock()
+        k8s_node_meta.name = "node1"
+        k8s_node.metadata = k8s_node_meta
+
+        # k8s pod has short hostname in spec.nodeName
+        old_pod = Mock()
+        old_pod.metadata = Mock(name="cilium-abc")
+        old_pod.spec = Mock(nodeName="node1")
+        new_pod = Mock()
+        new_pod.metadata = Mock(name="cilium-xyz")
+        new_pod.spec = Mock(nodeName="node1")
+        new_pod.status = Mock(conditions=[Mock(type="Ready", status="True")])
+
+        call_count = [0]
+
+        def list_side_effect(*args, **kwargs):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return [old_pod]  # _find_cilium_pod
+            return [new_pod]  # _wait_for_cilium_ready
+
+        step.kube.list = Mock(side_effect=list_side_effect)
+        step.kube.delete = Mock()
+
+        with patch("sunbeam.steps.k8s.list_nodes", return_value=[k8s_node]):
+            result = step.run(None)
+
+        step.kube.apply.assert_called_once()
+        step.kube.patch.assert_called_once()
+        assert result.result_type == ResultType.COMPLETED
+
+    def test_resolve_k8s_node_name_multiple_matches(self, step):
+        """_resolve_k8s_node_name raises when multiple K8s nodes share the label."""
+        node1 = Mock()
+        node1_meta = Mock()
+        node1_meta.name = "node1-a"
+        node1.metadata = node1_meta
+        node2 = Mock()
+        node2_meta = Mock()
+        node2_meta.name = "node1-b"
+        node2.metadata = node2_meta
+
+        with patch("sunbeam.steps.k8s.list_nodes", return_value=[node1, node2]):
+            with pytest.raises(SunbeamException, match="Multiple K8s nodes found"):
+                step._resolve_k8s_node_name("node1.maas")
+
+    def test_resolve_k8s_node_name_k8s_error(self, step):
+        """_resolve_k8s_node_name raises when the K8s API call fails."""
+        with patch("sunbeam.steps.k8s.list_nodes", side_effect=K8SError("api down")):
+            with pytest.raises(SunbeamException, match="Failed to resolve"):
+                step._resolve_k8s_node_name("node1.maas")
+
+    def test_resolve_k8s_node_name_no_metadata(self, step):
+        """_resolve_k8s_node_name raises when matched node has no metadata."""
+        k8s_node = Mock()
+        k8s_node.metadata = None
+
+        with patch("sunbeam.steps.k8s.list_nodes", return_value=[k8s_node]):
+            with pytest.raises(SunbeamException, match="has no metadata.name"):
+                step._resolve_k8s_node_name("node1.maas")
+
+    def test_run_delete_node_already_gone(self, step):
+        """If K8s node is gone, config is deleted and restart is skipped."""
+        step.to_update = []
+        step.to_delete = [{"name": "gone-node.maas"}]
+        step.kube.delete = Mock()
+
+        with patch("sunbeam.steps.k8s.list_nodes", return_value=[]):
+            result = step.run(None)
+
+        # Config deletion should still happen
+        step.kube.delete.assert_called_once()
+        # Step completes (restart failure is swallowed for delete path)
+        assert result.result_type == ResultType.COMPLETED
