@@ -38,7 +38,10 @@ class Inspuras13000Config(StorageBackendConfig):
     ]
     as13000_token_available_time: Annotated[
         str,
-        Field(description="The effective time of token validity in seconds."),
+        Field(
+            alias="as13000-token-available-time",
+            description="The effective time of token validity in seconds.",
+        ),
         SecretDictField(field="as13000-token-available-time"),
     ]
 
