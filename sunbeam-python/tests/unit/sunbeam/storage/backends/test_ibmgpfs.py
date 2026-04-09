@@ -46,6 +46,20 @@ class TestIbmgpfsBackend(BaseBackendTests):
 class TestIbmgpfsConfigValidation:
     """Test IBM GPFS config validation behavior."""
 
+    def test_gpfs_login_is_required(self, ibmgpfs_backend):
+        """Test that gpfs-user-login is required."""
+        config_class = ibmgpfs_backend.config_type()
+        with pytest.raises(ValidationError):
+            config_class.model_validate(
+                {
+                    "san-ip": "192.168.1.1",
+                    "san-login": "admin",
+                    "san-password": "secret",
+                    "gpfs-user-password": "secret",
+                    "protocol": "iscsi",
+                }
+            )
+
     def test_protocol_rejects_invalid_value(self, ibmgpfs_backend):
         """Test that protocol rejects values other than iscsi."""
         config_class = ibmgpfs_backend.config_type()
@@ -68,6 +82,7 @@ class TestIbmgpfsConfigValidation:
                 "san-ip": "192.168.1.1",
                 "san-login": "admin",
                 "san-password": "secret",
+                "gpfs-user-login": "gpfs-admin",
                 "gpfs-user-password": "secret",
                 "protocol": "iscsi",
             }
