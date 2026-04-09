@@ -25,15 +25,25 @@ class TestIbmflashsystemiscsiBackend(BaseBackendTests):
         """Test that charm name is cinder-volume-ibmflashsystemiscsi."""
         assert backend.charm_name == "cinder-volume-ibmflashsystemiscsi"
 
-    def test_config_has_required_fields(self, backend):
-        """Test that IBM FlashSystem iSCSI config has required fields."""
+    def test_config_has_expected_fields(self, backend):
+        """Test that IBM FlashSystem iSCSI config exposes expected fields."""
         fields = backend.config_type().model_fields
         for field in ("san_ip", "protocol"):
-            assert field in fields, f"Required field {field} not found in config"
+            assert field in fields, f"Expected field {field} not found in config"
 
 
 class TestIbmflashsystemiscsiConfigValidation:
     """Test IBM FlashSystem iSCSI config validation behavior."""
+
+    def test_san_ip_is_required(self, ibmflashsystemiscsi_backend):
+        """Test that san-ip is required."""
+        config_class = ibmflashsystemiscsi_backend.config_type()
+        with pytest.raises(ValidationError):
+            config_class.model_validate(
+                {
+                    "protocol": "iscsi",
+                }
+            )
 
     def test_protocol_rejects_invalid_value(self, ibmflashsystemiscsi_backend):
         """Test that protocol rejects values other than iscsi."""

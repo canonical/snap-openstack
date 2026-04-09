@@ -26,8 +26,9 @@ class Protocol(StrEnum):
 class IbmflashsystemiscsiConfig(StorageBackendConfig):
     """Configuration model for FlashSystem iSCSI backend.
 
-    This model includes ALL configuration options for the backend.
-    Additional configuration can be managed dynamically through the charm.
+    This model includes the essential static configuration options for
+    the backend. Additional backend configuration can be managed
+    dynamically through the charm.
     """
 
     # Mandatory connection parameters
