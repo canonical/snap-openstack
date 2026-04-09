@@ -26,11 +26,11 @@ class TestIbmibmstorageBackend(BaseBackendTests):
         """Test that charm name is cinder-volume-ibmibmstorage."""
         assert backend.charm_name == "cinder-volume-ibmibmstorage"
 
-    def test_config_has_required_fields(self, backend):
-        """Test that IBMStorage config has required fields."""
+    def test_config_has_expected_fields(self, backend):
+        """Test that IBMStorage config exposes expected fields."""
         fields = backend.config_type().model_fields
         for field in ("san_ip", "san_login", "san_password", "protocol"):
-            assert field in fields, f"Required field {field} not found in config"
+            assert field in fields, f"Expected field {field} not found in config"
 
     def test_san_credentials_are_secret(self, backend):
         """Test that SAN login and password are marked as secrets."""
@@ -71,3 +71,69 @@ class TestIbmibmstorageConfigValidation:
             }
         )
         assert config.protocol == "fc"
+
+    def test_connection_type_accepts_fibre_channel(self, ibmibmstorage_backend):
+        """Test that connection_type accepts fibre_channel."""
+        config_class = ibmibmstorage_backend.config_type()
+        config = config_class.model_validate(
+            {
+                "san-ip": "192.168.1.1",
+                "san-login": "admin",
+                "san-password": "secret",
+                "connection-type": "fibre_channel",
+            }
+        )
+        assert config.connection_type == "fibre_channel"
+
+    def test_connection_type_rejects_invalid_value(self, ibmibmstorage_backend):
+        """Test that connection_type rejects invalid values."""
+        config_class = ibmibmstorage_backend.config_type()
+        with pytest.raises(ValidationError):
+            config_class.model_validate(
+                {
+                    "san-ip": "192.168.1.1",
+                    "san-login": "admin",
+                    "san-password": "secret",
+                    "connection-type": "fc",
+                }
+            )
+
+    def test_chap_accepts_enabled(self, ibmibmstorage_backend):
+        """Test that chap accepts enabled."""
+        config_class = ibmibmstorage_backend.config_type()
+        config = config_class.model_validate(
+            {
+                "san-ip": "192.168.1.1",
+                "san-login": "admin",
+                "san-password": "secret",
+                "chap": "enabled",
+            }
+        )
+        assert config.chap == "enabled"
+
+    def test_chap_rejects_invalid_value(self, ibmibmstorage_backend):
+        """Test that chap rejects invalid values."""
+        config_class = ibmibmstorage_backend.config_type()
+        with pytest.raises(ValidationError):
+            config_class.model_validate(
+                {
+                    "san-ip": "192.168.1.1",
+                    "san-login": "admin",
+                    "san-password": "secret",
+                    "chap": "auto",
+                }
+            )
+
+    def test_protocol_and_connection_type_must_match(self, ibmibmstorage_backend):
+        """Test that protocol and connection_type must be consistent."""
+        config_class = ibmibmstorage_backend.config_type()
+        with pytest.raises(ValidationError):
+            config_class.model_validate(
+                {
+                    "san-ip": "192.168.1.1",
+                    "san-login": "admin",
+                    "san-password": "secret",
+                    "protocol": "fc",
+                    "connection-type": "iscsi",
+                }
+            )
