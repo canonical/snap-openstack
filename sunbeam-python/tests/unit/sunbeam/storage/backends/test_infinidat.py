@@ -519,9 +519,7 @@ class TestInfinidatChapValidation:
         from pydantic import ValidationError
 
         with pytest.raises(ValidationError, match="Blocked"):
-            InfinidatConfig.model_validate(
-                {**self.BASE_CONFIG, "use-chap-auth": True}
-            )
+            InfinidatConfig.model_validate({**self.BASE_CONFIG, "use-chap-auth": True})
 
     def test_chap_enabled_username_missing_raises_blocked(self):
         """CHAP enabled with only password raises blocked error."""
