@@ -1,8 +1,7 @@
 # SPDX-FileCopyrightText: 2026 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
-# ruff: noqa: E501
 
-"""Inspur InStorageMCS FC backend implementation using base step classes."""
+"""Inspur InStorageMCS backend implementation using base step classes."""
 
 import logging
 from enum import StrEnum
@@ -27,7 +26,7 @@ class Protocol(StrEnum):
 
 
 class InspurinstorageConfig(StorageBackendConfig):
-    """Configuration model for Inspur InStorageMCS FC backend.
+    """Configuration model for Inspur InStorageMCS backend.
 
     This model includes ALL configuration options for the backend.
     Additional configuration can be managed dynamically through the charm.
@@ -55,7 +54,7 @@ class InspurinstorageConfig(StorageBackendConfig):
     instorage_mcs_vol_autoexpand: Annotated[
         bool | None,
         Field(
-            description="Storage system autoexpand parameter for volumes (True/False)"
+            description=("Storage system autoexpand parameter for volumes (True/False)")
         ),
     ] = None
     instorage_mcs_vol_compression: Annotated[
@@ -70,31 +69,42 @@ class InspurinstorageConfig(StorageBackendConfig):
     instorage_mcs_vol_grainsize: Annotated[
         int | None,
         Field(
-            description="Storage system grain size parameter for volumes (32/64/128/256)"
+            description=(
+                "Storage system grain size parameter for volumes (32/64/128/256)"
+            )
         ),
     ] = None
     instorage_mcs_vol_rsize: Annotated[
         int | None,
         Field(
-            description="Storage system space-efficiency parameter for volumes (percentage)"
+            description=(
+                "Storage system space-efficiency parameter for volumes (percentage)"
+            )
         ),
     ] = None
     instorage_mcs_vol_warning: Annotated[
         int | None,
         Field(
-            description="Storage system threshold for volume capacity warnings (percentage)"
+            description=(
+                "Storage system threshold for volume capacity warnings (percentage)"
+            )
         ),
     ] = None
     instorage_mcs_localcopy_timeout: Annotated[
         int | None,
         Field(
-            description="Maximum number of seconds to wait for LocalCopy to be prepared."
+            description=(
+                "Maximum number of seconds to wait for LocalCopy to be prepared."
+            )
         ),
     ] = None
     instorage_mcs_localcopy_rate: Annotated[
         int | None,
         Field(
-            description="Specifies the InStorage LocalCopy copy rate to be used when creating a full volume copy."
+            description=(
+                "Specifies the InStorage LocalCopy copy rate "
+                "used when creating a full volume copy."
+            )
         ),
     ] = None
     instorage_mcs_vol_iogrp: Annotated[
@@ -103,19 +113,27 @@ class InspurinstorageConfig(StorageBackendConfig):
     instorage_san_secondary_ip: Annotated[
         str | None,
         Field(
-            description="Specifies secondary management IP or hostname to be used if san_ip is invalid or becomes inaccessible."
+            description=(
+                "Specifies secondary management IP or hostname "
+                "used if san_ip is invalid or inaccessible."
+            )
         ),
     ] = None
     instorage_mcs_volpool_name: Annotated[
         str | None,
         Field(
-            description="Comma separated list of storage system storage pools for volumes."
+            description=(
+                "Comma-separated list of storage system storage pools for volumes."
+            )
         ),
     ] = None
     instorage_mcs_iscsi_chap_enabled: Annotated[
         bool | None,
         Field(
-            description="Configure CHAP authentication for iSCSI connections (Default: Enabled)"
+            description=(
+                "Configure CHAP authentication for iSCSI "
+                "connections (default: enabled)."
+            )
         ),
     ] = None
     san_thin_provision: Annotated[
@@ -128,10 +146,10 @@ class InspurinstorageConfig(StorageBackendConfig):
 
 
 class InspurinstorageBackend(StorageBackendBase):
-    """Inspur InStorageMCS FC backend implementation."""
+    """Inspur InStorageMCS backend implementation."""
 
     backend_type = "inspurinstorage"
-    display_name = "InStorageMCS FC"
+    display_name = "InStorageMCS"
     generally_available = True
 
     @property

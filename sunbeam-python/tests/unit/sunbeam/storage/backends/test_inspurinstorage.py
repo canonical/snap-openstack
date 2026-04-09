@@ -26,11 +26,11 @@ class TestInspurinstorageBackend(BaseBackendTests):
         """Test that charm name is cinder-volume-inspurinstorage."""
         assert backend.charm_name == "cinder-volume-inspurinstorage"
 
-    def test_config_has_required_fields(self, backend):
-        """Test that InStorage config has required fields."""
+    def test_config_has_expected_fields(self, backend):
+        """Test that InStorage config has expected fields."""
         fields = backend.config_type().model_fields
         for field in ("san_ip", "san_login", "san_password", "protocol"):
-            assert field in fields, f"Required field {field} not found in config"
+            assert field in fields, f"Expected field {field} not found in config"
 
     def test_san_credentials_are_secret(self, backend):
         """Test that SAN login and password are marked as secrets."""
@@ -71,3 +71,16 @@ class TestInspurinstorageConfigValidation:
             }
         )
         assert config.protocol == "fc"
+
+    def test_protocol_accepts_iscsi(self, inspurinstorage_backend):
+        """Test that protocol accepts iscsi."""
+        config_class = inspurinstorage_backend.config_type()
+        config = config_class.model_validate(
+            {
+                "san-ip": "192.168.1.1",
+                "san-login": "admin",
+                "san-password": "secret",
+                "protocol": "iscsi",
+            }
+        )
+        assert config.protocol == "iscsi"
