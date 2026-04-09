@@ -1,6 +1,5 @@
 # SPDX-FileCopyrightText: 2026 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
-# ruff: noqa: E501
 
 """HPE XP backend implementation using base step classes."""
 
@@ -61,42 +60,60 @@ class HpexpConfig(StorageBackendConfig):
     hpexp_ldev_range: Annotated[
         str | None,
         Field(
-            description="Range of the LDEV numbers in the format of 'xxxx-yyyy' that can be used by the driver."
+            description=(
+                "Range of the LDEV numbers in the format of "
+                "'xxxx-yyyy' that can be used by the driver."
+            )
         ),
     ] = None
 
     hpexp_target_ports: Annotated[
         str | None,
         Field(
-            description="IDs of the storage ports used to attach volumes to the controller node."
+            description=(
+                "IDs of the storage ports used to attach volumes "
+                "to the controller node."
+            )
         ),
     ] = None
 
     hpexp_compute_target_ports: Annotated[
         str | None,
         Field(
-            description="IDs of the storage ports used to attach volumes to compute nodes."
+            description=(
+                "IDs of the storage ports used to attach volumes to compute nodes."
+            )
         ),
     ] = None
 
     hpexp_group_create: Annotated[
         bool | None,
         Field(
-            description="If True, the driver will create host groups or iSCSI targets on storage ports as needed."
+            description=(
+                "If True, the driver will create host groups or iSCSI "
+                "targets on storage ports as needed."
+            )
         ),
     ] = None
 
     hpexp_group_delete: Annotated[
         bool | None,
         Field(
-            description="If True, the driver will delete host groups or iSCSI targets on storage ports as needed."
+            description=(
+                "If True, the driver will delete host groups or iSCSI "
+                "targets on storage ports as needed."
+            )
         ),
     ] = None
 
     hpexp_copy_speed: Annotated[
         int | None,
         Field(
-            description="Copy speed of storage system. 1 or 2 indicates low speed, 3 indicates middle speed, and a value between 4 and 15 indicates high speed."
+            description=(
+                "Copy speed of storage system. 1 or 2 indicates low speed, "
+                "3 indicates middle speed, and a value between 4 and 15 "
+                "indicates high speed."
+            )
         ),
     ] = None
 
@@ -113,14 +130,21 @@ class HpexpConfig(StorageBackendConfig):
     hpexp_manage_drs_volumes: Annotated[
         bool | None,
         Field(
-            description="If true, the driver will create a driver managed vClone parent for each non-cloned DRS volume it creates."
+            description=(
+                "If true, the driver will create a driver managed vClone "
+                "parent for each non-cloned DRS volume it creates."
+            )
         ),
     ] = None
 
     hpexp_rest_disable_io_wait: Annotated[
         bool | None,
         Field(
-            description="It may take some time to detach volume after I/O. This option will allow detaching volume to complete immediately."
+            description=(
+                "It may take some time to detach volume after I/O. "
+                "This option will allow detaching volume to complete "
+                "immediately."
+            )
         ),
     ] = None
 
@@ -147,14 +171,18 @@ class HpexpConfig(StorageBackendConfig):
     hpexp_restore_timeout: Annotated[
         int | None,
         Field(
-            description="Maximum wait time in seconds for the restore operation to complete."
+            description=(
+                "Maximum wait time in seconds for the restore operation to complete."
+            )
         ),
     ] = None
 
     hpexp_state_transition_timeout: Annotated[
         int | None,
         Field(
-            description="Maximum wait time in seconds for a volume transition to complete."
+            description=(
+                "Maximum wait time in seconds for a volume transition to complete."
+            )
         ),
     ] = None
 
@@ -166,14 +194,18 @@ class HpexpConfig(StorageBackendConfig):
     hpexp_rest_timeout: Annotated[
         int | None,
         Field(
-            description="Maximum wait time in seconds for REST API execution to complete."
+            description=(
+                "Maximum wait time in seconds for REST API execution to complete."
+            )
         ),
     ] = None
 
     hpexp_extend_timeout: Annotated[
         int | None,
         Field(
-            description="Maximum wait time in seconds for a volume extention to complete."
+            description=(
+                "Maximum wait time in seconds for a volume extension to complete."
+            )
         ),
     ] = None
 
@@ -185,7 +217,9 @@ class HpexpConfig(StorageBackendConfig):
     hpexp_rest_connect_timeout: Annotated[
         int | None,
         Field(
-            description="Maximum wait time in seconds for REST API connection to complete."
+            description=(
+                "Maximum wait time in seconds for REST API connection to complete."
+            )
         ),
     ] = None
 
@@ -197,7 +231,10 @@ class HpexpConfig(StorageBackendConfig):
     hpexp_rest_get_api_response_timeout: Annotated[
         int | None,
         Field(
-            description="Maximum wait time in seconds for a response against GET method of REST API."
+            description=(
+                "Maximum wait time in seconds for a response "
+                "against GET method of REST API."
+            )
         ),
     ] = None
 
@@ -245,7 +282,10 @@ class HpexpConfig(StorageBackendConfig):
     hpexp_rest_use_object_caching: Annotated[
         bool | None,
         Field(
-            description="Set True to enable object caching of certain REST objects for better performance."
+            description=(
+                "Set True to enable object caching of certain "
+                "REST objects for better performance."
+            )
         ),
     ] = None
 
@@ -257,7 +297,11 @@ class HpexpConfig(StorageBackendConfig):
     hpexp_zoning_request: Annotated[
         bool | None,
         Field(
-            description="If True, the driver will configure FC zoning between the server and the storage system provided that FC zoning manager is enabled."
+            description=(
+                "If True, the driver will configure FC zoning between "
+                "the server and the storage system provided that FC "
+                "zoning manager is enabled."
+            )
         ),
     ] = None
 
