@@ -6,7 +6,6 @@
 import pytest
 from pydantic import ValidationError
 
-from sunbeam.storage.models import SecretDictField
 from tests.unit.sunbeam.storage.backends.test_common import BaseBackendTests
 
 
@@ -33,28 +32,35 @@ class TestFujitsueternusdxBackend(BaseBackendTests):
         for field in required_fields:
             assert field in fields, f"Required field {field} not found in config"
 
-    def test_fujitsu_passwordless_is_secret(self, backend):
-        """Test that fujitsu_passwordless is marked as secret."""
+    def test_fujitsu_passwordless_is_boolean_toggle(self, backend):
+        """Test that fujitsu_passwordless is a boolean toggle."""
         config_class = backend.config_type()
         field = config_class.model_fields.get("fujitsu_passwordless")
         assert field is not None
-        assert any(isinstance(m, SecretDictField) for m in field.metadata), (
-            "fujitsu_passwordless should be marked as secret"
-        )
+        assert field.annotation is bool
 
 
 class TestFujitsueternusdxConfigValidation:
     """Test Fujitsu ETERNUS DX config validation behavior."""
 
     def test_protocol_rejects_invalid_value(self, fujitsueternusdx_backend):
-        """Test that protocol rejects values other than fc/iscsi."""
+        """Test that protocol rejects values other than fc."""
         config_class = fujitsueternusdx_backend.config_type()
         with pytest.raises(ValidationError):
             config_class.model_validate(
                 {
                     "san-ip": "192.168.1.1",
-                    "fujitsu-passwordless": "key",
+                    "fujitsu-passwordless": True,
                     "protocol": "nvme",
+                }
+            )
+
+        with pytest.raises(ValidationError):
+            config_class.model_validate(
+                {
+                    "san-ip": "192.168.1.1",
+                    "fujitsu-passwordless": True,
+                    "protocol": "iscsi",
                 }
             )
 
@@ -64,7 +70,7 @@ class TestFujitsueternusdxConfigValidation:
         config = config_class.model_validate(
             {
                 "san-ip": "192.168.1.1",
-                "fujitsu-passwordless": "key",
+                "fujitsu-passwordless": True,
                 "protocol": "fc",
             }
         )

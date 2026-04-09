@@ -5,14 +5,13 @@
 
 import logging
 from enum import StrEnum
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import Field
 from rich.console import Console
 
 from sunbeam.core.manifest import StorageBackendConfig
 from sunbeam.storage.base import StorageBackendBase
-from sunbeam.storage.models import SecretDictField
 
 LOG = logging.getLogger(__name__)
 console = Console()
@@ -22,7 +21,6 @@ class Protocol(StrEnum):
     """Enumeration of valid protocol types."""
 
     FC = "fc"
-    ISCSI = "iscsi"
 
 
 class FujitsueternusdxConfig(StorageBackendConfig):
@@ -37,15 +35,14 @@ class FujitsueternusdxConfig(StorageBackendConfig):
         str, Field(description="Storage array management IP address or hostname")
     ]
     fujitsu_passwordless: Annotated[
-        str,
-        Field(description="Use SSH key to connect to storage."),
-        SecretDictField(field="fujitsu-passwordless"),
-    ]
+        bool,
+        Field(description="Whether to use SSH key authentication to connect."),
+    ] = False
 
     # Optional backend configuration
     protocol: Annotated[
-        Protocol | None,
-        Field(description="Protocol selector: fc, iscsi."),
+        Literal["fc"] | None,
+        Field(description="Protocol selector: fc."),
     ] = None
     cinder_eternus_config_file: Annotated[
         str | None,
@@ -54,7 +51,7 @@ class FujitsueternusdxConfig(StorageBackendConfig):
     fujitsu_private_key_path: Annotated[
         str | None,
         Field(
-            description="Filename of private key for ETERNUS CLI. This option must be set when the fujitsu_passwordless is True."  # noqa: E501
+            description="Filename of private key for ETERNUS CLI when SSH key authentication is enabled."  # noqa: E501
         ),
     ] = None
     fujitsu_use_cli_copy: Annotated[
