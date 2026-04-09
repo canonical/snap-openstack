@@ -26,11 +26,11 @@ class TestIbmflashsystemcommonBackend(BaseBackendTests):
         """Test that charm name is cinder-volume-ibmflashsystemcommon."""
         assert backend.charm_name == "cinder-volume-ibmflashsystemcommon"
 
-    def test_config_has_required_fields(self, backend):
-        """Test that IBM FlashSystem Common config has required fields."""
+    def test_config_has_expected_fields(self, backend):
+        """Test that IBM FlashSystem Common config exposes expected fields."""
         fields = backend.config_type().model_fields
         for field in ("san_ip", "san_login", "san_password", "protocol"):
-            assert field in fields, f"Required field {field} not found in config"
+            assert field in fields, f"Expected field {field} not found in config"
 
     def test_san_credentials_are_secret(self, backend):
         """Test that SAN login and password are marked as secrets."""
