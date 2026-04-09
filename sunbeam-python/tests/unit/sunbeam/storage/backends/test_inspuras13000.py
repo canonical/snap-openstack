@@ -61,7 +61,7 @@ class TestInspuras13000ConfigValidation:
                     "san-ip": "192.168.1.1",
                     "san-login": "admin",
                     "san-password": "secret",
-                    "as-13000-token-available-time": "3600",
+                    "as13000-token-available-time": "3600",
                     "protocol": "fc",
                 }
             )
@@ -74,7 +74,7 @@ class TestInspuras13000ConfigValidation:
                 "san-ip": "192.168.1.1",
                 "san-login": "admin",
                 "san-password": "secret",
-                "as-13000-token-available-time": "3600",
+                "as13000-token-available-time": "3600",
                 "protocol": "iscsi",
             }
         )
