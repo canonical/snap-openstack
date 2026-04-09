@@ -5,7 +5,7 @@
 
 import logging
 from enum import StrEnum
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import Field
 from rich.console import Console
@@ -50,7 +50,7 @@ class IbmflashsystemcommonConfig(StorageBackendConfig):
         Field(description="Protocol selector: fc."),
     ] = None
     flashsystem_connection_protocol: Annotated[
-        str | None,
+        Literal["FC"] | None,
         Field(description="Connection protocol should be FC. (Default is FC.)"),
     ] = None
     flashsystem_multihostmap_enabled: Annotated[
@@ -71,7 +71,7 @@ class IbmflashsystemcommonBackend(StorageBackendBase):
     """Ibmflashsystemcommon backend implementation."""
 
     backend_type = "ibmflashsystemcommon"
-    display_name = "Ibmflashsystemcommon"
+    display_name = "IBM FlashSystem Common"
     generally_available = True
 
     @property
