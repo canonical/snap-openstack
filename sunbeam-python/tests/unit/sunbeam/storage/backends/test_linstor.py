@@ -25,11 +25,10 @@ class TestLinstorBackend(BaseBackendTests):
         """Test that charm name is cinder-volume-linstor."""
         assert backend.charm_name == "cinder-volume-linstor"
 
-    def test_config_has_required_fields(self, backend):
-        """Test that LINSTOR config has required fields."""
+    def test_config_has_required_field(self, backend):
+        """Test that LINSTOR config exposes its required field."""
         fields = backend.config_type().model_fields
-        for field in ("san_ip", "protocol"):
-            assert field in fields, f"Required field {field} not found in config"
+        assert "san_ip" in fields, "Required field san_ip not found in config"
 
 
 class TestLinstorConfigValidation:

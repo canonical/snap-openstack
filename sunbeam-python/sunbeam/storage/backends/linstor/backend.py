@@ -1,24 +1,18 @@
 # SPDX-FileCopyrightText: 2026 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
-# ruff: noqa: E501
 
-"""LinstorIscsi backend implementation using base step classes."""
+"""LINSTOR iSCSI backend implementation using base step classes."""
 
-import logging
 from typing import Annotated, Literal
 
 from pydantic import Field
-from rich.console import Console
 
 from sunbeam.core.manifest import StorageBackendConfig
 from sunbeam.storage.base import StorageBackendBase
 
-LOG = logging.getLogger(__name__)
-console = Console()
-
 
 class LinstorConfig(StorageBackendConfig):
-    """Configuration model for LinstorIscsi backend.
+    """Configuration model for LINSTOR iSCSI backend.
 
     This model includes ALL configuration options for the backend.
     Additional configuration can be managed dynamically through the charm.
@@ -36,7 +30,9 @@ class LinstorConfig(StorageBackendConfig):
     ] = None
     linstor_default_volume_group_name: Annotated[
         str | None,
-        Field(description="Default Volume Group name for LINSTOR. Not Cinder Volume."),
+        Field(
+            description=("Default volume group name for LINSTOR (not Cinder volume).")
+        ),
     ] = None
     linstor_default_uri: Annotated[
         str | None,
@@ -53,13 +49,21 @@ class LinstorConfig(StorageBackendConfig):
     linstor_default_blocksize: Annotated[
         int | None,
         Field(
-            description="Default Block size for Image restoration. When using iSCSI transport, this option specifies the block size."
+            description=(
+                "Default block size for image restoration. "
+                "When using iSCSI transport, this option specifies "
+                "the block size."
+            )
         ),
     ] = None
     linstor_autoplace_count: Annotated[
         int | None,
         Field(
-            description="Autoplace replication count on volume deployment. 0 = Full cluster replication without autoplace, 1 = Single node deployment without replication, 2 or greater = Replicated deployment with autoplace."
+            description=(
+                "Autoplace replication count on volume deployment: "
+                "0=full cluster without autoplace, 1=single-node "
+                "without replication, >=2=replicated with autoplace."
+            )
         ),
     ] = None
     linstor_controller_diskless: Annotated[
@@ -69,10 +73,10 @@ class LinstorConfig(StorageBackendConfig):
 
 
 class LinstorBackend(StorageBackendBase):
-    """LinstorIscsi backend implementation."""
+    """LINSTOR iSCSI backend implementation."""
 
     backend_type = "linstor"
-    display_name = "LinstorIscsi"
+    display_name = "LINSTOR iSCSI"
     generally_available = True
 
     @property
