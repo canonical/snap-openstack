@@ -1,8 +1,7 @@
 # SPDX-FileCopyrightText: 2026 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
-# ruff: noqa: E501
 
-"""MacroSAN iSCSI backend implementation using base step classes."""
+"""MacroSAN backend implementation using base step classes."""
 
 import logging
 from enum import StrEnum
@@ -27,7 +26,7 @@ class Protocol(StrEnum):
 
 
 class MacrosanConfig(StorageBackendConfig):
-    """Configuration model for MacroSAN iSCSI backend.
+    """Configuration model for MacroSAN backend.
 
     This model includes ALL configuration options for the backend.
     Additional configuration can be managed dynamically through the charm.
@@ -119,37 +118,52 @@ class MacrosanConfig(StorageBackendConfig):
     macrosan_fc_use_sp_port_nr: Annotated[
         int | None,
         Field(
-            description="The use_sp_port_nr parameter is the number of online FC ports used by the single-ended memory when the FC connection is established in the switch non-all-pass mode. The maximum is 4"
+            description=(
+                "The use_sp_port_nr parameter is the number of online FC ports "
+                "used when FC connection is established in switch non-all-pass "
+                "mode. The maximum is 4."
+            )
         ),
     ] = None
 
     macrosan_fc_keep_mapped_ports: Annotated[
         bool | None,
         Field(
-            description="In the case of an FC connection, the configuration item associated with the port is maintained."
+            description=(
+                "In FC connections, keep the configuration item "
+                "associated with the port."
+            )
         ),
     ] = None
 
     macrosan_client: Annotated[
         str | None,
         Field(
-            description="Macrosan iscsi_clients list. You can configure multiple clients. You can configure it in this format: (host; client_name; sp1_iscsi_port; sp2_iscsi_port), (host; client_name; sp1_iscsi_port; sp2_iscsi_port) Important warning, Client_name has the following requirements: [a-zA-Z0-9.-_:], the maximum number of characters is 31 E.g: (controller1; device1; eth-1:0; eth-2:0), (controller2; device2; eth-1:0/eth-1:1; eth-2:0/eth-2:1),"
+            description=(
+                "MacroSAN iSCSI clients list. Configure one or more entries in "
+                "format: (host;client_name;sp1_iscsi_port;sp2_iscsi_port). "
+                "client_name supports [a-zA-Z0-9.-_:] up to 31 chars."
+            )
         ),
     ] = None
 
     macrosan_client_default: Annotated[
         str | None,
         Field(
-            description="This is the default connection ports' name for iscsi. This default configuration is used when no host related information is obtained.E.g: eth-1:0/eth-1:1; eth-2:0/eth-2:1"
+            description=(
+                "Default iSCSI connection port names used when "
+                "no host-specific information is available, e.g. "
+                "eth-1:0/eth-1:1;eth-2:0/eth-2:1."
+            )
         ),
     ] = None
 
 
 class MacrosanBackend(StorageBackendBase):
-    """MacroSAN iSCSI backend implementation."""
+    """MacroSAN backend implementation."""
 
     backend_type = "macrosan"
-    display_name = "MacroSAN iSCSI"
+    display_name = "MacroSAN"
     generally_available = True
 
     @property
