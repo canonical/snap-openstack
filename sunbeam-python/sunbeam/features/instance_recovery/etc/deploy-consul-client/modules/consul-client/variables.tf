@@ -45,10 +45,9 @@ variable "principal-application" {
   default     = null
 }
 
-variable "principal-application-model" {
-  description = "Name of the model principal application is deployed in"
+variable "principal-application-model-uuid" {
+  description = "UUID of the Juju model principal application is deployed in"
   type        = string
-  default     = "controller"
 }
 
 variable "consul-cluster-offer-url" {

@@ -1,18 +1,26 @@
 # microovn.tf
+#
+# SPDX-FileCopyrightText: 2025 - Canonical Ltd
+# SPDX-License-Identifier: Apache-2.0
+
 terraform {
   required_providers {
     juju = {
       source  = "juju/juju"
-      version = "= 0.23.1"
+      version = "= 1.3.1"
     }
   }
 }
 
 provider "juju" {}
 
+data "juju_model" "machine_model" {
+  uuid = var.machine_model_uuid
+}
+
 resource "juju_application" "openstack-network-agents" {
-  name  = "openstack-network-agents"
-  model = var.machine_model
+  name       = "openstack-network-agents"
+  model_uuid = data.juju_model.machine_model.uuid
 
   charm {
     name     = "openstack-network-agents"
@@ -29,10 +37,10 @@ resource "juju_application" "openstack-network-agents" {
 }
 
 resource "juju_application" "microcluster-token-distributor" {
-  name     = "microcluster-token-distributor"
-  model    = var.machine_model
-  machines = length(var.token_distributor_machine_ids) == 0 ? null : toset(var.token_distributor_machine_ids)
-  units    = length(var.token_distributor_machine_ids) == 0 ? 1 : null
+  name       = "microcluster-token-distributor"
+  model_uuid = data.juju_model.machine_model.uuid
+  machines   = length(var.token_distributor_machine_ids) == 0 ? null : toset(var.token_distributor_machine_ids)
+  units      = length(var.token_distributor_machine_ids) == 0 ? 1 : null
 
   charm {
     name     = "microcluster-token-distributor"
@@ -45,10 +53,10 @@ resource "juju_application" "microcluster-token-distributor" {
 }
 
 resource "juju_application" "microovn" {
-  name     = "microovn"
-  model    = var.machine_model
-  machines = length(var.microovn_machine_ids) == 0 ? null : toset(var.microovn_machine_ids)
-  units    = length(var.microovn_machine_ids) == 0 ? 1 : null
+  name       = "microovn"
+  model_uuid = data.juju_model.machine_model.uuid
+  machines   = length(var.microovn_machine_ids) == 0 ? null : toset(var.microovn_machine_ids)
+  units      = length(var.microovn_machine_ids) == 0 ? 1 : null
 
   charm {
     name     = "microovn"
@@ -63,8 +71,8 @@ resource "juju_application" "microovn" {
 }
 
 resource "juju_application" "sunbeam-ovn-proxy" {
-  name  = "sunbeam-ovn-proxy"
-  model = var.machine_model
+  name       = "sunbeam-ovn-proxy"
+  model_uuid = data.juju_model.machine_model.uuid
   # Only deploy when microovn is the SDN provider
   count = var.ovn-relay-offer-url == null ? 1 : 0
   # Deploy on same machine as token distributor
@@ -82,7 +90,7 @@ resource "juju_application" "sunbeam-ovn-proxy" {
 }
 
 resource "juju_integration" "microovn-microcluster-token-distributor" {
-  model = var.machine_model
+  model_uuid = data.juju_model.machine_model.uuid
 
   application {
     name     = juju_application.microovn.name
@@ -96,8 +104,8 @@ resource "juju_integration" "microovn-microcluster-token-distributor" {
 }
 
 resource "juju_integration" "microovn-certs" {
-  count = (var.ca-offer-url != null) ? 1 : 0
-  model = var.machine_model
+  count      = (var.ca-offer-url != null) ? 1 : 0
+  model_uuid = data.juju_model.machine_model.uuid
 
   application {
     name     = juju_application.microovn.name
@@ -110,8 +118,8 @@ resource "juju_integration" "microovn-certs" {
 }
 
 resource "juju_integration" "microovn-ovsdb-cms" {
-  count = (var.ovn-relay-offer-url != null) ? 1 : 0
-  model = var.machine_model
+  count      = (var.ovn-relay-offer-url != null) ? 1 : 0
+  model_uuid = data.juju_model.machine_model.uuid
 
   application {
     name     = juju_application.microovn.name
@@ -124,7 +132,7 @@ resource "juju_integration" "microovn-ovsdb-cms" {
 }
 
 resource "juju_integration" "microovn-openstack-network-agents" {
-  model = var.machine_model
+  model_uuid = data.juju_model.machine_model.uuid
 
   application {
     name     = juju_application.microovn.name
@@ -138,8 +146,8 @@ resource "juju_integration" "microovn-openstack-network-agents" {
 }
 
 resource "juju_integration" "microovn-to-ovn-proxy" {
-  model = var.machine_model
-  count = length(juju_application.sunbeam-ovn-proxy.*.name) > 0 ? 1 : 0
+  count      = length(juju_application.sunbeam-ovn-proxy.*.name) > 0 ? 1 : 0
+  model_uuid = data.juju_model.machine_model.uuid
 
   application {
     name     = juju_application.microovn.name
@@ -153,8 +161,8 @@ resource "juju_integration" "microovn-to-ovn-proxy" {
 }
 
 resource "juju_offer" "ovsdb-cms" {
-  model            = var.machine_model
   count            = length(juju_application.sunbeam-ovn-proxy.*.name) > 0 ? 1 : 0
+  model_uuid       = data.juju_model.machine_model.uuid
   application_name = juju_application.sunbeam-ovn-proxy[0].name
   endpoints        = ["ovsdb-cms"]
 }
