@@ -514,15 +514,15 @@ class TerraformHelper:
 
         for key, source_value in source.items():
             if key in charm_config_keys:
-                # Charm config: merge dicts
-                if key in target:
-                    target_value = target[key]
-                    if isinstance(target_value, dict) and isinstance(
-                        source_value, dict
-                    ):
-                        target_value.update(source_value)
-                    else:
-                        target[key] = source_value
+                # Charm config: merge dicts, but replace when source is empty
+                # (empty dict means "clear this config", not "merge nothing")
+                if (
+                    key in target
+                    and isinstance(target[key], dict)
+                    and isinstance(source_value, dict)
+                    and source_value
+                ):
+                    target[key].update(source_value)
                 else:
                     target[key] = source_value
             else:
