@@ -103,6 +103,11 @@ moved {
   to   = juju_integration.hypervisor-ovn[0]
 }
 
+moved {
+  from = juju_integration.hypervisor-cinder-ceph[0]
+  to   = juju_integration.hypervisor-extra-integration["cinder-volume-ceph-ceph-access"]
+}
+
 resource "juju_integration" "hypervisor-ovn" {
   # Should be deployed if ovn-relay-offer-url set
   count      = (var.ovn-relay-offer-url != null) ? 1 : 0
@@ -147,18 +152,20 @@ resource "juju_integration" "hypervisor-ceilometer" {
   }
 }
 
-resource "juju_integration" "hypervisor-cinder-ceph" {
-  count      = (var.cinder-volume-ceph-application-name != null) ? 1 : 0
+resource "juju_integration" "hypervisor-extra-integration" {
+  for_each = {
+    for i in var.extra_integrations : "${i.application_name}-${i.endpoint_name}" => i
+  }
   model_uuid = data.juju_model.machine_model.uuid
 
   application {
     name     = juju_application.openstack-hypervisor.name
-    endpoint = "ceph-access"
+    endpoint = each.value.hypervisor_endpoint_name
   }
 
   application {
-    name     = var.cinder-volume-ceph-application-name
-    endpoint = "ceph-access"
+    name     = each.value.application_name
+    endpoint = each.value.endpoint_name
   }
 }
 
