@@ -73,6 +73,7 @@ OPENSTACK_DESTROY_TIMEOUT = 1800  # 30 minutes
 
 CONFIG_KEY = "TerraformVarsOpenstack"
 TOPOLOGY_KEY = "Topology"
+OPENSTACK_MODEL_CONFIG_KEY = "OpenStackModelConfig"
 DATABASE_MEMORY_KEY = "DatabaseMemory"
 DATABASE_STORAGE_KEY = "DatabaseStorage"
 DEFAULT_DATABASE_TOPOLOGY = "single"
@@ -751,8 +752,14 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
         region_controllers = self.client.cluster.list_nodes_by_role("region_controller")
 
         self.update_status(context, "computing deployment sizing")
-        model_config = convert_proxy_to_model_configs(self.proxy_settings)
+        model_config = dict(
+            self.manifest.core.software.juju.bootstrap_model_configs.get(
+                OPENSTACK_MODEL, {}
+            )
+        )
+        model_config.update(convert_proxy_to_model_configs(self.proxy_settings))
         model_config.update({"workload-storage": K8SHelper.get_default_storageclass()})
+        update_config(self.client, OPENSTACK_MODEL_CONFIG_KEY, model_config)
         os_api_scale = compute_os_api_scale(
             self.topology, len(control_nodes) or len(region_controllers)
         )
@@ -1056,27 +1063,48 @@ class UpdateOpenStackModelConfigStep(BaseStep):
 
     def __init__(
         self,
-        client: Client,
+        deployment: Deployment,
         tfhelper: TerraformHelper,
         manifest: Manifest,
-        model_config: dict,
+        model_config: dict | None = None,
     ):
         super().__init__(
             "Update OpenStack model config",
             "Updating OpenStack model config related to proxy",
         )
-        self.client = client
+        self.client = deployment.get_client()
         self.tfhelper = tfhelper
         self.manifest = manifest
-        self.model_config = model_config
+        self.deployment = deployment
+        self.model_config = model_config or {}
 
     def run(self, context: StepContext) -> Result:
         """Apply model configs to openstack terraform plan."""
         try:
-            self.model_config.update(
-                {"workload-storage": K8SHelper.get_default_storageclass()}
-            )
-            override_tfvars = {"config": self.model_config}
+            try:
+                final_config = dict(
+                    read_config(self.client, OPENSTACK_MODEL_CONFIG_KEY)
+                )
+            except ConfigItemNotFoundException:
+                # Backward compatibility: OPENSTACK_MODEL_CONFIG_KEY is absent on
+                # deployments predating this change. Reconstruct the baseline
+                # following the same priority order as DeployControlPlaneStep:
+                # manifest bootstrap_model_configs → proxy settings → workload-storage.
+                # This ensures the targeted terraform apply doesn't drop existing
+                # model config keys. The key will be persisted after this run so
+                # subsequent calls take the fast path.
+                final_config = dict(
+                    self.manifest.core.software.juju.bootstrap_model_configs.get(
+                        OPENSTACK_MODEL, {}
+                    )
+                )
+                final_config.update(
+                    convert_proxy_to_model_configs(self.deployment.get_proxy_settings())
+                )
+                final_config["workload-storage"] = K8SHelper.get_default_storageclass()
+            final_config.update(self.model_config)
+            update_config(self.client, OPENSTACK_MODEL_CONFIG_KEY, final_config)
+            override_tfvars = {"config": final_config}
             self.tfhelper.update_tfvars_and_apply_tf(
                 self.client,
                 self.manifest,
