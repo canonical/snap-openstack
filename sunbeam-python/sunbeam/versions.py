@@ -104,6 +104,7 @@ TERRAFORM_DIR_NAMES = {
     "k8s-plan": "deploy-k8s",
     "microceph-plan": "deploy-microceph",
     "microovn-plan": "deploy-microovn",
+    # Kept for upgrade migration (MigrateCinderVolumeToStorageFrameworkStep)
     "cinder-volume-plan": "deploy-cinder-volume",
     "openstack-plan": "deploy-openstack",
     "hypervisor-plan": "deploy-openstack-hypervisor",
@@ -280,22 +281,6 @@ DEPLOY_SUNBEAM_MACHINE_TFVAR_MAP: VarMap = {
         },
     }
 }
-DEPLOY_CINDER_VOLUME_TFVAR_MAP: VarMap = {
-    "charms": {
-        CINDER_VOLUME_CHARM: {
-            "channel": "charm_cinder_volume_channel",
-            "revision": "charm_cinder_volume_revision",
-            "config": "charm_cinder_volume_config",
-        },
-        "cinder-volume-ceph": {
-            "channel": "charm_cinder_volume_ceph_channel",
-            "revision": "charm_cinder_volume_ceph_revision",
-            "config": "charm_cinder_volume_ceph_config",
-        },
-    }
-}
-
-
 MANIFEST_ATTRIBUTES_TFVAR_MAP: dict[str, VarMap] = {
     "sunbeam-machine-plan": DEPLOY_SUNBEAM_MACHINE_TFVAR_MAP,
     "k8s-plan": DEPLOY_K8S_TFVAR_MAP,
@@ -303,5 +288,4 @@ MANIFEST_ATTRIBUTES_TFVAR_MAP: dict[str, VarMap] = {
     "microovn-plan": DEPLOY_MICROOVN_TFVAR_MAP,
     "openstack-plan": DEPLOY_OPENSTACK_TFVAR_MAP,
     "hypervisor-plan": DEPLOY_OPENSTACK_HYPERVISOR_TFVAR_MAP,
-    "cinder-volume-plan": DEPLOY_CINDER_VOLUME_TFVAR_MAP,
 }

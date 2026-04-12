@@ -25,6 +25,11 @@ from sunbeam.steps.upgrades.intra_channel import (
     ReapplyInfraModelConfigStep,
     RefreshSnapStep,
 )
+from sunbeam.steps.upgrades.storage_migration import (
+    BackfillCephFeatureStateStep,
+    ImportCephResourcesToStorageFrameworkStep,
+)
+from sunbeam.storage.steps import ReapplyStorageBackendTerraformPlanStep
 
 _INTRA_CHANNEL = "sunbeam.steps.upgrades.intra_channel"
 
@@ -825,8 +830,17 @@ class TestLatestInChannelCoordinator:
         ovn_manager.get_roles_for_microovn.return_value = []
         self.client = Mock()
         self.client.cluster.list_nodes_by_role.return_value = []
+        self.client.cluster.get_config.return_value = "{}"
         self.jhelper = Mock()
         self.manifest = Mock()
+        self.storage_backend_register_patcher = patch(
+            f"{_INTRA_CHANNEL}.register_storage_terraform_plan"
+        )
+        self.storage_backend_register_patcher.start()
+
+    def teardown_method(self):
+        """Stop active patchers."""
+        self.storage_backend_register_patcher.stop()
 
     @patch(f"{_INTRA_CHANNEL}.is_maas_deployment")
     def test_get_plan_local_excludes_lb_ip_pool_step(self, mock_is_maas):
@@ -890,7 +904,39 @@ class TestLatestInChannelCoordinator:
         assert LatestInChannel in step_types
         assert EnsureCiliumDeviceByHostStep in step_types
         assert ReapplyInfraModelConfigStep in step_types
+        assert ImportCephResourcesToStorageFrameworkStep in step_types
+        assert BackfillCephFeatureStateStep in step_types
         assert UpgradeFeatures in step_types
+
+    @patch(f"{_INTRA_CHANNEL}.is_maas_deployment")
+    def test_get_plan_backfills_ceph_state_before_upgrade_features(self, mock_is_maas):
+        """Ceph feature state backfill must run before feature upgrades."""
+        mock_is_maas.return_value = False
+
+        coordinator = LatestInChannelCoordinator(
+            self.deployment, self.client, self.jhelper, self.manifest
+        )
+        plan = coordinator.get_plan()
+
+        step_types = [type(step) for step in plan]
+        assert step_types.index(BackfillCephFeatureStateStep) < step_types.index(
+            UpgradeFeatures
+        )
+
+    @patch(f"{_INTRA_CHANNEL}.is_maas_deployment")
+    def test_get_plan_imports_ceph_resources_before_storage_reapply(self, mock_is_maas):
+        """Legacy Ceph resources must be imported before storage reapply."""
+        mock_is_maas.return_value = False
+
+        coordinator = LatestInChannelCoordinator(
+            self.deployment, self.client, self.jhelper, self.manifest
+        )
+        plan = coordinator.get_plan()
+
+        step_types = [type(step) for step in plan]
+        import_index = step_types.index(ImportCephResourcesToStorageFrameworkStep)
+        reapply_index = step_types.index(ReapplyStorageBackendTerraformPlanStep)
+        assert import_index < reapply_index
 
 
 class TestReapplyInfraModelConfigStep:
@@ -1219,11 +1265,15 @@ class TestRefreshSnapStep:
         deployment.get_ovn_manager = Mock(return_value=ovn_manager)
         client = Mock()
         client.cluster.list_nodes_by_role.return_value = []
+        client.cluster.get_config.return_value = "{}"
         jhelper = Mock()
         manifest = Mock()
 
-        coordinator = LatestInChannelCoordinator(deployment, client, jhelper, manifest)
-        plan = coordinator.get_plan()
+        with patch(f"{_INTRA_CHANNEL}.register_storage_terraform_plan"):
+            coordinator = LatestInChannelCoordinator(
+                deployment, client, jhelper, manifest
+            )
+            plan = coordinator.get_plan()
 
         step_types = [type(s) for s in plan]
         assert RefreshSnapStep in step_types
@@ -1241,11 +1291,15 @@ class TestRefreshSnapStep:
         deployment.get_ovn_manager = Mock(return_value=ovn_manager)
         client = Mock()
         client.cluster.list_nodes_by_role.return_value = []
+        client.cluster.get_config.return_value = "{}"
         jhelper = Mock()
         manifest = Mock()
 
-        coordinator = LatestInChannelCoordinator(deployment, client, jhelper, manifest)
-        plan = coordinator.get_plan()
+        with patch(f"{_INTRA_CHANNEL}.register_storage_terraform_plan"):
+            coordinator = LatestInChannelCoordinator(
+                deployment, client, jhelper, manifest
+            )
+            plan = coordinator.get_plan()
 
         step_types = [type(s) for s in plan]
         assert step_types.index(RefreshSnapStep) > step_types.index(LatestInChannel)
