@@ -26,12 +26,12 @@ class TestDateraBackend(BaseBackendTests):
         """Test that charm name is cinder-volume-datera."""
         assert backend.charm_name == "cinder-volume-datera"
 
-    def test_datera_config_has_required_fields(self, backend):
-        """Test that Datera config has all required fields."""
+    def test_datera_config_has_expected_fields(self, backend):
+        """Test that Datera config defines all expected fields."""
         fields = backend.config_type().model_fields
-        required_fields = ["san_ip", "san_login", "san_password", "protocol"]
-        for field in required_fields:
-            assert field in fields, f"Required field {field} not found in config"
+        expected_fields = ["san_ip", "san_login", "san_password", "protocol"]
+        for field in expected_fields:
+            assert field in fields, f"Expected field {field} not found in config"
 
     def test_datera_credentials_are_secrets(self, backend):
         """Test that SAN login and password are marked as secrets."""
@@ -62,6 +62,18 @@ class TestDateraConfigValidation:
                 "san-login": "admin",
                 "san-password": "secret",
                 "protocol": "iscsi",
+            }
+        )
+        assert config.protocol == "iscsi"
+
+    def test_defaults_protocol_to_iscsi(self, datera_backend):
+        """Test that protocol defaults to iscsi when omitted."""
+        config_class = datera_backend.config_type()
+        config = config_class.model_validate(
+            {
+                "san-ip": "192.168.1.10",
+                "san-login": "admin",
+                "san-password": "secret",
             }
         )
         assert config.protocol == "iscsi"
