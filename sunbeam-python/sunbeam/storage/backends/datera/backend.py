@@ -39,9 +39,9 @@ class DateraConfig(StorageBackendConfig):
 
     # Optional backend configuration
     protocol: Annotated[
-        Literal["iscsi"] | None,
+        Literal["iscsi"],
         Field(description="Protocol selector: iscsi."),
-    ] = None
+    ] = "iscsi"
     datera_ldap_server: Annotated[
         str | None, Field(description="LDAP authentication server")
     ] = None
