@@ -46,7 +46,7 @@ class TestNexentaConfigValidation:
     """Test Nexenta config validation behavior."""
 
     def test_protocol_rejects_invalid_value(self, nexenta_backend):
-        """Test that protocol rejects values other than iscsi/nvme."""
+        """Test that protocol rejects values other than iscsi."""
         config_class = nexenta_backend.config_type()
         with pytest.raises(ValidationError):
             config_class.model_validate(

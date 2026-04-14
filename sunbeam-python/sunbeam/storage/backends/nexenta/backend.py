@@ -1,6 +1,5 @@
 # SPDX-FileCopyrightText: 2026 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
-# ruff: noqa: E501
 
 """Nexenta iSCSI backend implementation using base step classes."""
 
@@ -79,19 +78,19 @@ class NexentaConfig(StorageBackendConfig):
     nexenta_rest_protocol: Annotated[
         RestProtocol | None,
         Field(
-            description="Use http or https for NexentaStor management REST API connection"
+            description="Use http or https for NexentaStor management REST API connection"  # noqa: E501
         ),
     ] = None
     nexenta_nbd_symlinks_dir: Annotated[
         str | None,
         Field(
-            description="NexentaEdge logical path of directory to store symbolic links to NBDs"
+            description="NexentaEdge logical path of directory to store symbolic links to NBDs"  # noqa: E501
         ),
-    ] = "/dev/disk/by-path"
+    ] = None
     nexenta_rest_user: Annotated[
         str | None,
         Field(description="User name to connect to NexentaEdge"),
-    ] = "admin"
+    ] = None
     nexenta_lun_container: Annotated[
         str | None,
         Field(description="NexentaEdge logical path of bucket for LUNs"),
@@ -103,15 +102,15 @@ class NexentaConfig(StorageBackendConfig):
     nexenta_iops_limit: Annotated[
         int | None,
         Field(description="NexentaEdge iSCSI LUN object IOPS limit"),
-    ] = 0
+    ] = None
     nexenta_chunksize: Annotated[
         int | None,
         Field(description="NexentaEdge iSCSI LUN object chunk size"),
-    ] = 32768
+    ] = None
     nexenta_replication_count: Annotated[
         int | None,
         Field(description="NexentaEdge iSCSI LUN object replication count"),
-    ] = 3
+    ] = None
     nexenta_host: Annotated[
         str | None,
         Field(description="IP address of NexentaStor Appliance"),
@@ -119,31 +118,48 @@ class NexentaConfig(StorageBackendConfig):
     nexenta_rest_connect_timeout: Annotated[
         str | None,
         Field(
-            description="Specifies the time limit (in seconds), within which the connection to NexentaStor management REST API server must be established"
+            description=(
+                "Specifies the time limit (in seconds), within which the "
+                "connection to NexentaStor management REST API server must be "
+                "established"
+            )
         ),
     ] = "30"
     nexenta_rest_read_timeout: Annotated[
         str | None,
         Field(
-            description="Specifies the time limit (in seconds), within which NexentaStor management REST API server must send a response"
+            description=(
+                "Specifies the time limit (in seconds), within which "
+                "NexentaStor management REST API server must send a response"
+            )
         ),
     ] = "300"
     nexenta_rest_backoff_factor: Annotated[
         str | None,
         Field(
-            description="Specifies the backoff factor to apply between connection attempts to NexentaStor management REST API server"
+            description=(
+                "Specifies the backoff factor to apply between connection "
+                "attempts to NexentaStor management REST API server"
+            )
         ),
     ] = "0.5"
     nexenta_rest_retry_count: Annotated[
         int | None,
         Field(
-            description="Specifies the number of times to repeat NexentaStor management REST API call in case of connection errors and NexentaStor appliance EBUSY or ENOENT errors"
+            description=(
+                "Specifies the number of times to repeat NexentaStor "
+                "management REST API call in case of connection errors and "
+                "NexentaStor appliance EBUSY or ENOENT errors"
+            )
         ),
     ] = 3
     nexenta_use_https: Annotated[
         bool | None,
         Field(
-            description="Use HTTP secure protocol for NexentaStor management REST API connections"
+            description=(
+                "Use HTTP secure protocol for NexentaStor management REST API "
+                "connections"
+            )
         ),
     ] = True
     nexenta_lu_writebackcache_disabled: Annotated[
@@ -157,7 +173,11 @@ class NexentaConfig(StorageBackendConfig):
     nexenta_iscsi_target_portals: Annotated[
         str | None,
         Field(
-            description="Comma separated list of portals for NexentaStor5, in format of IP1:port1,IP2:port2. Port is optional, default=3260. Example: 10.10.10.1:3267,10.10.1.2"
+            description=(
+                "Comma separated list of portals for NexentaStor5, in format "
+                "of IP1:port1,IP2:port2. Port is optional, default=3260. "
+                "Example: 10.10.10.1:3267,10.10.1.2"
+            )
         ),
     ] = None
     nexenta_iscsi_target_host_group: Annotated[
@@ -203,7 +223,11 @@ class NexentaConfig(StorageBackendConfig):
     nexenta_sparsed_volumes: Annotated[
         bool | None,
         Field(
-            description="Enables or disables the creation of volumes as sparsed files that take no space. If disabled (False), volume is created as a regular file, which takes a long time."
+            description=(
+                "Enables or disables the creation of volumes as sparsed files "
+                "that take no space. If disabled (False), volume is created as "
+                "a regular file, which takes a long time."
+            )
         ),
     ] = True
     nexenta_qcow2_volumes: Annotated[
@@ -255,7 +279,10 @@ class NexentaConfig(StorageBackendConfig):
     nexenta_rrmgr_compression: Annotated[
         int | None,
         Field(
-            description="Enable stream compression, level 1..9. 1 - gives best speed; 9 - gives best compression."
+            description=(
+                "Enable stream compression, level 1..9. 1 - gives best speed; "
+                "9 - gives best compression."
+            )
         ),
     ] = 0
     nexenta_rrmgr_tcp_buf_size: Annotated[
