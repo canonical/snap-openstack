@@ -1,7 +1,5 @@
 # SPDX-FileCopyrightText: 2026 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
-# ruff: noqa: E501
-
 """Vendor backend implementation using base step classes."""
 
 import logging
@@ -27,7 +25,7 @@ class Protocol(StrEnum):
 
 
 class Toyouacs5000Config(StorageBackendConfig):
-    """Configuration model for Acs5000 FC backend.
+    """Configuration model for Acs5000 backend.
 
     This model includes ALL configuration options for the backend.
     Additional configuration can be managed dynamically through the charm.
@@ -56,20 +54,22 @@ class Toyouacs5000Config(StorageBackendConfig):
     acs5000_volpool_name: Annotated[
         str | None,
         Field(
-            description="Comma separated list of storage system storage pools for volumes."
+            description=(
+                "Comma-separated list of storage system storage pools for volumes."
+            )
         ),
     ] = None
     acs5000_copy_interval: Annotated[
         int | None,
         Field(
-            description="When volume copy task is going on,refresh volume status interval"
+            description=(
+                "When volume copy task is going on, refresh volume status interval"
+            )
         ),
     ] = None
     acs5000_multiattach: Annotated[
         bool | None,
-        Field(
-            description="Enable to allow volumes attaching to multiple hosts with no limit."
-        ),
+        Field(description="Enable multi-attach for volumes with no host limit."),
     ] = None
     san_thin_provision: Annotated[
         bool | None,
@@ -82,10 +82,10 @@ class Toyouacs5000Config(StorageBackendConfig):
 
 
 class Toyouacs5000Backend(StorageBackendBase):
-    """Acs5000 FC backend implementation."""
+    """Acs5000 backend implementation."""
 
     backend_type = "toyouacs5000"
-    display_name = "Acs5000 FC"
+    display_name = "Acs5000 FC/iSCSI"
     generally_available = True
 
     @property
