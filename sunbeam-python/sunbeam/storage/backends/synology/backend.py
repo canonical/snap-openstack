@@ -1,8 +1,6 @@
 # SPDX-FileCopyrightText: 2026 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
-# ruff: noqa: E501
-
-"""Syno iSCSI backend implementation using base step classes."""
+"""Synology iSCSI backend implementation using base step classes."""
 
 import logging
 from enum import StrEnum
@@ -26,7 +24,7 @@ class Protocol(StrEnum):
 
 
 class SynologyConfig(StorageBackendConfig):
-    """Configuration model for Syno iSCSI backend.
+    """Configuration model for Synology iSCSI backend.
 
     This model includes ALL configuration options for the backend.
     Additional configuration can be managed dynamically through the charm.
@@ -48,12 +46,15 @@ class SynologyConfig(StorageBackendConfig):
     ]
 
     synology_one_time_pass: Annotated[
-        str,
+        str | None,
         Field(
-            description="One time password of administrator for logging in Synology storage if OTP is enabled."
+            description=(
+                "One time password of administrator for logging in Synology "
+                "storage if OTP is enabled."
+            )
         ),
         SecretDictField(field="synology-one-time-pass"),
-    ]
+    ] = None
 
     # Optional backend configuration
     synology_pool_name: Annotated[
@@ -62,35 +63,36 @@ class SynologyConfig(StorageBackendConfig):
     ] = None
 
     synology_admin_port: Annotated[
-        int | None,
+        int,
         Field(description="Management port for Synology storage."),
     ] = 5000
 
     synology_username: Annotated[
-        str | None,
+        str,
         Field(description="Administrator of Synology storage."),
     ] = "admin"
 
     synology_ssl_verify: Annotated[
-        bool | None,
-        Field(
-            description="Do certificate validation or not if $driver_use_ssl is True"
-        ),
+        bool,
+        Field(description="Verify SSL certificates when connecting over HTTPS."),
     ] = True
 
     synology_device_id: Annotated[
         str | None,
         Field(
-            description="Device id for skip one time password check for logging in Synology storage if OTP is enabled."
+            description=(
+                "Device id for skip one time password check for logging in "
+                "Synology storage if OTP is enabled."
+            )
         ),
     ] = None
 
 
 class SynologyBackend(StorageBackendBase):
-    """Syno iSCSI backend implementation."""
+    """Synology iSCSI backend implementation."""
 
     backend_type = "synology"
-    display_name = "Syno iSCSI"
+    display_name = "Synology iSCSI"
     generally_available = True
 
     @property
