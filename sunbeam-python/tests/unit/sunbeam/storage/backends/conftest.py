@@ -7,7 +7,7 @@ import pytest
 
 from sunbeam.storage.backends.dellsc.backend import DellSCBackend
 from sunbeam.storage.backends.hitachi.backend import HitachiBackend
-from sunbeam.storage.backends.prophetstor.backend import ProphetstorBackend
+from sunbeam.storage.backends.prophetstor.backend import ProphetStorBackend
 from sunbeam.storage.backends.purestorage.backend import PureStorageBackend
 
 
@@ -32,7 +32,7 @@ def dellsc_backend():
 @pytest.fixture
 def prophetstor_backend():
     """Provide a ProphetStor backend instance."""
-    return ProphetstorBackend()
+    return ProphetStorBackend()
 
 
 @pytest.fixture(params=["hitachi", "purestorage", "dellsc", "prophetstor"])
@@ -42,6 +42,6 @@ def any_backend(request):
         "hitachi": HitachiBackend(),
         "purestorage": PureStorageBackend(),
         "dellsc": DellSCBackend(),
-        "prophetstor": ProphetstorBackend(),
+        "prophetstor": ProphetStorBackend(),
     }
     return backends[request.param]
