@@ -1,6 +1,5 @@
 # SPDX-FileCopyrightText: 2026 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
-# ruff: noqa: E501
 
 """QNAP Storage backend implementation using base step classes."""
 
@@ -54,7 +53,10 @@ class QnapConfig(StorageBackendConfig):
     qnap_management_url: Annotated[
         str | None,
         Field(
-            description="The URL to management QNAP Storage. Driver does not support IPv6 address in URL."
+            description=(
+                "URL to manage the QNAP storage system. The driver does not "
+                "support IPv6 addresses in the URL."
+            )
         ),
     ] = None
     qnap_poolname: Annotated[
