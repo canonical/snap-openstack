@@ -32,7 +32,7 @@ def dellsc_backend():
 
 @pytest.fixture
 def sandstone_backend():
-    """Provide a SandStone backend instance."""
+    """Provide a Sandstone backend instance."""
     return SandstoneBackend()
 
 
