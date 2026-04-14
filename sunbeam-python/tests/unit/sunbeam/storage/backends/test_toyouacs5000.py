@@ -26,11 +26,23 @@ class TestToyouacs5000Backend(BaseBackendTests):
         """Test that charm name is cinder-volume-toyouacs5000."""
         assert backend.charm_name == "cinder-volume-toyouacs5000"
 
-    def test_config_has_required_fields(self, backend):
-        """Test that Toyou ACS5000 config has required fields."""
+    def test_display_name_is_protocol_agnostic(self, backend):
+        """Test that display name reflects FC and iSCSI support."""
+        assert backend.display_name == "Acs5000 FC/iSCSI"
+
+    def test_config_has_expected_fields(self, backend):
+        """Test that Toyou ACS5000 config exposes expected fields."""
         fields = backend.config_type().model_fields
         for field in ("san_ip", "protocol", "san_login", "san_password"):
-            assert field in fields, f"Required field {field} not found in config"
+            assert field in fields, f"Expected field {field} not found in config"
+
+    def test_config_enforces_required_fields(self, backend):
+        """Test that mandatory Toyou ACS5000 config fields are required."""
+        fields = backend.config_type().model_fields
+        for field in ("san_ip", "san_login", "san_password"):
+            assert fields[field].is_required(), (
+                f"Field {field} should be required in config"
+            )
 
     def test_sensitive_fields_are_marked_secret(self, backend):
         """Test that SAN credentials are marked as secret."""
