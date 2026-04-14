@@ -1,6 +1,5 @@
 # SPDX-FileCopyrightText: 2026 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
-# ruff: noqa: E501
 
 """NetApp ONTAP backend implementation using base step classes."""
 
@@ -66,63 +65,87 @@ class NetAppConfig(StorageBackendConfig):
     netapp_storage_protocol: Annotated[
         Literal["iscsi", "fc", "nfs", "nvme"] | None,
         Field(
-            description="The storage protocol to be used on the data path with the storage system."
+            description=(
+                "The storage protocol to be used on the data path with the "
+                "storage system."
+            )
         ),
     ] = None
 
     netapp_server_hostname: Annotated[
         str | None,
         Field(
-            description="The hostname (or IP address) for the storage system or proxy server."
+            description="The hostname (or IP address) for the storage system or proxy server."  # noqa: E501
         ),
     ] = None
 
     netapp_server_port: Annotated[
         int | None,
         Field(
-            description="The TCP port to use for communication with the storage system or proxy server."
+            description=(
+                "The TCP port to use for communication with the storage system "
+                "or proxy server."
+            )
         ),
     ] = None
 
     netapp_use_legacy_client: Annotated[
         bool | None,
         Field(
-            description="Select which ONTAP client to use for retrieving and modifying data on the storage."
+            description=(
+                "Select which ONTAP client to use for retrieving and modifying "
+                "data on the storage."
+            )
         ),
     ] = None
 
     netapp_async_rest_timeout: Annotated[
         int | None,
         Field(
-            description="The maximum time in seconds to wait for completing a REST asynchronous operation."
+            description=(
+                "The maximum time in seconds to wait for completing a REST "
+                "asynchronous operation."
+            )
         ),
     ] = None
 
     netapp_transport_type: Annotated[
         TransportType | None,
         Field(
-            description="The transport protocol used when communicating with the storage system or proxy server."
+            description=(
+                "The transport protocol used when communicating with the storage "
+                "system or proxy server."
+            )
         ),
     ] = None
 
     netapp_ssl_cert_path: Annotated[
         str | None,
         Field(
-            description="The path to a CA_BUNDLE file or directory with certificates of trusted CA."
+            description=(
+                "The path to a CA_BUNDLE file or directory with certificates of "
+                "trusted CA."
+            )
         ),
     ] = None
 
     netapp_login: Annotated[
         str | None,
         Field(
-            description="Administrative user account name used to access the storage system or proxy server."
+            description=(
+                "Administrative user account name used to access the storage "
+                "system or proxy server."
+            )
         ),
     ] = None
 
     netapp_password: Annotated[
         str | None,
         Field(
-            description="Password for the administrative user account specified in the netapp_login option."
+            description=(
+                "Password for the administrative user account specified in the "
+                "netapp_login option."
+            )
         ),
         SecretDictField(field="netapp-password"),
     ] = None
@@ -130,7 +153,10 @@ class NetAppConfig(StorageBackendConfig):
     netapp_private_key_file: Annotated[
         str | None,
         Field(
-            description="Absolute path to the file containing the private key associated with the certificate."
+            description=(
+                "Absolute path to the file containing the private key "
+                "associated with the certificate."
+            )
         ),
         SecretDictField(field="netapp-private-key-file"),
     ] = None
@@ -146,7 +172,10 @@ class NetAppConfig(StorageBackendConfig):
     netapp_ca_certificate_file: Annotated[
         str,
         Field(
-            description="Absolute path to the file containing the public key certificate of the trusted CA."
+            description=(
+                "Absolute path to the file containing the public key "
+                "certificate of the trusted CA."
+            )
         ),
         SecretDictField(field="netapp-ca-certificate-file"),
     ]
@@ -173,7 +202,10 @@ class NetAppConfig(StorageBackendConfig):
     netapp_driver_reports_provisioned_capacity: Annotated[
         bool | None,
         Field(
-            description="Enable querying of storage system to calculate volumes provisioned size."
+            description=(
+                "Enable querying of storage system to calculate volumes "
+                "provisioned size."
+            )
         ),
     ] = None
 
@@ -197,105 +229,141 @@ class NetAppConfig(StorageBackendConfig):
     thres_avl_size_perc_start: Annotated[
         int | None,
         Field(
-            description="Percentage of available space for an NFS share to trigger cache cleaning."
+            description=(
+                "Percentage of available space for an NFS share to trigger "
+                "cache cleaning."
+            )
         ),
     ] = None
 
     thres_avl_size_perc_stop: Annotated[
         int | None,
         Field(
-            description="Percentage of available space on an NFS share to stop cache cleaning."
+            description=(
+                "Percentage of available space on an NFS share to stop cache cleaning."
+            )
         ),
     ] = None
 
     expiry_thres_minutes: Annotated[
         int | None,
         Field(
-            description="Threshold for last access time for images in the NFS image cache."
+            description=(
+                "Threshold for last access time for images in the NFS image cache."
+            )
         ),
     ] = None
 
     netapp_lun_ostype: Annotated[
         str | None,
         Field(
-            description="Type of operating system that will access a LUN exported from Data ONTAP."
+            description=(
+                "Type of operating system that will access a LUN exported from "
+                "Data ONTAP."
+            )
         ),
     ] = None
 
     netapp_namespace_ostype: Annotated[
         str | None,
         Field(
-            description="Type of operating system that will access a namespace exported from Data ONTAP."
+            description=(
+                "Type of operating system that will access a namespace exported "
+                "from Data ONTAP."
+            )
         ),
     ] = None
 
     netapp_host_type: Annotated[
         str | None,
         Field(
-            description="Type of operating system for all initiators that can access a LUN."
+            description="Type of operating system for all initiators that can access a LUN."  # noqa: E501
         ),
     ] = None
 
     netapp_pool_name_search_pattern: Annotated[
         str | None,
         Field(
-            description="Regular expression to restrict provisioning to specified pools."
+            description=(
+                "Regular expression to restrict provisioning to specified pools."
+            )
         ),
     ] = None
 
     netapp_lun_clone_busy_timeout: Annotated[
         int | None,
         Field(
-            description="Maximum time to retry LUN clone operation when device busy error occurs."
+            description=(
+                "Maximum time to retry LUN clone operation when device busy "
+                "error occurs."
+            )
         ),
     ] = None
 
     netapp_lun_clone_busy_interval: Annotated[
         int | None,
         Field(
-            description="Time interval to retry LUN clone operation when device busy error occurs."
+            description=(
+                "Time interval to retry LUN clone operation when device busy "
+                "error occurs."
+            )
         ),
     ] = None
 
     netapp_dedupe_cache_expiry_duration: Annotated[
         int | None,
         Field(
-            description="Time interval between updates of netapp_dedupe_used_percent for ONTAP backend pools."
+            description=(
+                "Time interval between updates of netapp_dedupe_used_percent "
+                "for ONTAP backend pools."
+            )
         ),
     ] = None
 
     netapp_performance_cache_expiry_duration: Annotated[
         int | None,
         Field(
-            description="Time interval between updates of performance utilization for ONTAP backend pools."
+            description=(
+                "Time interval between updates of performance utilization for "
+                "ONTAP backend pools."
+            )
         ),
     ] = None
 
     netapp_replication_aggregate_map: Annotated[
         str | None,
         Field(
-            description="Aggregate mapping between source and destination back ends for replication."
+            description=(
+                "Aggregate mapping between source and destination back ends "
+                "for replication."
+            )
         ),
     ] = None
 
     netapp_snapmirror_quiesce_timeout: Annotated[
         int | None,
         Field(
-            description="Maximum time to wait for existing SnapMirror transfers to complete before aborting."
+            description=(
+                "Maximum time to wait for existing SnapMirror transfers to "
+                "complete before aborting."
+            )
         ),
     ] = None
 
     netapp_replication_volume_online_timeout: Annotated[
         int | None,
         Field(
-            description="Time to wait for a replication volume create to complete and go online."
+            description=(
+                "Time to wait for a replication volume create to complete and "
+                "go online."
+            )
         ),
     ] = None
 
     netapp_replication_policy: Annotated[
         str | None,
         Field(
-            description="Replication policy to be used while creating snapmirror relationship."
+            description="Replication policy to be used while creating snapmirror relationship."  # noqa: E501
         ),
     ] = None
 
@@ -307,7 +375,7 @@ class NetAppConfig(StorageBackendConfig):
     netapp_migrate_volume_timeout: Annotated[
         int | None,
         Field(
-            description="Time to wait for storage assisted volume migration to complete."
+            description="Time to wait for storage assisted volume migration to complete."  # noqa: E501
         ),
     ] = None
 
