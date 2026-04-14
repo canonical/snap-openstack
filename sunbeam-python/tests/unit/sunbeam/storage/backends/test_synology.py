@@ -26,6 +26,10 @@ class TestSynologyBackend(BaseBackendTests):
         """Test that charm name is cinder-volume-synology."""
         assert backend.charm_name == "cinder-volume-synology"
 
+    def test_display_name_uses_synology_branding(self, backend):
+        """Test that display name consistently uses Synology."""
+        assert backend.display_name == "Synology iSCSI"
+
     def test_config_has_required_fields(self, backend):
         """Test that Synology config has required fields."""
         fields = backend.config_type().model_fields
@@ -76,3 +80,37 @@ class TestSynologyConfigValidation:
             }
         )
         assert config.protocol == "iscsi"
+
+    def test_one_time_password_is_optional(self, synology_backend):
+        """Test that one-time password is optional when OTP is not enabled."""
+        config_class = synology_backend.config_type()
+        config = config_class.model_validate(
+            {
+                "san-ip": "192.168.1.1",
+                "synology-password": "secret",
+                "protocol": "iscsi",
+            }
+        )
+        assert config.synology_one_time_pass is None
+
+    @pytest.mark.parametrize(
+        "field_name,field_value",
+        [
+            ("synology-admin-port", None),
+            ("synology-username", None),
+            ("synology-ssl-verify", None),
+        ],
+    )
+    def test_optional_defaults_reject_none(
+        self, synology_backend, field_name, field_value
+    ):
+        """Test that non-nullable fields with defaults reject explicit None."""
+        config_class = synology_backend.config_type()
+        payload = {
+            "san-ip": "192.168.1.1",
+            "synology-password": "secret",
+            "protocol": "iscsi",
+            field_name: field_value,
+        }
+        with pytest.raises(ValidationError):
+            config_class.model_validate(payload)
