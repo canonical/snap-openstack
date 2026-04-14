@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
-"""DPL FC backend implementation using base step classes."""
+"""ProphetStor DPL FC backend implementation using base step classes."""
 
 import logging
 from enum import StrEnum
@@ -24,8 +24,8 @@ class Protocol(StrEnum):
     ISCSI = "iscsi"
 
 
-class ProphetstorConfig(StorageBackendConfig):
-    """Configuration model for DPL FC backend.
+class ProphetStorConfig(StorageBackendConfig):
+    """Configuration model for ProphetStor DPL FC backend.
 
     This model includes ALL configuration options for the backend.
     Additional configuration can be managed dynamically through the charm.
@@ -37,7 +37,7 @@ class ProphetstorConfig(StorageBackendConfig):
     ]
 
     protocol: Annotated[
-        Protocol | None,
+        Protocol,
         Field(description="Protocol selector: fc, iscsi."),
     ]
 
@@ -48,16 +48,16 @@ class ProphetstorConfig(StorageBackendConfig):
     ] = None
 
     dpl_port: Annotated[
-        int | None,
+        int,
         Field(description="DPL port number."),
     ] = 8357
 
 
-class ProphetstorBackend(StorageBackendBase):
-    """DPL FC backend implementation."""
+class ProphetStorBackend(StorageBackendBase):
+    """ProphetStor DPL FC backend implementation."""
 
     backend_type = "prophetstor"
-    display_name = "DPL FC"
+    display_name = "ProphetStor FC"
     generally_available = True
 
     @property
@@ -87,4 +87,4 @@ class ProphetstorBackend(StorageBackendBase):
 
     def config_type(self) -> type[StorageBackendConfig]:
         """Return the configuration model type for this backend."""
-        return ProphetstorConfig
+        return ProphetStorConfig

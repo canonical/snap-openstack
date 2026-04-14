@@ -9,7 +9,7 @@ from pydantic import ValidationError
 from tests.unit.sunbeam.storage.backends.test_common import BaseBackendTests
 
 
-class TestProphetstorBackend(BaseBackendTests):
+class TestProphetStorBackend(BaseBackendTests):
     """Tests for ProphetStor backend."""
 
     @pytest.fixture
@@ -32,7 +32,7 @@ class TestProphetstorBackend(BaseBackendTests):
             assert field in fields, f"Required field {field} not found in config"
 
 
-class TestProphetstorConfigValidation:
+class TestProphetStorConfigValidation:
     """Test ProphetStor config validation behavior."""
 
     def test_protocol_rejects_invalid_value(self, prophetstor_backend):
@@ -56,3 +56,24 @@ class TestProphetstorConfigValidation:
             }
         )
         assert config.protocol == "fc"
+
+    def test_protocol_accepts_iscsi(self, prophetstor_backend):
+        """Test that protocol accepts iscsi."""
+        config_class = prophetstor_backend.config_type()
+        config = config_class.model_validate(
+            {
+                "san-ip": "192.168.1.1",
+                "protocol": "iscsi",
+            }
+        )
+        assert config.protocol == "iscsi"
+
+    def test_protocol_is_required(self, prophetstor_backend):
+        """Test that protocol is required."""
+        config_class = prophetstor_backend.config_type()
+        with pytest.raises(ValidationError):
+            config_class.model_validate(
+                {
+                    "san-ip": "192.168.1.1",
+                }
+            )
