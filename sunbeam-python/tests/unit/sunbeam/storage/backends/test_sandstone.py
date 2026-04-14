@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for SandStone backend."""
+"""Tests for Sandstone backend."""
 
 import pytest
 from pydantic import ValidationError
@@ -10,11 +10,11 @@ from tests.unit.sunbeam.storage.backends.test_common import BaseBackendTests
 
 
 class TestSandstoneBackend(BaseBackendTests):
-    """Tests for SandStone backend."""
+    """Tests for Sandstone backend."""
 
     @pytest.fixture
     def backend(self, sandstone_backend):
-        """Provide SandStone backend instance."""
+        """Provide Sandstone backend instance."""
         return sandstone_backend
 
     def test_backend_type_is_sandstone(self, backend):
@@ -26,14 +26,14 @@ class TestSandstoneBackend(BaseBackendTests):
         assert backend.charm_name == "cinder-volume-sandstone"
 
     def test_config_has_required_fields(self, backend):
-        """Test that SandStone config has required fields."""
+        """Test that Sandstone config has required fields."""
         fields = backend.config_type().model_fields
         for field in ("san_ip", "protocol"):
             assert field in fields, f"Required field {field} not found in config"
 
 
 class TestSandstoneConfigValidation:
-    """Test SandStone config validation behavior."""
+    """Test Sandstone config validation behavior."""
 
     def test_protocol_rejects_invalid_value(self, sandstone_backend):
         """Test that protocol rejects values other than iscsi."""

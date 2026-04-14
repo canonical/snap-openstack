@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
-"""Sds iSCSI backend implementation using base step classes."""
+"""Sandstone iSCSI backend implementation using base step classes."""
 
 import logging
 from enum import StrEnum
@@ -24,7 +24,7 @@ class Protocol(StrEnum):
 
 
 class SandstoneConfig(StorageBackendConfig):
-    """Configuration model for Sds iSCSI backend.
+    """Configuration model for Sandstone iSCSI backend.
 
     This model includes ALL configuration options for the backend.
     Additional configuration can be managed dynamically through the charm.
@@ -34,6 +34,7 @@ class SandstoneConfig(StorageBackendConfig):
     san_ip: Annotated[
         str, Field(description="Storage array management IP address or hostname.")
     ]
+    # Optional connection configuration
     protocol: Annotated[
         Protocol | None,
         Field(description="Protocol selector: iscsi."),
@@ -42,20 +43,20 @@ class SandstoneConfig(StorageBackendConfig):
     # Optional backend configuration
     default_sandstone_target_ips: Annotated[
         str | None,
-        Field(description="SandStone default target ip."),
+        Field(description="Sandstone default target IPs."),
     ] = None
     sandstone_pool: Annotated[
         str | None,
-        Field(description="SandStone storage pool resource name."),
+        Field(description="Sandstone storage pool resource name."),
     ] = None
     initiator_assign_sandstone_target_ip: Annotated[
         str | None,
-        Field(description="Support initiator assign target with assign ip."),
+        Field(description="Support assigning a target IP to an initiator."),
     ] = None
 
 
 class SandstoneBackend(StorageBackendBase):
-    """Sds iSCSI backend implementation."""
+    """Sandstone iSCSI backend implementation."""
 
     backend_type = "sandstone"
     display_name = "Sds iSCSI"
