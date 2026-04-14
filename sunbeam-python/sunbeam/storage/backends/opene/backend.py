@@ -12,7 +12,6 @@ from rich.console import Console
 
 from sunbeam.core.manifest import StorageBackendConfig
 from sunbeam.storage.base import StorageBackendBase
-from sunbeam.storage.models import SecretDictField
 
 LOG = logging.getLogger(__name__)
 console = Console()
@@ -54,9 +53,8 @@ class OpeneConfig(StorageBackendConfig):
         str | None, Field(description="List of multipath ip addresses to ignore.")
     ] = None
     chap_password_len: Annotated[
-        str,
+        int,
         Field(description="Length of the random string for CHAP password."),
-        SecretDictField(field="chap-password-len"),
     ]
     jovian_pool: Annotated[
         str | None, Field(description="JovianDSS pool that holds all cinder volumes")
