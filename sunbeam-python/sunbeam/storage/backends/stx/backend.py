@@ -41,6 +41,7 @@ class StxConfig(StorageBackendConfig):
     san_ip: Annotated[
         str, Field(description="Storage array management IP address or hostname")
     ]
+    # Optional connection configuration
     protocol: Annotated[
         Protocol | None,
         Field(description="Protocol selector: iscsi."),
