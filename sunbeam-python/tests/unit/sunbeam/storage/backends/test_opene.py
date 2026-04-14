@@ -6,7 +6,6 @@
 import pytest
 from pydantic import ValidationError
 
-from sunbeam.storage.models import SecretDictField
 from tests.unit.sunbeam.storage.backends.test_common import BaseBackendTests
 
 
@@ -32,14 +31,12 @@ class TestOpeneBackend(BaseBackendTests):
         for field in ("san_ip", "protocol", "chap_password_len"):
             assert field in fields, f"Required field {field} not found in config"
 
-    def test_sensitive_fields_are_marked_secret(self, backend):
-        """Test that CHAP password length field is marked as secret."""
+    def test_chap_password_len_is_numeric(self, backend):
+        """Test that CHAP password length field is configured as int."""
         config_class = backend.config_type()
         field = config_class.model_fields.get("chap_password_len")
         assert field is not None
-        assert any(isinstance(m, SecretDictField) for m in field.metadata), (
-            "chap_password_len should be marked as secret"
-        )
+        assert field.annotation is int
 
 
 class TestOpeneConfigValidation:
@@ -52,7 +49,7 @@ class TestOpeneConfigValidation:
             config_class.model_validate(
                 {
                     "san-ip": "192.168.1.1",
-                    "chap-password-len": "16",
+                    "chap-password-len": 16,
                     "protocol": "fc",
                 }
             )
@@ -63,8 +60,56 @@ class TestOpeneConfigValidation:
         config = config_class.model_validate(
             {
                 "san-ip": "192.168.1.1",
-                "chap-password-len": "16",
+                "chap-password-len": 16,
                 "protocol": "iscsi",
             }
         )
         assert config.protocol == "iscsi"
+
+    def test_jovian_block_size_accepts_valid_value(self, opene_backend):
+        """Test that jovian_block_size accepts valid enum values."""
+        config_class = opene_backend.config_type()
+        config = config_class.model_validate(
+            {
+                "san-ip": "192.168.1.1",
+                "chap-password-len": 16,
+                "protocol": "iscsi",
+                "jovian-block-size": "16K",
+            }
+        )
+        assert str(config.jovian_block_size) == "16K"
+
+    def test_jovian_block_size_rejects_invalid_value(self, opene_backend):
+        """Test that jovian_block_size rejects invalid values."""
+        config_class = opene_backend.config_type()
+        with pytest.raises(ValidationError):
+            config_class.model_validate(
+                {
+                    "san-ip": "192.168.1.1",
+                    "chap-password-len": 16,
+                    "protocol": "iscsi",
+                    "jovian-block-size": "8K",
+                }
+            )
+
+    def test_optional_fields_round_trip_with_kebab_aliases(self, opene_backend):
+        """Test optional fields are parsed/serialized via kebab-case aliases."""
+        config_class = opene_backend.config_type()
+        config = config_class.model_validate(
+            {
+                "san-ip": "192.168.1.1",
+                "chap-password-len": 16,
+                "protocol": "iscsi",
+                "san-hosts": "10.0.0.10",
+                "jovian-recovery-delay": 20,
+                "jovian-ignore-tpath": "10.0.0.11,10.0.0.12",
+                "jovian-pool": "pool-1",
+                "jovian-block-size": "32K",
+            }
+        )
+        dumped = config.model_dump(by_alias=True)
+        assert dumped["san-hosts"] == "10.0.0.10"
+        assert dumped["jovian-recovery-delay"] == 20
+        assert dumped["jovian-ignore-tpath"] == "10.0.0.11,10.0.0.12"
+        assert dumped["jovian-pool"] == "pool-1"
+        assert dumped["jovian-block-size"] == "32K"
