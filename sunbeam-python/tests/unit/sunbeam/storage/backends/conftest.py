@@ -8,7 +8,7 @@ import pytest
 from sunbeam.storage.backends.dellsc.backend import DellSCBackend
 from sunbeam.storage.backends.hitachi.backend import HitachiBackend
 from sunbeam.storage.backends.purestorage.backend import PureStorageBackend
-from sunbeam.storage.backends.veritasaccess.backend import VeritasaccessBackend
+from sunbeam.storage.backends.veritasaccess.backend import VeritasAccessBackend
 
 
 @pytest.fixture
@@ -32,7 +32,7 @@ def dellsc_backend():
 @pytest.fixture
 def veritasaccess_backend():
     """Provide a Veritas Access backend instance."""
-    return VeritasaccessBackend()
+    return VeritasAccessBackend()
 
 
 @pytest.fixture(params=["hitachi", "purestorage", "dellsc", "veritasaccess"])
@@ -42,6 +42,6 @@ def any_backend(request):
         "hitachi": HitachiBackend(),
         "purestorage": PureStorageBackend(),
         "dellsc": DellSCBackend(),
-        "veritasaccess": VeritasaccessBackend(),
+        "veritasaccess": VeritasAccessBackend(),
     }
     return backends[request.param]
