@@ -9,7 +9,7 @@ from pydantic import ValidationError
 from tests.unit.sunbeam.storage.backends.test_common import BaseBackendTests
 
 
-class TestVeritasaccessBackend(BaseBackendTests):
+class TestVeritasAccessBackend(BaseBackendTests):
     """Tests for Veritas Access backend."""
 
     @pytest.fixture
@@ -25,6 +25,10 @@ class TestVeritasaccessBackend(BaseBackendTests):
         """Test that charm name is cinder-volume-veritasaccess."""
         assert backend.charm_name == "cinder-volume-veritasaccess"
 
+    def test_display_name_is_veritas_access(self, backend):
+        """Test that display name is user-friendly and consistent."""
+        assert backend.display_name == "Veritas Access"
+
     def test_config_has_required_fields(self, backend):
         """Test that Veritas Access config has required fields."""
         fields = backend.config_type().model_fields
@@ -32,7 +36,7 @@ class TestVeritasaccessBackend(BaseBackendTests):
             assert field in fields, f"Required field {field} not found in config"
 
 
-class TestVeritasaccessConfigValidation:
+class TestVeritasAccessConfigValidation:
     """Test Veritas Access config validation behavior."""
 
     def test_protocol_rejects_invalid_value(self, veritasaccess_backend):

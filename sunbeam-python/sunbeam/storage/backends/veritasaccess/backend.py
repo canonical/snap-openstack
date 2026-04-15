@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
-"""ACCESSIscsi backend implementation using base step classes."""
+"""Veritas Access backend implementation using base step classes."""
 
 import logging
 from enum import StrEnum
@@ -23,8 +23,8 @@ class Protocol(StrEnum):
     ISCSI = "iscsi"
 
 
-class VeritasaccessConfig(StorageBackendConfig):
-    """Configuration model for ACCESSIscsi backend.
+class VeritasAccessConfig(StorageBackendConfig):
+    """Configuration model for Veritas Access backend.
 
     This model includes ALL configuration options for the backend.
     Additional configuration can be managed dynamically through the charm.
@@ -42,7 +42,7 @@ class VeritasaccessConfig(StorageBackendConfig):
     # Optional backend configuration
     vrts_lun_sparse: Annotated[
         bool | None,
-        Field(description="Create sparse Lun."),
+        Field(description="Create sparse LUN."),
     ] = None
 
     vrts_target_config: Annotated[
@@ -51,11 +51,11 @@ class VeritasaccessConfig(StorageBackendConfig):
     ] = None
 
 
-class VeritasaccessBackend(StorageBackendBase):
-    """ACCESSIscsi backend implementation."""
+class VeritasAccessBackend(StorageBackendBase):
+    """Veritas Access backend implementation."""
 
     backend_type = "veritasaccess"
-    display_name = "ACCESSIscsi"
+    display_name = "Veritas Access"
     generally_available = True
 
     @property
@@ -85,4 +85,4 @@ class VeritasaccessBackend(StorageBackendBase):
 
     def config_type(self) -> type[StorageBackendConfig]:
         """Return the configuration model type for this backend."""
-        return VeritasaccessConfig
+        return VeritasAccessConfig
