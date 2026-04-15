@@ -342,12 +342,17 @@ class ScaleJujuStep(BaseStep, JujuStepHelper):
     """Enable Juju HA."""
 
     def __init__(
-        self, controller: str, n: int = 3, extra_args: list[str] | None = None
+        self,
+        controller: str,
+        n: int = 3,
+        extra_args: list[str] | None = None,
+        wait_timeout: str = "15m",
     ):
         super().__init__("Juju HA", "Enable Juju High Availability")
         self.controller = controller
         self.n = n
         self.extra_args = extra_args or []
+        self.wait_timeout = wait_timeout
 
     def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not."""
@@ -373,7 +378,7 @@ class ScaleJujuStep(BaseStep, JujuStepHelper):
             "controller",
             "controller",
             "--timeout",
-            "15m",
+            self.wait_timeout,
         ]
         self.update_status(context, "scaling controller")
         LOG.debug("Waiting for HA to be enabled")
