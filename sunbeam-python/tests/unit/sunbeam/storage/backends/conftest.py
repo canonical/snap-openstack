@@ -8,6 +8,7 @@ import pytest
 from sunbeam.storage.backends.dellsc.backend import DellSCBackend
 from sunbeam.storage.backends.hitachi.backend import HitachiBackend
 from sunbeam.storage.backends.purestorage.backend import PureStorageBackend
+from sunbeam.storage.backends.qnap.backend import QnapBackend
 
 
 @pytest.fixture
@@ -28,12 +29,19 @@ def dellsc_backend():
     return DellSCBackend()
 
 
-@pytest.fixture(params=["hitachi", "purestorage", "dellsc"])
+@pytest.fixture
+def qnap_backend():
+    """Provide a QNAP backend instance."""
+    return QnapBackend()
+
+
+@pytest.fixture(params=["hitachi", "purestorage", "dellsc", "qnap"])
 def any_backend(request):
     """Parametrized fixture that provides each backend type."""
     backends = {
         "hitachi": HitachiBackend(),
         "purestorage": PureStorageBackend(),
         "dellsc": DellSCBackend(),
+        "qnap": QnapBackend(),
     }
     return backends[request.param]
