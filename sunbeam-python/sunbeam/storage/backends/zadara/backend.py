@@ -1,6 +1,5 @@
 # SPDX-FileCopyrightText: 2026 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
-# ruff: noqa: E501
 
 """ZadaraVPSA iSCSI backend implementation using base step classes."""
 
@@ -59,7 +58,10 @@ class ZadaraConfig(StorageBackendConfig):
     zadara_ssl_cert_verify: Annotated[
         bool | None,
         Field(
-            description="If set to True the http client will validate the SSL certificate of the VPSA endpoint."
+            description=(
+                "If set to True the http client will validate"
+                " the SSL certificate of the VPSA endpoint."
+            )
         ),
     ] = None
     zadara_vpsa_poolname: Annotated[

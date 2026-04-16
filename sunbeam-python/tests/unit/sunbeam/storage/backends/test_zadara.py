@@ -26,11 +26,11 @@ class TestZadaraBackend(BaseBackendTests):
         """Test that charm name is cinder-volume-zadara."""
         assert backend.charm_name == "cinder-volume-zadara"
 
-    def test_config_has_required_fields(self, backend):
-        """Test that Zadara config has required fields."""
+    def test_config_has_expected_fields(self, backend):
+        """Test that Zadara config exposes the expected fields."""
         fields = backend.config_type().model_fields
         for field in ("san_ip", "protocol", "zadara_access_key"):
-            assert field in fields, f"Required field {field} not found in config"
+            assert field in fields, f"Expected field {field} not found in config"
 
     def test_sensitive_fields_are_marked_secret(self, backend):
         """Test that access key field is marked as secret."""
