@@ -60,9 +60,52 @@ done
 sudo usermod --append --groups snap_daemon $USER
 
 # Generate keypair and set-up prompt-less access to local machine
-[ -f $HOME/.ssh/id_ed25519 ] || ssh-keygen -f $HOME/.ssh/id_ed25519 -t ed25519 -N ""
-cat $HOME/.ssh/id_ed25519.pub >> $HOME/.ssh/authorized_keys
-ssh-keyscan -H $(hostname --all-ip-addresses) >> $HOME/.ssh/known_hosts
+SSH_DIR="$HOME/.ssh"
+KEY_FILE="$SSH_DIR/id_ed25519"
+PUB_KEY_FILE="$KEY_FILE.pub"
+AUTHORIZED_KEYS="$SSH_DIR/authorized_keys"
+KNOWN_HOSTS="$SSH_DIR/known_hosts"
+
+# --- Ensure ~/.ssh exists with correct permissions ---
+if [[ ! -d $SSH_DIR ]]; then
+   mkdir -m 700 "$SSH_DIR"
+fi
+
+# --- Generate keypair if missing ---
+if [[ ! -f "$KEY_FILE" ]]; then
+    ssh-keygen -t ed25519 -f "$KEY_FILE" -N "" -q
+fi
+
+# --- Ensure authorized_keys exists with correct permissions ---
+touch "$AUTHORIZED_KEYS"
+chmod 600 "$AUTHORIZED_KEYS"
+
+# --- Add public key to authorized_keys (idempotent) ---
+if [[ -f "$PUB_KEY_FILE" ]]; then
+    pub_key=$(<"$PUB_KEY_FILE")
+    if ! grep -qxF "$pub_key" "$AUTHORIZED_KEYS"; then
+        printf '%s\n' "$pub_key" >> "$AUTHORIZED_KEYS"
+    fi
+fi
+
+# --- Ensure known_hosts exists with correct permissions ---
+touch "$KNOWN_HOSTS"
+chmod 600 "$KNOWN_HOSTS"
+
+# --- Update known_hosts safely (simple + effective) ---
+for ip in $(hostname -I); do
+    [[ -z "$ip" ]] && continue
+
+    # Remove any existing entries (handles hashed + changed keys)
+    ssh-keygen -R "$ip" -f "$KNOWN_HOSTS" >/dev/null 2>&1 || true
+
+    # Scan and add fresh keys (default key types, hashed)
+    ssh-keyscan -H "$ip" 2>/dev/null >> "$KNOWN_HOSTS"
+done
+
+# --- Deduplicate known_hosts (safe even with hashing) ---
+sort -u "$KNOWN_HOSTS" -o "$KNOWN_HOSTS"
+
 
 if ! grep -E 'HTTPS?_PROXY' /etc/environment &> /dev/null && \
 ! curl -s -m 10 -x "" api.charmhub.io &> /dev/null; then
