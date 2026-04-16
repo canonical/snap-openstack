@@ -13,11 +13,9 @@ class TestYadroBackend(BaseBackendTests):
     """Tests for Yadro backend."""
 
     @pytest.fixture
-    def backend(self):
+    def backend(self, yadro_backend):
         """Provide Yadro backend instance."""
-        # This fixture must be injected via pytest's fixture dependency injection
-        # If yadro_backend is needed, inject it as a parameter to the test methods instead
-        raise NotImplementedError("Use the yadro_backend fixture directly in test methods")
+        return yadro_backend
 
     def test_backend_type_is_yadro(self, backend):
         """Test that backend type is 'yadro'."""

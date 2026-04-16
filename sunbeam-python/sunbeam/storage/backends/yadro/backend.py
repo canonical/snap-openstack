@@ -1,20 +1,15 @@
 # SPDX-FileCopyrightText: 2026 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tatlin FCVolume backend implementation using base step classes."""
+"""Yadro storage backend implementation."""
 
-import logging
 from enum import StrEnum
 from typing import Annotated
 
 from pydantic import Field
-from rich.console import Console
 
 from sunbeam.core.manifest import StorageBackendConfig
 from sunbeam.storage.base import StorageBackendBase
-
-LOG = logging.getLogger(__name__)
-console = Console()
 
 
 class Protocol(StrEnum):
@@ -25,49 +20,50 @@ class Protocol(StrEnum):
 
 
 class YadroConfig(StorageBackendConfig):
-    """Configuration model for Tatlin FCVolume backend.
+    """Configuration model for the Yadro storage backend.
 
-    This model includes ALL configuration options for the backend.
-    Additional configuration can be managed dynamically through the charm.
+    This model includes the configuration options defined directly for this
+    backend. Additional configuration can be managed dynamically through the
+    charm.
     """
 
-    # Mandatory connection parameters (required: true in spec)
+    # Required connection parameter.
     san_ip: Annotated[
         str, Field(description="Storage array management IP address or hostname.")
     ]
 
-    # Optional backend configuration (required: false in spec)
+    # Optional backend configuration parameters.
     protocol: Annotated[
         Protocol | None,
         Field(description="Protocol selector: fc, iscsi."),
     ] = None
     pool_name: Annotated[
         str | None,
-        Field(description="storage pool name"),
+        Field(description="Storage pool name."),
     ] = None
     api_port: Annotated[
         int | None,
-        Field(description="Port to use to access the Tatlin API"),
+        Field(description="Port used to access the storage API."),
     ] = None
     export_ports: Annotated[
         str | None,
-        Field(description="Ports to export Tatlin resource through"),
+        Field(description="Ports used to export storage resources."),
     ] = None
     host_group: Annotated[
         str | None,
-        Field(description="Tatlin host group name"),
+        Field(description="Host group name."),
     ] = None
     max_resource_count: Annotated[
         int | None,
-        Field(description="Max resource count allowed for Tatlin"),
+        Field(description="Maximum number of resources allowed."),
     ] = None
     pool_max_resource_count: Annotated[
         int | None,
-        Field(description="Max resource count allowed for single pool"),
+        Field(description="Maximum number of resources allowed for a single pool."),
     ] = None
     tat_api_retry_count: Annotated[
         int | None,
-        Field(description="Number of retry on Tatlin API"),
+        Field(description="Number of retries for storage API operations."),
     ] = None
     auth_method: Annotated[
         str | None,
@@ -75,20 +71,20 @@ class YadroConfig(StorageBackendConfig):
     ] = None
     lba_format: Annotated[
         str | None,
-        Field(description="LBA Format for new volume"),
+        Field(description="LBA format for new volumes."),
     ] = None
     wait_retry_count: Annotated[
         int | None,
-        Field(description="Number of checks for a lengthy operation to finish"),
+        Field(description="Number of checks for a lengthy operation to finish."),
     ] = None
     wait_interval: Annotated[
         int | None,
-        Field(description="Wait number of seconds before re-checking"),
+        Field(description="Number of seconds to wait before re-checking."),
     ] = None
 
 
 class YadroBackend(StorageBackendBase):
-    """Tatlin FCVolume backend implementation."""
+    """Yadro storage backend implementation."""
 
     backend_type = "yadro"
     display_name = "Tatlin FCVolume"
