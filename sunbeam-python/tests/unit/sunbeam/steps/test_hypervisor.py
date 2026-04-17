@@ -11,10 +11,12 @@ from sunbeam.core.common import ResultType
 from sunbeam.core.juju import ApplicationNotFoundException
 from sunbeam.core.terraform import TerraformException
 from sunbeam.steps.hypervisor import (
+    DeployHypervisorApplicationStep,
     ReapplyHypervisorOptionalIntegrationsStep,
     ReapplyHypervisorTerraformPlanStep,
     RemoveHypervisorUnitStep,
 )
+from sunbeam.storage.base import HypervisorIntegration
 
 
 # Common fixtures
@@ -27,6 +29,128 @@ def read_config_patch():
         Mock(return_value={"model": "openstack"}),
     ) as mock:
         yield mock
+
+
+class TestDeployHypervisorApplicationStep:
+    @pytest.fixture
+    def ovn_manager(self):
+        """Mock OVN manager."""
+        mgr = Mock()
+        mgr.get_provider.return_value = Mock()
+        return mgr
+
+    @pytest.fixture
+    def deploy_hypervisor_step(
+        self,
+        basic_deployment,
+        basic_client,
+        basic_tfhelper,
+        basic_jhelper,
+        basic_manifest,
+        test_model,
+        read_config_patch,
+        ovn_manager,
+    ):
+        """Create DeployHypervisorApplicationStep instance for testing."""
+        openstack_tfhelper = Mock()
+        openstack_tfhelper.output.return_value = {
+            "rabbitmq-offer-url": "rabbitmq-url",
+            "keystone-offer-url": "keystone-url",
+            "cert-distributor-offer-url": "cert-distributor-url",
+            "ca-offer-url": "ca-url",
+            "nova-offer-url": "nova-url",
+        }
+        basic_deployment.get_ovn_manager.return_value = ovn_manager
+        basic_deployment.get_space.return_value = "test-space"
+        step = DeployHypervisorApplicationStep(
+            basic_deployment,
+            basic_client,
+            basic_tfhelper,
+            openstack_tfhelper,
+            basic_jhelper,
+            basic_manifest,
+            test_model,
+        )
+        return step
+
+    @patch("sunbeam.steps.hypervisor.StorageBackendManager")
+    def test_extra_tfvars_no_backends(
+        self,
+        mock_manager_class,
+        deploy_hypervisor_step,
+    ):
+        """extra_tfvars should have empty extra_integrations when no backends."""
+        mock_manager = Mock()
+        mock_manager.collect_hypervisor_integrations.return_value = set()
+        mock_manager_class.return_value = mock_manager
+
+        tfvars = deploy_hypervisor_step.extra_tfvars()
+
+        assert "extra_integrations" in tfvars
+        assert tfvars["extra_integrations"] == []
+        mock_manager.collect_hypervisor_integrations.assert_called_once_with(
+            deploy_hypervisor_step.deployment,
+            deploy_hypervisor_step.client,
+        )
+
+    @patch("sunbeam.steps.hypervisor.StorageBackendManager")
+    def test_extra_tfvars_with_integrations(
+        self,
+        mock_manager_class,
+        deploy_hypervisor_step,
+    ):
+        """extra_tfvars should include integrations from storage framework."""
+        mock_manager = Mock()
+        mock_manager.collect_hypervisor_integrations.return_value = {
+            HypervisorIntegration(
+                application_name="cinder-volume-ceph",
+                endpoint_name="ceph-access",
+                hypervisor_endpoint_name="ceph-access",
+            ),
+        }
+        mock_manager_class.return_value = mock_manager
+
+        tfvars = deploy_hypervisor_step.extra_tfvars()
+
+        assert "extra_integrations" in tfvars
+        assert len(tfvars["extra_integrations"]) == 1
+        integration = tfvars["extra_integrations"][0]
+        assert integration["application_name"] == "cinder-volume-ceph"
+        assert integration["endpoint_name"] == "ceph-access"
+        assert integration["hypervisor_endpoint_name"] == "ceph-access"
+
+    @patch("sunbeam.steps.hypervisor.StorageBackendManager")
+    def test_extra_tfvars_includes_offer_urls(
+        self,
+        mock_manager_class,
+        deploy_hypervisor_step,
+    ):
+        """extra_tfvars should still include Juju offer URLs."""
+        mock_manager = Mock()
+        mock_manager.collect_hypervisor_integrations.return_value = set()
+        mock_manager_class.return_value = mock_manager
+
+        tfvars = deploy_hypervisor_step.extra_tfvars()
+
+        assert tfvars["rabbitmq-offer-url"] == "rabbitmq-url"
+        assert tfvars["keystone-offer-url"] == "keystone-url"
+        assert tfvars["cert-distributor-offer-url"] == "cert-distributor-url"
+        assert tfvars["ca-offer-url"] == "ca-url"
+        assert tfvars["nova-offer-url"] == "nova-url"
+
+    @patch("sunbeam.steps.hypervisor.StorageBackendManager")
+    def test_extra_tfvars_includes_integrations(
+        self,
+        mock_manager_class,
+        deploy_hypervisor_step,
+    ):
+        """extra_tfvars should include extra_integrations from storage backends."""
+        mock_manager = Mock()
+        mock_manager.collect_hypervisor_integrations.return_value = set()
+        mock_manager_class.return_value = mock_manager
+
+        tfvars = deploy_hypervisor_step.extra_tfvars()
+        assert "extra_integrations" in tfvars
 
 
 class TestRemoveHypervisorUnitStep:
@@ -464,6 +588,61 @@ class TestReapplyHypervisorTerraformPlanStep:
         expected_override_tfvars["machine_model_uuid"] = "test-uuid"
 
         assert override_tfvars_from_mock_call == expected_override_tfvars
+        assert result.result_type == ResultType.COMPLETED
+
+    @patch("sunbeam.steps.hypervisor.StorageBackendManager")
+    def test_run_refreshes_storage_hypervisor_integrations(
+        self,
+        mock_manager_class,
+        basic_client,
+        basic_tfhelper,
+        basic_jhelper,
+        basic_manifest,
+        basic_deployment,
+        test_model,
+        read_config_patch,
+        get_network_config_patch,
+        get_pci_whitelist_config_patch,
+        get_dpdk_config_patch,
+        step_context,
+    ):
+        """Reapply should keep backend-owned hypervisor integrations in tfvars."""
+        mock_manager = Mock()
+        mock_manager.collect_hypervisor_integrations.return_value = {
+            HypervisorIntegration(
+                application_name="cinder-volume-ceph",
+                endpoint_name="ceph-access",
+                hypervisor_endpoint_name="ceph-access",
+            ),
+        }
+        mock_manager_class.return_value = mock_manager
+        basic_jhelper.get_model_uuid.return_value = "test-uuid"
+        basic_client.cluster.list_nodes_by_role.return_value = []
+        step = ReapplyHypervisorTerraformPlanStep(
+            basic_client,
+            basic_tfhelper,
+            basic_jhelper,
+            basic_manifest,
+            test_model,
+            deployment=basic_deployment,
+        )
+
+        result = step.run(step_context)
+
+        override_tfvars = basic_tfhelper.update_tfvars_and_apply_tf.call_args.kwargs[
+            "override_tfvars"
+        ]
+        assert override_tfvars["extra_integrations"] == [
+            {
+                "application_name": "cinder-volume-ceph",
+                "endpoint_name": "ceph-access",
+                "hypervisor_endpoint_name": "ceph-access",
+            }
+        ]
+        mock_manager.collect_hypervisor_integrations.assert_called_once_with(
+            basic_deployment,
+            basic_client,
+        )
         assert result.result_type == ResultType.COMPLETED
 
     def test_run_tf_apply_failed(

@@ -17,6 +17,8 @@ from sunbeam.core.manifest import StorageBackendConfig
 from sunbeam.storage.base import (
     FQDN_PATTERN,
     JUJU_APP_NAME_PATTERN,
+    BackendIntegration,
+    HypervisorIntegration,
     validate_juju_application_name,
 )
 
@@ -291,6 +293,8 @@ class TestStorageBackendBase(BaseStorageBackendTests):
         )
 
         assert "principal_application" in tfvars
+        assert "units" in tfvars
+        assert tfvars["units"] == 1
         assert tfvars["principal_application"] == backend.principal_application
         assert "charm_name" in tfvars
         assert tfvars["charm_name"] == backend.charm_name
@@ -299,6 +303,51 @@ class TestStorageBackendBase(BaseStorageBackendTests):
         assert "endpoint_bindings" in tfvars
         assert "charm_config" in tfvars
         assert "secrets" in tfvars
+
+    def test_build_terraform_vars_extra_integrations_empty(
+        self, backend, mock_deployment, mock_manifest
+    ):
+        """Test build_terraform_vars includes empty extra_integrations."""
+        config = backend.config_type().model_validate(
+            {
+                "required-field": "test",
+                "secret-field": "secret123",
+            }
+        )
+
+        tfvars = backend.build_terraform_vars(
+            mock_deployment, mock_manifest, "test-backend", config
+        )
+
+        assert "extra_integrations" in tfvars
+        assert tfvars["extra_integrations"] == []
+
+    def test_build_terraform_vars_extra_integrations_non_empty(
+        self, backend, mock_deployment, mock_manifest
+    ):
+        """Test build_terraform_vars includes overridden extra_integrations."""
+        integrations = {
+            BackendIntegration("microceph", "ceph", "ceph-access"),
+            BackendIntegration("vault", "secrets", "vault-kv"),
+        }
+        with patch.object(backend, "get_extra_integrations", return_value=integrations):
+            config = backend.config_type().model_validate(
+                {
+                    "required-field": "test",
+                    "secret-field": "secret123",
+                }
+            )
+
+            tfvars = backend.build_terraform_vars(
+                mock_deployment, mock_manifest, "test-backend", config
+            )
+
+        assert "extra_integrations" in tfvars
+        assert len(tfvars["extra_integrations"]) == 2
+        # Convert to a set of frozensets for order-independent comparison
+        result_set = {frozenset(d.items()) for d in tfvars["extra_integrations"]}
+        expected_set = {frozenset(i.to_dict().items()) for i in integrations}
+        assert result_set == expected_set
 
     def test_display_config_options(self, backend, mock_console):
         """Test display of configuration options."""
@@ -593,3 +642,98 @@ class TestStorageBackendBase(BaseStorageBackendTests):
         mock_client.cluster.update_config.assert_called_once_with(
             "StorageBackendsEnabled", json.dumps(expected_backends)
         )
+
+
+class TestBackendIntegration:
+    def test_creation(self):
+        integration = BackendIntegration(
+            application_name="microceph",
+            endpoint_name="ceph",
+            backend_endpoint_name="ceph-access",
+        )
+        assert integration.application_name == "microceph"
+        assert integration.endpoint_name == "ceph"
+        assert integration.backend_endpoint_name == "ceph-access"
+
+    def test_frozen(self):
+        from dataclasses import FrozenInstanceError
+
+        integration = BackendIntegration(
+            application_name="microceph",
+            endpoint_name="ceph",
+            backend_endpoint_name="ceph-access",
+        )
+        with pytest.raises(FrozenInstanceError):
+            integration.application_name = "other"
+
+    def test_hashable_in_set(self):
+        i1 = BackendIntegration("microceph", "ceph", "ceph-access")
+        i2 = BackendIntegration("microceph", "ceph", "ceph-access")
+        i3 = BackendIntegration("other", "ceph", "ceph-access")
+        s = {i1, i2, i3}
+        assert len(s) == 2
+
+    def test_to_dict(self):
+        integration = BackendIntegration("microceph", "ceph", "ceph-access")
+        d = integration.to_dict()
+        assert d == {
+            "application_name": "microceph",
+            "endpoint_name": "ceph",
+            "backend_endpoint_name": "ceph-access",
+        }
+
+
+class TestHypervisorIntegration:
+    def test_creation(self):
+        integration = HypervisorIntegration(
+            application_name="cinder-volume-ceph",
+            endpoint_name="ceph-access",
+            hypervisor_endpoint_name="ceph-access",
+        )
+        assert integration.application_name == "cinder-volume-ceph"
+
+    def test_frozen(self):
+        from dataclasses import FrozenInstanceError
+
+        integration = HypervisorIntegration(
+            application_name="cinder-volume-ceph",
+            endpoint_name="ceph-access",
+            hypervisor_endpoint_name="ceph-access",
+        )
+        with pytest.raises(FrozenInstanceError):
+            integration.application_name = "other"
+
+    def test_hashable_in_set(self):
+        i1 = HypervisorIntegration("cinder-volume-ceph", "ceph-access", "ceph-access")
+        i2 = HypervisorIntegration("cinder-volume-ceph", "ceph-access", "ceph-access")
+        s = {i1, i2}
+        assert len(s) == 1
+
+    def test_to_dict(self):
+        integration = HypervisorIntegration(
+            "cinder-volume-ceph", "ceph-access", "ceph-access"
+        )
+        d = integration.to_dict()
+        assert d == {
+            "application_name": "cinder-volume-ceph",
+            "endpoint_name": "ceph-access",
+            "hypervisor_endpoint_name": "ceph-access",
+        }
+
+
+class TestStorageBackendBaseIntegrationMethods:
+    """Tests for the default integration methods on StorageBackendBase."""
+
+    def test_get_extra_integrations_returns_empty_set(
+        self, mock_backend, mock_deployment
+    ):
+        result = mock_backend.get_extra_integrations(mock_deployment)
+        assert result == set()
+        assert isinstance(result, set)
+
+    def test_get_hypervisor_integrations_returns_empty_set(
+        self, mock_backend, mock_deployment
+    ):
+        result = mock_backend.get_hypervisor_integrations(mock_deployment)
+        assert result == set()
+        assert isinstance(result, set)

@@ -177,6 +177,7 @@ class InstanceRecoveryFeature(OpenStackControlPlaneFeature):
                     self.manifest,
                     deployment.openstack_machines_model,
                     extra_tfvars=extra_tfvars,
+                    deployment=deployment,
                 ),
             ]
         )
@@ -199,6 +200,7 @@ class InstanceRecoveryFeature(OpenStackControlPlaneFeature):
                 self.manifest,
                 deployment.openstack_machines_model,
                 extra_tfvars=extra_tfvars,
+                deployment=deployment,
             ),
             RemoveSaasApplicationsStep(
                 jhelper,

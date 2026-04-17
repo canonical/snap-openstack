@@ -12,11 +12,12 @@ from rich.console import Console
 from rich.table import Table
 from snaphelpers import Snap
 
+from sunbeam.clusterd.client import Client
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import JujuHelper
 from sunbeam.core.manifest import StorageInstanceManifest
 from sunbeam.errors import SunbeamException
-from sunbeam.storage.base import StorageBackendBase
+from sunbeam.storage.base import HypervisorIntegration, StorageBackendBase
 from sunbeam.storage.models import BackendNotFoundException, StorageBackendInfo
 from sunbeam.storage.service import StorageBackendService
 
@@ -322,3 +323,44 @@ class StorageBackendManager:
                 principal_apps.append(model_app_tuple)
 
         return principal_apps
+
+    def collect_hypervisor_integrations(
+        self,
+        deployment: Deployment,
+        client: Client,
+    ) -> set[HypervisorIntegration]:
+        """Collect hypervisor integrations from all registered backends.
+
+        Queries clusterd for registered storage backend instances, then
+        for each registered backend type that exists in the manager's
+        loaded backends, calls get_hypervisor_integrations() and returns
+        the union of all results.
+
+        Args:
+            deployment: The current deployment.
+            client: The clusterd client.
+
+        Returns:
+            Set of HypervisorIntegration from all registered backends.
+        """
+        integrations: set[HypervisorIntegration] = set()
+
+        registered = client.cluster.get_storage_backends()
+
+        # Collect the unique backend types that have instances deployed
+        registered_types: set[str] = set()
+        for backend in registered.root:
+            registered_types.add(backend.type)
+
+        for backend_type in registered_types:
+            backend_impl = self._backends.get(backend_type)
+            if backend_impl is None:
+                LOG.debug(
+                    "Backend type %r registered in clusterd but not "
+                    "loaded in manager, skipping",
+                    backend_type,
+                )
+                continue
+            integrations.update(backend_impl.get_hypervisor_integrations(deployment))
+
+        return integrations

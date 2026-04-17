@@ -21,10 +21,10 @@ from rich.console import Console
 from snaphelpers import Snap
 
 import sunbeam.core.questions
+import sunbeam.features.ceph.microceph as microceph
 import sunbeam.provider.maas.client as maas_client
 import sunbeam.provider.maas.deployment as maas_deployment
 import sunbeam.steps.k8s as k8s
-import sunbeam.steps.microceph as microceph
 import sunbeam.utils as sunbeam_utils
 from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import NodeNotExistInClusterException

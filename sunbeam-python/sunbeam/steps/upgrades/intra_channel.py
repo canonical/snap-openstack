@@ -7,6 +7,7 @@ import queue
 from rich.console import Console
 
 from sunbeam.clusterd.client import Client
+from sunbeam.core.ceph import is_internal_ceph_enabled
 from sunbeam.core.common import (
     BaseStep,
     Result,
@@ -26,8 +27,8 @@ from sunbeam.core.juju import (
 from sunbeam.core.manifest import Manifest
 from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.core.terraform import TerraformInitStep
+from sunbeam.features.ceph.microceph import DeployMicrocephApplicationStep
 from sunbeam.features.interface.v1.base import is_maas_deployment
-from sunbeam.steps.cinder_volume import DeployCinderVolumeApplicationStep
 from sunbeam.steps.hypervisor import ReapplyHypervisorTerraformPlanStep
 from sunbeam.steps.k8s import (
     DeployK8SApplicationStep,
@@ -35,7 +36,6 @@ from sunbeam.steps.k8s import (
     EnsureDefaultL2AdvertisementMutedStep,
     EnsureL2AdvertisementByHostStep,
 )
-from sunbeam.steps.microceph import DeployMicrocephApplicationStep
 from sunbeam.steps.microovn import DeployMicroOVNApplicationStep
 from sunbeam.steps.mysql import MySQLCharmUpgradeStep
 from sunbeam.steps.openstack import (
@@ -46,6 +46,13 @@ from sunbeam.steps.openstack import (
 )
 from sunbeam.steps.sunbeam_machine import DeploySunbeamMachineApplicationStep
 from sunbeam.steps.upgrades.base import UpgradeCoordinator, UpgradeFeatures
+from sunbeam.steps.upgrades.storage_migration import (
+    BackfillCephFeatureStateStep,
+    ImportCephResourcesToStorageFrameworkStep,
+    MigrateCinderVolumeToStorageFrameworkStep,
+)
+from sunbeam.storage.base import STORAGE_TFPLAN, register_storage_terraform_plan
+from sunbeam.storage.steps import ReapplyStorageBackendTerraformPlanStep
 
 LOG = logging.getLogger(__name__)
 console = Console()
@@ -401,40 +408,50 @@ class LatestInChannelCoordinator(UpgradeCoordinator):
 
     def get_plan(self) -> list[BaseStep]:
         """Return the upgrade plan."""
-        plan = [
+        plan: list[BaseStep] = [
             LatestInChannel(self.deployment, self.jhelper, self.manifest),
             ReapplyInfraModelConfigStep(self.deployment, self.jhelper, self.manifest),
             RefreshSnapStep(self.deployment, self.jhelper),
-            # Microceph introduces new offer urls for rgw and so microceph
-            # plan need to be applied before openstack plan
-            TerraformInitStep(self.deployment.get_tfhelper("microceph-plan")),
-            DeployMicrocephApplicationStep(
-                self.deployment,
-                self.client,
-                self.deployment.get_tfhelper("microceph-plan"),
-                self.jhelper,
-                self.manifest,
-                self.deployment.openstack_machines_model,
-            ),
-            TerraformInitStep(self.deployment.get_tfhelper("openstack-plan")),
-            ReapplyOpenStackTerraformPlanStep(
-                self.deployment,
-                self.client,
-                self.deployment.get_tfhelper("openstack-plan"),
-                self.jhelper,
-                self.manifest,
-                self.deployment.openstack_machines_model,
-            ),
-            TerraformInitStep(self.deployment.get_tfhelper("sunbeam-machine-plan")),
-            DeploySunbeamMachineApplicationStep(
-                self.deployment,
-                self.client,
-                self.deployment.get_tfhelper("sunbeam-machine-plan"),
-                self.jhelper,
-                self.manifest,
-                self.deployment.openstack_machines_model,
-            ),
         ]
+        # Microceph introduces new offer urls for rgw and so microceph
+        # plan need to be applied before openstack plan
+        microceph_necessary = is_internal_ceph_enabled(self.client)
+        if microceph_necessary:
+            plan.extend(
+                [
+                    TerraformInitStep(self.deployment.get_tfhelper("microceph-plan")),
+                    DeployMicrocephApplicationStep(
+                        self.deployment,
+                        self.client,
+                        self.deployment.get_tfhelper("microceph-plan"),
+                        self.jhelper,
+                        self.manifest,
+                        self.deployment.openstack_machines_model,
+                    ),
+                ]
+            )
+        plan.extend(
+            [
+                TerraformInitStep(self.deployment.get_tfhelper("openstack-plan")),
+                ReapplyOpenStackTerraformPlanStep(
+                    self.deployment,
+                    self.client,
+                    self.deployment.get_tfhelper("openstack-plan"),
+                    self.jhelper,
+                    self.manifest,
+                    self.deployment.openstack_machines_model,
+                ),
+                TerraformInitStep(self.deployment.get_tfhelper("sunbeam-machine-plan")),
+                DeploySunbeamMachineApplicationStep(
+                    self.deployment,
+                    self.client,
+                    self.deployment.get_tfhelper("sunbeam-machine-plan"),
+                    self.jhelper,
+                    self.manifest,
+                    self.deployment.openstack_machines_model,
+                ),
+            ]
+        )
 
         if is_maas_deployment(self.deployment):
             from sunbeam.provider.maas.client import MaasClient  # noqa: PLC0415
@@ -542,22 +559,55 @@ class LatestInChannelCoordinator(UpgradeCoordinator):
                 ]
             )
 
+        if microceph_necessary:
+            plan.extend(
+                [
+                    TerraformInitStep(self.deployment.get_tfhelper("microceph-plan")),
+                    DeployMicrocephApplicationStep(
+                        self.deployment,
+                        self.client,
+                        self.deployment.get_tfhelper("microceph-plan"),
+                        self.jhelper,
+                        self.manifest,
+                        self.deployment.openstack_machines_model,
+                    ),
+                ]
+            )
+        # Migrate old cinder-volume plan state to the unified storage
+        # framework before reapplying the storage backend plan.
+        old_cv_tfhelper = self.deployment.get_tfhelper("cinder-volume-plan")
         plan.extend(
             [
-                TerraformInitStep(self.deployment.get_tfhelper("microceph-plan")),
-                DeployMicrocephApplicationStep(
+                TerraformInitStep(old_cv_tfhelper),
+                MigrateCinderVolumeToStorageFrameworkStep(
                     self.deployment,
                     self.client,
-                    self.deployment.get_tfhelper("microceph-plan"),
+                    old_cv_tfhelper,
                     self.jhelper,
                     self.manifest,
                     self.deployment.openstack_machines_model,
                 ),
-                TerraformInitStep(self.deployment.get_tfhelper("cinder-volume-plan")),
-                DeployCinderVolumeApplicationStep(
+            ]
+        )
+
+        # Register and reapply the storage backend terraform plan
+        # so that cinder-volume and backend charms pick up upgrades.
+        register_storage_terraform_plan(self.deployment)
+        storage_tfhelper = self.deployment.get_tfhelper(STORAGE_TFPLAN)
+        plan.extend(
+            [
+                TerraformInitStep(storage_tfhelper),
+                ImportCephResourcesToStorageFrameworkStep(
                     self.deployment,
                     self.client,
-                    self.deployment.get_tfhelper("cinder-volume-plan"),
+                    storage_tfhelper,
+                    self.jhelper,
+                    self.deployment.openstack_machines_model,
+                ),
+                ReapplyStorageBackendTerraformPlanStep(
+                    self.deployment,
+                    self.client,
+                    storage_tfhelper,
                     self.jhelper,
                     self.manifest,
                     self.deployment.openstack_machines_model,
@@ -569,6 +619,11 @@ class LatestInChannelCoordinator(UpgradeCoordinator):
                     self.jhelper,
                     self.manifest,
                     self.deployment.openstack_machines_model,
+                    deployment=self.deployment,
+                ),
+                BackfillCephFeatureStateStep(
+                    self.deployment,
+                    self.client,
                 ),
                 UpgradeFeatures(self.deployment, upgrade_release=False),
             ]
