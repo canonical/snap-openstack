@@ -106,7 +106,7 @@ K8SD_SNAP_SOCKET = "/var/snap/k8s/common/var/lib/k8sd/state/control.socket"
 COREDNS_HPA = {
     "enabled": True,
     "minReplicas": 1,
-    "maxReplicas": 5,
+    "maxReplicas": 100,
     "metrics": [
         {
             "type": "Resource",
@@ -114,15 +114,19 @@ COREDNS_HPA = {
                 "name": "cpu",
                 "target": {"type": "Utilization", "averageUtilization": 80},
             },
-        }
-    ],
-    "behavior": {
-        "scaleUp": {"policies": [{"periodSeconds": 30, "type": "Pods", "value": 2}]},
-        "scaleDown": {
-            "stabilizationWindowSeconds": 300,
-            "policies": [{"type": "Pods", "value": 2, "periodSeconds": 60}],
         },
-    },
+        {
+            "type": "Resource",
+            "resource": {
+                "name": "memory",
+                "target": {"type": "Utilization", "averageUtilization": 70},
+            },
+        },
+    ],
+}
+
+COREDNS_PDB = {
+    "minAvailable": 1,
 }
 
 COREDNS_RESOURCES = {
@@ -1997,6 +2001,9 @@ class PatchCoreDNSStep(BaseStep):
 
     This is a workaround for https://github.com/canonical/k8s-operator/issues/504
     Resources and HPA settings are updated for coredns
+    There is a fix in k8s snap but not backported. Here is the bug link
+    https://github.com/canonical/k8s-snap/issues/2456
+    TODO: Remove this class once #2456 is fixed and available in k8s 1.32/stable
     """
 
     def __init__(
@@ -2036,6 +2043,9 @@ class PatchCoreDNSStep(BaseStep):
             LOG.debug("Failed to create k8s client", exc_info=True)
             return Result(ResultType.FAILED, str(e))
 
+        control_nodes = self.client.cluster.list_nodes_by_role("control")
+        self.replica_count = self.compute_coredns_replica_count(len(control_nodes))
+
         try:
             coredns_hpa = self.kube.get(
                 autoscaling_v2.HorizontalPodAutoscaler, name=self.coredns_hpa
@@ -2045,9 +2055,6 @@ class PatchCoreDNSStep(BaseStep):
             if coredns_hpa_spec is None:
                 LOG.debug("Coredns HPA has no spec")
                 return Result(ResultType.COMPLETED)
-
-            control_nodes = self.client.cluster.list_nodes_by_role("control")
-            self.replica_count = self.compute_coredns_replica_count(len(control_nodes))
 
             if self.replica_count == coredns_hpa_spec.minReplicas:
                 return Result(ResultType.SKIPPED)
@@ -2079,13 +2086,17 @@ class PatchCoreDNSStep(BaseStep):
         hpa_dict["minReplicas"] = self.replica_count
         hpa = json.dumps(hpa_dict)
         resources = json.dumps(COREDNS_RESOURCES)
+        pdb = json.dumps(COREDNS_PDB)
         # Note: Applying coredns hpa with modified minReplica will take time
         # to see the scale in, scale out based on policy defined in COREDNS_HPA
         try:
+            set_json = (
+                f"hpa='{hpa}',resources='{resources}',podDisruptionBudget='{pdb}'"
+            )
             cmd_str = (
                 f"k8s helm upgrade -n {self.coredns_namespace} ck-dns "
                 "/snap/k8s/current/k8s/manifests/charts/coredns-*.tgz"
-                f" --reuse-values --set-json hpa='{hpa}',resources='{resources}'"
+                f" --reuse-values --set-json {set_json}"
             )
             LOG.debug(f"Running cmd in unit {leader}: {cmd_str}")
 
@@ -2107,6 +2118,20 @@ class PatchCoreDNSStep(BaseStep):
                 "Failed to run helm upgrade on coredns",
                 exc_info=True,
             )
+            return Result(ResultType.FAILED, str(e))
+
+        # The helm upgrade modifies the CoreDNS pod template (resources), triggering
+        # a rolling restart. Wait for the k8s application to return to active before
+        # proceeding so that DNS is available when subsequent steps deploy OpenStack.
+        try:
+            self.jhelper.wait_application_ready(
+                self.juju_app_name,
+                self.deployment.openstack_machines_model,
+                accepted_status=["active"],
+                timeout=K8S_APP_TIMEOUT,
+            )
+        except TimeoutError as e:
+            LOG.warning(str(e))
             return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.COMPLETED)
