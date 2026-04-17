@@ -42,7 +42,7 @@ class TestDellpowerstoreBackend(BaseBackendTests):
         # Verify Dell PowerStore specific required fields
         required_fields = [
             "san_ip",
-            "san_username",
+            "san_login",
             "san_password",
         ]
         for field in required_fields:
@@ -58,7 +58,7 @@ class TestDellpowerstoreBackend(BaseBackendTests):
         config_no_protocol = config_class.model_validate(
             {
                 "san-ip": "192.168.1.1",
-                "san-username": "admin",
+                "san-login": "admin",
                 "san-password": "secret",
             }
         )
@@ -68,7 +68,7 @@ class TestDellpowerstoreBackend(BaseBackendTests):
         valid_config_fc = config_class.model_validate(
             {
                 "san-ip": "192.168.1.1",
-                "san-username": "admin",
+                "san-login": "admin",
                 "san-password": "secret",
                 "protocol": "fc",
             }
@@ -79,7 +79,7 @@ class TestDellpowerstoreBackend(BaseBackendTests):
         valid_config_iscsi = config_class.model_validate(
             {
                 "san-ip": "192.168.1.1",
-                "san-username": "admin",
+                "san-login": "admin",
                 "san-password": "secret",
                 "protocol": "iscsi",
             }
@@ -92,13 +92,13 @@ class TestDellpowerstoreBackend(BaseBackendTests):
 
         config_class = backend.config_type()
 
-        # Check san_username is marked as secret
-        username_field = config_class.model_fields.get("san_username")
+        # Check san_login is marked as secret
+        username_field = config_class.model_fields.get("san_login")
         assert username_field is not None
         has_secret_marker = any(
             isinstance(m, SecretDictField) for m in username_field.metadata
         )
-        assert has_secret_marker, "san_username should be marked as secret"
+        assert has_secret_marker, "san_login should be marked as secret"
 
         # Check san_password is marked as secret
         password_field = config_class.model_fields.get("san_password")
@@ -128,7 +128,7 @@ class TestDellpowerstoreBackend(BaseBackendTests):
         config = config_class.model_validate(
             {
                 "san-ip": "192.168.1.1",
-                "san-username": "admin",
+                "san-login": "admin",
                 "san-password": "secret",
             }
         )
@@ -156,7 +156,7 @@ class TestDellpowerstoreConfigValidation:
             config_class.model_validate(
                 {
                     "san-ip": "192.168.1.1",
-                    "san-username": "admin",
+                    "san-login": "admin",
                     "san-password": "secret",
                     "protocol": "INVALID",
                 }
@@ -171,7 +171,7 @@ class TestDellpowerstoreConfigValidation:
         config = config_class.model_validate(
             {
                 "san-ip": "192.168.1.1",
-                "san-username": "admin",
+                "san-login": "admin",
                 "san-password": "secret",
                 "powerstore-nvme": True,
             }
