@@ -25,6 +25,7 @@ from sunbeam.core.k8s import K8SError
 from sunbeam.errors import SunbeamException
 from sunbeam.steps.k8s import (
     CREDENTIAL_SUFFIX,
+    K8S_APP_TIMEOUT,
     K8S_CLOUD_SUFFIX,
     AddK8SCloudStep,
     AddK8SCredentialStep,
@@ -1261,6 +1262,40 @@ class TestPatchCoreDNSStep:
             result = step.is_skip(step_context)
         assert result.result_type == ResultType.COMPLETED
 
+    def test_is_skip_no_hpa_computes_replica_count(self, step, kube, step_context):
+        """Replica count must be derived from control-node count even without HPA.
+
+        Previously replica_count defaulted to 1 because the computation was inside
+        the try-block that raised on 404.
+        """
+        control_nodes = [
+            {"name": "node1", "machineid": "1"},
+            {"name": "node2", "machineid": "2"},
+            {"name": "node3", "machineid": "3"},
+        ]
+        step.client.cluster.list_nodes_by_role.return_value = control_nodes
+        api_error = ApiError(
+            Mock(),
+            httpx.Response(
+                status_code=404,
+                content=json.dumps(
+                    {
+                        "code": 404,
+                        "message": "horizontalpodautoscalers.autoscaling"
+                        ' "ck-dns-coredns" not found',
+                    }
+                ),
+            ),
+        )
+        kube.get = Mock(side_effect=api_error)
+
+        with patch("sunbeam.steps.k8s.get_kube_client", return_value=kube):
+            result = step.is_skip(step_context)
+
+        assert result.result_type == ResultType.COMPLETED
+        # 3 control nodes → replica_count must be 3, not the default 1
+        assert step.replica_count == 3
+
     def test_is_skip_kube_get_error(self, step, kube, step_context):
         api_error = ApiError(
             Mock(),
@@ -1334,6 +1369,7 @@ class TestPatchCoreDNSStep:
         assert result.result_type == ResultType.COMPLETED
         jhelper.get_leader_unit.assert_called_once()
         jhelper.run_cmd_on_machine_unit_payload.assert_called_once()
+        jhelper.wait_application_ready.assert_called_once()
 
     def test_run_helm_upgrade_failed(self, step, jhelper):
         jhelper.run_cmd_on_machine_unit_payload.return_value = Mock(return_code=1)
@@ -1341,6 +1377,7 @@ class TestPatchCoreDNSStep:
         assert result.result_type == ResultType.FAILED
         jhelper.get_leader_unit.assert_called_once()
         jhelper.run_cmd_on_machine_unit_payload.assert_called_once()
+        jhelper.wait_application_ready.assert_not_called()
 
     def test_run_failed_on_juju_run_on_machine_unit(self, step, jhelper):
         jhelper.run_cmd_on_machine_unit_payload.side_effect = JujuException(
@@ -1350,6 +1387,7 @@ class TestPatchCoreDNSStep:
         assert result.result_type == ResultType.FAILED
         jhelper.get_leader_unit.assert_called_once()
         jhelper.run_cmd_on_machine_unit_payload.assert_called_once()
+        jhelper.wait_application_ready.assert_not_called()
 
     def test_run_leader_not_found(self, step, jhelper):
         jhelper.get_leader_unit.side_effect = LeaderNotFoundException(
@@ -1359,6 +1397,35 @@ class TestPatchCoreDNSStep:
         assert result.result_type == ResultType.FAILED
         jhelper.get_leader_unit.assert_called_once()
         jhelper.run_cmd_on_machine_unit_payload.assert_not_called()
+        jhelper.wait_application_ready.assert_not_called()
+
+    def test_run_waits_for_k8s_application_ready(self, step, jhelper):
+        """wait_application_ready must be called after a successful helm upgrade.
+
+        Ensures DNS is available before subsequent OpenStack deployment steps.
+        """
+        jhelper.run_cmd_on_machine_unit_payload.return_value = Mock(return_code=0)
+        result = step.run(None)
+        assert result.result_type == ResultType.COMPLETED
+        jhelper.wait_application_ready.assert_called_once_with(
+            "k8s",
+            step.deployment.openstack_machines_model,
+            accepted_status=["active"],
+            timeout=K8S_APP_TIMEOUT,
+        )
+
+    def test_run_wait_application_ready_timeout(self, step, jhelper):
+        """A TimeoutError from wait_application_ready must propagate as FAILED.
+
+        Ensures the deployment does not silently proceed with DNS unavailable.
+        """
+        jhelper.run_cmd_on_machine_unit_payload.return_value = Mock(return_code=0)
+        jhelper.wait_application_ready.side_effect = TimeoutError(
+            "Timed out waiting for k8s to be ready"
+        )
+        result = step.run(None)
+        assert result.result_type == ResultType.FAILED
+        jhelper.wait_application_ready.assert_called_once()
 
 
 class TestPatchServiceExternalTrafficStep:
