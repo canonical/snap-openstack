@@ -237,6 +237,10 @@ FEATURE_GATES: dict[str, dict[str, bool | list[str]]] = {
         "generally_available": False,  # TODO: Set to True when split-roles is GA
         "requires": ["feature.microovn-sdn"],
     },
+    "feature.loadbalancer-amphora": {
+        "generally_available": False,  # TODO: Set to True when Amphora support is GA
+        "requires": ["feature.microovn-sdn"],
+    },
 }
 
 

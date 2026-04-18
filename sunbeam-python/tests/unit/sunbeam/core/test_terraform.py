@@ -696,6 +696,135 @@ class TestTerraformHelper:
             assert "rabbitmq-storage" not in applied_tfvars
 
 
+class TestApplyTfvars:
+    """Unit tests for TerraformHelper._apply_tfvars charm-config merging behaviour."""
+
+    # Minimal tfvar_map that recognises octavia-config as a charm config key
+    _OCTAVIA_TFVAR_MAP = {
+        "charms": {
+            "octavia-k8s": {
+                "channel": "octavia-channel",
+                "revision": "octavia-revision",
+                "config": "octavia-config",
+            }
+        }
+    }
+
+    def _make_helper(self, mocker, snap, tfvar_map=None):
+        mocker.patch.object(terraform_mod, "Snap", return_value=snap)
+        return TerraformHelper(
+            path=Path("/tmp/test"),
+            plan="openstack-plan",
+            tfvar_map=tfvar_map or self._OCTAVIA_TFVAR_MAP,
+        )
+
+    def test_empty_dict_replaces_existing_charm_config(self, mocker, snap):
+        """Passing {} as override for a charm-config key must replace it, not merge.
+
+        Regression test: previously _apply_tfvars called target_value.update({})
+        which was a no-op, leaving the old Amphora octavia-config untouched after
+        'sunbeam disable loadbalancer'.
+        """
+        helper = self._make_helper(mocker, snap)
+        target = {
+            "octavia-config": {
+                "amphora-network-attachment": "openstack/octavia-mgmt-net",
+                "amp-image-tag": "octavia-amphora",
+                "amp-flavor-id": "daf37b10",
+            }
+        }
+        source = {"octavia-config": {}}
+        helper._apply_tfvars(target, source)
+        assert target["octavia-config"] == {}
+
+    def test_non_empty_dict_merges_into_existing_charm_config(self, mocker, snap):
+        """Non-empty charm-config override still merges (existing keys preserved)."""
+        helper = self._make_helper(mocker, snap)
+        target = {
+            "octavia-config": {
+                "amp-image-tag": "old-tag",
+                "existing-key": "keep-me",
+            }
+        }
+        source = {"octavia-config": {"amp-image-tag": "new-tag"}}
+        helper._apply_tfvars(target, source)
+        assert target["octavia-config"]["amp-image-tag"] == "new-tag"
+        assert target["octavia-config"]["existing-key"] == "keep-me"
+
+    def test_none_replaces_existing_charm_config(self, mocker, snap):
+        """None as override value must unconditionally replace the existing config."""
+        helper = self._make_helper(mocker, snap)
+        target = {"octavia-config": {"amp-image-tag": "octavia-amphora"}}
+        source = {"octavia-config": None}
+        helper._apply_tfvars(target, source)
+        assert target["octavia-config"] is None
+
+    def test_non_charm_config_replaced_not_merged(self, mocker, snap):
+        """Non-charm-config (non-dict) values are always replaced."""
+        helper = self._make_helper(mocker, snap)
+        target = {"octavia-channel": "2023.1/stable", "enable-octavia": True}
+        source = {"octavia-channel": "2024.1/stable", "enable-octavia": False}
+        helper._apply_tfvars(target, source)
+        assert target["octavia-channel"] == "2024.1/stable"
+        assert target["enable-octavia"] is False
+
+    def test_empty_dict_clears_charm_config_in_full_disable_flow(
+        self,
+        mocker,
+        snap,
+        copytree,
+        deployment: Deployment,
+        read_config,
+    ):
+        """Integration: set_tfvars_on_disable octavia-config:{} clears stored config.
+
+        Simulates the disable-loadbalancer flow where octavia-config was previously
+        set by the Amphora configure step and must be fully cleared on disable.
+        """
+        tfplan = "openstack-plan"
+        # DB has the full Amphora octavia-config written by configure step
+        read_config.return_value = {
+            "_computed_keys": ["octavia-config", "octavia-to-tls-provider"],
+            "octavia-config": {
+                "amphora-network-attachment": "openstack/octavia-mgmt-net",
+                "amp-image-tag": "octavia-amphora",
+                "amp-flavor-id": "daf37b10-6998-416a-b412-29869c7f38fa",
+                "amp-secgroup-list": "55eaa2b8 8e187499",
+                "amp-boot-network-list": "e6772bb5-3de6-4df2-9c4c-edeb2780eb85",
+            },
+            "octavia-to-tls-provider": "manual-tls-certificates",
+            "enable-octavia": True,
+        }
+
+        mocker.patch.object(deployment_mod, "Snap", return_value=snap)
+        mocker.patch.object(manifest_mod, "Snap", return_value=snap)
+        mocker.patch.object(terraform_mod, "Snap", return_value=snap)
+        client = Mock()
+        client.cluster.get_latest_manifest.return_value = {"data": test_manifest}
+        client.cluster.get_config.return_value = "{}"
+        deployment.get_client.return_value = client
+        manifest = deployment.get_manifest()
+
+        tfhelper = deployment.get_tfhelper(tfplan)
+        disable_tfvars = {
+            "enable-octavia": False,
+            "octavia-config": {},
+            "octavia-to-tls-provider": None,
+        }
+        with (
+            patch.object(tfhelper, "write_tfvars") as write_tfvars,
+            patch.object(tfhelper, "apply"),
+        ):
+            tfhelper.update_tfvars_and_apply_tf(
+                client, manifest, "fake-config", disable_tfvars
+            )
+            applied_tfvars = write_tfvars.call_args.args[0]
+
+        assert applied_tfvars["octavia-config"] == {}
+        assert applied_tfvars["octavia-to-tls-provider"] is None
+        assert applied_tfvars["enable-octavia"] is False
+
+
 class TestParseTerraformEvent:
     """Tests for TerraformHelper._parse_terraform_event()."""
 
