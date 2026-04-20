@@ -311,10 +311,7 @@ class TestInfinidatConfigValidation:
 
 
 class TestInfinidatBuildTerraformVars:
-    """Tests for the Infinidat build_terraform_vars override.
-
-    Verifies the local charm source support via manifest model_extra.
-    """
+    """Tests Infinidat build_terraform_vars behavior."""
 
     @pytest.fixture
     def mock_deployment(self):
