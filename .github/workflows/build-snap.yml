@@ -79,6 +79,16 @@ jobs:
           # closer to the tutorial scenario.
           sg snap_daemon "openstack.sunbeam cluster bootstrap --manifest .github/assets/testing/edge.yml --accept-defaults --topology single --database single"
           sg snap_daemon "openstack.sunbeam cluster list"
+
+          # Verify bootstrap_model_configs from manifest were applied to the openstack model.
+          # The edge.yml sets logging-config for the openstack model; confirm it is not the default.
+          actual_logging=$(juju model-config -m openstack logging-config)
+          expected_logging="<root>=WARNING;unit=DEBUG"
+          if [ "$actual_logging" != "$expected_logging" ]; then
+            echo "ERROR: logging-config mismatch: expected '$expected_logging', got '$actual_logging'"
+            exit 1
+          fi
+          echo "OK: logging-config correctly set to '$actual_logging'"
           # Note: Moving configure before enabling caas just to ensure caas images are not downloaded
           # To download caas image, require ports to open on firewall to access fedora images.
           sg snap_daemon "openstack.sunbeam configure --accept-defaults --openrc demo-openrc"

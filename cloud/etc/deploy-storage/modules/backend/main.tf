@@ -4,23 +4,26 @@
 terraform {
   required_providers {
     juju = {
-      source = "juju/juju"
+      source  = "juju/juju"
+      version = "= 1.3.1"
     }
   }
 }
 
+provider "juju" {}
+
 data "juju_model" "model" {
-  name = var.model
+  uuid = var.model_uuid
 }
 
 data "juju_application" "cinder-volume" {
-  name  = var.principal_application
-  model = data.juju_model.model.name
+  name       = var.principal_application
+  model_uuid = data.juju_model.model.uuid
 }
 
 resource "juju_secret" "secret" {
-  model = data.juju_model.model.name
-  name  = "${var.name}-config-secret"
+  model_uuid = data.juju_model.model.uuid
+  name       = "${var.name}-config-secret"
   value = {
     # Only template secrets that have a corresponding charm config value
     for k, v in var.secrets : v => var.charm_config[k] if can(var.charm_config[k])
@@ -28,7 +31,7 @@ resource "juju_secret" "secret" {
 }
 
 resource "juju_access_secret" "secret-access" {
-  model        = juju_secret.secret.model
+  model_uuid   = data.juju_model.model.uuid
   secret_id    = juju_secret.secret.secret_id
   applications = [juju_application.storage-backend.name]
 }
@@ -44,9 +47,9 @@ locals {
 
 # Deploy Storage backend charms
 resource "juju_application" "storage-backend" {
-  name  = var.name
-  model = data.juju_model.model.uuid
-  units = 1
+  name       = var.name
+  model_uuid = data.juju_model.model.uuid
+  units      = 1
 
   charm {
     name     = var.charm_name
@@ -62,7 +65,7 @@ resource "juju_application" "storage-backend" {
 
 # Integrate Storage backends with cinder-volume
 resource "juju_integration" "storage-backend-to-cinder-volume" {
-  model = data.juju_model.model.name
+  model_uuid = data.juju_model.model.uuid
 
   application {
     name     = juju_application.storage-backend.name

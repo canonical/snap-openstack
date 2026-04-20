@@ -195,7 +195,9 @@ class TlsFeature(OpenStackControlPlaneFeature):
         jhelper_keystone = deployment.get_juju_helper(keystone=True)
 
         model = OPENSTACK_MODEL
-        apps_to_monitor = ["traefik", "traefik-public", "keystone"]
+        apps_to_monitor = ["traefik", "traefik-public"]
+        if not deployment.external_keystone_model:
+            apps_to_monitor.append("keystone")
         if client.cluster.list_nodes_by_role("storage"):
             apps_to_monitor.append("traefik-rgw")
 
@@ -205,13 +207,25 @@ class TlsFeature(OpenStackControlPlaneFeature):
                 self.ca_cert_name(deployment.get_region_name()),
                 self.feature_key,
             ),
-            WaitForApplicationsStep(
-                jhelper_current,
-                apps_to_monitor,
-                model,
-                INGRESS_CHANGE_APPLICATION_TIMEOUT,
-            ),
         ]
+        if apps_to_monitor:
+            plan.append(
+                WaitForApplicationsStep(
+                    jhelper_current,
+                    apps_to_monitor,
+                    model,
+                    INGRESS_CHANGE_APPLICATION_TIMEOUT,
+                )
+            )
+        if deployment.external_keystone_model:
+            plan.append(
+                WaitForApplicationsStep(
+                    jhelper_keystone,
+                    ["keystone"],
+                    model,
+                    INGRESS_CHANGE_APPLICATION_TIMEOUT,
+                )
+            )
         run_plan(plan, console, show_hints)
 
         config: dict = {}

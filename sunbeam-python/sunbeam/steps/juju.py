@@ -342,12 +342,17 @@ class ScaleJujuStep(BaseStep, JujuStepHelper):
     """Enable Juju HA."""
 
     def __init__(
-        self, controller: str, n: int = 3, extra_args: list[str] | None = None
+        self,
+        controller: str,
+        n: int = 3,
+        extra_args: list[str] | None = None,
+        wait_timeout: str = "15m",
     ):
         super().__init__("Juju HA", "Enable Juju High Availability")
         self.controller = controller
         self.n = n
         self.extra_args = extra_args or []
+        self.wait_timeout = wait_timeout
 
     def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not."""
@@ -373,7 +378,7 @@ class ScaleJujuStep(BaseStep, JujuStepHelper):
             "controller",
             "controller",
             "--timeout",
-            "15m",
+            self.wait_timeout,
         ]
         self.update_status(context, "scaling controller")
         LOG.debug("Waiting for HA to be enabled")
@@ -614,23 +619,31 @@ class JujuGrantModelAccessStep(BaseStep, JujuStepHelper):
                 "admin",
                 model_with_owner,
             ]
-            LOG.debug(f"Running command {' '.join(cmd)}")
+            LOG.debug("Running command %r", " ".join(cmd))
             process = subprocess.run(cmd, capture_output=True, text=True, check=True)
             LOG.debug(
-                f"Command finished. stdout={process.stdout}, stderr={process.stderr}"
+                "Command finished. stdout=%r, stderr=%r",
+                process.stdout,
+                process.stderr,
             )
 
             return Result(ResultType.COMPLETED)
         except ModelNotFoundException as e:
             return Result(ResultType.FAILED, str(e))
         except subprocess.CalledProcessError as e:
-            LOG.debug(e.stderr)
             if 'user already has "admin" access or greater' in e.stderr:
+                LOG.debug(
+                    'User %r already has "admin" access or greater on model %r',
+                    self.username,
+                    model_with_owner,
+                )
                 return Result(ResultType.COMPLETED)
 
             LOG.exception(
-                f"Error granting user {self.username} admin access on model "
-                f"{self.model}"
+                "Error granting user %r admin access on model %r: %s",
+                self.username,
+                model_with_owner,
+                e.stderr,
             )
             return Result(ResultType.FAILED, str(e))
 

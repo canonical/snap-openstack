@@ -32,11 +32,13 @@ from sunbeam.steps.openstack import (
     DEFAULT_RABBITMQ_STORAGE,
     DEFAULT_STORAGE_MULTI_DATABASE,
     DEFAULT_STORAGE_SINGLE_DATABASE,
+    OPENSTACK_MODEL_CONFIG_KEY,
     RABBITMQ_STORAGE_KEY,
     DeployControlPlaneStep,
     OpenStackPatchLoadBalancerServicesIPPoolStep,
     OpenStackPatchLoadBalancerServicesIPStep,
     ReapplyOpenStackTerraformPlanStep,
+    UpdateOpenStackModelConfigStep,
     compute_ha_scale,
     compute_ingress_scale,
     compute_os_api_scale,
@@ -1418,6 +1420,179 @@ class TestLoadStoredTfvars:
         result = load_stored_tfvars(client, [CONFIG_KEY, "TerraformVarsDns"])
 
         assert result["mysql-storage-map"]["nova"] == {"database": "10G"}
+
+
+class TestUpdateOpenStackModelConfigStep:
+    @pytest.fixture
+    def tfhelper(self):
+        return Mock()
+
+    @pytest.fixture
+    def manifest(self):
+        manifest = Mock()
+        manifest.core.software.juju.bootstrap_model_configs.get.return_value = {}
+        return manifest
+
+    @pytest.fixture
+    def deployment(self):
+        dep = Mock()
+        dep.get_proxy_settings.return_value = {}
+        return dep
+
+    def test_run_merges_model_config_onto_db_config(
+        self, tfhelper, manifest, deployment, step_context, snap_patch, snap_mock
+    ):
+        """model_config passed to constructor is merged on top of the DB config."""
+        snap_mock().config.get.return_value = "k8s"
+        db_config = {"workload-storage": "ceph-xfs", "juju-http-proxy": ""}
+        extra_config = {"juju-http-proxy": "http://proxy:3128"}
+
+        with (
+            patch("sunbeam.steps.openstack.read_config", return_value=db_config),
+            patch("sunbeam.steps.openstack.update_config") as mock_update,
+        ):
+            step = UpdateOpenStackModelConfigStep(
+                deployment, tfhelper, manifest, extra_config
+            )
+            result = step.run(step_context)
+
+        assert result.result_type == ResultType.COMPLETED
+        saved = mock_update.call_args[0][2]
+        assert saved["workload-storage"] == "ceph-xfs"
+        assert saved["juju-http-proxy"] == "http://proxy:3128"
+
+    def test_run_saves_updated_config_to_db(
+        self, tfhelper, manifest, deployment, step_context, snap_patch, snap_mock
+    ):
+        """Updated final_config is persisted back to OPENSTACK_MODEL_CONFIG_KEY."""
+        snap_mock().config.get.return_value = "k8s"
+        db_config = {"workload-storage": "ceph-xfs"}
+
+        with (
+            patch("sunbeam.steps.openstack.read_config", return_value=db_config),
+            patch("sunbeam.steps.openstack.update_config") as mock_update,
+        ):
+            step = UpdateOpenStackModelConfigStep(deployment, tfhelper, manifest)
+            step.run(step_context)
+
+        mock_update.assert_called_once_with(
+            deployment.get_client(),
+            OPENSTACK_MODEL_CONFIG_KEY,
+            {"workload-storage": "ceph-xfs"},
+        )
+
+    def test_run_tf_apply_failed(
+        self, tfhelper, manifest, deployment, step_context, snap_patch, snap_mock
+    ):
+        """Returns FAILED result when terraform raises TerraformException."""
+        snap_mock().config.get.return_value = "k8s"
+        tfhelper.update_tfvars_and_apply_tf.side_effect = TerraformException(
+            "apply failed"
+        )
+
+        with (
+            patch("sunbeam.steps.openstack.read_config", return_value={}),
+            patch("sunbeam.steps.openstack.update_config"),
+        ):
+            step = UpdateOpenStackModelConfigStep(deployment, tfhelper, manifest)
+            result = step.run(step_context)
+
+        assert result.result_type == ResultType.FAILED
+        assert "apply failed" in result.message
+
+    def test_run_backward_compat_key_absent_builds_baseline(
+        self, tfhelper, manifest, deployment, step_context, snap_patch, snap_mock
+    ):
+        """Backward compat: when OPENSTACK_MODEL_CONFIG_KEY is absent, baseline.
+
+        Baseline is built from bootstrap_model_configs + proxy settings
+        + workload-storage.
+        """
+        snap_mock().config.get.return_value = "k8s"
+        manifest.core.software.juju.bootstrap_model_configs.get.return_value = {
+            "logging-config": "<root>=DEBUG"
+        }
+        deployment.get_proxy_settings.return_value = {"HTTP_PROXY": "http://p:3128"}
+
+        with (
+            patch(
+                "sunbeam.steps.openstack.read_config",
+                side_effect=ConfigItemNotFoundException("absent"),
+            ),
+            patch("sunbeam.steps.openstack.update_config") as mock_update,
+        ):
+            step = UpdateOpenStackModelConfigStep(deployment, tfhelper, manifest)
+            result = step.run(step_context)
+
+        assert result.result_type == ResultType.COMPLETED
+        saved = mock_update.call_args[0][2]
+        assert saved["logging-config"] == "<root>=DEBUG"
+        assert saved["juju-http-proxy"] == "http://p:3128"
+        assert "workload-storage" in saved
+
+    def test_run_backward_compat_no_proxy(
+        self, tfhelper, manifest, deployment, step_context, snap_patch, snap_mock
+    ):
+        """Backward compat: empty proxy settings are handled gracefully."""
+        snap_mock().config.get.return_value = "k8s"
+        deployment.get_proxy_settings.return_value = {}
+
+        with (
+            patch(
+                "sunbeam.steps.openstack.read_config",
+                side_effect=ConfigItemNotFoundException("absent"),
+            ),
+            patch("sunbeam.steps.openstack.update_config"),
+        ):
+            step = UpdateOpenStackModelConfigStep(deployment, tfhelper, manifest)
+            result = step.run(step_context)
+
+        assert result.result_type == ResultType.COMPLETED
+
+
+class TestDeployControlPlaneStepModelConfigPersisted:
+    """Verifies that DeployControlPlaneStep persists model config to the DB."""
+
+    def test_run_saves_model_config_to_db(
+        self,
+        deployment_with_client,
+        basic_tfhelper,
+        basic_jhelper,
+        basic_manifest,
+        config_mock,
+        snap_patch,
+        snap_mock,
+        step_context,
+    ):
+        """Verify OPENSTACK_MODEL_CONFIG_KEY is written to DB.
+
+        Checks that DeployControlPlaneStep.run() persists the key.
+        """
+        snap_mock().config.get.return_value = "k8s"
+        basic_jhelper.get_application_names.return_value = []
+        deployment_with_client.get_ovn_manager().get_control_plane_tfvars.return_value = {}
+
+        step = DeployControlPlaneStep(
+            deployment_with_client,
+            basic_tfhelper,
+            basic_jhelper,
+            basic_manifest,
+            TOPOLOGY,
+            MODEL,
+        )
+
+        with patch("sunbeam.steps.openstack.update_config") as mock_update:
+            step.run(step_context)
+
+        saved_keys = [call[0][1] for call in mock_update.call_args_list]
+        assert OPENSTACK_MODEL_CONFIG_KEY in saved_keys
+        model_config_call = next(
+            c
+            for c in mock_update.call_args_list
+            if c[0][1] == OPENSTACK_MODEL_CONFIG_KEY
+        )
+        saved_config = model_config_call[0][2]
+        assert "workload-storage" in saved_config
 
     def test_missing_extra_key_ignored(self, manifest_read_config, snap):
         """Missing extra config keys are silently skipped."""

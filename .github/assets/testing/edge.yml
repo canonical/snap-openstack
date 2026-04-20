@@ -4,6 +4,9 @@ core:
       bootstrap_args:
         - --bootstrap-constraints
         - root-disk=5G
+      bootstrap_model_configs:
+        openstack:
+          logging-config: "<root>=WARNING;unit=DEBUG"
     charms:
       cinder-volume:
         channel: 2024.1/edge

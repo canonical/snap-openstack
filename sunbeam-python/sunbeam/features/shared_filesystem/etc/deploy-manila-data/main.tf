@@ -5,7 +5,7 @@ terraform {
   required_providers {
     juju = {
       source  = "juju/juju"
-      version = "= 0.23.1"
+      version = "= 1.3.1"
     }
   }
 }
@@ -13,15 +13,15 @@ terraform {
 provider "juju" {}
 
 data "juju_model" "machine_model" {
-  name = var.machine_model
+  uuid = var.machine_model_uuid
 }
 
 resource "juju_application" "manila-data" {
-  name  = "manila-data"
-  trust = true
-  model = data.juju_model.machine_model.name
-  machines = length(var.machine_ids) == 0 ? null : toset(var.machine_ids)
-  units    = length(var.machine_ids) == 0 ? 0 : null
+  name       = "manila-data"
+  trust      = true
+  model_uuid = data.juju_model.machine_model.uuid
+  machines   = length(var.machine_ids) == 0 ? null : toset(var.machine_ids)
+  units      = length(var.machine_ids) == 0 ? 0 : null
 
   charm {
     name     = "manila-data"
@@ -37,8 +37,8 @@ resource "juju_application" "manila-data" {
 }
 
 resource "juju_integration" "manila-data-identity" {
-  count = (var.keystone-offer-url != null) ? 1 : 0
-  model = var.machine_model
+  count      = (var.keystone-offer-url != null) ? 1 : 0
+  model_uuid = data.juju_model.machine_model.uuid
 
   application {
     name     = juju_application.manila-data.name
@@ -52,8 +52,8 @@ resource "juju_integration" "manila-data-identity" {
 }
 
 resource "juju_integration" "manila-data-amqp" {
-  count = (var.amqp-offer-url != null) ? 1 : 0
-  model = var.machine_model
+  count      = (var.amqp-offer-url != null) ? 1 : 0
+  model_uuid = data.juju_model.machine_model.uuid
 
   application {
     name     = juju_application.manila-data.name
@@ -66,8 +66,8 @@ resource "juju_integration" "manila-data-amqp" {
 }
 
 resource "juju_integration" "manila-data-database" {
-  count = (var.database-offer-url != null) ? 1 : 0
-  model = var.machine_model
+  count      = (var.database-offer-url != null) ? 1 : 0
+  model_uuid = data.juju_model.machine_model.uuid
 
   application {
     name     = juju_application.manila-data.name

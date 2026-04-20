@@ -5,7 +5,7 @@ terraform {
   required_providers {
     juju = {
       source  = "juju/juju"
-      version = "= 0.23.1"
+      version = "= 1.3.1"
     }
   }
 }
@@ -13,7 +13,7 @@ terraform {
 provider "juju" {}
 
 data "juju_model" "model" {
-  name = var.model
+  uuid = var.model
 }
 
 module "backends" {
@@ -21,7 +21,7 @@ module "backends" {
 
   source = "./modules/backend"
 
-  model = data.juju_model.model.uuid
+  model_uuid = data.juju_model.model.uuid
 
   name                  = each.key
   principal_application = each.value.principal_application
@@ -38,7 +38,7 @@ module "cinder-volume" {
   for_each = var.cinder-volumes
   source   = "./modules/cinder-volume"
 
-  machine_model                  = var.model
+  machine_model_uuid             = data.juju_model.model.uuid
   application_name               = each.value.application_name
   charm_channel                  = each.value.charm_channel
   charm_revision                 = each.value.charm_revision
