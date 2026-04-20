@@ -25,6 +25,12 @@ def purestorage_backend():
 
 
 @pytest.fixture
+def dellpowerstore_backend():
+    """Provide a Dell PowerStore backend instance."""
+    return DellPowerstoreBackend()
+
+
+@pytest.fixture
 def dellsc_backend():
     """Provide a Dell Storage Center backend instance."""
     return DellSCBackend()
