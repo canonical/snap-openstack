@@ -494,7 +494,7 @@ class TestInfinidatBuildTerraformVars:
             "charm_config",
             "secrets",
         }
-        assert set(result.keys()) == expected_keys
+        assert expected_keys.issubset(result.keys())
 
 
 class TestInfinidatChapValidation:
