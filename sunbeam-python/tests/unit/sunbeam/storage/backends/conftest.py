@@ -42,7 +42,9 @@ def dellpowerstore_backend():
     return DellPowerstoreBackend()
 
 
-@pytest.fixture(params=["hitachi", "purestorage", "dellsc", "nexenta", "dellpowerstore"])
+@pytest.fixture(
+    params=["hitachi", "purestorage", "dellsc", "nexenta", "dellpowerstore"]
+)
 def any_backend(request):
     """Parametrized fixture that provides each backend type."""
     backends = {
