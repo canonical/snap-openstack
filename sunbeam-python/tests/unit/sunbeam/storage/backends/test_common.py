@@ -157,7 +157,11 @@ class TestAllBackends(BaseBackendTests):
 
 
 def test_all_backends_have_unique_types(
-    hitachi_backend, purestorage_backend, dellsc_backend, veritasaccess_backend, dellpowerstore_backend
+    hitachi_backend,
+    purestorage_backend,
+    dellsc_backend,
+    veritasaccess_backend,
+    dellpowerstore_backend,
 ):
     """Test that all backends have unique type identifiers."""
     backends = [
@@ -174,7 +178,11 @@ def test_all_backends_have_unique_types(
 
 
 def test_all_backends_have_unique_charm_names(
-    hitachi_backend, purestorage_backend, dellsc_backend, veritasaccess_backend, dellpowerstore_backend
+    hitachi_backend,
+    purestorage_backend,
+    dellsc_backend,
+    veritasaccess_backend,
+    dellpowerstore_backend,
 ):
     """Test that all backends have unique charm names."""
     backends = [
