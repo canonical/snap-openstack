@@ -33,10 +33,18 @@ def dellsc_backend():
 @pytest.fixture
 def prophetstor_backend():
     """Provide a ProphetStor backend instance."""
-    return ProphetstorBackend()
+    return ProphetStorBackend()
 
 
-@pytest.fixture(params=["hitachi", "purestorage", "dellsc", "prophetstor"])
+@pytest.fixture
+def dellpowerstore_backend():
+    """Provide a Dell PowerStore backend instance."""
+    return DellPowerstoreBackend()
+
+
+@pytest.fixture(
+    params=["hitachi", "purestorage", "dellsc", "prophetstor", "dellpowerstore"]
+)
 def any_backend(request):
     """Parametrized fixture that provides each backend type."""
     backends = {
