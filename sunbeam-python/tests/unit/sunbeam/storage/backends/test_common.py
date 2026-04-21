@@ -168,7 +168,6 @@ def test_all_backends_have_unique_types(
        
         dellsc_backend,
         ibmibmstorage_backend,
-    ,
         dellpowerstore_backend,
     ]
     types = [b.backend_type for b in backends]
@@ -189,7 +188,6 @@ def test_all_backends_have_unique_charm_names(
        
         dellsc_backend,
         ibmibmstorage_backend,
-    ,
         dellpowerstore_backend,
     ]
     charm_names = [b.charm_name for b in backends]
