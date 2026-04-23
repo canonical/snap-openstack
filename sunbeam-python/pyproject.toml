@@ -112,6 +112,7 @@ dev = [
     "mypy",
     "python-watcherclient",
 ]
+tics = ["pylint", "flake8"]
 
 [project.urls]
 "Homepage" = "https://github.com/canonical/snap-openstack"
