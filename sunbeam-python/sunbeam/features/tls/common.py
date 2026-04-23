@@ -13,6 +13,7 @@ from rich.console import Console
 from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import ConfigItemNotFoundException
 from sunbeam.core import questions
+from sunbeam.core.ceph import is_internal_ceph_enabled
 from sunbeam.core.common import (
     BaseStep,
     Result,
@@ -198,7 +199,9 @@ class TlsFeature(OpenStackControlPlaneFeature):
         apps_to_monitor = ["traefik", "traefik-public"]
         if not deployment.external_keystone_model:
             apps_to_monitor.append("keystone")
-        if client.cluster.list_nodes_by_role("storage"):
+        if client.cluster.list_nodes_by_role("storage") and is_internal_ceph_enabled(
+            client
+        ):
             apps_to_monitor.append("traefik-rgw")
 
         plan: list[BaseStep] = [

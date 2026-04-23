@@ -10,6 +10,7 @@ import logging
 import re
 import types
 import typing
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
@@ -59,6 +60,86 @@ FQDN_PATTERN = (
 
 PRINCIPAL_HA_APPLICATION = "cinder-volume"
 PRINCIPAL_NON_HA_APPLICATION = "cinder-volume-noha"
+
+STORAGE_TFPLAN = "storage-backend-plan"
+STORAGE_TFPLAN_DIR = "deploy-storage-backend"
+
+
+def register_storage_terraform_plan(deployment: Deployment) -> "TerraformHelper":
+    """Register the unified storage backend terraform plan with the deployment.
+
+    Copies the plan source into the deployment's plan directory and wires
+    up a TerraformHelper on the deployment's tfhelpers map keyed by
+    STORAGE_TFPLAN. Returns the helper for convenience.
+
+    This is the module-level entrypoint that callers outside of
+    StorageBackendBase should use (e.g. telemetry, upgrade steps).
+    Previously the equivalent logic was only reachable by instantiating
+    StorageBackendBase directly, which forced a ``# type: ignore`` and
+    coupled unrelated code to the abstract base.
+    """
+    import shutil
+
+    from sunbeam.core.terraform import TerraformHelper
+
+    # Six parents walk from
+    # $SNAP/lib/python3.X/site-packages/sunbeam/storage/base.py
+    # back to $SNAP, which is where etc/deploy-storage lives in the
+    # packaged runtime. This path calculation intentionally mirrors
+    # the historical StorageBackendBase.register_terraform_plan so the
+    # snap layout continues to resolve correctly.
+    plan_source = (
+        Path(__file__).parent.parent.parent.parent.parent.parent / "etc/deploy-storage"
+    )
+    if not plan_source.exists():
+        raise FileNotFoundError(f"Terraform plan not found at {plan_source}")
+
+    dst = deployment.plans_directory / STORAGE_TFPLAN_DIR
+    shutil.copytree(plan_source, dst, dirs_exist_ok=True)
+
+    env: dict[str, str] = {}
+    env.update(deployment._get_juju_clusterd_env())
+    env.update(deployment.get_proxy_settings())
+
+    tfhelper = TerraformHelper(
+        path=dst,
+        plan=STORAGE_TFPLAN,
+        tfvar_map={},
+        backend="http",
+        env=env,
+        clusterd_address=deployment.get_clusterd_http_address(),
+    )
+    deployment._tfhelpers[STORAGE_TFPLAN] = tfhelper
+    return tfhelper
+
+
+@dataclass(frozen=True)
+class BackendIntegration:
+    """An additional juju integration a backend needs.
+
+    Beyond the standard subordinate relation to cinder-volume.
+    """
+
+    application_name: str
+    endpoint_name: str
+    backend_endpoint_name: str
+
+    def to_dict(self) -> dict[str, str]:
+        """Return the integration as a dictionary."""
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class HypervisorIntegration:
+    """An integration the hypervisor needs with a storage backend."""
+
+    application_name: str
+    endpoint_name: str
+    hypervisor_endpoint_name: str
+
+    def to_dict(self) -> dict[str, str]:
+        """Return the integration as a dictionary."""
+        return asdict(self)
 
 
 def validate_juju_application_name(name: str) -> bool:
@@ -115,8 +196,8 @@ class StorageBackendBase(FeatureGateMixin, typing.Generic[BackendConfig]):
 
     def __init__(self) -> None:
         """Initialize storage backend."""
-        self.tfplan = "storage-backend-plan"
-        self.tfplan_dir = "deploy-storage-backend"
+        self.tfplan = STORAGE_TFPLAN
+        self.tfplan_dir = STORAGE_TFPLAN_DIR
         self._manifest: Manifest | None = None
 
     def check_enabled(self, client: Client | None, snap: Snap) -> bool:
@@ -238,7 +319,7 @@ class StorageBackendBase(FeatureGateMixin, typing.Generic[BackendConfig]):
     def create_destroy_step(
         self,
         deployment: Deployment,
-        client,
+        client: Client,
         tfhelper: TerraformHelper,
         jhelper: JujuHelper,
         manifest: Manifest,
@@ -259,43 +340,7 @@ class StorageBackendBase(FeatureGateMixin, typing.Generic[BackendConfig]):
 
     def register_terraform_plan(self, deployment: Deployment) -> None:
         """Register storage backend Terraform plan with deployment system."""
-        import shutil
-
-        from sunbeam.core.terraform import TerraformHelper
-
-        # Get the plan source path
-        backend_self_contained = (
-            Path(__file__).parent.parent.parent.parent.parent.parent
-            / "etc/deploy-storage"  # / "backends" / self.name / self.tfplan_dir
-        )
-
-        if backend_self_contained.exists():
-            plan_source = backend_self_contained
-        else:
-            raise FileNotFoundError(
-                f"Terraform plan not found at {backend_self_contained}"
-            )
-
-        # Copy plan to deployment's plans directory
-        dst = deployment.plans_directory / self.tfplan_dir
-        shutil.copytree(plan_source, dst, dirs_exist_ok=True)
-
-        # Create TerraformHelper
-        env = {}
-        env.update(deployment._get_juju_clusterd_env())
-        env.update(deployment.get_proxy_settings())
-
-        tfhelper = TerraformHelper(
-            path=dst,
-            plan=self.tfplan,
-            tfvar_map={},
-            backend="http",
-            env=env,
-            clusterd_address=deployment.get_clusterd_http_address(),
-        )
-
-        # Register the helper with the deployment's tfhelpers
-        deployment._tfhelpers[self.tfplan] = tfhelper
+        register_storage_terraform_plan(deployment)
 
     def add_backend_instance(
         self,
@@ -630,6 +675,27 @@ class StorageBackendBase(FeatureGateMixin, typing.Generic[BackendConfig]):
             },
         ]
 
+    def get_extra_integrations(self, deployment: Deployment) -> set[BackendIntegration]:
+        """Additional juju integrations the backend needs.
+
+        Beyond the standard subordinate relation to cinder-volume.
+        """
+        return set()
+
+    def get_application_name(self, backend_name: str) -> str:
+        """Return the Juju application name used for this backend."""
+        return backend_name
+
+    def get_units(self) -> int | None:
+        """Return the requested unit count for this backend application."""
+        return 1
+
+    def get_hypervisor_integrations(
+        self, deployment: Deployment
+    ) -> set[HypervisorIntegration]:
+        """Integrations the hypervisor needs with this backend."""
+        return set()
+
     def build_terraform_vars(
         self,
         deployment: Deployment,
@@ -637,7 +703,7 @@ class StorageBackendBase(FeatureGateMixin, typing.Generic[BackendConfig]):
         backend_name: str,
         config: BackendConfig,
     ) -> dict[str, Any]:
-        """Generate Terraform variables for Pure Storage backend deployment."""
+        """Generate Terraform variables for this storage backend deployment."""
         # Map our configuration fields to the correct charm configuration option names
         config_dict = config.model_dump(exclude_none=True, by_alias=True)
 
@@ -674,6 +740,8 @@ class StorageBackendBase(FeatureGateMixin, typing.Generic[BackendConfig]):
 
         # Build Terraform variables to match the plan's expected format
         tfvars = {
+            "application_name": self.get_application_name(backend_name),
+            "units": self.get_units(),
             "principal_application": self.principal_application,
             "charm_name": self.charm_name,
             "charm_base": self.charm_base,
@@ -683,6 +751,9 @@ class StorageBackendBase(FeatureGateMixin, typing.Generic[BackendConfig]):
             "charm_config": config_dict,
             "secrets": secret_fields,
         }
+
+        extra_integrations = self.get_extra_integrations(deployment)
+        tfvars["extra_integrations"] = [i.to_dict() for i in extra_integrations]
 
         return tfvars
 

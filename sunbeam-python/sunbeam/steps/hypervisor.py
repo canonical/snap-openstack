@@ -48,6 +48,7 @@ from sunbeam.core.terraform import (
 )
 from sunbeam.lazy import LazyImport
 from sunbeam.steps.configure import get_external_network_configs
+from sunbeam.storage.manager import StorageBackendManager
 
 if typing.TYPE_CHECKING:
     import openstack
@@ -75,7 +76,6 @@ class DeployHypervisorApplicationStep(DeployMachineApplicationStep):
         client: Client,
         tfhelper: TerraformHelper,
         openstack_tfhelper: TerraformHelper,
-        cinder_volume_tfhelper: TerraformHelper,
         jhelper: JujuHelper,
         manifest: Manifest,
         model: str,
@@ -94,14 +94,12 @@ class DeployHypervisorApplicationStep(DeployMachineApplicationStep):
             "Deploying OpenStack Hypervisor",
         )
         self.openstack_tfhelper = openstack_tfhelper
-        self.cinder_volume_tfhelper = cinder_volume_tfhelper
         self.ovn_manager = deployment.get_ovn_manager()
 
     def extra_tfvars(self) -> dict:
         """Extra terraform vars to pass to terraform apply."""
         openstack_tf_output = self.openstack_tfhelper.output()
 
-        storage_nodes = self.client.cluster.list_nodes_by_role("storage")
         # Always pass Offer URLs as extravars instead of terraform backend
         # so that sunbeam has control to remove the CMR integrations by passing
         # null value.
@@ -120,12 +118,11 @@ class DeployHypervisorApplicationStep(DeployMachineApplicationStep):
             juju_offers.add("ovn-relay-offer-url")
         extra_tfvars = {offer: openstack_tf_output.get(offer) for offer in juju_offers}
 
-        if len(storage_nodes) > 0:
-            cinder_volume_tf_output = self.cinder_volume_tfhelper.output()
-
-            app_name_key = "cinder-volume-ceph-application-name"
-            if app_name := cinder_volume_tf_output.get(app_name_key):
-                extra_tfvars[app_name_key] = app_name
+        manager = StorageBackendManager()
+        integrations = manager.collect_hypervisor_integrations(
+            self.deployment, self.client
+        )
+        extra_tfvars["extra_integrations"] = [i.to_dict() for i in integrations]
 
         extra_tfvars.update(
             {
@@ -203,7 +200,7 @@ class ReapplyHypervisorOptionalIntegrationsStep(DeployHypervisorApplicationStep)
             "-target=juju_integration.hypervisor-cert-distributor",
             "-target=juju_integration.hypervisor-certs",
             "-target=juju_integration.hypervisor-ceilometer",
-            "-target=juju_integration.hypervisor-cinder-ceph",
+            "-target=juju_integration.hypervisor-extra-integration",
             "-target=juju_integration.hypervisor-masakari",
             "-target=juju_integration.hypervisor-barbican",
         ]
@@ -344,7 +341,8 @@ class ReapplyHypervisorTerraformPlanStep(BaseStep):
         jhelper: JujuHelper,
         manifest: Manifest,
         model: str,
-        extra_tfvars: dict = {},
+        extra_tfvars: dict | None = None,
+        deployment: Deployment | None = None,
     ):
         super().__init__(
             "Reapply OpenStack Hypervisor Terraform plan",
@@ -355,7 +353,8 @@ class ReapplyHypervisorTerraformPlanStep(BaseStep):
         self.jhelper = jhelper
         self.manifest = manifest
         self.model = model
-        self.extra_tfvars = extra_tfvars
+        self.extra_tfvars = extra_tfvars.copy() if extra_tfvars else {}
+        self.deployment = deployment
 
     def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
@@ -400,6 +399,15 @@ class ReapplyHypervisorTerraformPlanStep(BaseStep):
         dpdk_config = get_dpdk_config(self.client)
         LOG.debug("Adding DPDK configuration: %s", dpdk_config)
         self.extra_tfvars["charm_config"].update(dpdk_config)
+
+        if self.deployment:
+            manager = StorageBackendManager()
+            integrations = manager.collect_hypervisor_integrations(
+                self.deployment, self.client
+            )
+            self.extra_tfvars["extra_integrations"] = [
+                i.to_dict() for i in integrations
+            ]
 
         statuses = ["active", "unknown"]
         if len(self.client.cluster.list_nodes_by_role("storage")) < 1:
