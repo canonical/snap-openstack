@@ -199,6 +199,13 @@ def generate_ca_chain(certificate: str, ca_certificate: str, ca_chain: str) -> s
     if not certificate_decoded or not ca_certificate_decoded or not ca_chain_decoded:
         raise binascii.Error("Unable to decode one of the certificates")
 
+    # Normalize line endings to LF to ensure consistent comparison and output.
+    # Certificates with CRLF line endings may otherwise be treated as different
+    # from equivalent certificates with LF line endings.
+    certificate_decoded = certificate_decoded.replace("\r\n", "\n")
+    ca_certificate_decoded = ca_certificate_decoded.replace("\r\n", "\n")
+    ca_chain_decoded = ca_chain_decoded.replace("\r\n", "\n")
+
     # If ca_certificate is already part of ca_chain, do not add it to the final ca chain
     # manual-tls-certificates checks if the final ca_chain is in proper order and each
     # certificate is signed by the successor one.
