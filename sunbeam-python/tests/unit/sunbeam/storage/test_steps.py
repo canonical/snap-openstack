@@ -7,7 +7,9 @@ from unittest.mock import Mock, patch
 import pydantic
 import pytest
 
+from sunbeam.core.common import ResultType
 from sunbeam.core.questions import PasswordPromptQuestion, PromptQuestion
+from sunbeam.core.steps import DeployMachineApplicationStep
 from sunbeam.storage.models import SecretDictField
 from sunbeam.storage.steps import (
     DeploySpecificCinderVolumeStep,
@@ -356,3 +358,34 @@ class TestDeploySpecificCinderVolumeStep:
             ]
             is True
         )
+
+        def test_deploy_machine_application_step_run_skips_wait(
+            basic_deployment,
+            basic_client,
+            basic_tfhelper,
+            basic_jhelper,
+            basic_manifest,
+            test_model,
+            step_context,
+        ):
+            step = DeployMachineApplicationStep(
+                basic_deployment,
+                basic_client,
+                basic_tfhelper,
+                basic_jhelper,
+                basic_manifest,
+                config="test-config",
+                application="test-app",
+                model=test_model,
+                roles=[],
+                wait=False,
+            )
+
+            basic_jhelper.get_model_uuid.return_value = "model-uuid"
+            basic_client.cluster.list_nodes_by_role.return_value = []
+
+            result = step.run(step_context)
+
+            assert result.result_type == ResultType.COMPLETED
+            basic_tfhelper.update_tfvars_and_apply_tf.assert_called_once()
+            basic_jhelper.wait_application_ready.assert_not_called()
