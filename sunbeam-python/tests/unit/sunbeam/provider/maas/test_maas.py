@@ -1555,7 +1555,10 @@ class TestMaasDeployK8SApplicationStep:
         step.ranges = "10.0.0.0/28"
         step.client.cluster.get_config.return_value = "{}"
         expected_tfvars = {
-            "endpoint_bindings": [{"space": "data"}],
+            "endpoint_bindings": [
+                {"space": "data"},
+                {"endpoint": "cluster", "space": "internal_space"},
+            ],
             "k8s_config": {
                 "load-balancer-cidrs": "10.0.0.0/28",
                 "load-balancer-enabled": True,
