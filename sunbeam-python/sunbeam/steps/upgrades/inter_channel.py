@@ -123,7 +123,7 @@ class BaseUpgrade(BaseStep, JujuStepHelper):
                 reporter=context.reporter if context else None,
             )
         except TerraformException as e:
-            LOG.exception("Error upgrading cloud")
+            LOG.warning("Error upgrading cloud: %r", e)
             return Result(ResultType.FAILED, str(e))
         status_queue: queue.Queue[str] = queue.Queue()
         status = context.status if context else None

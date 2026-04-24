@@ -1232,7 +1232,7 @@ class MaasScaleJujuStep(ScaleJujuStep):
         nb_controllers = len(controller_machines)
 
         if nb_controllers == self.n:
-            LOG.debug("Already the correct number of controllers, skipping scaling...")
+            LOG.debug("Already the correct number of controllers, skipping scaling")
             return Result(ResultType.SKIPPED)
 
         if nb_controllers > self.n:
@@ -1831,7 +1831,7 @@ class MaasConfigureMicrocephOSDStep(BaseStep):
                 )
 
         if len(disks_to_configure) == 0:
-            LOG.debug("No disks to configure, skipping step.")
+            LOG.debug("No disks to configure, skipping step")
             return Result(ResultType.SKIPPED)
 
         self.disks_to_configure = disks_to_configure
@@ -2452,7 +2452,7 @@ class MaasConfigSRIOVStep(BaseStep):
                 )
             except (ActionFailedException, TimeoutError):
                 msg = f"Unable to set hypervisor {node_name} configuration"
-                LOG.exception(msg)
+                LOG.warning(msg)
                 return Result(ResultType.FAILED, msg)
 
         return Result(ResultType.COMPLETED)
@@ -2623,7 +2623,7 @@ class MaasConfigDPDKStep(BaseConfigDPDKStep):
                 )
             except (ActionFailedException, TimeoutError):
                 msg = f"Unable to set hypervisor {node_name} configuration"
-                LOG.exception(msg)
+                LOG.warning(msg)
                 return Result(ResultType.FAILED, msg)
 
         return Result(ResultType.COMPLETED)

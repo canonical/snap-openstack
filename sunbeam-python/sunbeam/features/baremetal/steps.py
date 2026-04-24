@@ -124,7 +124,7 @@ class _BaseStep(abc.ABC, BaseStep, JujuStepHelper):
         try:
             self._run(reporter=context.reporter)
         except Exception as e:
-            LOG.exception("Failed to execute step %s: %r", self.name, e)
+            LOG.warning("Failed to execute step %s: %r", self.name, e)
             return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.COMPLETED)

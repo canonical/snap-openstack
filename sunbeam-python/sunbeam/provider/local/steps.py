@@ -716,7 +716,7 @@ class LocalConfigSRIOVStep(BaseStep):
                     )
 
         else:
-            LOG.info("No SR-IOV devices detected, skipping SR-IOV configuration.")
+            LOG.info("No SR-IOV devices detected, skipping SR-IOV configuration")
             self.should_skip = True
 
     def _show_sriov_nics(
@@ -785,7 +785,7 @@ class LocalConfigSRIOVStep(BaseStep):
             )
         except (ActionFailedException, TimeoutError):
             msg = f"Unable to set hypervisor {name} configuration"
-            LOG.exception(msg)
+            LOG.warning(msg)
             return Result(ResultType.FAILED, msg)
 
         return Result(ResultType.COMPLETED)
@@ -997,7 +997,7 @@ class LocalConfigDPDKStep(BaseConfigDPDKStep):
             )
         except (ActionFailedException, TimeoutError):
             msg = f"Unable to set hypervisor {name} configuration"
-            LOG.exception(msg)
+            LOG.warning(msg)
             return Result(ResultType.FAILED, msg)
 
         return Result(ResultType.COMPLETED)

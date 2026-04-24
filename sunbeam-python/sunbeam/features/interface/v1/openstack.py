@@ -415,7 +415,7 @@ class OpenStackControlPlaneFeature(EnableDisableFeature, typing.Generic[ConfigTy
             LOG.debug("Release upgrade is not supported for feature %s", self.name)
             return
 
-        # Nothig to do if the plan is openstack-plan as it is taken
+        # Nothing to do if the plan is openstack-plan as it is taken
         # care during control plane refresh
         if self.tf_plan_location == TerraformPlanLocation.SUNBEAM_TERRAFORM_REPO:
             LOG.debug(
@@ -481,7 +481,7 @@ class UpgradeOpenStackApplicationStep(BaseStep, JujuStepHelper):
                 reporter=context.reporter,
             )
         except TerraformException as e:
-            LOG.exception("Error upgrading feature %s", self.feature.name)
+            LOG.warning("Error upgrading feature %s: %r", self.feature.name, e)
             return Result(ResultType.FAILED, str(e))
         status_queue: queue.Queue[str] = queue.Queue()
         task = update_status_background(self, apps, status_queue, context.status)

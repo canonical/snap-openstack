@@ -261,7 +261,7 @@ class DeployObservabilityStackStep(BaseStep, JujuStepHelper):
                 reporter=context.reporter,
             )
         except (TerraformException, TerraformStateLockedException) as e:
-            LOG.exception("Error deploying Observability Stack")
+            LOG.warning("Error deploying Observability Stack: %r", e)
             return Result(ResultType.FAILED, str(e))
 
         apps = self.jhelper.get_application_names(self.model)
@@ -350,7 +350,7 @@ class UpdateObservabilityModelConfigStep(BaseStep, JujuStepHelper):
                 reporter=context.reporter,
             )
         except (TerraformException, TerraformStateLockedException) as e:
-            LOG.exception("Error updating Observability Model config")
+            LOG.warning("Error updating Observability Model config: %r", e)
             return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.COMPLETED)
@@ -402,7 +402,7 @@ class DeployObservabilityAgentStep(BaseStep, JujuStepHelper):
                 reporter=context.reporter,
             )
         except (TerraformException, TerraformStateLockedException) as e:
-            LOG.exception("Error deploying observability agent")
+            LOG.warning("Error deploying observability agent: %r", e)
             return Result(ResultType.FAILED, str(e))
 
         app = "opentelemetry-collector"
@@ -445,7 +445,7 @@ class RemoveObservabilityStackStep(BaseStep, JujuStepHelper):
         try:
             self.tfhelper.destroy(reporter=context.reporter)
         except TerraformException as e:
-            LOG.exception("Error destroying Observability Stack")
+            LOG.warning("Error destroying Observability Stack: %r", e)
             return Result(ResultType.FAILED, str(e))
 
         try:
@@ -486,7 +486,7 @@ class RemoveObservabilityAgentStep(BaseStep, JujuStepHelper):
         try:
             self.tfhelper.destroy(reporter=context.reporter)
         except TerraformException as e:
-            LOG.exception("Error destroying observability agent")
+            LOG.warning("Error destroying observability agent: %r", e)
             return Result(ResultType.FAILED, str(e))
 
         apps = ["opentelemetry-collector"]
