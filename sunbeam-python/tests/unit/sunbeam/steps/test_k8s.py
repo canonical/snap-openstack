@@ -25,7 +25,6 @@ from sunbeam.core.k8s import K8SError
 from sunbeam.errors import SunbeamException
 from sunbeam.steps.k8s import (
     CREDENTIAL_SUFFIX,
-    K8S_APP_TIMEOUT,
     K8S_CLOUD_SUFFIX,
     AddK8SCloudStep,
     AddK8SCredentialStep,
@@ -1365,67 +1364,170 @@ class TestPatchCoreDNSStep:
 
     def test_run(self, step, jhelper):
         jhelper.run_cmd_on_machine_unit_payload.return_value = Mock(return_code=0)
-        result = step.run(None)
+        with patch.object(step, "_wait_for_coredns_ready"):
+            result = step.run(None)
         assert result.result_type == ResultType.COMPLETED
         jhelper.get_leader_unit.assert_called_once()
         jhelper.run_cmd_on_machine_unit_payload.assert_called_once()
-        jhelper.wait_application_ready.assert_called_once()
 
     def test_run_helm_upgrade_failed(self, step, jhelper):
         jhelper.run_cmd_on_machine_unit_payload.return_value = Mock(return_code=1)
-        result = step.run(None)
+        with patch.object(step, "_wait_for_coredns_ready") as mock_wait:
+            result = step.run(None)
         assert result.result_type == ResultType.FAILED
         jhelper.get_leader_unit.assert_called_once()
         jhelper.run_cmd_on_machine_unit_payload.assert_called_once()
-        jhelper.wait_application_ready.assert_not_called()
+        mock_wait.assert_not_called()
 
     def test_run_failed_on_juju_run_on_machine_unit(self, step, jhelper):
         jhelper.run_cmd_on_machine_unit_payload.side_effect = JujuException(
             "Not able to run command"
         )
-        result = step.run(None)
+        with patch.object(step, "_wait_for_coredns_ready") as mock_wait:
+            result = step.run(None)
         assert result.result_type == ResultType.FAILED
         jhelper.get_leader_unit.assert_called_once()
         jhelper.run_cmd_on_machine_unit_payload.assert_called_once()
-        jhelper.wait_application_ready.assert_not_called()
+        mock_wait.assert_not_called()
 
     def test_run_leader_not_found(self, step, jhelper):
         jhelper.get_leader_unit.side_effect = LeaderNotFoundException(
             "Leader missing..."
         )
-        result = step.run(None)
+        with patch.object(step, "_wait_for_coredns_ready") as mock_wait:
+            result = step.run(None)
         assert result.result_type == ResultType.FAILED
         jhelper.get_leader_unit.assert_called_once()
         jhelper.run_cmd_on_machine_unit_payload.assert_not_called()
-        jhelper.wait_application_ready.assert_not_called()
+        mock_wait.assert_not_called()
 
-    def test_run_waits_for_k8s_application_ready(self, step, jhelper):
-        """wait_application_ready must be called after a successful helm upgrade.
+    def test_run_waits_for_coredns_ready(self, step, jhelper):
+        """_wait_for_coredns_ready must be called after a successful helm upgrade.
 
         Ensures DNS is available before subsequent OpenStack deployment steps.
         """
         jhelper.run_cmd_on_machine_unit_payload.return_value = Mock(return_code=0)
-        result = step.run(None)
+        with patch.object(step, "_wait_for_coredns_ready") as mock_wait:
+            result = step.run(None)
         assert result.result_type == ResultType.COMPLETED
-        jhelper.wait_application_ready.assert_called_once_with(
-            "k8s",
-            step.deployment.openstack_machines_model,
-            accepted_status=["active"],
-            timeout=K8S_APP_TIMEOUT,
-        )
+        mock_wait.assert_called_once()
 
-    def test_run_wait_application_ready_timeout(self, step, jhelper):
-        """A TimeoutError from wait_application_ready must propagate as FAILED.
+    def test_run_coredns_ready_timeout(self, step, jhelper):
+        """A TimeoutError from _wait_for_coredns_ready must propagate as FAILED.
 
         Ensures the deployment does not silently proceed with DNS unavailable.
         """
         jhelper.run_cmd_on_machine_unit_payload.return_value = Mock(return_code=0)
-        jhelper.wait_application_ready.side_effect = TimeoutError(
-            "Timed out waiting for k8s to be ready"
-        )
-        result = step.run(None)
+        with patch.object(
+            step,
+            "_wait_for_coredns_ready",
+            side_effect=TimeoutError("timed out"),
+        ):
+            result = step.run(None)
         assert result.result_type == ResultType.FAILED
-        jhelper.wait_application_ready.assert_called_once()
+
+    def test_run_coredns_deployment_not_found(self, step, jhelper):
+        """A K8SError from _wait_for_coredns_ready must propagate as FAILED."""
+        jhelper.run_cmd_on_machine_unit_payload.return_value = Mock(return_code=0)
+        with patch.object(
+            step,
+            "_wait_for_coredns_ready",
+            side_effect=K8SError("CoreDNS deployment 'ck-dns-coredns' not found"),
+        ):
+            result = step.run(None)
+        assert result.result_type == ResultType.FAILED
+
+    def test_wait_for_coredns_ready_when_already_ready(self, step, kube):
+        """Returns immediately when availableReplicas >= replica_count."""
+        step.kube = kube
+        step.replica_count = 2
+        deployment = Mock()
+        deployment.status = Mock()
+        deployment.status.availableReplicas = 2
+        kube.get = Mock(return_value=deployment)
+        step._wait_for_coredns_ready()  # must not raise
+        kube.get.assert_called_once()
+
+    def test_wait_for_coredns_ready_polls_until_ready(self, step, kube):
+        """Polls until availableReplicas reaches replica_count."""
+        step.kube = kube
+        step.replica_count = 1
+        not_ready = Mock()
+        not_ready.status = Mock()
+        not_ready.status.availableReplicas = 0
+        ready = Mock()
+        ready.status = Mock()
+        ready.status.availableReplicas = 1
+        kube.get = Mock(side_effect=[not_ready, ready])
+        with patch("sunbeam.steps.k8s.time.sleep"):
+            step._wait_for_coredns_ready()
+        assert kube.get.call_count == 2
+
+    def test_wait_for_coredns_ready_retries_on_5xx_api_error(self, step, kube):
+        """Retries only on transient 5xx errors."""
+        step.kube = kube
+        step.replica_count = 1
+        api_error = ApiError(
+            Mock(),
+            httpx.Response(
+                status_code=503,
+                content=json.dumps({"code": 503, "message": "service unavailable"}),
+            ),
+        )
+        ready = Mock()
+        ready.status = Mock()
+        ready.status.availableReplicas = 1
+        kube.get = Mock(side_effect=[api_error, ready])
+        with patch("sunbeam.steps.k8s.time.sleep"):
+            step._wait_for_coredns_ready()
+        assert kube.get.call_count == 2
+
+    def test_wait_for_coredns_ready_fails_fast_on_404(self, step, kube):
+        """Raises K8SError immediately when deployment is not found (404)."""
+        step.kube = kube
+        step.replica_count = 1
+        api_error = ApiError(
+            Mock(),
+            httpx.Response(
+                status_code=404,
+                content=json.dumps({"code": 404, "message": "not found"}),
+            ),
+        )
+        kube.get = Mock(side_effect=api_error)
+        with pytest.raises(K8SError, match="not found"):
+            step._wait_for_coredns_ready()
+        kube.get.assert_called_once()
+
+    def test_wait_for_coredns_ready_reraises_non_transient_api_error(self, step, kube):
+        """Re-raises ApiError for non-404, non-5xx status codes."""
+        step.kube = kube
+        step.replica_count = 1
+        api_error = ApiError(
+            Mock(),
+            httpx.Response(
+                status_code=403,
+                content=json.dumps({"code": 403, "message": "forbidden"}),
+            ),
+        )
+        kube.get = Mock(side_effect=api_error)
+        with pytest.raises(ApiError):
+            step._wait_for_coredns_ready()
+        kube.get.assert_called_once()
+
+    def test_wait_for_coredns_ready_timeout(self, step, kube):
+        """Raises TimeoutError when pods do not become ready in time."""
+        step.kube = kube
+        step.replica_count = 3
+        deployment = Mock()
+        deployment.status = Mock()
+        deployment.status.availableReplicas = 0
+        kube.get = Mock(return_value=deployment)
+        with (
+            patch("sunbeam.steps.k8s.K8S_APP_TIMEOUT", 0),
+            patch("sunbeam.steps.k8s.time.sleep"),
+        ):
+            with pytest.raises(TimeoutError):
+                step._wait_for_coredns_ready()
 
 
 class TestPatchServiceExternalTrafficStep:
