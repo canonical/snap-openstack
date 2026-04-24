@@ -239,7 +239,7 @@ class ConfigureValidationStep(BaseStep):
                 reporter=context.reporter,
             )
         except (TerraformException, TerraformStateLockedException) as e:
-            LOG.exception("Error configuring validation feature")
+            LOG.warning("Error configuring validation feature: %r", e)
             return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.COMPLETED)

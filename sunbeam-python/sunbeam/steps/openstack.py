@@ -837,7 +837,7 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
                 reporter=context.reporter,
             )
         except TerraformException as e:
-            LOG.exception("Error configuring cloud")
+            LOG.warning("Error configuring cloud: %r", e)
             return Result(ResultType.FAILED, str(e))
 
         apps = self.jhelper.get_application_names(self.model)
@@ -1009,7 +1009,7 @@ class ReapplyOpenStackTerraformPlanStep(BaseStep, JujuStepHelper):
                 reporter=context.reporter,
             )
         except TerraformException as e:
-            LOG.exception("Error reconfiguring cloud")
+            LOG.warning("Error reconfiguring cloud: %r", e)
             return Result(ResultType.FAILED, str(e))
 
         storage_nodes = self.client.cluster.list_nodes_by_role("storage")
@@ -1119,7 +1119,7 @@ class UpdateOpenStackModelConfigStep(BaseStep):
             )
             return Result(ResultType.COMPLETED)
         except TerraformException as e:
-            LOG.exception("Error updating modelconfigs for openstack plan")
+            LOG.warning("Error updating modelconfigs for openstack plan: %r", e)
             return Result(ResultType.FAILED, str(e))
 
 
@@ -1536,7 +1536,7 @@ class DestroyControlPlaneStep(BaseStep):
             try:
                 self.tfhelper.destroy(reporter=context.reporter)
             except TerraformException as e:
-                LOG.exception("Error destroying cloud")
+                LOG.warning("Error destroying cloud: %r", e)
                 return Result(ResultType.FAILED, str(e))
 
         timeout_factor = 0.8

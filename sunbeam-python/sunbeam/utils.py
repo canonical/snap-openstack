@@ -76,7 +76,7 @@ def get_fqdn(cidr: str | None = None) -> str:
             return fqdn
     except Exception as e:
         LOG.debug("Ignoring error in getting FQDN")
-        LOG.debug(e, exc_info=True)
+        LOG.debug("FQDN lookup failed: %r", e)
 
     # return hostname if fqdn is localhost
     return socket.gethostname()
@@ -241,11 +241,11 @@ class CatchGroup(click.Group):
         try:
             return self.main(*args, **kwargs)
         except SunbeamException as e:
-            LOG.debug(e, exc_info=True)
+            LOG.debug("SunbeamException caught: %r", e)
             LOG.error("Error: %s", e)
             sys.exit(1)
         except Exception as e:
-            LOG.debug(e, exc_info=True)
+            LOG.debug("Unexpected exception caught: %r", e)
             message = (
                 "An unexpected error has occurred."
                 " Please see https://canonical-openstack.readthedocs-hosted.com/en/latest/how-to/troubleshooting/inspecting-the-cluster/"

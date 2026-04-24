@@ -85,11 +85,12 @@ class AddCloudJujuStep(BaseStep, JujuStepHelper):
         try:
             juju_clouds = self.get_clouds(cloud_type, local=True)
         except subprocess.CalledProcessError as e:
-            LOG.exception(
+            LOG.warning(
                 "Error determining whether to skip the bootstrap "
-                "process. Defaulting to not skip."
+                "process. Defaulting to not skip: %s: %s",
+                e,
+                e.stderr,
             )
-            LOG.warning("%s: %s", e, e.stderr)
             return Result(ResultType.FAILED, str(e))
 
         if self.cloud not in juju_clouds:
@@ -104,11 +105,12 @@ class AddCloudJujuStep(BaseStep, JujuStepHelper):
                 cloud_type, local=False, controller=self.controller
             )
         except subprocess.CalledProcessError as e:
-            LOG.exception(
+            LOG.warning(
                 "Error determining whether to skip the bootstrap "
-                "process. Defaulting to not skip."
+                "process. Defaulting to not skip: %s: %s",
+                e,
+                e.stderr,
             )
-            LOG.warning("%s: %s", e, e.stderr)
             return Result(ResultType.FAILED, str(e))
 
         if self.cloud in juju_clouds_on_controller:
@@ -173,11 +175,12 @@ class AddCredentialsJujuStep(BaseStep, JujuStepHelper):
             if "not found" in e.stderr:
                 return Result(ResultType.COMPLETED)
 
-            LOG.exception(
+            LOG.warning(
                 "Error determining whether to skip the bootstrap "
-                "process. Defaulting to not skip."
+                "process. Defaulting to not skip: %s: %s",
+                e,
+                e.stderr,
             )
-            LOG.warning("%s: %s", e, e.stderr)
             return Result(ResultType.FAILED, str(e))
 
         client_creds = credentials.get("client-credentials", {})
@@ -198,8 +201,7 @@ class AddCredentialsJujuStep(BaseStep, JujuStepHelper):
         try:
             self.add_credential(self.cloud, self.definition, self.controller)
         except subprocess.CalledProcessError as e:
-            LOG.exception("Error adding credentials to Juju")
-            LOG.warning("%s: %s", e, e.stderr)
+            LOG.warning("Error adding credentials to Juju: %s: %s", e, e.stderr)
             return Result(ResultType.FAILED, str(e))
         return Result(ResultType.COMPLETED)
 
@@ -238,11 +240,12 @@ class BootstrapJujuStep(BaseStep, JujuStepHelper):
         try:
             self.juju_clouds = self.get_clouds(self.cloud_type)
         except subprocess.CalledProcessError as e:
-            LOG.exception(
+            LOG.warning(
                 "Error determining whether to skip the bootstrap "
-                "process. Defaulting to not skip."
+                "process. Defaulting to not skip: %s: %s",
+                e,
+                e.stderr,
             )
-            LOG.warning("%s: %s", e, e.stderr)
             return Result(ResultType.FAILED, str(e))
         if self.cloud not in self.juju_clouds:
             return Result(
@@ -253,7 +256,7 @@ class BootstrapJujuStep(BaseStep, JujuStepHelper):
             self.get_controller(self.controller)
             return Result(ResultType.SKIPPED)
         except ControllerNotFoundException as e:
-            LOG.debug(str(e))
+            LOG.debug("Controller %s is not found: %r", self.controller, e)
         return Result(ResultType.COMPLETED)
 
     def run(self, context: StepContext) -> Result:
@@ -279,9 +282,8 @@ class BootstrapJujuStep(BaseStep, JujuStepHelper):
 
                     try:
                         k, v = self.bootstrap_args[index].split("=", 1)
-                    except ValueError as e:
-                        LOG.exception("Error bootstrapping Juju")
-                        LOG.debug(str(e))
+                    except ValueError:
+                        LOG.warning("Error parsing bootstrap config argument")
                         msg = (
                             "Value Error: Expected boostrap argument in form of "
                             f"key=value, got {self.bootstrap_args[index]}"
@@ -333,8 +335,7 @@ class BootstrapJujuStep(BaseStep, JujuStepHelper):
 
             return Result(ResultType.COMPLETED)
         except subprocess.CalledProcessError as e:
-            LOG.exception("Error bootstrapping Juju")
-            LOG.warning("%s: %s", e, e.stderr)
+            LOG.warning("Error bootstrapping Juju: %s: %s", e, e.stderr)
             return Result(ResultType.FAILED, str(e))
 
 
@@ -439,8 +440,7 @@ class DestroyJujuControllerStep(BaseStep, JujuStepHelper):
         try:
             process = subprocess.run(cmd, capture_output=True, text=True, check=True)
         except subprocess.CalledProcessError as e:
-            LOG.exception("Error destroying controller")
-            LOG.warning("%s: %s", e, e.stderr)
+            LOG.warning("Error destroying controller: %s: %s", e, e.stderr)
             return Result(ResultType.FAILED, str(e))
         LOG.debug(
             "Command finished. stdout=%r, stderr=%r", process.stdout, process.stderr
@@ -471,8 +471,7 @@ class CreateJujuUserStep(BaseStep, JujuStepHelper):
             if self.username in user_names:
                 return Result(ResultType.SKIPPED)
         except subprocess.CalledProcessError as e:
-            LOG.exception("Error getting users list from juju.")
-            LOG.warning("%s: %s", e, e.stderr)
+            LOG.warning("Error getting users list from Juju: %s: %s", e, e.stderr)
             return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.COMPLETED)
@@ -526,8 +525,12 @@ class CreateJujuUserStep(BaseStep, JujuStepHelper):
 
             return Result(ResultType.COMPLETED, message=token)
         except subprocess.CalledProcessError as e:
-            LOG.exception("Error creating user %s in Juju", self.username)
-            LOG.warning("%s: %s", e, e.stderr)
+            LOG.warning(
+                "Error creating user %s in Juju: %s: %s",
+                self.username,
+                e,
+                e.stderr,
+            )
             return Result(ResultType.FAILED, str(e))
 
 
@@ -557,8 +560,7 @@ class ResetJujuUserStep(BaseStep, JujuStepHelper):
                     ResultType.FAILED, f"User {self.username} not found in Juju"
                 )
         except subprocess.CalledProcessError as e:
-            LOG.exception("Error getting list of users from Juju.")
-            LOG.warning("%s: %s", e, e.stderr)
+            LOG.warning("Error getting list of users from Juju: %s: %s", e, e.stderr)
             return Result(ResultType.FAILED, str(e))
 
         try:
@@ -587,7 +589,7 @@ class ResetJujuUserStep(BaseStep, JujuStepHelper):
 
             return Result(ResultType.COMPLETED, message=token)
         except subprocess.CalledProcessError as e:
-            LOG.exception("Error resetting user %s in Juju", self.username)
+            LOG.warning("Error resetting user %s in Juju: %r", self.username, e)
             return Result(ResultType.FAILED, str(e))
 
 
@@ -646,7 +648,7 @@ class JujuGrantModelAccessStep(BaseStep, JujuStepHelper):
                 )
                 return Result(ResultType.COMPLETED)
 
-            LOG.exception(
+            LOG.warning(
                 "Error granting user %r admin access on model %r: %s",
                 self.username,
                 model_with_owner,
@@ -677,8 +679,7 @@ class RemoveJujuUserStep(BaseStep, JujuStepHelper):
             if self.username not in user_names:
                 return Result(ResultType.SKIPPED)
         except subprocess.CalledProcessError as e:
-            LOG.exception("Error getting list of users from Juju")
-            LOG.warning("%s: %s", e, e.stderr)
+            LOG.warning("Error getting list of users from Juju: %s: %s", e, e.stderr)
             return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.COMPLETED)
@@ -700,8 +701,12 @@ class RemoveJujuUserStep(BaseStep, JujuStepHelper):
 
             return Result(ResultType.COMPLETED)
         except subprocess.CalledProcessError as e:
-            LOG.exception("Error removing user %s from Juju", self.username)
-            LOG.warning("%s: %s", e, e.stderr)
+            LOG.warning(
+                "Error removing user %s from Juju: %s: %s",
+                self.username,
+                e,
+                e.stderr,
+            )
             return Result(ResultType.FAILED, str(e))
 
 
@@ -742,7 +747,11 @@ class RegisterJujuUserStep(BaseStep, JujuStepHelper):
             self.juju_account = JujuAccount.load(self.data_location)
             LOG.debug("Local account found: %r", self.juju_account.user)
         except JujuAccountNotFound:
-            LOG.warning("Cannot find local Juju account: %r", self.juju_account.user)
+            LOG.warning(
+                "Cannot find local Juju account %r in %r",
+                self.username,
+                self.data_location,
+            )
             return Result(ResultType.FAILED, "Account was not registered locally")
 
         try:
@@ -753,8 +762,11 @@ class RegisterJujuUserStep(BaseStep, JujuStepHelper):
                 return Result(ResultType.SKIPPED)
         except subprocess.CalledProcessError as e:
             if "No controllers registered" not in e.stderr:
-                LOG.exception("Error retrieving authenticated user from Juju.")
-                LOG.warning("%s: %s", e, e.stderr)
+                LOG.warning(
+                    "Error retrieving authenticated user from Juju: %s: %s",
+                    e,
+                    e.stderr,
+                )
                 return Result(ResultType.FAILED, str(e))
             # Error is about no controller register, which is okay is this case
 
@@ -850,7 +862,7 @@ class RegisterJujuUserStep(BaseStep, JujuStepHelper):
                 while True:
                     index = child.expect(expect_list, PEXPECT_TIMEOUT)
                     LOG.debug(
-                        "Juju registraton: expect got regex related to %r",
+                        "Juju registration: expect got regex related to %r",
                         expect_list[index],
                     )
                     if index in (0, 1, 3):
@@ -874,7 +886,7 @@ class RegisterJujuUserStep(BaseStep, JujuStepHelper):
                         LOG.debug("User registration completed")
                         break
         except pexpect.TIMEOUT as e:
-            LOG.exception("Error registering user %s in Juju", self.username)
+            LOG.warning("Timeout registering user %s in Juju: %r", self.username, e)
             return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.COMPLETED)
@@ -1034,7 +1046,7 @@ class AddJujuMachineStep(BaseStep, JujuStepHelper):
         try:
             self.model_with_owner = self.get_model_name_with_owner(self.model)
         except ModelNotFoundException as e:
-            LOG.debug(str(e))
+            LOG.debug("Model %s is not found: %r", self.model, e)
             return Result(ResultType.FAILED, "Model not found")
 
         try:
@@ -1048,8 +1060,7 @@ class AddJujuMachineStep(BaseStep, JujuStepHelper):
                     return Result(ResultType.SKIPPED, machine)
 
         except subprocess.CalledProcessError as e:
-            LOG.exception("Error retrieving machines list from Juju")
-            LOG.warning("%s: %s", e, e.stderr)
+            LOG.warning("Error retrieving machines list from Juju: %s: %s", e, e.stderr)
             return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.COMPLETED)
@@ -1116,7 +1127,7 @@ class AddJujuMachineStep(BaseStep, JujuStepHelper):
 
             return Result(ResultType.COMPLETED, machine)
         except pexpect.TIMEOUT:
-            LOG.exception("Error adding machine %s to Juju", self.machine_ip)
+            LOG.warning("Timeout adding machine %s to Juju", self.machine_ip)
             return Result(ResultType.FAILED, "TIMED OUT to add machine")
 
 
@@ -1157,8 +1168,7 @@ class RemoveJujuMachineStep(BaseStep, JujuStepHelper):
                 LOG.debug("Machine does not exist")
                 return Result(ResultType.SKIPPED)
         except subprocess.CalledProcessError as e:
-            LOG.exception("Error retrieving machine list from Juju")
-            LOG.warning("%s: %s", e, e.stderr)
+            LOG.warning("Error retrieving machine list from Juju: %s: %s", e, e.stderr)
             return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.COMPLETED)
@@ -1197,8 +1207,12 @@ class RemoveJujuMachineStep(BaseStep, JujuStepHelper):
 
             return Result(ResultType.COMPLETED)
         except subprocess.CalledProcessError as e:
-            LOG.exception("Error removing machine %s from Juju", self.machine_id)
-            LOG.warning("%s: %s", e, e.stderr)
+            LOG.warning(
+                "Error removing machine %s from Juju: %s: %s",
+                self.machine_id,
+                e,
+                e.stderr,
+            )
             return Result(ResultType.FAILED, str(e))
 
 
@@ -1226,8 +1240,7 @@ class BackupBootstrapUserStep(BaseStep, JujuStepHelper):
             if username == "admin":
                 return Result(ResultType.COMPLETED)
         except subprocess.CalledProcessError as e:
-            LOG.exception("Error retrieving user from Juju")
-            LOG.warning("%s: %s", e, e.stderr)
+            LOG.warning("Error retrieving user from Juju: %s: %s", e, e.stderr)
             return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.SKIPPED)
@@ -1731,8 +1744,7 @@ class DownloadJujuControllerCharmStep(BaseStep, JujuStepHelper):
 
             return Result(ResultType.COMPLETED)
         except subprocess.CalledProcessError as e:
-            LOG.exception("Error downloading Juju Controller charm")
-            LOG.warning("%s: %s", e, e.stderr)
+            LOG.warning("Error downloading Juju Controller charm: %s: %s", e, e.stderr)
             return Result(ResultType.FAILED, str(e))
 
 
@@ -1864,7 +1876,7 @@ class IntegrateJujuApplicationsStep(BaseStep):
                 timeout=1200,
             )
         except (JujuWaitException, TimeoutError) as e:
-            LOG.warning(str(e))
+            LOG.warning("Timed out waiting for integration of %s: %r", apps, e)
             return Result(ResultType.FAILED, str(e))
         return Result(ResultType.COMPLETED)
 
@@ -1984,8 +1996,12 @@ class SwitchToController(BaseStep, JujuStepHelper):
                 "Command finished. stdout=%r, stderr=%r", process.stdout, process.stderr
             )
         except subprocess.CalledProcessError as e:
-            LOG.exception("Error in switching the controller to %s", self.controller)
-            LOG.warning("%s: %s", e, e.stderr)
+            LOG.warning(
+                "Error in switching the controller to %s: %s: %s",
+                self.controller,
+                e,
+                e.stderr,
+            )
             return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.COMPLETED)
@@ -2019,7 +2035,7 @@ class SaveControllerStep(BaseStep, JujuStepHelper):
         try:
             controller = self.get_controller(name)["details"]
         except ControllerNotFoundException as e:
-            LOG.debug(str(e))
+            LOG.debug("Controller %s is not found: %r", name, e)
             return None
         return JujuController(
             name=name,
@@ -2260,12 +2276,13 @@ class MigrateModelStep(BaseStep, JujuStepHelper):
 
                 return True
             except subprocess.CalledProcessError:
-                LOG.exception(
-                    "Error in finding %s model in controller %s",
+                LOG.warning(
+                    "Error in finding %s model in controller %s: %s: %s",
                     self.model,
                     self.from_controller,
+                    e,
+                    e.stderr,
                 )
-                LOG.warning("%s: %s", e, e.stderr)
 
                 raise JujuMigrationFailedError(
                     f"Model {model} is not in either {to_controller} or"
@@ -2309,13 +2326,15 @@ class MigrateModelStep(BaseStep, JujuStepHelper):
         try:
             process = subprocess.run(cmd, capture_output=True, text=True, check=True)
         except subprocess.CalledProcessError as e:
-            LOG.exception(
-                "Error in migrating model %s from controller %s to controller %s",
+            LOG.warning(
+                "Error in migrating model %s from controller"
+                " %s to controller %s: %s: %s",
                 self.model,
                 self.from_controller,
                 self.to_controller,
+                e,
+                e.stderr,
             )
-            LOG.warning("%s: %s", e, e.stderr)
 
             raise JujuMigrationFailedError("Juju migrate command failed") from e
 
@@ -2339,8 +2358,12 @@ class MigrateModelStep(BaseStep, JujuStepHelper):
         try:
             self._switch_controller(self.to_controller)
         except subprocess.CalledProcessError as e:
-            LOG.exception("Error in switching to controller %s", self.to_controller)
-            LOG.warning("%s: %s", e, e.stderr)
+            LOG.warning(
+                "Error in switching to controller %s: %s: %s",
+                self.to_controller,
+                e,
+                e.stderr,
+            )
 
             return Result(ResultType.FAILED, str(e))
 
@@ -2361,7 +2384,7 @@ class MigrateModelStep(BaseStep, JujuStepHelper):
             owner = self._get_model_owner(self.model, self.from_controller)
         except ValueError:
             msg = f"Error in determining the owner for model {self.model}"
-            LOG.exception(msg)
+            LOG.warning(msg)
             return Result(ResultType.FAILED, msg)
 
         # Migrate model
@@ -2372,7 +2395,7 @@ class MigrateModelStep(BaseStep, JujuStepHelper):
         except JujuMigrationFailedError as e:
             return Result(ResultType.FAILED, str(e))
         except TimeoutError:
-            LOG.exception("Error in finding model after migration")
+            LOG.warning("Timed out waiting for model %s to migrate", self.model)
             return Result(
                 ResultType.FAILED,
                 f"Timed out waiting for model {self.model} to migrate",
@@ -2382,8 +2405,12 @@ class MigrateModelStep(BaseStep, JujuStepHelper):
         try:
             self._switch_controller(self.to_controller)
         except subprocess.CalledProcessError as e:
-            LOG.exception("Error in switching to controller %s", self.to_controller)
-            LOG.warning("%s: %s", e, e.stderr)
+            LOG.warning(
+                "Error in switching to controller %s: %s: %s",
+                self.to_controller,
+                e,
+                e.stderr,
+            )
             return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.COMPLETED)

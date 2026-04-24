@@ -93,7 +93,7 @@ class GenerateCloudConfigStep(BaseStep):
                 self._print_cloud_config(tf_output)
             return Result(ResultType.COMPLETED)
         except subprocess.CalledProcessError as e:
-            LOG.exception("Error initializing Terraform")
+            LOG.warning("Error initializing Terraform: %r", e)
             return Result(ResultType.FAILED, str(e))
 
     def _generate_cloud_config(self, is_admin: bool, tf_output: dict) -> dict:

@@ -225,7 +225,7 @@ class UserOpenRCStep(BaseStep):
             self._print_openrc(tf_output)
             return Result(ResultType.COMPLETED)
         except TerraformException as e:
-            LOG.exception("Error getting Terraform output")
+            LOG.warning("Error getting Terraform output: %r", e)
             return Result(ResultType.FAILED, str(e))
 
     def _print_openrc(self, tf_output: dict) -> None:
@@ -293,7 +293,7 @@ class DemoSetup(BaseStep):
             self.tfhelper.apply(reporter=context.reporter)
             return Result(ResultType.COMPLETED)
         except TerraformException as e:
-            LOG.exception("Error configuring cloud")
+            LOG.warning("Error configuring cloud: %r", e)
             return Result(ResultType.FAILED, str(e))
 
 

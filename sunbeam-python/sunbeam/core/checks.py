@@ -506,14 +506,14 @@ class TokenCheck(Check):
         try:
             token_bytes = base64.b64decode(self.token)
         except Exception:
-            LOG.exception("Failed to decode join token")
+            LOG.warning("Failed to decode join token: invalid base64 encoding")
             self.message = "Join token is not a valid base64 string"
             return False
 
         try:
             token = json.loads(token_bytes)
         except Exception:
-            LOG.exception("Failed to decode join token")
+            LOG.warning("Failed to decode join token: invalid JSON format")
             self.message = "Join token content is not a valid JSON-encoded object"
             return False
 

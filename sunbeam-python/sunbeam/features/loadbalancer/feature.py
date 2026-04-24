@@ -952,7 +952,7 @@ class DeployAmphoraInfraStep(BaseStep, JujuStepHelper):
                 queue=status_queue,
             )
         except (JujuWaitException, TimeoutError) as e:
-            LOG.warning(str(e))
+            LOG.warning("Timed out waiting for CNI applications %s: %s", apps, e)
             return Result(ResultType.FAILED, str(e))
         finally:
             task.stop()
@@ -1110,7 +1110,7 @@ class RemoveCNIInfraStep(BaseStep, JujuStepHelper):
                 timeout=LOADBALANCER_CNI_DEPLOY_TIMEOUT,
             )
         except TimeoutError as e:
-            LOG.warning(str(e))
+            LOG.warning("Timed out waiting for CNI applications to be removed: %s", e)
             return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.COMPLETED)

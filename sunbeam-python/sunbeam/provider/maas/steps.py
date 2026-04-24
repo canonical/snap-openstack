@@ -2451,7 +2451,7 @@ class MaasConfigSRIOVStep(BaseStep):
                 )
             except (ActionFailedException, TimeoutError):
                 msg = f"Unable to set hypervisor {node_name} configuration"
-                LOG.exception(msg)
+                LOG.warning(msg)
                 return Result(ResultType.FAILED, msg)
 
         return Result(ResultType.COMPLETED)
@@ -2622,7 +2622,7 @@ class MaasConfigDPDKStep(BaseConfigDPDKStep):
                 )
             except (ActionFailedException, TimeoutError):
                 msg = f"Unable to set hypervisor {node_name} configuration"
-                LOG.exception(msg)
+                LOG.warning(msg)
                 return Result(ResultType.FAILED, msg)
 
         return Result(ResultType.COMPLETED)

@@ -709,7 +709,7 @@ class AddK8SCredentialStep(BaseStep, JujuStepHelper):
                 return Result(ResultType.COMPLETED)
 
             LOG.debug("%s: %s", e, e.stderr)
-            LOG.exception("Error retrieving juju credentails from controller")
+            LOG.warning("Error retrieving Juju credentials from controller: %r", e)
             return Result(ResultType.FAILED, str(e))
 
         if self.credential_name in credentials.get("controller-credentials", {}).keys():
@@ -2129,7 +2129,7 @@ class PatchCoreDNSStep(BaseStep):
         try:
             self._wait_for_coredns_ready()
         except (TimeoutError, K8SError) as e:
-            LOG.warning(str(e))
+            LOG.warning("CoreDNS readiness check failed: %s", e)
             return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.COMPLETED)
