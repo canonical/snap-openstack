@@ -75,6 +75,18 @@ def is_certificate_valid(certificate: bytes) -> bool:
     return True
 
 
+def is_ca_certificate(certificate: str | bytes) -> bool:
+    """Return True if the certificate has BasicConstraints CA:TRUE."""
+    try:
+        cert_bytes = base64.b64decode(certificate)
+        cert = x509.load_pem_x509_certificate(cert_bytes)
+        bc = cert.extensions.get_extension_for_class(x509.BasicConstraints)
+        return bc.value.ca
+    except Exception as e:
+        LOG.debug("CA check failed: %s", e)
+        return False
+
+
 def validate_ca_certificate(
     ctx: click.core.Context, param: click.core.Option, value: str
 ) -> str:
