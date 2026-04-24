@@ -15,6 +15,7 @@ from lightkube.types import PatchType
 
 from sunbeam.clusterd.service import ConfigItemNotFoundException
 from sunbeam.core.common import ResultType
+from sunbeam.core.deployment import Networks
 from sunbeam.core.juju import (
     ActionFailedException,
     ApplicationNotFoundException,
@@ -29,6 +30,7 @@ from sunbeam.steps.k8s import (
     K8S_CLOUD_SUFFIX,
     AddK8SCloudStep,
     AddK8SCredentialStep,
+    DeployK8SApplicationStep,
     EnsureCiliumDeviceByHostStep,
     EnsureDefaultL2AdvertisementMutedStep,
     EnsureK8SUnitsTaggedStep,
@@ -64,7 +66,13 @@ def deployment_with_space():
     """Deployment mock with space configuration."""
     deployment = Mock()
     deployment.name = "test-deployment"
-    deployment.get_space.return_value = "management"
+
+    def get_space(network):
+        if network == Networks.INTERNAL:
+            return "internal"
+        return "management"
+
+    deployment.get_space.side_effect = get_space
     return deployment
 
 
@@ -928,12 +936,12 @@ class TestEnsureK8SUnitsTaggedStep:
         jhelper.get_machines.return_value = {
             "1": Mock(
                 network_interfaces={
-                    "eth0": Mock(space="management", ip_addresses=["10.0.0.1"])
+                    "eth0": Mock(space="internal", ip_addresses=["10.0.0.1"])
                 }
             ),
             "2": Mock(
                 network_interfaces={
-                    "eth0": Mock(space="management", ip_addresses=["10.0.0.2"])
+                    "eth0": Mock(space="internal", ip_addresses=["10.0.0.2"])
                 }
             ),
         }
@@ -960,12 +968,12 @@ class TestEnsureK8SUnitsTaggedStep:
         jhelper.get_machines.return_value = {
             "1": Mock(
                 network_interfaces={
-                    "eth0": Mock(space="management", ip_addresses=["10.0.0.1"])
+                    "eth0": Mock(space="internal", ip_addresses=["10.0.0.1"])
                 }
             ),
             "2": Mock(
                 network_interfaces={
-                    "eth0": Mock(space="management", ip_addresses=["10.0.0.2"])
+                    "eth0": Mock(space="internal", ip_addresses=["10.0.0.2"])
                 }
             ),
         }
@@ -995,12 +1003,12 @@ class TestEnsureK8SUnitsTaggedStep:
         jhelper.get_machines.return_value = {
             "1": Mock(
                 network_interfaces={
-                    "eth0": Mock(space="management", ip_addresses=["10.0.0.1"])
+                    "eth0": Mock(space="internal", ip_addresses=["10.0.0.1"])
                 }
             ),
             "2": Mock(
                 network_interfaces={
-                    "eth0": Mock(space="management", ip_addresses=["10.0.0.2"])
+                    "eth0": Mock(space="internal", ip_addresses=["10.0.0.2"])
                 }
             ),
         }
@@ -1024,12 +1032,12 @@ class TestEnsureK8SUnitsTaggedStep:
         jhelper.get_machines.return_value = {
             "1": Mock(
                 network_interfaces={
-                    "eth0": Mock(space="management", ip_addresses=["10.0.0.1"])
+                    "eth0": Mock(space="internal", ip_addresses=["10.0.0.1"])
                 }
             ),
             "2": Mock(
                 network_interfaces={
-                    "eth0": Mock(space="management", ip_addresses=["10.0.0.2"])
+                    "eth0": Mock(space="internal", ip_addresses=["10.0.0.2"])
                 }
             ),
         }
@@ -1084,6 +1092,39 @@ class TestEnsureK8SUnitsTaggedStep:
             result = step.run(None)
         step.kube.apply.assert_called_once()
         assert result.result_type == ResultType.FAILED
+
+
+class TestDeployK8SApplicationStep:
+    @pytest.fixture
+    def deployment(self, deployment_with_space):
+        deployment_with_space.openstack_machines_model = "test-model"
+        return deployment_with_space
+
+    @pytest.fixture
+    def manifest(self, basic_manifest):
+        basic_manifest.core.software.charms.get.return_value = None
+        return basic_manifest
+
+    @pytest.fixture
+    def step(self, deployment, basic_client, basic_tfhelper, basic_jhelper, manifest):
+        basic_client.cluster.get_config.return_value = "{}"
+        return DeployK8SApplicationStep(
+            deployment,
+            basic_client,
+            basic_tfhelper,
+            basic_jhelper,
+            manifest,
+            "test-model",
+        )
+
+    def test_extra_tfvars_binds_cluster_endpoint_to_internal_space(self, step):
+        assert step.extra_tfvars()["endpoint_bindings"] == [
+            {"space": "management"},
+            {"endpoint": "cluster", "space": "internal"},
+        ]
+
+    def test_get_k8s_config_tfvars_does_not_manage_cluster_annotations(self, step):
+        assert "cluster-annotations" not in step._get_k8s_config_tfvars()
 
 
 class TestGetKubeClient:
