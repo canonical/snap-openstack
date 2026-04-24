@@ -2021,8 +2021,11 @@ class PatchCoreDNSStep(BaseStep):
         self.juju_app_name = "k8s"
         self.coredns_namespace = "kube-system"
         self.coredns_hpa = "ck-dns-coredns"
+        self.coredns_deployment = "coredns"
         self.timeout = 180  # 3 minutes for helm upgrade
         self.replica_count = 1
+
+    _COREDNS_POLL_INTERVAL = 10
 
     def compute_coredns_replica_count(self, control_nodes: int) -> int:
         """Determine replica count for coredns."""
@@ -2120,21 +2123,64 @@ class PatchCoreDNSStep(BaseStep):
             )
             return Result(ResultType.FAILED, str(e))
 
-        # The helm upgrade modifies the CoreDNS pod template (resources), triggering
-        # a rolling restart. Wait for the k8s application to return to active before
-        # proceeding so that DNS is available when subsequent steps deploy OpenStack.
+        # Wait for CoreDNS pods to be ready rather than relying on the k8s
+        # charm status, which may not reflect external changes (helm upgrade)
+        # until the next update-status hook fires.
         try:
-            self.jhelper.wait_application_ready(
-                self.juju_app_name,
-                self.deployment.openstack_machines_model,
-                accepted_status=["active"],
-                timeout=K8S_APP_TIMEOUT,
-            )
-        except TimeoutError as e:
+            self._wait_for_coredns_ready()
+        except (TimeoutError, K8SError) as e:
             LOG.warning(str(e))
             return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.COMPLETED)
+
+    def _wait_for_coredns_ready(self) -> None:
+        """Wait until CoreDNS deployment has at least replica_count available replicas.
+
+        Directly polls the CoreDNS Deployment status rather than relying on the
+        k8s charm status, which may not reflect external changes (e.g. a helm
+        upgrade) until the next update-status hook runs.
+        """
+        deadline = time.monotonic() + K8S_APP_TIMEOUT
+        while time.monotonic() < deadline:
+            try:
+                deployment = self.kube.get(
+                    apps_v1.Deployment, name=self.coredns_deployment
+                )
+            except l_exceptions.ApiError as e:
+                status = getattr(e, "status", None)
+                status_code = getattr(status, "code", None)
+                if status_code == 404:
+                    raise K8SError(
+                        f"CoreDNS deployment '{self.coredns_deployment}' not found"
+                    ) from e
+                if status_code is not None and 500 <= status_code < 600:
+                    LOG.debug("Transient error while getting coredns deployment: %s", e)
+                    time.sleep(self._COREDNS_POLL_INTERVAL)
+                    continue
+                raise
+            available_replicas = (
+                deployment.status.availableReplicas
+                if deployment.status and deployment.status.availableReplicas is not None
+                else 0
+            )
+            if available_replicas >= self.replica_count:
+                LOG.debug(
+                    "CoreDNS deployment ready: %d/%d replicas available",
+                    available_replicas,
+                    self.replica_count,
+                )
+                return
+            LOG.debug(
+                "Waiting for CoreDNS availableReplicas >= %d (current: %d)",
+                self.replica_count,
+                available_replicas,
+            )
+            time.sleep(self._COREDNS_POLL_INTERVAL)
+        raise TimeoutError(
+            f"CoreDNS deployment did not reach {self.replica_count} available"
+            f" replicas within {K8S_APP_TIMEOUT}s"
+        )
 
 
 class PatchServiceExternalTrafficStep(BaseStep):
