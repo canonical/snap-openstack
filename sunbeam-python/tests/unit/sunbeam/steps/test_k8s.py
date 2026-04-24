@@ -11,6 +11,7 @@ import lightkube.core.exceptions
 import pytest
 import tenacity
 from lightkube import ApiError
+from lightkube.types import PatchType
 
 from sunbeam.clusterd.service import ConfigItemNotFoundException
 from sunbeam.core.common import ResultType
@@ -1804,7 +1805,19 @@ class TestEnsureCiliumDeviceByHostStep:
         result = step.run(None)
 
         step.kube.apply.assert_called_once()
-        step.kube.patch.assert_called_once()  # clears restart-pending
+        step.kube.patch.assert_called_once_with(
+            step.cilium_node_config_resource,
+            "cilium-devices-node1",
+            {
+                "metadata": {
+                    "annotations": {
+                        "sunbeam/restart-pending": "false",
+                    }
+                }
+            },
+            namespace="kube-system",
+            patch_type=PatchType.MERGE,
+        )
         assert result.result_type == ResultType.COMPLETED
 
     def test_run_updates_config(self, step):
