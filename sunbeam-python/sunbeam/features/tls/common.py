@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2024 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
+import base64
 import binascii
 import json
 import logging
@@ -40,6 +41,7 @@ from sunbeam.features.interface.utils import (
     generate_ca_chain,
     get_subject_from_csr,
     is_certificate_valid,
+    normalize_pem,
 )
 from sunbeam.features.interface.v1.base import BaseFeatureGroup
 from sunbeam.features.interface.v1.openstack import (
@@ -625,15 +627,20 @@ class ConfigureTLSCertificatesStep(BaseStep):
             if not cert or not is_certificate_valid(cert):
                 raise click.ClickException("Not a valid certificate")
 
+            # Normalize CRLF to LF in the leaf cert before storing
+            cert_normalized = base64.b64encode(
+                normalize_pem(base64.b64decode(cert))
+            ).decode()
+
             self.process_certs[subject] = {
                 "app": app,
                 "unit": unit_name,
                 "relation_id": relation_id,
                 "csr": csr,
-                "certificate": cert,
+                "certificate": cert_normalized,
             }
             variables["certificates"].setdefault(subject, {})
-            variables["certificates"][subject]["certificate"] = cert
+            variables["certificates"][subject]["certificate"] = cert_normalized
 
         questions.write_answers(self.client, self._CONFIG, variables)
 

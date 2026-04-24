@@ -47,6 +47,21 @@ def is_certificate_valid():
 
 
 @pytest.fixture()
+def normalize_pem():
+    with patch.object(tls, "normalize_pem", return_value=b"fake-cert-bytes") as p:
+        yield p
+
+
+@pytest.fixture()
+def b64_encode_decode():
+    with (
+        patch.object(tls.base64, "b64decode", return_value=b"fake-cert-bytes"),
+        patch.object(tls.base64, "b64encode", return_value=b"fake-cert-encoded"),
+    ):
+        yield
+
+
+@pytest.fixture()
 def get_outstanding():
     with patch.object(
         vault,
@@ -236,6 +251,7 @@ class TestConfigureTLSCertificatesStep:
         write_answers,
         get_subject_from_csr,
         is_certificate_valid,
+        b64_encode_decode,
     ):
         certs_to_process = [
             {

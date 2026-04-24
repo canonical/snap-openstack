@@ -28,6 +28,11 @@ else:
 LOG = logging.getLogger()
 
 
+def normalize_pem(pem_bytes: bytes) -> bytes:
+    """Normalize pem line endings to LF."""
+    return pem_bytes.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+
+
 def get_all_registered_groups(cli: click.Group) -> dict:
     """Get all the registered groups from cli object.
 
@@ -91,9 +96,9 @@ def validate_ca_certificate(
     ctx: click.core.Context, param: click.core.Option, value: str
 ) -> str:
     try:
-        ca_bytes = base64.b64decode(value)
+        ca_bytes = normalize_pem(base64.b64decode(value))
         x509.load_pem_x509_certificate(ca_bytes)
-        return value
+        return base64.b64encode(ca_bytes).decode()
     except (binascii.Error, TypeError, ValueError) as e:
         LOG.debug(e)
         raise click.BadParameter(str(e))
@@ -106,7 +111,7 @@ def validate_ca_chain(
         return None
 
     try:
-        chain_bytes = base64.b64decode(value)
+        chain_bytes = normalize_pem(base64.b64decode(value))
         chain_list = re.findall(
             pattern=(
                 "(?=-----BEGIN CERTIFICATE-----)(.*?)(?<=-----END CERTIFICATE-----)"
@@ -120,7 +125,7 @@ def validate_ca_chain(
             for cert in chain_list:
                 x509.load_pem_x509_certificate(cert.encode())
 
-            return value
+            return base64.b64encode(chain_bytes).decode()
 
         # Check if the chain is in correct order
         for i in range(len(chain_list) - 1):
@@ -128,7 +133,7 @@ def validate_ca_chain(
             issuer = x509.load_pem_x509_certificate(chain_list[i + 1].encode())
             cert.verify_directly_issued_by(issuer)
 
-        return value
+        return base64.b64encode(chain_bytes).decode()
     except (
         binascii.Error,
         TypeError,
@@ -210,13 +215,6 @@ def generate_ca_chain(certificate: str, ca_certificate: str, ca_chain: str) -> s
 
     if not certificate_decoded or not ca_certificate_decoded or not ca_chain_decoded:
         raise binascii.Error("Unable to decode one of the certificates")
-
-    # Normalize line endings to LF to ensure consistent comparison and output.
-    # Certificates with CRLF line endings may otherwise be treated as different
-    # from equivalent certificates with LF line endings.
-    certificate_decoded = certificate_decoded.replace("\r\n", "\n")
-    ca_certificate_decoded = ca_certificate_decoded.replace("\r\n", "\n")
-    ca_chain_decoded = ca_chain_decoded.replace("\r\n", "\n")
 
     # If ca_certificate is already part of ca_chain, do not add it to the final ca chain
     # manual-tls-certificates checks if the final ca_chain is in proper order and each
