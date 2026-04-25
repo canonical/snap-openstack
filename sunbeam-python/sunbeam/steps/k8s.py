@@ -81,12 +81,14 @@ if typing.TYPE_CHECKING:
     import lightkube.config.kubeconfig as l_kubeconfig
     import lightkube.core.client as l_client
     import lightkube.core.exceptions as l_exceptions
+    import lightkube.types as l_patch_type
     from lightkube.models import meta_v1
     from lightkube.resources import apps_v1, autoscaling_v2, core_v1
 else:
     l_kubeconfig = LazyImport("lightkube.config.kubeconfig")
     l_client = LazyImport("lightkube.core.client")
     l_exceptions = LazyImport("lightkube.core.exceptions")
+    l_patch_type = LazyImport("lightkube.types")
     meta_v1 = LazyImport("lightkube.models.meta_v1")
     apps_v1 = LazyImport("lightkube.resources.apps_v1")
     autoscaling_v2 = LazyImport("lightkube.resources.autoscaling_v2")
@@ -1657,6 +1659,7 @@ class EnsureCiliumDeviceByHostStep(_PerHostK8SResourceStep):
                         }
                     },
                     namespace=self._CILIUM_NAMESPACE,
+                    patch_type=l_patch_type.PatchType.MERGE,
                 )
             except l_exceptions.ApiError:
                 LOG.debug(
