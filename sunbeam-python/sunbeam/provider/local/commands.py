@@ -1599,17 +1599,69 @@ def join(  # noqa: C901
             )
 
     if is_storage_node:
-        plan4.append(TerraformInitStep(microceph_tfhelper))
-        plan4.append(
-            DeployMicrocephApplicationStep(
-                deployment,
-                client,
-                microceph_tfhelper,
-                jhelper,
-                manifest,
-                deployment.openstack_machines_model,
-            )
+        # Check if this is the first storage node joining
+        is_first_storage_node = (
+            len(client.cluster.list_nodes_by_role(Role.STORAGE.name.lower())) <= 1
         )
+
+        if is_first_storage_node:
+            # Deploy MicroCeph WITHOUT waiting
+            # The charm will be stuck in "waiting" because it needs traefik-route-rgw
+            # integration which doesn't exist as enable-ceph=False.
+            plan4.append(TerraformInitStep(microceph_tfhelper))
+            plan4.append(
+                DeployMicrocephApplicationStep(
+                    deployment,
+                    client,
+                    microceph_tfhelper,
+                    jhelper,
+                    manifest,
+                    deployment.openstack_machines_model,
+                    wait=False,
+                )
+            )
+
+            # Redeploy control plane with enable-ceph=true
+            plan4.append(
+                DeployControlPlaneStep(
+                    deployment,
+                    openstack_tfhelper,
+                    jhelper,
+                    manifest,
+                    "auto",
+                    deployment.openstack_machines_model,
+                    is_region_controller=is_region_controller,
+                )
+            )
+
+            # Redeploy MicroCeph with output from OS TF variables related to
+            # traefik-rgw/keystone-endpoints offers from openstack model
+            microceph_tfhelper = deployment.get_tfhelper("microceph-plan")
+            plan4.append(TerraformInitStep(microceph_tfhelper))
+            plan4.append(
+                DeployMicrocephApplicationStep(
+                    deployment,
+                    client,
+                    microceph_tfhelper,
+                    jhelper,
+                    manifest,
+                    deployment.openstack_machines_model,
+                )
+            )
+        else:
+            # Deploy MicroCeph directly with blocking as OS TF variables are already set
+            plan4.append(TerraformInitStep(microceph_tfhelper))
+            plan4.append(
+                DeployMicrocephApplicationStep(
+                    deployment,
+                    client,
+                    microceph_tfhelper,
+                    jhelper,
+                    manifest,
+                    deployment.openstack_machines_model,
+                )
+            )
+
         plan4.append(
             ConfigureMicrocephOSDStep(
                 client,
@@ -1630,49 +1682,6 @@ def join(  # noqa: C901
                 deployment.openstack_machines_model,
             )
         )
-
-        # Re-deploy control plane if this is the first storage node joining
-        # the cluster to enable mandatory storage services
-        storage_nodes = client.cluster.list_nodes_by_role(Role.STORAGE.name.lower())
-        if len(storage_nodes) == 1:
-            plan4.append(
-                DeployControlPlaneStep(
-                    deployment,
-                    openstack_tfhelper,
-                    jhelper,
-                    manifest,
-                    "auto",
-                    deployment.openstack_machines_model,
-                    is_region_controller=is_region_controller,
-                )
-            )
-
-            # Redeploy of Microceph is required to fill terraform vars
-            # related to traefik-rgw/keystone-endpoints offers from
-            # openstack model
-            microceph_tfhelper = deployment.get_tfhelper("microceph-plan")
-            plan4.append(TerraformInitStep(microceph_tfhelper))
-            plan4.append(
-                DeployMicrocephApplicationStep(
-                    deployment,
-                    client,
-                    microceph_tfhelper,
-                    jhelper,
-                    manifest,
-                    deployment.openstack_machines_model,
-                )
-            )
-            # Fill AMQP / Keystone / MySQL offers from openstack model
-            plan4.append(
-                DeployCinderVolumeApplicationStep(
-                    deployment,
-                    client,
-                    cinder_volume_tfhelper,
-                    jhelper,
-                    manifest,
-                    deployment.openstack_machines_model,
-                )
-            )
 
         plan4.append(
             ReapplyHypervisorOptionalIntegrationsStep(
