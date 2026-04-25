@@ -264,7 +264,7 @@ def evict_pods(client: "l_client.Client", pods: list["core_v1.Pod"]) -> None:
     for pod in pods:
         if pod.metadata is None:
             continue
-        LOG.debug(f"Evicting pod {pod.metadata.name}")
+        LOG.debug("Evicting pod %s", pod.metadata.name)
         evict = core_v1.Pod.Eviction(
             metadata=meta_v1.ObjectMeta(
                 name=pod.metadata.name, namespace=pod.metadata.namespace

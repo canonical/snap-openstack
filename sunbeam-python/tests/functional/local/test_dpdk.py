@@ -6,6 +6,8 @@ import subprocess
 
 from . import utils
 
+LOG = logging.getLogger(__name__)
+
 
 def test_dpdk(
     tmp_path,
@@ -36,7 +38,7 @@ def test_dpdk(
         base_manifest_path=manifest_path,
     )
 
-    logging.info("Applying DPDK configuration.")
+    LOG.info("Applying DPDK configuration")
     utils.sunbeam_command(
         f"-v configure dpdk -m {dpdk_manifest_path} --accept-defaults"
     )
@@ -62,12 +64,12 @@ def test_dpdk(
             == "true"
         )
         if dpdk_initialized:
-            logging.info("OVS DPDK initialized.")
+            LOG.info("OVS DPDK initialized")
             break
         else:
-            logging.info("OVS DPDK not initialized yet.")
+            LOG.info("OVS DPDK not initialized yet")
             if attempt < dpdk_init_retries - 1:
-                logging.debug("Rechecking in %s seconds.", dpdk_init_check_interval)
+                LOG.debug("Rechecking in %d seconds", dpdk_init_check_interval)
                 time.sleep(dpdk_init_check_interval)
     assert dpdk_initialized, "OVS DPDK did not initialize in time."
 

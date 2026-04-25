@@ -103,7 +103,7 @@ def retrieve_admin_credentials(
     try:
         action_result = jhelper.run_action(unit, model, action_cmd)
     except (ActionFailedException, TimeoutError) as e:
-        LOG.debug(f"Running action {action_cmd} on {unit} failed: {str(e)}")
+        LOG.debug("Running action %s on %s failed: %r", action_cmd, unit, e)
         raise click.ClickException("Unable to retrieve openrc from Keystone service")
 
     region_name = deployment.get_region_name() or DEFAULT_REGION
@@ -124,7 +124,7 @@ def retrieve_admin_credentials(
     try:
         action_result = jhelper.run_action(unit, model, action_cmd)
     except ActionFailedException as e:
-        LOG.debug(f"Running action {action_cmd} on {unit} failed: {str(e)}")
+        LOG.debug("Running action %s on %s failed: %r", action_cmd, unit, e)
         raise click.ClickException("Unable to retrieve CA certs from Keystone service")
 
     ca_bundle = []
@@ -142,7 +142,7 @@ def retrieve_admin_credentials(
     if bundle:
         home = os.environ["SNAP_REAL_HOME"]
         cafile = Path(home) / ".config" / "openstack" / "ca_bundle.pem"
-        LOG.debug("Writing CA bundle to {str(cafile)}")
+        LOG.debug("Writing CA bundle to %s", cafile)
 
         cafile.parent.mkdir(mode=0o775, parents=True, exist_ok=True)
         if not cafile.exists():
@@ -210,7 +210,7 @@ class UserOpenRCStep(BaseStep):
             self.client, CLOUD_CONFIG_SECTION
         )
         if "user" not in self.variables:
-            LOG.debug("Demo setup not yet done")
+            LOG.debug("Demo setup is not yet done")
             return Result(ResultType.SKIPPED)
         if self.variables["user"]["run_demo_setup"]:
             return Result(ResultType.COMPLETED)
@@ -225,7 +225,7 @@ class UserOpenRCStep(BaseStep):
             self._print_openrc(tf_output)
             return Result(ResultType.COMPLETED)
         except TerraformException as e:
-            LOG.exception("Error getting terraform output")
+            LOG.warning("Error getting Terraform output: %r", e)
             return Result(ResultType.FAILED, str(e))
 
     def _print_openrc(self, tf_output: dict) -> None:
@@ -293,7 +293,7 @@ class DemoSetup(BaseStep):
             self.tfhelper.apply(reporter=context.reporter)
             return Result(ResultType.COMPLETED)
         except TerraformException as e:
-            LOG.exception("Error configuring cloud")
+            LOG.warning("Error configuring cloud: %r", e)
             return Result(ResultType.FAILED, str(e))
 
 
@@ -393,7 +393,7 @@ class BaseConfigDPDKStep(BaseStep):
 
         self.variables["enabled"] = dpdk_bank.enabled.ask()
         if not self.variables["enabled"]:
-            LOG.debug("DPDK disabled.")
+            LOG.debug("DPDK disabled")
         else:
             self._prompt_nics(console, show_hint)
 

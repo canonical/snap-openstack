@@ -134,9 +134,9 @@ def create_audit(
     )
 
     if audit_details.state == "SUCCEEDED":
-        LOG.debug(f"Create Watcher audit {audit.uuid} successfully")
+        LOG.debug("Create Watcher audit %s succeeded", audit.uuid)
     else:
-        LOG.debug(f"Create Watcher audit {audit.uuid} failed")
+        LOG.debug("Create Watcher audit %s failed", audit.uuid)
         raise SunbeamException(
             f"Create watcher audit failed, template: {template.name}"
         )
@@ -176,16 +176,16 @@ def exec_audit(client: "watcher_client.Client", audit: "watcher.Audit"):
     action_plans = client.action_plan.list(audit=audit.uuid)
     for action_plan in action_plans:
         _exec_plan(client=client, action_plan=action_plan)
-    LOG.debug(f"All Action plans for Audit {audit.uuid} started")
+    LOG.debug("All Action plans for Audit %s started", audit.uuid)
 
 
 def _exec_plan(client: "watcher_client.Client", action_plan: "watcher.ActionPlan"):
     """Run action plan."""
     if action_plan.state == "SUCCEEDED":
-        LOG.debug(f"action plan {action_plan.uuid} state is SUCCEEDED, skip execution")
+        LOG.debug("action plan %s state is SUCCEEDED, skip execution", action_plan.uuid)
         return
     client.action_plan.start(action_plan_id=action_plan.uuid)
-    LOG.debug(f"Start Watcher action plan {action_plan.uuid}")
+    LOG.debug("Start Watcher action plan %s", action_plan.uuid)
 
 
 def wait_until_action_state(
@@ -218,7 +218,9 @@ def wait_until_action_state(
             for action in actions:
                 if completed_actions.get(action.uuid) is True:
                     continue
-                LOG.debug(f"Watcher action {action.uuid} is in {action.state} state.")
+                LOG.debug(
+                    "Watcher action %s is in %s state.", action.uuid, action.state
+                )
                 if action.state == "FAILED":
                     raise WatcherActionFailedException
                 if action.state in expected_state:
@@ -244,6 +246,6 @@ def wait_until_action_state(
                     )
                 )
             LOG.debug(
-                f"All actions for Watcher audit {audit.uuid}"
-                " have been successfully completed."
+                "All actions for Watcher audit %s have been successfully completed.",
+                audit.uuid,
             )

@@ -287,7 +287,7 @@ class DnsFeature(OpenStackControlPlaneFeature):
         :param upgrade_release: Whether to upgrade release
         """
         if upgrade_release:
-            LOG.debug(f"Release upgrade not supported for feature {self.name}")
+            LOG.debug("Release upgrade is not supported for feature %s", self.name)
             return
 
         super().upgrade_hook(deployment, upgrade_release, show_hints)
@@ -302,4 +302,4 @@ class DnsFeature(OpenStackControlPlaneFeature):
         plan.append(PatchBindLoadBalancerIPStep(deployment.get_client()))
 
         run_plan(plan, console, show_hints)
-        LOG.debug(f"OpenStack {self.display_name} application refreshed.")
+        LOG.debug("OpenStack %s application refreshed", self.display_name)

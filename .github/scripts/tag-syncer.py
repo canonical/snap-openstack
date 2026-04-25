@@ -1,16 +1,23 @@
+# SPDX-FileCopyrightText: 2026 - Canonical Ltd
+# SPDX-License-Identifier: Apache-2.0
+
 # /// script
 # requires-python = ">=3.12"
 # dependencies = [
 #     "launchpadlib>=2.1.0",
 # ]
 # ///
+"""Helper script to sync git tags with snap builds in Launchpad.
+
+Usage:
+    python3 tag-syncer.py <snap-recipes...>
+"""
 
 import logging
-import sys
 import subprocess
+import sys
 
 from launchpadlib.launchpad import Launchpad
-
 
 logging.basicConfig(
     level=logging.INFO,
@@ -133,7 +140,7 @@ def process_build(build) -> bool:
     """Process a single build and create a tag if appropriate.
 
     Returns:
-        bool: True if build was processed successfully (tagged or skipped), False on error.
+        bool: True if build was processed successfully (tagged or skipped).
     """
     if not is_build_ready_for_tagging(build):
         return True
@@ -261,7 +268,9 @@ if __name__ == "__main__":
     if len(sys.argv) < 2:
         logger.error("Usage: tag-syncer.py <snap-recipes...>")
         logger.error(
-            "Example: tag-syncer.py ~openstack-snappers/snap-openstack/+snap/openstack-caracal-candidate ~openstack-snappers/+snap/openstack-main-edge"
+            "Example: tag-syncer.py"
+            " ~openstack-snappers/snap-openstack/+snap/openstack-caracal-candidate"
+            " ~openstack-snappers/+snap/openstack-main-edge"
         )
         sys.exit(1)
 

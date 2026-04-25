@@ -72,7 +72,7 @@ def setup_root_logging(logfile: Path | None = None):
             )
         )
         logger.addHandler(file_handler)
-        logger.debug(f"Logging to {str(logfile)!r}")
+        logger.debug("Logging to %r", str(logfile))
 
 
 def setup_logging(logfile: Union[Path, str]) -> None:

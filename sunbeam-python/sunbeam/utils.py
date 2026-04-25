@@ -76,7 +76,7 @@ def get_fqdn(cidr: str | None = None) -> str:
             return fqdn
     except Exception as e:
         LOG.debug("Ignoring error in getting FQDN")
-        LOG.debug(e, exc_info=True)
+        LOG.debug("FQDN lookup failed: %r", e)
 
     # return hostname if fqdn is localhost
     return socket.gethostname()
@@ -99,7 +99,7 @@ def _get_default_gw_iface_fallback() -> str | None:
     iface = None
     with open("/proc/net/route", "r") as f:
         contents = [line.strip() for line in f.readlines() if line.strip()]
-        logging.debug(contents)
+        LOG.debug("Contents of /proc/net/route: %s", contents)
 
         entries: list[dict[str, str]] = []
         # First line is a header line of the table contents. Note, we skip blank entries
@@ -241,17 +241,17 @@ class CatchGroup(click.Group):
         try:
             return self.main(*args, **kwargs)
         except SunbeamException as e:
-            LOG.debug(e, exc_info=True)
+            LOG.debug("SunbeamException caught: %r", e)
             LOG.error("Error: %s", e)
             sys.exit(1)
         except Exception as e:
-            LOG.debug(e, exc_info=True)
+            LOG.debug("Unexpected exception caught: %r", e)
             message = (
                 "An unexpected error has occurred."
                 " Please see https://canonical-openstack.readthedocs-hosted.com/en/latest/how-to/troubleshooting/inspecting-the-cluster/"
                 " for troubleshooting information."
             )
-            LOG.warn(message)
+            LOG.warning(message)
             LOG.error("Error: %s", e)
             sys.exit(1)
 
@@ -309,7 +309,7 @@ def first_connected_server(servers: list) -> str | None:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         ip_port = server.rsplit(":", 1)
         if len(ip_port) != 2:
-            LOG.debug(f"Server {server} not in <ip>:<port> format")
+            LOG.debug("Server %s is not in the <ip>:<port> format", server)
             continue
 
         ip = ipaddress.ip_address(ip_port[0].lstrip("[").rstrip("]"))
@@ -325,8 +325,7 @@ def first_connected_server(servers: list) -> str | None:
             s.connect((str(ip), port))
             return server
         except Exception as e:
-            LOG.debug(str(e))
-            LOG.debug(f"Not able to connect to {ip} {port}")
+            LOG.debug("Not able to connect to %s:%s server: %r", ip, port, e)
         finally:
             s.close()
 

@@ -111,7 +111,7 @@ class CreateWatcherAuditStepABC(ABC, BaseStep):
             audit = self._create_audit()
             actions = self._get_actions(audit)
         except tenacity.RetryError as e:
-            LOG.warning(e)
+            LOG.warning("Failed to create Watcher audit: %r", e)
             return Result(ResultType.FAILED, "Unable to create Watcher audit")
         return Result(
             ResultType.COMPLETED,
@@ -202,7 +202,7 @@ class RunWatcherAuditStep(BaseStep):
             tenacity.RetryError,
             WatcherActionFailedException,
         ) as e:
-            LOG.warning(e)
+            LOG.warning("Failed to execute Watcher audit action plan: %r", e)
             failed = True
 
         actions = watcher_helper.get_actions(client=self.client, audit=self.audit)
