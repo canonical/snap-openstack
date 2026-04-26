@@ -9,6 +9,7 @@ from sunbeam.storage.backends.dellpowerstore.backend import DellPowerstoreBacken
 from sunbeam.storage.backends.dellsc.backend import DellSCBackend
 from sunbeam.storage.backends.hitachi.backend import HitachiBackend
 from sunbeam.storage.backends.purestorage.backend import PureStorageBackend
+from sunbeam.storage.backends.yadro.backend import YadroBackend
 
 
 @pytest.fixture
@@ -30,18 +31,25 @@ def dellsc_backend():
 
 
 @pytest.fixture
+def yadro_backend():
+    """Provide a Yadro backend instance."""
+    return YadroBackend()
+
+
+@pytest.fixture
 def dellpowerstore_backend():
     """Provide a Dell PowerStore backend instance."""
     return DellPowerstoreBackend()
 
 
-@pytest.fixture(params=["hitachi", "purestorage", "dellsc", "dellpowerstore"])
+@pytest.fixture(params=["hitachi", "purestorage", "dellsc", "yadro", "dellpowerstore"])
 def any_backend(request):
     """Parametrized fixture that provides each backend type."""
     backends = {
         "hitachi": HitachiBackend(),
         "purestorage": PureStorageBackend(),
         "dellsc": DellSCBackend(),
+        "yadro": YadroBackend(),
         "dellpowerstore": DellPowerstoreBackend(),
     }
     return backends[request.param]
