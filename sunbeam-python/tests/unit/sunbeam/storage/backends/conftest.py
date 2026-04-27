@@ -7,6 +7,7 @@ import pytest
 
 from sunbeam.storage.backends.dellpowerstore.backend import DellPowerstoreBackend
 from sunbeam.storage.backends.dellsc.backend import DellSCBackend
+from sunbeam.storage.backends.fujitsueternusdx.backend import FujitsueternusdxBackend
 from sunbeam.storage.backends.hitachi.backend import HitachiBackend
 from sunbeam.storage.backends.purestorage.backend import PureStorageBackend
 
@@ -30,18 +31,27 @@ def dellsc_backend():
 
 
 @pytest.fixture
+def fujitsueternusdx_backend():
+    """Provide a Fujitsu ETERNUS DX backend instance."""
+    return FujitsueternusdxBackend()
+
+
+@pytest.fixture
 def dellpowerstore_backend():
     """Provide a Dell PowerStore backend instance."""
     return DellPowerstoreBackend()
 
 
-@pytest.fixture(params=["hitachi", "purestorage", "dellsc", "dellpowerstore"])
+@pytest.fixture(
+    params=["hitachi", "purestorage", "dellsc", "fujitsueternusdx", "dellpowerstore"]
+)
 def any_backend(request):
     """Parametrized fixture that provides each backend type."""
     backends = {
         "hitachi": HitachiBackend(),
         "purestorage": PureStorageBackend(),
         "dellsc": DellSCBackend(),
+        "fujitsueternusdx": FujitsueternusdxBackend(),
         "dellpowerstore": DellPowerstoreBackend(),
     }
     return backends[request.param]
