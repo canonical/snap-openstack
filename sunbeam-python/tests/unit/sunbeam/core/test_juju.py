@@ -262,9 +262,9 @@ def test_charm_refresh(jhelper, juju):
 
 
 def test_charm_refresh_with_channel(jhelper, juju):
-    jhelper.charm_refresh("app", "test-model", channel="2024.1/stable")
+    jhelper.charm_refresh("app", "test-model", channel="2026.1/stable")
     juju.refresh.assert_called_with(
-        "app", channel="2024.1/stable", revision=None, base=None, trust=False
+        "app", channel="2026.1/stable", revision=None, base=None, trust=False
     )
 
 
@@ -276,9 +276,9 @@ def test_charm_refresh_with_revision(jhelper, juju):
 
 
 def test_charm_refresh_with_channel_and_revision(jhelper, juju):
-    jhelper.charm_refresh("app", "test-model", channel="2024.1/stable", revision=123)
+    jhelper.charm_refresh("app", "test-model", channel="2026.1/stable", revision=123)
     juju.refresh.assert_called_with(
-        "app", channel="2024.1/stable", revision=123, base=None, trust=False
+        "app", channel="2026.1/stable", revision=123, base=None, trust=False
     )
 
 
@@ -458,7 +458,7 @@ def test_deploy_simple(jhelper, juju):
         revision=None,
         config=None,
         num_units=1,
-        base="ubuntu@24.04",
+        base="ubuntu@26.04",
         to=None,
     )
 
@@ -665,7 +665,7 @@ def test_get_available_charm_revision(jhelper: jujulib.JujuHelper, juju):
                 "edge": [
                     {
                         "revision": 121,
-                        "bases": [{"name": "ubuntu", "channel": "24.04"}],
+                        "bases": [{"name": "ubuntu", "channel": "26.04"}],
                     }
                 ]
             }

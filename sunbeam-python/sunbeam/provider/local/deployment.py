@@ -164,7 +164,7 @@ class LocalDeployment(Deployment):
         """Generate preseed for deployment."""
         try:
             management_cidr = self.get_management_cidr()
-        except (ValueError, ClusterServiceUnavailableException):
+        except ValueError, ClusterServiceUnavailableException:
             management_cidr = None
         fqdn = utils.get_fqdn(management_cidr)
         client = self.get_client()

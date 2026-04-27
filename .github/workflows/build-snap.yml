@@ -62,6 +62,7 @@ jobs:
           sudo snap remove --purge lxd
           sudo snap install --channel 3.6 juju
 
+          sudo snap install core26 --channel=latest/edge || true
           sudo snap install  ${{ needs.build.outputs.snap }} --dangerous
           sudo snap connect openstack:juju-bin juju:juju-bin
           openstack.sunbeam prepare-node-script --bootstrap | bash -x
