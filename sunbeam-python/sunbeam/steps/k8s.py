@@ -302,6 +302,10 @@ class DeployK8SApplicationStep(DeployMachineApplicationStep):
         tfvars = {
             "endpoint_bindings": [
                 {"space": self.deployment.get_space(Networks.MANAGEMENT)},
+                {
+                    "endpoint": "cluster",
+                    "space": self.deployment.get_space(Networks.INTERNAL),
+                },
             ],
             "k8s_config": self._get_k8s_config_tfvars(),
         }
@@ -334,9 +338,9 @@ class EnsureK8SUnitsTaggedStep(BaseStep):
     This step ensures that every k8s node is tagged with the
     HOSTNAME_LABEL, to ensure sunbeam can query the correct nodes
     afterwards.
-    Match is done on management ip address. Node IP in k8s is guaranteed by
-    the cluster space binding, which is always bound to the management
-    space.
+    Match is done on the IP addresses from the space configured as
+    Networks.INTERNAL. Node IP in k8s is guaranteed by the cluster
+    space binding.
     """
 
     def __init__(
@@ -357,18 +361,16 @@ class EnsureK8SUnitsTaggedStep(BaseStep):
         self.fqdn = fqdn
         self.to_update: dict[str, str] = {}
 
-    def _get_management_ips(
+    def _get_cluster_ips(
         self, juju_machine: "jubilant.statustypes.MachineStatus"
     ) -> list[str]:
-        management_space = self.deployment.get_space(Networks.MANAGEMENT)
-        management_networks = self.jhelper.get_space_networks(
-            self.model, management_space
-        )
+        cluster_space = self.deployment.get_space(Networks.INTERNAL)
+        cluster_networks = self.jhelper.get_space_networks(self.model, cluster_space)
 
         return _get_machines_space_ips(
             juju_machine.network_interfaces,
-            management_space,
-            management_networks,
+            cluster_space,
+            cluster_networks,
         )
 
     @tenacity.retry(
@@ -444,18 +446,18 @@ class EnsureK8SUnitsTaggedStep(BaseStep):
                 raise SunbeamException(
                     f"{sunbeam_name!r} not found in Juju, expected id {machine_id!r}"
                 )
-            management_ips = self._get_management_ips(juju_machine)
-            if not management_ips:
-                LOG.debug("No management IPs found for machine %s", machine_id)
-                raise SunbeamException(f"{sunbeam_name!r} has no management IPs")
+            cluster_ips = self._get_cluster_ips(juju_machine)
+            if not cluster_ips:
+                LOG.debug("No cluster IPs found for machine %s", machine_id)
+                raise SunbeamException(f"{sunbeam_name!r} has no cluster IPs")
 
             try:
-                k8s_node = self._find_matching_k8s_node(sunbeam_name, management_ips)
+                k8s_node = self._find_matching_k8s_node(sunbeam_name, cluster_ips)
             except ValueError:
                 LOG.debug(
-                    "No matching k8s node found for %s, management IPs %s",
+                    "No matching k8s node found for %s, cluster IPs %s",
                     sunbeam_name,
-                    management_ips,
+                    cluster_ips,
                 )
                 raise SunbeamException(f"{sunbeam_name} has no matching k8s node")
             except K8SError as e:
