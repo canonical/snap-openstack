@@ -9,6 +9,7 @@ from sunbeam.storage.backends.dellpowerstore.backend import DellPowerstoreBacken
 from sunbeam.storage.backends.dellsc.backend import DellSCBackend
 from sunbeam.storage.backends.hitachi.backend import HitachiBackend
 from sunbeam.storage.backends.purestorage.backend import PureStorageBackend
+from sunbeam.storage.backends.veritasaccess.backend import VeritasAccessBackend
 
 
 @pytest.fixture
@@ -30,18 +31,27 @@ def dellsc_backend():
 
 
 @pytest.fixture
+def veritasaccess_backend():
+    """Provide a Veritas Access backend instance."""
+    return VeritasAccessBackend()
+
+
+@pytest.fixture
 def dellpowerstore_backend():
     """Provide a Dell PowerStore backend instance."""
     return DellPowerstoreBackend()
 
 
-@pytest.fixture(params=["hitachi", "purestorage", "dellsc", "dellpowerstore"])
+@pytest.fixture(
+    params=["hitachi", "purestorage", "dellsc", "veritasaccess", "dellpowerstore"]
+)
 def any_backend(request):
     """Parametrized fixture that provides each backend type."""
     backends = {
         "hitachi": HitachiBackend(),
         "purestorage": PureStorageBackend(),
         "dellsc": DellSCBackend(),
+        "veritasaccess": VeritasAccessBackend(),
         "dellpowerstore": DellPowerstoreBackend(),
     }
     return backends[request.param]
