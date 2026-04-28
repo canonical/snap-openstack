@@ -7,8 +7,8 @@ variable "ubuntu-advantage-channel" {
   default     = "latest/edge"
 }
 
-variable "machine-model" {
-  description = "Name of model to deploy ubuntu-pro into."
+variable "machine_model_uuid" {
+  description = "UUID of Juju model to deploy ubuntu-pro into"
   type        = string
 }
 

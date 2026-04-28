@@ -1192,7 +1192,7 @@ class MaasScaleJujuStep(ScaleJujuStep):
                 f"tags={maas_deployment.RoleTags.JUJU_CONTROLLER.value}",
             )
         )
-        super().__init__(controller, extra_args=extra_args)
+        super().__init__(controller, extra_args=extra_args, wait_timeout="30m")
         self.client = maas_client
 
     def is_skip(self, context: StepContext) -> Result:

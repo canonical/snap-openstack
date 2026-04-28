@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2024 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
+import base64
 import binascii
 import json
 import logging
@@ -40,6 +41,7 @@ from sunbeam.features.interface.utils import (
     generate_ca_chain,
     get_subject_from_csr,
     is_certificate_valid,
+    normalize_pem,
 )
 from sunbeam.features.interface.v1.base import BaseFeatureGroup
 from sunbeam.features.interface.v1.openstack import (
@@ -195,7 +197,9 @@ class TlsFeature(OpenStackControlPlaneFeature):
         jhelper_keystone = deployment.get_juju_helper(keystone=True)
 
         model = OPENSTACK_MODEL
-        apps_to_monitor = ["traefik", "traefik-public", "keystone"]
+        apps_to_monitor = ["traefik", "traefik-public"]
+        if not deployment.external_keystone_model:
+            apps_to_monitor.append("keystone")
         if client.cluster.list_nodes_by_role("storage"):
             apps_to_monitor.append("traefik-rgw")
 
@@ -205,13 +209,25 @@ class TlsFeature(OpenStackControlPlaneFeature):
                 self.ca_cert_name(deployment.get_region_name()),
                 self.feature_key,
             ),
-            WaitForApplicationsStep(
-                jhelper_current,
-                apps_to_monitor,
-                model,
-                INGRESS_CHANGE_APPLICATION_TIMEOUT,
-            ),
         ]
+        if apps_to_monitor:
+            plan.append(
+                WaitForApplicationsStep(
+                    jhelper_current,
+                    apps_to_monitor,
+                    model,
+                    INGRESS_CHANGE_APPLICATION_TIMEOUT,
+                )
+            )
+        if deployment.external_keystone_model:
+            plan.append(
+                WaitForApplicationsStep(
+                    jhelper_keystone,
+                    ["keystone"],
+                    model,
+                    INGRESS_CHANGE_APPLICATION_TIMEOUT,
+                )
+            )
         run_plan(plan, console, show_hints)
 
         config: dict = {}
@@ -611,15 +627,20 @@ class ConfigureTLSCertificatesStep(BaseStep):
             if not cert or not is_certificate_valid(cert):
                 raise click.ClickException("Not a valid certificate")
 
+            # Normalize CRLF to LF in the leaf cert before storing
+            cert_normalized = base64.b64encode(
+                normalize_pem(base64.b64decode(cert))
+            ).decode()
+
             self.process_certs[subject] = {
                 "app": app,
                 "unit": unit_name,
                 "relation_id": relation_id,
                 "csr": csr,
-                "certificate": cert,
+                "certificate": cert_normalized,
             }
             variables["certificates"].setdefault(subject, {})
-            variables["certificates"][subject]["certificate"] = cert
+            variables["certificates"][subject]["certificate"] = cert_normalized
 
         questions.write_answers(self.client, self._CONFIG, variables)
 

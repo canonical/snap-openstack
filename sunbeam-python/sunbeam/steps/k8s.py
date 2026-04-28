@@ -81,12 +81,14 @@ if typing.TYPE_CHECKING:
     import lightkube.config.kubeconfig as l_kubeconfig
     import lightkube.core.client as l_client
     import lightkube.core.exceptions as l_exceptions
+    import lightkube.types as l_patch_type
     from lightkube.models import meta_v1
     from lightkube.resources import apps_v1, autoscaling_v2, core_v1
 else:
     l_kubeconfig = LazyImport("lightkube.config.kubeconfig")
     l_client = LazyImport("lightkube.core.client")
     l_exceptions = LazyImport("lightkube.core.exceptions")
+    l_patch_type = LazyImport("lightkube.types")
     meta_v1 = LazyImport("lightkube.models.meta_v1")
     apps_v1 = LazyImport("lightkube.resources.apps_v1")
     autoscaling_v2 = LazyImport("lightkube.resources.autoscaling_v2")
@@ -106,7 +108,7 @@ K8SD_SNAP_SOCKET = "/var/snap/k8s/common/var/lib/k8sd/state/control.socket"
 COREDNS_HPA = {
     "enabled": True,
     "minReplicas": 1,
-    "maxReplicas": 5,
+    "maxReplicas": 100,
     "metrics": [
         {
             "type": "Resource",
@@ -114,15 +116,19 @@ COREDNS_HPA = {
                 "name": "cpu",
                 "target": {"type": "Utilization", "averageUtilization": 80},
             },
-        }
-    ],
-    "behavior": {
-        "scaleUp": {"policies": [{"periodSeconds": 30, "type": "Pods", "value": 2}]},
-        "scaleDown": {
-            "stabilizationWindowSeconds": 300,
-            "policies": [{"type": "Pods", "value": 2, "periodSeconds": 60}],
         },
-    },
+        {
+            "type": "Resource",
+            "resource": {
+                "name": "memory",
+                "target": {"type": "Utilization", "averageUtilization": 70},
+            },
+        },
+    ],
+}
+
+COREDNS_PDB = {
+    "minAvailable": 1,
 }
 
 COREDNS_RESOURCES = {
@@ -296,6 +302,10 @@ class DeployK8SApplicationStep(DeployMachineApplicationStep):
         tfvars = {
             "endpoint_bindings": [
                 {"space": self.deployment.get_space(Networks.MANAGEMENT)},
+                {
+                    "endpoint": "cluster",
+                    "space": self.deployment.get_space(Networks.INTERNAL),
+                },
             ],
             "k8s_config": self._get_k8s_config_tfvars(),
         }
@@ -328,9 +338,9 @@ class EnsureK8SUnitsTaggedStep(BaseStep):
     This step ensures that every k8s node is tagged with the
     HOSTNAME_LABEL, to ensure sunbeam can query the correct nodes
     afterwards.
-    Match is done on management ip address. Node IP in k8s is guaranteed by
-    the cluster space binding, which is always bound to the management
-    space.
+    Match is done on the IP addresses from the space configured as
+    Networks.INTERNAL. Node IP in k8s is guaranteed by the cluster
+    space binding.
     """
 
     def __init__(
@@ -351,18 +361,16 @@ class EnsureK8SUnitsTaggedStep(BaseStep):
         self.fqdn = fqdn
         self.to_update: dict[str, str] = {}
 
-    def _get_management_ips(
+    def _get_cluster_ips(
         self, juju_machine: "jubilant.statustypes.MachineStatus"
     ) -> list[str]:
-        management_space = self.deployment.get_space(Networks.MANAGEMENT)
-        management_networks = self.jhelper.get_space_networks(
-            self.model, management_space
-        )
+        cluster_space = self.deployment.get_space(Networks.INTERNAL)
+        cluster_networks = self.jhelper.get_space_networks(self.model, cluster_space)
 
         return _get_machines_space_ips(
             juju_machine.network_interfaces,
-            management_space,
-            management_networks,
+            cluster_space,
+            cluster_networks,
         )
 
     @tenacity.retry(
@@ -438,18 +446,18 @@ class EnsureK8SUnitsTaggedStep(BaseStep):
                 raise SunbeamException(
                     f"{sunbeam_name!r} not found in Juju, expected id {machine_id!r}"
                 )
-            management_ips = self._get_management_ips(juju_machine)
-            if not management_ips:
-                LOG.debug("No management IPs found for machine %s", machine_id)
-                raise SunbeamException(f"{sunbeam_name!r} has no management IPs")
+            cluster_ips = self._get_cluster_ips(juju_machine)
+            if not cluster_ips:
+                LOG.debug("No cluster IPs found for machine %s", machine_id)
+                raise SunbeamException(f"{sunbeam_name!r} has no cluster IPs")
 
             try:
-                k8s_node = self._find_matching_k8s_node(sunbeam_name, management_ips)
+                k8s_node = self._find_matching_k8s_node(sunbeam_name, cluster_ips)
             except ValueError:
                 LOG.debug(
-                    "No matching k8s node found for %s, management IPs %s",
+                    "No matching k8s node found for %s, cluster IPs %s",
                     sunbeam_name,
-                    management_ips,
+                    cluster_ips,
                 )
                 raise SunbeamException(f"{sunbeam_name} has no matching k8s node")
             except K8SError as e:
@@ -1653,6 +1661,7 @@ class EnsureCiliumDeviceByHostStep(_PerHostK8SResourceStep):
                         }
                     },
                     namespace=self._CILIUM_NAMESPACE,
+                    patch_type=l_patch_type.PatchType.MERGE,
                 )
             except l_exceptions.ApiError:
                 LOG.debug(
@@ -1997,6 +2006,9 @@ class PatchCoreDNSStep(BaseStep):
 
     This is a workaround for https://github.com/canonical/k8s-operator/issues/504
     Resources and HPA settings are updated for coredns
+    There is a fix in k8s snap but not backported. Here is the bug link
+    https://github.com/canonical/k8s-snap/issues/2456
+    TODO: Remove this class once #2456 is fixed and available in k8s 1.32/stable
     """
 
     def __init__(
@@ -2014,8 +2026,11 @@ class PatchCoreDNSStep(BaseStep):
         self.juju_app_name = "k8s"
         self.coredns_namespace = "kube-system"
         self.coredns_hpa = "ck-dns-coredns"
+        self.coredns_deployment = "coredns"
         self.timeout = 180  # 3 minutes for helm upgrade
         self.replica_count = 1
+
+    _COREDNS_POLL_INTERVAL = 10
 
     def compute_coredns_replica_count(self, control_nodes: int) -> int:
         """Determine replica count for coredns."""
@@ -2036,6 +2051,9 @@ class PatchCoreDNSStep(BaseStep):
             LOG.debug("Failed to create k8s client", exc_info=True)
             return Result(ResultType.FAILED, str(e))
 
+        control_nodes = self.client.cluster.list_nodes_by_role("control")
+        self.replica_count = self.compute_coredns_replica_count(len(control_nodes))
+
         try:
             coredns_hpa = self.kube.get(
                 autoscaling_v2.HorizontalPodAutoscaler, name=self.coredns_hpa
@@ -2045,9 +2063,6 @@ class PatchCoreDNSStep(BaseStep):
             if coredns_hpa_spec is None:
                 LOG.debug("Coredns HPA has no spec")
                 return Result(ResultType.COMPLETED)
-
-            control_nodes = self.client.cluster.list_nodes_by_role("control")
-            self.replica_count = self.compute_coredns_replica_count(len(control_nodes))
 
             if self.replica_count == coredns_hpa_spec.minReplicas:
                 return Result(ResultType.SKIPPED)
@@ -2079,13 +2094,17 @@ class PatchCoreDNSStep(BaseStep):
         hpa_dict["minReplicas"] = self.replica_count
         hpa = json.dumps(hpa_dict)
         resources = json.dumps(COREDNS_RESOURCES)
+        pdb = json.dumps(COREDNS_PDB)
         # Note: Applying coredns hpa with modified minReplica will take time
         # to see the scale in, scale out based on policy defined in COREDNS_HPA
         try:
+            set_json = (
+                f"hpa='{hpa}',resources='{resources}',podDisruptionBudget='{pdb}'"
+            )
             cmd_str = (
                 f"k8s helm upgrade -n {self.coredns_namespace} ck-dns "
                 "/snap/k8s/current/k8s/manifests/charts/coredns-*.tgz"
-                f" --reuse-values --set-json hpa='{hpa}',resources='{resources}'"
+                f" --reuse-values --set-json {set_json}"
             )
             LOG.debug(f"Running cmd in unit {leader}: {cmd_str}")
 
@@ -2109,7 +2128,64 @@ class PatchCoreDNSStep(BaseStep):
             )
             return Result(ResultType.FAILED, str(e))
 
+        # Wait for CoreDNS pods to be ready rather than relying on the k8s
+        # charm status, which may not reflect external changes (helm upgrade)
+        # until the next update-status hook fires.
+        try:
+            self._wait_for_coredns_ready()
+        except (TimeoutError, K8SError) as e:
+            LOG.warning(str(e))
+            return Result(ResultType.FAILED, str(e))
+
         return Result(ResultType.COMPLETED)
+
+    def _wait_for_coredns_ready(self) -> None:
+        """Wait until CoreDNS deployment has at least replica_count available replicas.
+
+        Directly polls the CoreDNS Deployment status rather than relying on the
+        k8s charm status, which may not reflect external changes (e.g. a helm
+        upgrade) until the next update-status hook runs.
+        """
+        deadline = time.monotonic() + K8S_APP_TIMEOUT
+        while time.monotonic() < deadline:
+            try:
+                deployment = self.kube.get(
+                    apps_v1.Deployment, name=self.coredns_deployment
+                )
+            except l_exceptions.ApiError as e:
+                status = getattr(e, "status", None)
+                status_code = getattr(status, "code", None)
+                if status_code == 404:
+                    raise K8SError(
+                        f"CoreDNS deployment '{self.coredns_deployment}' not found"
+                    ) from e
+                if status_code is not None and 500 <= status_code < 600:
+                    LOG.debug("Transient error while getting coredns deployment: %s", e)
+                    time.sleep(self._COREDNS_POLL_INTERVAL)
+                    continue
+                raise
+            available_replicas = (
+                deployment.status.availableReplicas
+                if deployment.status and deployment.status.availableReplicas is not None
+                else 0
+            )
+            if available_replicas >= self.replica_count:
+                LOG.debug(
+                    "CoreDNS deployment ready: %d/%d replicas available",
+                    available_replicas,
+                    self.replica_count,
+                )
+                return
+            LOG.debug(
+                "Waiting for CoreDNS availableReplicas >= %d (current: %d)",
+                self.replica_count,
+                available_replicas,
+            )
+            time.sleep(self._COREDNS_POLL_INTERVAL)
+        raise TimeoutError(
+            f"CoreDNS deployment did not reach {self.replica_count} available"
+            f" replicas within {K8S_APP_TIMEOUT}s"
+        )
 
 
 class PatchServiceExternalTrafficStep(BaseStep):
