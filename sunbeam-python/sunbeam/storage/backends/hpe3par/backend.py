@@ -182,7 +182,7 @@ class HPEthreeparBackend(StorageBackendBase):
     @property
     def supports_ha(self) -> bool:
         """Return whether this backend supports HA deployments."""
-        return True
+        return False
 
     def config_type(self) -> type[StorageBackendConfig]:
         """Return the configuration class for HPE 3Par backend."""
