@@ -162,11 +162,11 @@ class DeployObservabilityStackStep(BaseStep, JujuStepHelper):
                 reporter=context.reporter,
             )
         except (TerraformException, TerraformStateLockedException) as e:
-            LOG.exception("Error deploying Observability Stack")
+            LOG.warning("Error deploying Observability Stack: %r", e)
             return Result(ResultType.FAILED, str(e))
 
         apps = self.jhelper.get_application_names(self.model)
-        LOG.debug(f"Application monitored for readiness: {apps}")
+        LOG.debug("Application monitored for readiness: %s", apps)
         status_queue: queue.Queue[str] = queue.Queue()
         task = update_status_background(self, apps, status_queue, context.status)
         try:
@@ -231,7 +231,7 @@ class UpdateObservabilityModelConfigStep(BaseStep, JujuStepHelper):
                 reporter=context.reporter,
             )
         except (TerraformException, TerraformStateLockedException) as e:
-            LOG.exception("Error updating Observability Model config")
+            LOG.warning("Error updating Observability Model config: %r", e)
             return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.COMPLETED)
@@ -283,11 +283,11 @@ class DeployObservabilityAgentStep(BaseStep, JujuStepHelper):
                 reporter=context.reporter,
             )
         except (TerraformException, TerraformStateLockedException) as e:
-            LOG.exception("Error deploying observability agent")
+            LOG.warning("Error deploying observability agent: %r", e)
             return Result(ResultType.FAILED, str(e))
 
         app = "opentelemetry-collector"
-        LOG.debug(f"Application monitored for readiness: {app}")
+        LOG.debug("Application monitored for readiness: %s", app)
         try:
             self.jhelper.wait_application_ready(
                 app,
@@ -326,7 +326,7 @@ class RemoveObservabilityStackStep(BaseStep, JujuStepHelper):
         try:
             self.tfhelper.destroy(reporter=context.reporter)
         except TerraformException as e:
-            LOG.exception("Error destroying Observability Stack")
+            LOG.warning("Error destroying Observability Stack: %r", e)
             return Result(ResultType.FAILED, str(e))
 
         try:
@@ -367,7 +367,7 @@ class RemoveObservabilityAgentStep(BaseStep, JujuStepHelper):
         try:
             self.tfhelper.destroy(reporter=context.reporter)
         except TerraformException as e:
-            LOG.exception("Error destroying observability agent")
+            LOG.warning("Error destroying observability agent: %r", e)
             return Result(ResultType.FAILED, str(e))
 
         apps = ["opentelemetry-collector"]
@@ -463,7 +463,7 @@ class IntegrateRemoteCosOffersStep(BaseStep, JujuStepHelper):
             self.deployment.openstack_machines_model,
         ]:
             app = "opentelemetry-collector"
-            LOG.debug(f"Application monitored for readiness: {app}")
+            LOG.debug("Application monitored for readiness: %s", app)
             try:
                 self.jhelper.wait_application_ready(
                     app,
@@ -524,7 +524,7 @@ class RemoveRemoteCosOffersStep(BaseStep, JujuStepHelper):
             self.deployment.openstack_machines_model,
         ]:
             relations = self._get_relations(model, self.endpoints)
-            LOG.debug(f"List of relations to remove in model {model}: {relations}")
+            LOG.debug("List of relations to remove in model %s: %s", model, relations)
             for relation_pair in relations:
                 self.remove_relation(
                     model,
@@ -537,7 +537,7 @@ class RemoveRemoteCosOffersStep(BaseStep, JujuStepHelper):
             self.deployment.openstack_machines_model,
         ]:
             app = "opentelemetry-collector"
-            LOG.debug(f"Application monitored for readiness: {app}")
+            LOG.debug("Application monitored for readiness: %s", app)
             try:
                 self.jhelper.wait_application_ready(
                     app,

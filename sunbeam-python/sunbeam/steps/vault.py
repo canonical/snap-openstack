@@ -71,7 +71,7 @@ class VaultCharmUpgradeStep(BaseStep, JujuStepHelper):
         self, revision: int | None = None, channel: str = VAULT_CHANNEL
     ) -> None:
         """Upgrade vault-k8s to the specified channel."""
-        LOG.info(f"Upgrading {self.application} to channel {channel}")
+        LOG.info("Upgrading %s to channel %s", self.application, channel)
         self.jhelper.charm_refresh(
             self.application,
             OPENSTACK_MODEL,
@@ -139,7 +139,8 @@ class VaultCharmUpgradeStep(BaseStep, JujuStepHelper):
                     CHARM_NAME, target_channel, arch="amd64"
                 )
         except JujuException as e:
-            LOG.debug("Could not determine latest revision for %s: %s", CHARM_NAME, e)
+            LOG.debug("Could not determine latest revision for %s: %r", CHARM_NAME, e)
+            # Proceed with refresh if we cannot confirm the revision.
             return Result(ResultType.COMPLETED)
 
         if deployed_channel == target_channel and app.charm_rev == latest_rev:
@@ -187,7 +188,7 @@ class VaultCharmUpgradeStep(BaseStep, JujuStepHelper):
                 )
                 self.upgrade(revision=revision, channel=target_channel)
             except JujuException as e:
-                LOG.error(f"Failed to refresh Vault: {e}")
+                LOG.error("Failed to refresh Vault: %r", e)
                 return Result(
                     ResultType.FAILED,
                     f"Failed to refresh Vault: {e}",
@@ -204,7 +205,7 @@ class VaultCharmUpgradeStep(BaseStep, JujuStepHelper):
                     timeout=VAULT_UPGRADE_TIMEOUT,
                 )
             except (JujuWaitException, TimeoutError) as e:
-                LOG.error(f"Timed out waiting for {self.application}: {e}")
+                LOG.error("Timed out waiting for %s: %r", self.application, e)
                 return Result(
                     ResultType.FAILED,
                     f"Timed out waiting for {self.application} to stabilise: {e}",
@@ -246,8 +247,9 @@ class VaultCharmUpgradeStep(BaseStep, JujuStepHelper):
             )
         except (JujuWaitException, TimeoutError) as e:
             LOG.warning(
-                f"Timed out waiting for {self.application} to stabilise "
-                f"after terraform apply: {e}"
+                "Timed out waiting for %s to stabilise after terraform apply: %r",
+                self.application,
+                e,
             )
 
         try:
@@ -256,7 +258,7 @@ class VaultCharmUpgradeStep(BaseStep, JujuStepHelper):
             )
             vault_status = VaultHelper(self.jhelper).get_vault_status(leader_unit)
         except (JujuException, LeaderNotFoundException, TimeoutError) as e:
-            LOG.warning(f"Could not determine vault seal status: {e}")
+            LOG.warning("Could not determine vault seal status: %r", e)
             return Result(
                 ResultType.COMPLETED,
                 "Vault upgraded. Unable to determine seal status, run "

@@ -77,7 +77,7 @@ class DeployCertificatesProviderApplicationStep(BaseStep):
                 timeout=CERTIFICATES_APP_TIMEOUT,
             )
         except (JujuWaitException, TimeoutError) as e:
-            LOG.warning(str(e))
+            LOG.warning("Timed out waiting for certificates application: %r", e)
             return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.COMPLETED)

@@ -73,13 +73,13 @@ class RunSetTempUrlSecretStep(BaseStep, JujuStepHelper):
                 )
         except (ActionFailedException, LeaderNotFoundException) as e:
             LOG.error(
-                "Error running the set-temp-url-secret action on %s: %s",
+                "Error running the set-temp-url-secret action on %s: %r",
                 app,
                 e,
             )
             return Result(ResultType.FAILED, str(e))
 
-        LOG.debug(f"Application monitored for readiness: {self.apps}")
+        LOG.debug("Application monitored for readiness: %s", self.apps)
         status_queue: queue.Queue[str] = queue.Queue()
         task = update_status_background(self, self.apps, status_queue, context.status)
         try:
@@ -90,7 +90,7 @@ class RunSetTempUrlSecretStep(BaseStep, JujuStepHelper):
                 queue=status_queue,
             )
         except (JujuWaitException, TimeoutError) as e:
-            LOG.warning(str(e))
+            LOG.warning("Application %s failed to become active: %r", app, e)
             return Result(ResultType.FAILED, str(e))
         finally:
             task.stop()
@@ -123,9 +123,9 @@ class _BaseStep(abc.ABC, BaseStep, JujuStepHelper):
         """Execute step."""
         try:
             self._run(reporter=context.reporter)
-        except Exception as ex:
-            LOG.exception(str(ex))
-            return Result(ResultType.FAILED, str(ex))
+        except Exception as e:
+            LOG.warning("Failed to execute step %s: %r", self.name, e)
+            return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.COMPLETED)
 
@@ -152,7 +152,7 @@ class _BaseStep(abc.ABC, BaseStep, JujuStepHelper):
             override_tfvars=tfvars,
             reporter=reporter,
         )
-        LOG.debug(f"Applications monitored for readiness: {apps}")
+        LOG.debug("Applications monitored for readiness: %s", apps)
         status_queue: queue.Queue[str] = queue.Queue()
         task = update_status_background(self.feature, apps, status_queue)
 
@@ -247,7 +247,7 @@ class _DeleteResourcesStep(_BaseStep):
             reporter=reporter,
         )
 
-        LOG.debug(f"Waiting for application to disappear: {self.charm_name}")
+        LOG.debug("Waiting for application to disappear: %s", self.charm_name)
         try:
             self.jhelper.wait_application_gone(
                 [self.charm_name],

@@ -121,7 +121,7 @@ class EnableUbuntuProApplicationStep(BaseStep, JujuStepHelper):
 
                 return Result(ResultType.FAILED, message)
         except TimeoutError as e:
-            LOG.warning(str(e))
+            LOG.warning("Timed out waiting for %s application: %r", APPLICATION, e)
             return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.COMPLETED)

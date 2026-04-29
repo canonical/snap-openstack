@@ -3,7 +3,6 @@
 
 import json
 import logging
-import traceback
 import typing
 
 import tenacity
@@ -242,24 +241,26 @@ class RemoveHypervisorUnitStep(BaseStep, JujuStepHelper):
             node = self.client.cluster.get_node_info(self.node_name)
             self.machine_id = str(node.get("machineid"))
         except NodeNotExistInClusterException:
-            LOG.debug(f"Machine {self.node_name} does not exist, skipping.")
+            LOG.debug("Machine %s does not exist, skipping", self.node_name)
             return Result(ResultType.SKIPPED)
 
         try:
             application = self.jhelper.get_application(APPLICATION, self.model)
         except ApplicationNotFoundException as e:
-            LOG.debug(str(e))
+            LOG.debug("Failed to get hypervisor application: %r", e)
             return Result(
                 ResultType.SKIPPED, "Hypervisor application has not been deployed yet"
             )
 
         for unit_name, unit in application.units.items():
             if unit.machine == self.machine_id:
-                LOG.debug(f"Unit {unit_name} is deployed on machine: {self.machine_id}")
+                LOG.debug(
+                    "Unit %s is deployed on machine: %s", unit_name, self.machine_id
+                )
                 self.unit = unit_name
                 break
         if not self.unit:
-            LOG.debug(f"Unit is not deployed on machine: {self.machine_id}, skipping.")
+            LOG.debug("Unit is not deployed on machine: %s, skipping.", self.machine_id)
             return Result(ResultType.SKIPPED)
         try:
             results = self.jhelper.run_action(self.unit, self.model, "running-guests")
@@ -269,7 +270,7 @@ class RemoveHypervisorUnitStep(BaseStep, JujuStepHelper):
 
         if result := results.get("result"):
             guests = json.loads(result)
-            LOG.debug(f"Found guests on hypervisor: {guests}")
+            LOG.debug("Found guests on hypervisor: %s", guests)
             if guests and not self.force:
                 return Result(
                     ResultType.FAILED,
@@ -297,7 +298,7 @@ class RemoveHypervisorUnitStep(BaseStep, JujuStepHelper):
         try:
             self.jhelper.run_action(self.unit, self.model, "disable")
         except ActionFailedException as e:
-            LOG.debug(str(e))
+            LOG.debug("Failed to disable hypervisor unit: %r", e)
             return Result(ResultType.FAILED, "Failed to disable hypervisor unit")
         try:
             self.jhelper.remove_unit(APPLICATION, self.unit, self.model)
@@ -314,18 +315,19 @@ class RemoveHypervisorUnitStep(BaseStep, JujuStepHelper):
                 timeout=HYPERVISOR_UNIT_TIMEOUT,
             )
         except (ApplicationNotFoundException, TimeoutError) as e:
-            LOG.warning(str(e))
+            LOG.warning("Failed to remove hypervisor unit: %r", e)
             return Result(ResultType.FAILED, str(e))
         try:
             if self.deployment:
                 remove_hypervisor(self.jhelper, self.deployment, self.node_name)
         except openstack.exceptions.SDKException as e:
             LOG.error(
-                "Encountered error removing hypervisor references from control plane."
+                "Encountered error removing hypervisor references from control plane"
             )
             if self.force:
-                LOG.warning("Force mode set, ignoring exception:")
-                traceback.print_exception(e)
+                LOG.warning(
+                    "Force mode set, ignoring following exceptions", exc_info=True
+                )
             else:
                 return Result(ResultType.FAILED, str(e))
 
@@ -388,7 +390,7 @@ class ReapplyHypervisorTerraformPlanStep(BaseStep):
 
         if network_configs:
             LOG.debug(
-                "Add external network configs from DemoSetup to extra tfvars: %s",
+                "Adding external network configs from DemoSetup to extra tfvars: %s",
                 network_configs,
             )
             self.extra_tfvars["charm_config"].update(network_configs)
@@ -427,7 +429,7 @@ class ReapplyHypervisorTerraformPlanStep(BaseStep):
                 timeout=HYPERVISOR_UNIT_TIMEOUT,
             )
         except TimeoutError as e:
-            LOG.warning(str(e))
+            LOG.warning("Timed out waiting for hypervisor application: %r", e)
             return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.COMPLETED)
@@ -492,24 +494,26 @@ class EnableHypervisorStep(BaseStep, JujuStepHelper):
             node = self.client.cluster.get_node_info(self.node)
             self.machine_id = str(node.get("machineid"))
         except NodeNotExistInClusterException:
-            LOG.debug(f"Machine {self.node} does not exist, skipping.")
+            LOG.debug("Machine %s does not exist, skipping.", self.node)
             return Result(ResultType.SKIPPED)
 
         try:
             application = self.jhelper.get_application(APPLICATION, self.model)
         except ApplicationNotFoundException as e:
-            LOG.debug(str(e))
+            LOG.debug("Failed to get hypervisor application: %r", e)
             return Result(
                 ResultType.SKIPPED, "Hypervisor application has not been deployed yet"
             )
 
         for unit_name, unit in application.units.items():
             if unit.machine == self.machine_id:
-                LOG.debug(f"Unit {unit_name} is deployed on machine: {self.machine_id}")
+                LOG.debug(
+                    "Unit %s is deployed on machine: %s", unit_name, self.machine_id
+                )
                 self.unit = unit_name
                 break
         if not self.unit:
-            LOG.debug(f"Unit is not deployed on machine: {self.machine_id}, skipping.")
+            LOG.debug("Unit is not deployed on machine: %s, skipping.", self.machine_id)
             return Result(ResultType.SKIPPED)
         return Result(ResultType.COMPLETED)
 
@@ -520,7 +524,7 @@ class EnableHypervisorStep(BaseStep, JujuStepHelper):
         try:
             self.jhelper.run_action(self.unit, self.model, "enable")
         except ActionFailedException as e:
-            LOG.debug(str(e))
+            LOG.debug("Failed to enable hypervisor service for %s: %r", self.unit, e)
             return Result(
                 ResultType.FAILED,
                 f"Failed to enable hypervisor service for unit {self.unit}",

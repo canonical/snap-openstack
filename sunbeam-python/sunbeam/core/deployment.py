@@ -236,7 +236,7 @@ class Deployment(pydantic.BaseModel):
             ConfigItemNotFoundException,
             ValueError,
         ) as e:
-            LOG.debug(f"Using default Proxy settings from provider due to {str(e)}")
+            LOG.warning("Using default proxy settings from provider due to %r", e)
             proxy = self.get_default_proxy_settings()
 
         if "NO_PROXY" in proxy:
@@ -273,7 +273,7 @@ class Deployment(pydantic.BaseModel):
             feature = features.get(name)
             group = groups.get(name)
             if not feature and not group:
-                LOG.warning(f"Feature {name} not found in feature manager.")
+                LOG.warning("Feature %s is not found in feature manager", name)
                 continue
             if feature and feature_or_group_manifest_dict:
                 feature_manifests[name] = _parse_feature(
@@ -287,7 +287,9 @@ class Deployment(pydantic.BaseModel):
                 ) in feature_or_group_manifest_dict.items():
                     feature = features.get(group.name + "." + name)
                     if not feature:
-                        LOG.warning(f"Feature {name} not found in group {group.name}.")
+                        LOG.warning(
+                            "Feature %s is not found in group %s", name, group.name
+                        )
                         continue
                     if not feature_manifest_dict:
                         continue
@@ -351,28 +353,28 @@ class Deployment(pydantic.BaseModel):
         if manifest_file is not None:
             manifest_dict = yaml.safe_load(manifest_file.read_text("utf-8"))
             override_manifest = self.parse_manifest(manifest_dict)
-            LOG.debug("Manifest loaded from file.")
+            LOG.debug("Manifest loaded from file")
         else:
             try:
                 client = self.get_client()
                 override_manifest = self.parse_manifest(
                     yaml.safe_load(client.cluster.get_latest_manifest()["data"])
                 )
-                LOG.debug("Manifest loaded from clusterd.")
+                LOG.debug("Manifest loaded from clusterd")
             except ClusterServiceUnavailableException:
                 LOG.debug(
                     "Failed to get manifest from clusterd, might not be bootstrapped,"
-                    " consider default manifest."
+                    " consider default manifest"
                 )
             except ConfigItemNotFoundException:
                 LOG.debug(
                     "No manifest found in clusterd, consider default"
-                    " manifest from database."
+                    " manifest from database"
                 )
             except ValueError:
                 LOG.debug(
                     "Failed to get clusterd client, might no be bootstrapped,"
-                    " consider empty manifest from database."
+                    " consider empty manifest from database"
                 )
             if override_manifest is None:
                 # Only get manifest from embedded if manifest not present in clusterd
@@ -384,7 +386,7 @@ class Deployment(pydantic.BaseModel):
                     override_manifest = self.parse_manifest(
                         yaml.safe_load(manifest_file.read_text())
                     )
-                    LOG.debug("Manifest loaded from embedded manifest.")
+                    LOG.debug("Manifest loaded from embedded manifest")
 
         if override_manifest is not None:
             override_manifest.validate_against_default(manifest)
@@ -438,7 +440,7 @@ class Deployment(pydantic.BaseModel):
             tfplan_dir = TERRAFORM_DIR_NAMES.get(tfplan, tfplan)
             src = tf_manifest.source
             dst = self.plans_directory / tfplan_dir
-            LOG.debug(f"Updating {dst} from {src}...")
+            LOG.debug("Updating %s from %s...", dst, src)
             shutil.copytree(src, dst, dirs_exist_ok=True)
 
             self._tfhelpers[tfplan] = TerraformHelper(

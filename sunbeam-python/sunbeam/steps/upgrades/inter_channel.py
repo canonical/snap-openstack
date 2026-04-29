@@ -112,7 +112,7 @@ class BaseUpgrade(BaseStep, JujuStepHelper):
         """
         expected_wls = ["active", "blocked", "unknown"]
         LOG.debug(
-            f"Upgrading applications using terraform plan {tfhelper.plan}: {apps}"
+            "Upgrading applications using terraform plan %s: %s", tfhelper.plan, apps
         )
         try:
             tfhelper.update_partial_tfvars_and_apply_tf(
@@ -123,7 +123,7 @@ class BaseUpgrade(BaseStep, JujuStepHelper):
                 reporter=context.reporter if context else None,
             )
         except TerraformException as e:
-            LOG.exception("Error upgrading cloud")
+            LOG.warning("Error upgrading cloud: %r", e)
             return Result(ResultType.FAILED, str(e))
         status_queue: queue.Queue[str] = queue.Queue()
         status = context.status if context else None
@@ -137,7 +137,7 @@ class BaseUpgrade(BaseStep, JujuStepHelper):
                 queue=status_queue,
             )
         except (JujuWaitException, TimeoutError) as e:
-            LOG.debug(str(e))
+            LOG.debug("Timed out waiting for upgrading %s: %r", apps, e)
             return Result(ResultType.FAILED, str(e))
         finally:
             task.stop()
@@ -177,7 +177,7 @@ class UpgradeControlPlane(BaseUpgrade):
     def upgrade_tasks(self, context: StepContext) -> Result:
         """Perform the upgrade tasks."""
         # Step 1: Upgrade mysql charms
-        LOG.debug("Upgrading Mysql charms")
+        LOG.debug("Upgrading MySQL charms")
         charms = list(MYSQL_CHARMS_K8S.keys())
         apps = self.get_apps_filter_by_charms(self.model, charms)
         result = self.upgrade_applications(
