@@ -104,6 +104,9 @@ K8S_DESTROY_TIMEOUT = 900
 K8S_UNIT_TIMEOUT = 1800  # 30 minutes, adding / removing units can take a long time
 K8S_ENABLE_ADDONS_TIMEOUT = 300  # 5 minutes
 K8SD_SNAP_SOCKET = "/var/snap/k8s/common/var/lib/k8sd/state/control.socket"
+# Toleration seconds for node failure recovery k8s default of 5 min to 1 min
+DEFAULT_NOT_READY_TOLERATION_SECONDS = 60
+DEFAULT_UNREACHABLE_TOLERATION_SECONDS = 60
 
 COREDNS_HPA = {
     "enabled": True,
@@ -294,6 +297,22 @@ class DeployK8SApplicationStep(DeployMachineApplicationStep):
         config_tfvars["node-labels"] = " ".join(
             node_label for node_label in node_labels if node_label
         )
+        toleration_settings = {
+            "default-not-ready-toleration-seconds": str(
+                DEFAULT_NOT_READY_TOLERATION_SECONDS
+            ),
+            "default-unreachable-toleration-seconds": str(
+                DEFAULT_UNREACHABLE_TOLERATION_SECONDS
+            ),
+        }
+        existing_apiserver_args = [
+            arg
+            for arg in str(config_tfvars.get("kube-apiserver-extra-args", "")).split()
+            if arg.split("=")[0] not in toleration_settings
+        ]
+        for key, value in toleration_settings.items():
+            existing_apiserver_args.append(f"{key}={value}")
+        config_tfvars["kube-apiserver-extra-args"] = " ".join(existing_apiserver_args)
 
         return config_tfvars
 

@@ -1560,6 +1560,7 @@ class TestMaasDeployK8SApplicationStep:
                 {"endpoint": "cluster", "space": "internal_space"},
             ],
             "k8s_config": {
+                "kube-apiserver-extra-args": "default-not-ready-toleration-seconds=60 default-unreachable-toleration-seconds=60",
                 "load-balancer-cidrs": "10.0.0.0/28",
                 "load-balancer-enabled": True,
                 "load-balancer-l2-mode": True,

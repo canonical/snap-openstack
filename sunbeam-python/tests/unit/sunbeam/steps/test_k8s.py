@@ -1126,6 +1126,24 @@ class TestDeployK8SApplicationStep:
     def test_get_k8s_config_tfvars_does_not_manage_cluster_annotations(self, step):
         assert "cluster-annotations" not in step._get_k8s_config_tfvars()
 
+    def test_get_k8s_config_tfvars_sets_default_toleration_seconds(self, step):
+        config = step._get_k8s_config_tfvars()
+        apiserver_args = config.get("kube-apiserver-extra-args", "")
+        assert "default-not-ready-toleration-seconds=60" in apiserver_args
+        assert "default-unreachable-toleration-seconds=60" in apiserver_args
+
+    def test_get_k8s_config_tfvars_merges_toleration_seconds_with_existing_args(
+        self, step, manifest
+    ):
+        charm_mock = Mock()
+        charm_mock.config = {"kube-apiserver-extra-args": "xyz-flag=true"}
+        manifest.core.software.charms.get.return_value = charm_mock
+        config = step._get_k8s_config_tfvars()
+        apiserver_args = config.get("kube-apiserver-extra-args", "")
+        assert "xyz-flag=true" in apiserver_args
+        assert "default-not-ready-toleration-seconds=60" in apiserver_args
+        assert "default-unreachable-toleration-seconds=60" in apiserver_args
+
 
 class TestGetKubeClient:
     @pytest.fixture
