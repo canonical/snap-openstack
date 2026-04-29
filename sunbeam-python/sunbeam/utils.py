@@ -18,7 +18,6 @@ from pathlib import Path
 
 import click
 import netifaces  # type: ignore [import-untyped]
-import pydantic.alias_generators
 
 from sunbeam.errors import SunbeamException
 from sunbeam.lazy import LazyImport
@@ -411,6 +410,24 @@ def clean_env():
             os.environ.pop(key)
 
 
+def to_snake(value: str) -> str:
+    """Convert a string to snake_case.
+
+    Same as pydantic.alias_generators.to_snake except letter-to-digit and
+    digit-to-letter transitions do NOT insert underscores. This preserves
+    product names like 'hpe3par' (pydantic would turn it into 'hpe_3par').
+    """
+    # Handle sequences of uppercase letters followed by a lowercase letter
+    # e.g. 'APIUrl' -> 'API_Url'
+    value = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", value)
+    # Insert underscore between a lowercase letter and an uppercase letter
+    # e.g. 'myField' -> 'my_Field'
+    value = re.sub(r"([a-z])([A-Z])", r"\1_\2", value)
+    # Replace hyphens with underscores to handle kebab-case
+    value = value.replace("-", "_")
+    return value.lower()
+
+
 def to_kebab(value: str) -> str:
     """Convert a string to kebab-case."""
-    return pydantic.alias_generators.to_snake(value).replace("_", "-")
+    return to_snake(value).replace("_", "-")
