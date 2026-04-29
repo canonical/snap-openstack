@@ -72,6 +72,7 @@ class DeployMachineApplicationStep(BaseStep):
         roles: list[Role] | list[list[Role]] | None = None,
         banner: str = "",
         description: str = "",
+        wait: bool = True,
     ):
         super().__init__(banner, description)
         self.deployment = deployment
@@ -83,6 +84,7 @@ class DeployMachineApplicationStep(BaseStep):
         self.application = application
         self.model = model
         self.roles = roles or []
+        self.wait = wait
 
     def extra_tfvars(self) -> dict:
         """Extra terraform vars to pass to terraform apply."""
@@ -147,16 +149,17 @@ class DeployMachineApplicationStep(BaseStep):
 
         # Note(gboutry): application is in state unknown when it's deployed
         # without units
-        try:
-            self.jhelper.wait_application_ready(
-                self.application,
-                self.model,
-                accepted_status=self.get_accepted_application_status(),
-                timeout=self.get_application_timeout(),
-            )
-        except TimeoutError as e:
-            LOG.warning(str(e))
-            return Result(ResultType.FAILED, str(e))
+        if self.wait:
+            try:
+                self.jhelper.wait_application_ready(
+                    self.application,
+                    self.model,
+                    accepted_status=self.get_accepted_application_status(),
+                    timeout=self.get_application_timeout(),
+                )
+            except TimeoutError as e:
+                LOG.warning(str(e))
+                return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.COMPLETED)
 
