@@ -183,3 +183,36 @@ variable "loki-scale" {
   type        = number
   default     = 1
 }
+
+variable "prometheus-storage" {
+  description = "Storage directives for Prometheus"
+  type        = map(string)
+  default = {
+    database = "20G"
+  }
+}
+
+variable "loki-storage" {
+  description = "Storage directives for Loki"
+  type        = map(string)
+  default = {
+    active-index-directory = "2G"
+    loki-chunks            = "5G"
+  }
+}
+
+variable "grafana-storage" {
+  description = "Storage directives for Grafana"
+  type        = map(string)
+  default = {
+    database = "1G"
+  }
+}
+
+variable "alertmanager-storage" {
+  description = "Storage directives for Alertmanager"
+  type        = map(string)
+  default = {
+    data = "1G"
+  }
+}
