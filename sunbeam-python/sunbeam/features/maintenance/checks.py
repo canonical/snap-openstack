@@ -410,7 +410,7 @@ class NoLastControlRoleCheck(Check):
         """
         try:
             node = find_node(kube_client, name)
-        except (K8SNodeNotFoundError, K8SError):
+        except K8SNodeNotFoundError, K8SError:
             return False
         if node.spec and not node.spec.unschedulable:
             return True
@@ -697,7 +697,7 @@ class ControlRoleNodeCordonedCheck(Check):
 
         try:
             node = find_node(kube_client, self.node)
-        except (K8SNodeNotFoundError, K8SError):
+        except K8SNodeNotFoundError, K8SError:
             self.message = f"failed to get k8s node: '{self.node}'"
             return False
 
@@ -735,7 +735,7 @@ class ControlRoleNodeUncordonedCheck(Check):
 
         try:
             node = find_node(kube_client, self.node)
-        except (K8SNodeNotFoundError, K8SError):
+        except K8SNodeNotFoundError, K8SError:
             self.message = f"failed to get k8s node: '{self.node}'"
             return False
 

@@ -386,7 +386,9 @@ class DefaultableMappingParameter(click.ParamType):
             return (split[0], split[1])
         self.fail(f"Invalid mapping '{value}'.", param, ctx)
 
-    def get_metavar(self, param: click.Parameter) -> str:
+    def get_metavar(
+        self, param: click.Parameter, ctx: click.Context | None = None
+    ) -> str | None:
         """Define metavar representation for the parameter."""
         repr_str = f"{self.key_name}|{self.key_name}{self.sep}{self.value_name}"
 

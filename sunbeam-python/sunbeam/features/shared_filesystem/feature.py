@@ -64,7 +64,7 @@ class SharedFilesystemFeature(OpenStackControlPlaneFeature):
             charms={
                 "manila-k8s": CharmManifest(channel=OPENSTACK_CHANNEL),
                 "manila-cephfs-k8s": CharmManifest(channel=OPENSTACK_CHANNEL),
-                "manila-data": CharmManifest(channel="2024.1/edge"),
+                "manila-data": CharmManifest(channel="2026.1/edge"),
             },
             terraform={
                 self.tfplan_manila_data: TerraformManifest(
