@@ -122,7 +122,13 @@ class TestJujuLoginStep:
             assert step.is_skip(step_context).result_type == ResultType.COMPLETED
 
         with patch(
-            "sunbeam.steps.juju.pexpect.spawn", Mock(return_value=Mock(exitstatus=0))
+            "sunbeam.steps.juju.pexpect.spawn",
+            Mock(
+                return_value=Mock(
+                    __enter__=Mock(return_value=Mock(exitstatus=0)),
+                    __exit__=Mock(return_value=False),
+                )
+            ),
         ):
             result = step.run(step_context)
         assert result.result_type == ResultType.COMPLETED
@@ -144,7 +150,13 @@ class TestJujuLoginStep:
             "sunbeam.steps.juju.pexpect.spawn",
             Mock(
                 return_value=Mock(
-                    exitstatus=0, expect=Mock(side_effect=pexpect.TIMEOUT("timeout"))
+                    __enter__=Mock(
+                        return_value=Mock(
+                            exitstatus=0,
+                            expect=Mock(side_effect=pexpect.TIMEOUT("timeout")),
+                        )
+                    ),
+                    __exit__=Mock(return_value=False),
                 )
             ),
         ):
@@ -165,7 +177,13 @@ class TestJujuLoginStep:
             assert step.is_skip(step_context).result_type == ResultType.COMPLETED
 
         with patch(
-            "sunbeam.steps.juju.pexpect.spawn", Mock(return_value=Mock(exitstatus=1))
+            "sunbeam.steps.juju.pexpect.spawn",
+            Mock(
+                return_value=Mock(
+                    __enter__=Mock(return_value=Mock(exitstatus=1)),
+                    __exit__=Mock(return_value=False),
+                )
+            ),
         ):
             result = step.run(step_context)
         assert result.result_type == ResultType.FAILED
