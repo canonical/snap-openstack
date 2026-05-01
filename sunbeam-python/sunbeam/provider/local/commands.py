@@ -1025,6 +1025,10 @@ def configure_sriov(
         return
 
     manifest = deployment.get_manifest(manifest_path)
+
+    # Login to the Juju controller
+    run_plan([JujuLoginStep(deployment.juju_account)], console, show_hints)
+
     jhelper = deployment.get_juju_helper()
     jhelper_keystone = deployment.get_juju_helper(keystone=True)
 
@@ -1098,6 +1102,10 @@ def configure_dpdk(
         return
 
     manifest = deployment.get_manifest(manifest_path)
+
+    # Login to the Juju controller
+    run_plan([JujuLoginStep(deployment.juju_account)], console, show_hints)
+
     jhelper = deployment.get_juju_helper()
     jhelper_keystone = deployment.get_juju_helper(keystone=True)
 
@@ -1793,6 +1801,10 @@ def list_nodes(
     preflight_checks = [DaemonGroupCheck()]
     run_preflight_checks(preflight_checks, console)
     deployment: LocalDeployment = ctx.obj
+
+    # Login to the Juju controller
+    run_plan([JujuLoginStep(deployment.juju_account)], console, show_hints)
+
     jhelper = JujuHelper(deployment.juju_controller)
     step = LocalClusterStatusStep(deployment, jhelper)
     results = run_plan([step], console, show_hints)

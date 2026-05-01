@@ -39,6 +39,7 @@ class TestDisableMigrationFlagMapping:
                 "sunbeam.features.maintenance.commands.get_cluster_status"
             ) as mock_get_status,
             patch("sunbeam.features.maintenance.commands.JujuHelper"),
+            patch("sunbeam.features.maintenance.commands.run_plan"),
         ):
             mock_get_status.return_value = {"test-node": "compute"}
             mock_instance = Mock()

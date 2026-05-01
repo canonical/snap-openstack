@@ -27,7 +27,7 @@ from sunbeam.core.juju import (
 )
 from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.core.terraform import TerraformInitStep
-from sunbeam.steps.juju import RemoveSaasApplicationsStep
+from sunbeam.steps.juju import JujuLoginStep, RemoveSaasApplicationsStep
 from sunbeam.steps.sso import (
     APPLICATION_REMOVE_TIMEOUT,
     SSO_CONFIG_KEY,
@@ -156,6 +156,9 @@ def add_sso(
         click.echo(f"{name} ({provider_protocol}) is already enabled.")
         return
 
+    # Login to the Juju controller
+    run_plan([JujuLoginStep(deployment.juju_account)], console, show_hints)
+
     jhelper = JujuHelper(deployment.juju_controller)
 
     step_map = {
@@ -232,7 +235,11 @@ def remove_sso(
         msg = f"This action will remove {name}. Are you sure?"
         click.confirm(msg, abort=True)
 
+    # Login to the Juju controller
+    run_plan([JujuLoginStep(deployment.juju_account)], console, show_hints)
+
     jhelper = JujuHelper(deployment.juju_controller)
+
     plan: list[BaseStep] = [
         TerraformInitStep(deployment.get_tfhelper("openstack-plan")),
     ]
@@ -308,7 +315,11 @@ def update_sso(
     except Exception as e:
         raise click.ClickException(f"Invalid config supplied: {e}")
 
+    # Login to the Juju controller
+    run_plan([JujuLoginStep(deployment.juju_account)], console, show_hints)
+
     jhelper = JujuHelper(deployment.juju_controller)
+
     plan = [
         TerraformInitStep(deployment.get_tfhelper("openstack-plan")),
         UpdateExternalProviderStep(
@@ -328,6 +339,10 @@ def update_sso(
 def get_openid_redirect_uri(ctx: click.Context):
     """Get the OpenID redirect URI."""
     deployment: Deployment = ctx.obj
+
+    # Login to the Juju controller
+    run_plan([JujuLoginStep(deployment.juju_account)], console)
+
     jhelper = JujuHelper(deployment.juju_controller)
     app = "keystone"
     action_cmd = "get-admin-account"
@@ -365,10 +380,14 @@ def purge_sso(
 ) -> None:
     """Remove all identity providers."""
     deployment: Deployment = ctx.obj
-    jhelper = JujuHelper(deployment.juju_controller)
     client = deployment.get_client()
     preflight_checks = [VerifyBootstrappedCheck(client)]
     run_preflight_checks(preflight_checks, console)
+
+    # Login to the Juju controller
+    run_plan([JujuLoginStep(deployment.juju_account)], console, show_hints)
+
+    jhelper = JujuHelper(deployment.juju_controller)
 
     config = safe_get_sso_config(client)
     if not yes_i_mean_it and any(config.values()):
@@ -425,11 +444,15 @@ def set_saml_x509(
 ) -> None:
     """Set Keystone SAML x509 SP certificate and key."""
     deployment: Deployment = ctx.obj
-    jhelper = JujuHelper(deployment.juju_controller)
     client = deployment.get_client()
     tfhelper = deployment.get_tfhelper("openstack-plan")
     preflight_checks = [VerifyBootstrappedCheck(client)]
     run_preflight_checks(preflight_checks, console)
+
+    # Login to the Juju controller
+    run_plan([JujuLoginStep(deployment.juju_account)], console, show_hints)
+
+    jhelper = JujuHelper(deployment.juju_controller)
 
     run_plan(
         [

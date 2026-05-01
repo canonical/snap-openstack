@@ -23,6 +23,7 @@ from sunbeam.features.maintenance.utils import (
     get_cluster_status,
 )
 from sunbeam.steps.hypervisor import EnableHypervisorStep
+from sunbeam.steps.juju import JujuLoginStep
 from sunbeam.steps.maintenance import (
     CordonControlRoleNodeStep,
     CreateWatcherHostMaintenanceAuditStep,
@@ -639,6 +640,9 @@ def enable(
     show_hints: bool = False,
 ) -> None:
     """Enable maintenance mode for node."""
+    # Login to the Juju controller
+    run_plan([JujuLoginStep(deployment.juju_account)], console, show_hints)
+
     cluster_status = get_cluster_status(
         deployment=deployment,
         jhelper=JujuHelper(deployment.juju_controller),
@@ -697,6 +701,9 @@ def disable(
     show_hints: bool = False,
 ) -> None:
     """Disable maintenance mode for node."""
+    # Login to the Juju controller
+    run_plan([JujuLoginStep(deployment.juju_account)], console, show_hints)
+
     cluster_status = get_cluster_status(
         deployment=deployment,
         jhelper=JujuHelper(deployment.juju_controller),

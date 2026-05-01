@@ -80,6 +80,7 @@ from sunbeam.features.tls.common import (
     get_outstanding_certificate_requests,
     handle_list_outstanding_csrs,
 )
+from sunbeam.steps.juju import JujuLoginStep
 from sunbeam.steps.k8s import (
     K8S_CONFIG_KEY,
 )
@@ -1971,6 +1972,10 @@ class LoadbalancerFeature(OpenStackControlPlaneFeature):
                 "Barbican (secrets) feature must be enabled for Octavia Amphora.\n"
                 "Enable it first: sunbeam enable secrets"
             )
+
+        # Login to the Juju controller
+        run_plan([JujuLoginStep(deployment.juju_account)], console, show_hints)
+
         self.run_configure_plans(
             deployment,
             show_hints=show_hints,
@@ -2004,6 +2009,10 @@ class LoadbalancerFeature(OpenStackControlPlaneFeature):
                 "Barbican (secrets) feature must be enabled for Octavia Amphora.\n"
                 "Enable it first: sunbeam enable secrets"
             )
+
+        # Login to the Juju controller
+        run_plan([JujuLoginStep(deployment.juju_account)], console, show_hints)
+
         jhelper = JujuHelper(deployment.juju_controller)
         feature_config: LoadbalancerFeatureConfig | None = None
         if self.manifest:
@@ -2043,6 +2052,10 @@ class LoadbalancerFeature(OpenStackControlPlaneFeature):
                 "Barbican (secrets) feature must be enabled for Octavia Amphora.\n"
                 "Enable it first: sunbeam enable secrets"
             )
+
+        # Login to the Juju controller
+        run_plan([JujuLoginStep(deployment.juju_account)], console)
+
         csrs = handle_list_outstanding_csrs(
             CA_MANUAL_TLS_CERTIFICATE,
             CA_MANUAL_TLS_CERTIFICATE_INTERFACE,

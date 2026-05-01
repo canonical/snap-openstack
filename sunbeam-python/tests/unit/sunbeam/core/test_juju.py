@@ -135,6 +135,74 @@ def test_cli_json_decode_error(jhelper):
         jhelper.cli("status")
 
 
+def test_cli_auth_error_raises_authentication_error(jhelper):
+    """Test that CLIError with auth-related stderr raises JujuAuthenticationError."""
+    jhelper._juju.cli.side_effect = jubilant.CLIError(
+        1,
+        ["juju", "status"],
+        "",
+        "please enter password for sunbeam on infra-default: "
+        "ERROR cannot log in: api connection open timed out",
+    )
+    with pytest.raises(jujulib.JujuAuthenticationError, match="expired or is invalid"):
+        jhelper.cli("status")
+
+
+def test_cli_auth_error_macaroon(jhelper):
+    """Test that macaroon discharge errors are detected as auth errors."""
+    jhelper._juju.cli.side_effect = jubilant.CLIError(
+        1,
+        ["juju", "status"],
+        "",
+        "ERROR macaroon discharge required",
+    )
+    with pytest.raises(jujulib.JujuAuthenticationError):
+        jhelper.cli("status")
+
+
+def test_cli_auth_error_login_expired(jhelper):
+    """Test that login expired errors are detected as auth errors."""
+    jhelper._juju.cli.side_effect = jubilant.CLIError(
+        1,
+        ["juju", "status"],
+        "",
+        "ERROR login expired",
+    )
+    with pytest.raises(jujulib.JujuAuthenticationError):
+        jhelper.cli("status")
+
+
+def test_cli_auth_error_invalid_entity(jhelper):
+    """Test that invalid entity name or password is detected as auth error."""
+    jhelper._juju.cli.side_effect = jubilant.CLIError(
+        1,
+        ["juju", "status"],
+        "",
+        "invalid entity name or password",
+    )
+    with pytest.raises(jujulib.JujuAuthenticationError):
+        jhelper.cli("status")
+
+
+def test_cli_non_auth_error_propagates(jhelper):
+    """Test that non-auth CLIErrors propagate normally."""
+    jhelper._juju.cli.side_effect = jubilant.CLIError(
+        1,
+        ["juju", "status"],
+        "",
+        "ERROR model not found",
+    )
+    with pytest.raises(jubilant.CLIError):
+        jhelper.cli("status")
+
+
+def test_check_auth_error_no_stderr():
+    """Test that _check_auth_error handles None/empty stderr."""
+    error = jubilant.CLIError(1, ["juju"], "", None)
+    # Should not raise
+    jujulib._check_auth_error(error)
+
+
 def test_get_model_found(jhelper):
     assert jhelper.get_model("test-model")
 

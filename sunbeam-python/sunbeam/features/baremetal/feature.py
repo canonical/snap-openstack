@@ -33,6 +33,7 @@ from sunbeam.features.interface.v1.openstack import (
     OpenStackControlPlaneFeature,
     TerraformPlanLocation,
 )
+from sunbeam.steps.juju import JujuLoginStep
 from sunbeam.utils import click_option_show_hints, pass_method_obj
 from sunbeam.versions import OPENSTACK_CHANNEL
 
@@ -288,6 +289,9 @@ class BaremetalFeature(OpenStackControlPlaneFeature):
         self, deployment: Deployment, group_name: str, show_hints: bool
     ):
         """Add ironic-conductor group."""
+        # Login to the Juju controller
+        run_plan([JujuLoginStep(deployment.juju_account)], console, show_hints)
+
         step = steps.DeployIronicConductorGroupsStep(deployment, self, [group_name])
         jhelper = JujuHelper(deployment.juju_controller)
         temp_url_secret_step = steps.RunSetTempUrlSecretStep(

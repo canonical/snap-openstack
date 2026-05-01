@@ -10,19 +10,22 @@ from typing import Generic, Literal, Type, TypeGuard
 import click
 from packaging.requirements import Requirement
 from packaging.version import Version
+from rich.console import Console
 from snaphelpers import Snap
 
 from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import ConfigItemNotFoundException
-from sunbeam.core.common import SunbeamException, read_config, update_config
+from sunbeam.core.common import SunbeamException, read_config, run_plan, update_config
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.manifest import FeatureConfig, Manifest, SoftwareConfig
 from sunbeam.feature_gates import FeatureGateMixin
 from sunbeam.features.interface import utils
 from sunbeam.provider.maas.deployment import MaasDeployment
+from sunbeam.steps.juju import JujuLoginStep
 from sunbeam.versions import VarMap
 
 LOG = logging.getLogger(__name__)
+console = Console()
 _GROUPS: dict[str, Type["BaseFeatureGroup"]] = {}
 _FEATURES: dict[str, Type["BaseFeature"]] = {}
 
@@ -781,6 +784,10 @@ class EnableDisableFeature(BaseFeature, Generic[ConfigType]):
             current_click_context = current_click_context.parent
 
         self.pre_enable(deployment, config, show_hints)
+
+        # Login to the Juju controller
+        run_plan([JujuLoginStep(deployment.juju_account)], console, show_hints)
+
         self.run_enable_plans(deployment, config, show_hints)
         self.post_enable(deployment, config, show_hints)
         self.update_feature_info(deployment.get_client(), {"enabled": "true"})
@@ -804,6 +811,10 @@ class EnableDisableFeature(BaseFeature, Generic[ConfigType]):
     def disable_feature(self, deployment: Deployment, show_hints: bool) -> None:
         """Disable feature command."""
         self.pre_disable(deployment, show_hints)
+
+        # Login to the Juju controller
+        run_plan([JujuLoginStep(deployment.juju_account)], console, show_hints)
+
         self.run_disable_plans(deployment, show_hints)
         self.post_disable(deployment, show_hints)
         self.update_feature_info(deployment.get_client(), {"enabled": "false"})

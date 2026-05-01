@@ -36,7 +36,7 @@ from sunbeam.core.questions import (
     write_answers,
 )
 from sunbeam.core.terraform import TerraformInitStep
-from sunbeam.steps.juju import UpdateJujuModelConfigStep
+from sunbeam.steps.juju import JujuLoginStep, UpdateJujuModelConfigStep
 from sunbeam.steps.openstack import UpdateOpenStackModelConfigStep
 from sunbeam.steps.sunbeam_machine import DeploySunbeamMachineApplicationStep
 from sunbeam.utils import click_option_show_hints
@@ -78,6 +78,9 @@ def _update_proxy(proxy: dict, deployment: Deployment, show_hints: bool):
 
     # Update proxy in clusterdb
     update_config(client, PROXY_CONFIG_KEY, proxy)
+
+    # Login to the Juju controller
+    run_plan([JujuLoginStep(deployment.juju_account)], console, show_hints)
 
     jhelper = JujuHelper(deployment.juju_controller)
     manifest = deployment.get_manifest()
