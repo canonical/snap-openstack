@@ -23,6 +23,7 @@ from sunbeam.core.juju import (
     ActionFailedException,
     ApplicationNotFoundException,
     JujuHelper,
+    JujuStepHelper,
     LeaderNotFoundException,
     UnitNotFoundException,
 )
@@ -245,7 +246,7 @@ class ConfigureValidationStep(BaseStep):
         return Result(ResultType.COMPLETED)
 
 
-class ValidationFeature(OpenStackControlPlaneFeature):
+class ValidationFeature(OpenStackControlPlaneFeature, JujuStepHelper):
     """Deploy tempest to openstack model."""
 
     version = Version(FEATURE_VERSION)
@@ -380,21 +381,17 @@ class ValidationFeature(OpenStackControlPlaneFeature):
         # since python-libjuju does not support such feature. See related
         # bug: https://github.com/juju/python-libjuju/issues/1029
         try:
-            subprocess.run(
-                [
-                    "juju",
-                    "ssh",
-                    "--model",
-                    model_name,
-                    "--container",
-                    TEMPEST_CONTAINER_NAME,
-                    unit,
-                    "ls",
-                    TEMPEST_VALIDATION_RESULT,
-                ],
-                check=True,
+            self._juju_cmd(
+                "ssh",
+                "--model",
+                model_name,
+                "--container",
+                TEMPEST_CONTAINER_NAME,
+                unit,
+                "ls",
+                TEMPEST_VALIDATION_RESULT,
+                json_format=False,
                 timeout=30,  # 30 seconds should be enough for `ls`
-                capture_output=True,
             )
         except subprocess.CalledProcessError:
             return False
@@ -416,13 +413,7 @@ class ValidationFeature(OpenStackControlPlaneFeature):
         with console.status(progress_message):
             # Note: this is a workaround to cache the model in the juju client
             try:
-                subprocess.run(
-                    ["juju", "show-model", model_name],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    check=True,
-                    timeout=30,
-                )
+                self._juju_cmd("show-model", model_name, json_format=False, timeout=30)
             except subprocess.TimeoutExpired:
                 raise click.ClickException("Timed out while priming Juju model cache")
             # Note: this is a workaround to run command to payload container
@@ -432,18 +423,15 @@ class ValidationFeature(OpenStackControlPlaneFeature):
                 # juju scp does not allow directory as destination
                 destination = str(Path(destination, Path(source).name))
             try:
-                subprocess.run(
-                    [
-                        "juju",
-                        "scp",
-                        "--model",
-                        model_name,
-                        "--container",
-                        TEMPEST_CONTAINER_NAME,
-                        f"{unit}:{source}",
-                        destination,
-                    ],
-                    check=True,
+                self._juju_cmd(
+                    "scp",
+                    "--model",
+                    model_name,
+                    "--container",
+                    TEMPEST_CONTAINER_NAME,
+                    f"{unit}:{source}",
+                    destination,
+                    json_format=False,
                     timeout=60,  # 60 seconds should be enough for copying a file
                 )
             except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:

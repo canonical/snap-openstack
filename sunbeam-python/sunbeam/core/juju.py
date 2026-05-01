@@ -1875,6 +1875,8 @@ class JujuHelper:
 
 
 class JujuStepHelper:
+    """Base class for Juju step."""
+
     jhelper: JujuHelper
 
     def _get_juju_binary(self) -> str:
@@ -1883,12 +1885,12 @@ class JujuStepHelper:
         juju_binary = snap.paths.snap / "juju" / "bin" / "juju"
         return str(juju_binary)
 
-    def _juju_cmd(self, *args):
+    def _juju_cmd(self, *args, json_format=True, env=None, cwd=None, timeout=None):
         """Runs the specified juju command line command.
 
-        The command will be run using the json formatter. Invoking functions
-        do not need to worry about the format or the juju command that should
-        be used.
+        The command will be run using the json formatter by default. Invoking
+        functions do not need to worry about the format or the juju command
+        that should be used.
 
         For example, to run the juju bootstrap k8s, this method should
         be invoked as:
@@ -1896,24 +1898,43 @@ class JujuStepHelper:
           self._juju_cmd('bootstrap', 'k8s')
 
         Any results from running with json are returned after being parsed.
+        When json_format is False, the subprocess.CompletedProcess output is returned.
+
         Subprocess execution errors are raised to the calling code.
 
         :param args: command to run
-        :return:
+        :param json_format: if True, add ``--format json`` and parse output
+        :param env: optional environment variables for the subprocess
+        :param cwd: optional working directory for the subprocess
+        :param timeout: optional timeout in seconds for the subprocess
+        :return: parsed JSON (dict/list) if json_format, else CompletedProcess
         """
         cmd = [self._get_juju_binary()]
         cmd.extend(args)
-        cmd.extend(["--format", "json"])
+        if json_format:
+            cmd.extend(["--format", "json"])
 
-        LOG.debug(f"Running command {' '.join(cmd)}")
+        LOG.debug("Running command %s", " ".join(cmd))
         try:
-            process = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            process = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=True,
+                env=env,
+                cwd=cwd,
+                timeout=timeout,
+            )
         except subprocess.CalledProcessError as e:
             _check_auth_error(e)
             raise
-        LOG.debug(f"Command finished. stdout={process.stdout}, stderr={process.stderr}")
+        LOG.debug(
+            "Command finished. stdout=%r, stderr=%r", process.stdout, process.stderr
+        )
 
-        return json.loads(process.stdout.strip())
+        if json_format:
+            return json.loads(process.stdout.strip())
+        return process
 
     def get_clouds(
         self, cloud_type: str, local: bool = False, controller: str | None = None
@@ -2024,21 +2045,10 @@ class JujuStepHelper:
         with tempfile.NamedTemporaryFile() as temp:
             temp.write(yaml.dump(cloud).encode("utf-8"))
             temp.flush()
-            cmd = [
-                self._get_juju_binary(),
-                "add-cloud",
-                name,
-                "--file",
-                temp.name,
-                "--client",
-            ]
+            args = ["add-cloud", name, "--file", temp.name, "--client"]
             if controller:
-                cmd.extend(["--controller", controller, "--force"])
-            LOG.debug(f"Running command {' '.join(cmd)}")
-            process = subprocess.run(cmd, capture_output=True, text=True, check=True)
-            LOG.debug(
-                f"Command finished. stdout={process.stdout}, stderr={process.stderr}"
-            )
+                args.extend(["--controller", controller, "--force"])
+            self._juju_cmd(*args, json_format=False)
 
         return True
 
@@ -2047,22 +2057,15 @@ class JujuStepHelper:
         with tempfile.NamedTemporaryFile() as temp:
             temp.write(yaml.dump(kubeconfig).encode("utf-8"))
             temp.flush()
-            cmd = [
-                self._get_juju_binary(),
+            env = os.environ.copy()
+            env.update({"KUBECONFIG": temp.name})
+            self._juju_cmd(
                 "add-k8s",
                 name,
                 "--client",
                 "--region=localhost/localhost",
-            ]
-
-            env = os.environ.copy()
-            env.update({"KUBECONFIG": temp.name})
-            LOG.debug(f"Running command {' '.join(cmd)}")
-            process = subprocess.run(
-                cmd, capture_output=True, text=True, check=True, env=env
-            )
-            LOG.debug(
-                f"Command finished. stdout={process.stdout}, stderr={process.stderr}"
+                json_format=False,
+                env=env,
             )
 
     def add_credential(self, cloud: str, credential: dict, controller: str | None):
@@ -2074,22 +2077,12 @@ class JujuStepHelper:
         with tempfile.NamedTemporaryFile() as temp:
             temp.write(yaml.dump(credential).encode("utf-8"))
             temp.flush()
-            cmd = [
-                self._get_juju_binary(),
-                "add-credential",
-                cloud,
-                "--file",
-                temp.name,
-            ]
+            args = ["add-credential", cloud, "--file", temp.name]
             if controller:
-                cmd.extend(["--controller", controller])
+                args.extend(["--controller", controller])
             else:
-                cmd.extend(["--client"])
-            LOG.debug(f"Running command {' '.join(cmd)}")
-            process = subprocess.run(cmd, capture_output=True, text=True, check=True)
-            LOG.debug(
-                f"Command finished. stdout={process.stdout}, stderr={process.stderr}"
-            )
+                args.extend(["--client"])
+            self._juju_cmd(*args, json_format=False)
 
     def integrate(
         self,
@@ -2099,39 +2092,20 @@ class JujuStepHelper:
         ignore_error_if_exists: bool = True,
     ):
         """Juju integrate applications."""
-        cmd = [
-            self._get_juju_binary(),
-            "integrate",
-            "-m",
-            model,
-            provider,
-            requirer,
-        ]
         try:
-            LOG.debug(f"Running command {' '.join(cmd)}")
-            process = subprocess.run(cmd, capture_output=True, text=True, check=True)
-            LOG.debug(
-                f"Command finished. stdout={process.stdout}, stderr={process.stderr}"
+            self._juju_cmd(
+                "integrate", "-m", model, provider, requirer, json_format=False
             )
         except subprocess.CalledProcessError as e:
-            _check_auth_error(e)
             LOG.debug(e.stderr)
             if ignore_error_if_exists and "already exists" not in e.stderr:
                 raise e
 
     def remove_relation(self, model: str, provider: str, requirer: str):
         """Juju remove relation."""
-        cmd = [
-            self._get_juju_binary(),
-            "remove-relation",
-            "-m",
-            model,
-            provider,
-            requirer,
-        ]
-        LOG.debug(f"Running command {' '.join(cmd)}")
-        process = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        LOG.debug(f"Command finished. stdout={process.stdout}, stderr={process.stderr}")
+        self._juju_cmd(
+            "remove-relation", "-m", model, provider, requirer, json_format=False
+        )
 
     def get_charm_deployed_versions(self, model: str) -> dict:
         """Return charm deployed info for all the applications in model.
