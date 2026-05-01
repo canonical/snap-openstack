@@ -11,6 +11,7 @@ from rich.console import Console
 from snaphelpers import Snap
 
 from sunbeam.clusterd.service import ManifestItemNotFoundException
+from sunbeam.core.checks import JujuLoginCheck, run_preflight_checks
 from sunbeam.core.common import (
     ResultType,
     RiskLevel,
@@ -126,6 +127,9 @@ def refresh(
     deployment: Deployment = ctx.obj
     client = deployment.get_client()
 
+    # Login to the Juju controller
+    run_preflight_checks([JujuLoginCheck(deployment.juju_account)], console)
+
     if not manifest_path and not clear_manifest:
         # Warn only when the snap channel risk has changed since the manifest
         # was last stored (e.g. snap refreshed from stable to beta).  We
@@ -168,7 +172,9 @@ def refresh(
         manifest = deployment.get_manifest()
 
     LOG.debug(f"Manifest used for deployment - core: {manifest.core}")
+
     jhelper = JujuHelper(deployment.juju_controller)
+
     upgrade_coordinator: UpgradeCoordinator
     if upgrade_release:
         upgrade_coordinator = ChannelUpgradeCoordinator(
@@ -209,6 +215,10 @@ def refresh_mysql(
     """Upgrade mysql-k8s charm to latest revision in channel."""
     deployment: Deployment = ctx.obj
     client = deployment.get_client()
+
+    # Login to the Juju controller
+    run_preflight_checks([JujuLoginCheck(deployment.juju_account)], console)
+
     manifest = None
     if manifest_path:
         manifest = deployment.get_manifest(manifest_path)
@@ -230,6 +240,7 @@ def refresh_mysql(
         )
 
     jhelper = JujuHelper(deployment.juju_controller)
+
     upgrade_coordinator = MySQLInChannelUpgradeCoordinator(
         deployment, client, jhelper, manifest, reset_mysql_upgrade_state
     )
@@ -255,6 +266,10 @@ def refresh_vault(
     """Upgrade vault-k8s charm to latest stable channel."""
     deployment: Deployment = ctx.obj
     client = deployment.get_client()
+
+    # Login to the Juju controller
+    run_preflight_checks([JujuLoginCheck(deployment.juju_account)], console)
+
     jhelper = JujuHelper(deployment.juju_controller)
 
     manifest = None
