@@ -38,6 +38,7 @@ apps:
       - network-bind
   sunbeam:
     command: bin/sunbeam
+    completer: usr/share/bash-completion/completions/sunbeam-completion
     plugs:
       - dot-local-share-juju
       - home
@@ -200,6 +201,7 @@ parts:
       done
 
   sunbeam-and-openstackclients:
+    after: [wrappers]
     plugin: python
     source: .
     source-subdir: sunbeam-python/
@@ -231,6 +233,9 @@ parts:
       mkdir -p usr/share/bash-completion/completions
       ./bin/openstack complete > usr/share/bash-completion/completions/openstack
       echo "complete -F _openstack openstack.openstack" >> usr/share/bash-completion/completions/openstack
+      # Pre-generate sunbeam completion cache
+      cp completions/sunbeam-completion usr/share/bash-completion/completions/sunbeam-completion
+      ./bin/python3 completions/generate_completion_cache.py usr/share/bash-completion/completions/.sunbeam-completion-cache
 
   plugin-packages:
     plugin: nil
