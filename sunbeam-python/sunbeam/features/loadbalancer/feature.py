@@ -19,6 +19,7 @@ from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import ConfigItemNotFoundException
 from sunbeam.commands.configure import retrieve_admin_credentials
 from sunbeam.core import questions
+from sunbeam.core.checks import JujuLoginCheck, run_preflight_checks
 from sunbeam.core.common import (
     FORMAT_TABLE,
     FORMAT_YAML,
@@ -1726,6 +1727,9 @@ class LoadbalancerFeature(OpenStackControlPlaneFeature):
         TLS certificates are provisioned separately via
         ``sunbeam loadbalancer provide-certificates``.
         """
+        # Login to the Juju controller
+        run_preflight_checks([JujuLoginCheck(deployment.juju_account)], console)
+
         openstack_tfhelper = deployment.get_tfhelper(self.tfplan)
         cni_tfhelper = deployment.get_tfhelper(self.cni_tfplan)
         setup_tfhelper = deployment.get_tfhelper(self.setup_tfplan)
@@ -1971,6 +1975,7 @@ class LoadbalancerFeature(OpenStackControlPlaneFeature):
                 "Barbican (secrets) feature must be enabled for Octavia Amphora.\n"
                 "Enable it first: sunbeam enable secrets"
             )
+
         self.run_configure_plans(
             deployment,
             show_hints=show_hints,
@@ -2004,6 +2009,10 @@ class LoadbalancerFeature(OpenStackControlPlaneFeature):
                 "Barbican (secrets) feature must be enabled for Octavia Amphora.\n"
                 "Enable it first: sunbeam enable secrets"
             )
+
+        # Login to the Juju controller
+        run_preflight_checks([JujuLoginCheck(deployment.juju_account)], console)
+
         jhelper = JujuHelper(deployment.juju_controller)
         feature_config: LoadbalancerFeatureConfig | None = None
         if self.manifest:
@@ -2043,6 +2052,7 @@ class LoadbalancerFeature(OpenStackControlPlaneFeature):
                 "Barbican (secrets) feature must be enabled for Octavia Amphora.\n"
                 "Enable it first: sunbeam enable secrets"
             )
+
         csrs = handle_list_outstanding_csrs(
             CA_MANUAL_TLS_CERTIFICATE,
             CA_MANUAL_TLS_CERTIFICATE_INTERFACE,

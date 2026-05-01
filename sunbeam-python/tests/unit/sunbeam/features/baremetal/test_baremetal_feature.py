@@ -78,8 +78,10 @@ class TestBaremetalFeature:
     @patch.object(steps, "JujuHelper")
     @patch.object(ironic_feature, "JujuHelper")
     @patch.object(ironic_feature, "click", Mock())
+    @patch.object(ironic_feature, "run_preflight_checks")
     def test_run_enable_plans(
         self,
+        mock_run_preflight_checks,
         mock_JujuHelper,
         mock_steps_JujuHelper,
         mock_switch_apply,

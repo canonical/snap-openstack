@@ -9,7 +9,11 @@ from rich.console import Console
 from rich.table import Table
 
 from sunbeam.clusterd.service import ConfigItemNotFoundException
-from sunbeam.core.checks import VerifyBootstrappedCheck, run_preflight_checks
+from sunbeam.core.checks import (
+    JujuLoginCheck,
+    VerifyBootstrappedCheck,
+    run_preflight_checks,
+)
 from sunbeam.core.common import (
     FORMAT_TABLE,
     FORMAT_YAML,
@@ -146,9 +150,12 @@ def add_sso(
 ) -> None:
     """Add a new identity provider."""
     deployment: Deployment = ctx.obj
-
     client = deployment.get_client()
-    preflight_checks = [VerifyBootstrappedCheck(client)]
+
+    preflight_checks = [
+        VerifyBootstrappedCheck(client),
+        JujuLoginCheck(deployment.juju_account),
+    ]
     run_preflight_checks(preflight_checks, console)
 
     cfg = safe_get_sso_config(client)
@@ -219,8 +226,13 @@ def remove_sso(
     """Remove an identity provider."""
     deployment: Deployment = ctx.obj
     client = deployment.get_client()
-    preflight_checks = [VerifyBootstrappedCheck(client)]
+
+    preflight_checks = [
+        VerifyBootstrappedCheck(client),
+        JujuLoginCheck(deployment.juju_account),
+    ]
     run_preflight_checks(preflight_checks, console)
+
     cfg = safe_get_sso_config(client)
 
     provider = cfg.get(protocol, {}).get(name)
@@ -233,6 +245,7 @@ def remove_sso(
         click.confirm(msg, abort=True)
 
     jhelper = JujuHelper(deployment.juju_controller)
+
     plan: list[BaseStep] = [
         TerraformInitStep(deployment.get_tfhelper("openstack-plan")),
     ]
@@ -287,8 +300,13 @@ def update_sso(
     """Update identity provider (openid only)."""
     deployment: Deployment = ctx.obj
     client = deployment.get_client()
-    preflight_checks = [VerifyBootstrappedCheck(client)]
+
+    preflight_checks = [
+        VerifyBootstrappedCheck(client),
+        JujuLoginCheck(deployment.juju_account),
+    ]
     run_preflight_checks(preflight_checks, console)
+
     try:
         cfg = read_config(client, SSO_CONFIG_KEY)
     except ConfigItemNotFoundException:
@@ -309,6 +327,7 @@ def update_sso(
         raise click.ClickException(f"Invalid config supplied: {e}")
 
     jhelper = JujuHelper(deployment.juju_controller)
+
     plan = [
         TerraformInitStep(deployment.get_tfhelper("openstack-plan")),
         UpdateExternalProviderStep(
@@ -328,6 +347,10 @@ def update_sso(
 def get_openid_redirect_uri(ctx: click.Context):
     """Get the OpenID redirect URI."""
     deployment: Deployment = ctx.obj
+
+    # Login to the Juju controller
+    run_preflight_checks([JujuLoginCheck(deployment.juju_account)], console)
+
     jhelper = JujuHelper(deployment.juju_controller)
     app = "keystone"
     action_cmd = "get-admin-account"
@@ -365,10 +388,15 @@ def purge_sso(
 ) -> None:
     """Remove all identity providers."""
     deployment: Deployment = ctx.obj
-    jhelper = JujuHelper(deployment.juju_controller)
     client = deployment.get_client()
-    preflight_checks = [VerifyBootstrappedCheck(client)]
+
+    preflight_checks = [
+        VerifyBootstrappedCheck(client),
+        JujuLoginCheck(deployment.juju_account),
+    ]
     run_preflight_checks(preflight_checks, console)
+
+    jhelper = JujuHelper(deployment.juju_controller)
 
     config = safe_get_sso_config(client)
     if not yes_i_mean_it and any(config.values()):
@@ -425,11 +453,16 @@ def set_saml_x509(
 ) -> None:
     """Set Keystone SAML x509 SP certificate and key."""
     deployment: Deployment = ctx.obj
-    jhelper = JujuHelper(deployment.juju_controller)
     client = deployment.get_client()
     tfhelper = deployment.get_tfhelper("openstack-plan")
-    preflight_checks = [VerifyBootstrappedCheck(client)]
+
+    preflight_checks = [
+        VerifyBootstrappedCheck(client),
+        JujuLoginCheck(deployment.juju_account),
+    ]
     run_preflight_checks(preflight_checks, console)
+
+    jhelper = JujuHelper(deployment.juju_controller)
 
     run_plan(
         [

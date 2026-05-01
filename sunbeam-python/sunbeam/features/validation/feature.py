@@ -17,6 +17,7 @@ from rich.console import Console
 from rich.table import Column, Table
 
 from sunbeam.clusterd.client import Client
+from sunbeam.core.checks import JujuLoginCheck, run_preflight_checks
 from sunbeam.core.common import BaseStep, Result, ResultType, StepContext, run_plan
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import (
@@ -39,7 +40,6 @@ from sunbeam.features.interface.v1.openstack import (
     OpenStackControlPlaneFeature,
     TerraformPlanLocation,
 )
-from sunbeam.steps.juju import JujuLoginStep
 from sunbeam.utils import click_option_show_hints, pass_method_obj
 from sunbeam.versions import OPENSTACK_CHANNEL
 
@@ -576,7 +576,7 @@ class ValidationFeature(OpenStackControlPlaneFeature):
         if output:
             # Due to shelling out to the juju cli (rather than using libjuju),
             # we need to ensure the juju cli is logged in.
-            run_plan([JujuLoginStep(deployment.juju_account)], console, show_hints)
+            run_preflight_checks([JujuLoginCheck(deployment.juju_account)], console)
 
             self._copy_file_from_tempest_container(
                 deployment, TEMPEST_VALIDATION_RESULT, output
@@ -617,7 +617,7 @@ class ValidationFeature(OpenStackControlPlaneFeature):
         """Get last validation result."""
         # Due to shelling out to the juju cli (rather than using libjuju),
         # we need to ensure the juju cli is logged in.
-        run_plan([JujuLoginStep(deployment.juju_account)], console, show_hints)
+        run_preflight_checks([JujuLoginCheck(deployment.juju_account)], console)
 
         if not self._check_file_exist_in_tempest_container(
             deployment, TEMPEST_VALIDATION_RESULT

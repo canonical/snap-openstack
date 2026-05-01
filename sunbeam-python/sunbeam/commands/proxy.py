@@ -13,7 +13,11 @@ from sunbeam.clusterd.service import (
     ClusterServiceUnavailableException,
     ConfigItemNotFoundException,
 )
-from sunbeam.core.checks import VerifyBootstrappedCheck, run_preflight_checks
+from sunbeam.core.checks import (
+    JujuLoginCheck,
+    VerifyBootstrappedCheck,
+    run_preflight_checks,
+)
 from sunbeam.core.common import (
     FORMAT_TABLE,
     FORMAT_YAML,
@@ -65,7 +69,10 @@ def _preflight_checks(deployment: Deployment):
                 "completed succesfully. Please run `sunbeam cluster bootstrap`"
             )
             raise click.ClickException(message)
-    preflight_checks = [VerifyBootstrappedCheck(client)]
+    preflight_checks = [
+        VerifyBootstrappedCheck(client),
+        JujuLoginCheck(deployment.juju_account),
+    ]
 
     run_preflight_checks(preflight_checks, console)
 

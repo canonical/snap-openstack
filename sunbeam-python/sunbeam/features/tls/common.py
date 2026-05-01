@@ -14,6 +14,7 @@ from rich.console import Console
 from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import ConfigItemNotFoundException
 from sunbeam.core import questions
+from sunbeam.core.checks import JujuLoginCheck, run_preflight_checks
 from sunbeam.core.common import (
     BaseStep,
     Result,
@@ -443,6 +444,10 @@ def handle_list_outstanding_csrs(
     ]
     """
     action_cmd = "get-outstanding-certificate-requests"
+
+    # Login to the Juju controller
+    run_preflight_checks([JujuLoginCheck(deployment.juju_account)], console)
+
     jhelper = JujuHelper(deployment.juju_controller)
     try:
         action_result = get_outstanding_certificate_requests(

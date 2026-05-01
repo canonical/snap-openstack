@@ -7,7 +7,11 @@ import click
 from rich.console import Console
 
 from sunbeam.core import juju
-from sunbeam.core.checks import VerifyBootstrappedCheck, run_preflight_checks
+from sunbeam.core.checks import (
+    JujuLoginCheck,
+    VerifyBootstrappedCheck,
+    run_preflight_checks,
+)
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.openstack import OPENSTACK_MODEL
 
@@ -37,9 +41,12 @@ def retrieve_dashboard_url(jhelper: juju.JujuHelper) -> str:
 def dashboard_url(ctx: click.Context) -> None:
     """Retrieve OpenStack Dashboard URL."""
     deployment: Deployment = ctx.obj
-    preflight_checks = []
-    preflight_checks.append(VerifyBootstrappedCheck(deployment.get_client()))
+    preflight_checks = [
+        VerifyBootstrappedCheck(deployment.get_client()),
+        JujuLoginCheck(deployment.juju_account),
+    ]
     run_preflight_checks(preflight_checks, console)
+
     jhelper = juju.JujuHelper(deployment.juju_controller)
 
     with console.status("Retrieving dashboard URL from Horizon service ... "):

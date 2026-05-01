@@ -10,10 +10,12 @@ from typing import Generic, Literal, Type, TypeGuard
 import click
 from packaging.requirements import Requirement
 from packaging.version import Version
+from rich.console import Console
 from snaphelpers import Snap
 
 from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import ConfigItemNotFoundException
+from sunbeam.core.checks import JujuLoginCheck, run_preflight_checks
 from sunbeam.core.common import SunbeamException, read_config, update_config
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.manifest import FeatureConfig, Manifest, SoftwareConfig
@@ -23,6 +25,7 @@ from sunbeam.provider.maas.deployment import MaasDeployment
 from sunbeam.versions import VarMap
 
 LOG = logging.getLogger(__name__)
+console = Console()
 _GROUPS: dict[str, Type["BaseFeatureGroup"]] = {}
 _FEATURES: dict[str, Type["BaseFeature"]] = {}
 
@@ -745,6 +748,7 @@ class EnableDisableFeature(BaseFeature, Generic[ConfigType]):
         self, deployment: Deployment, config: ConfigType, show_hints: bool
     ) -> None:
         """Handler to perform tasks before enabling the feature."""
+        run_preflight_checks([JujuLoginCheck(deployment.juju_account)], console)
         self.check_enablement_requirements(deployment)
         self.enable_requirements(deployment, show_hints)
 
@@ -781,12 +785,14 @@ class EnableDisableFeature(BaseFeature, Generic[ConfigType]):
             current_click_context = current_click_context.parent
 
         self.pre_enable(deployment, config, show_hints)
+
         self.run_enable_plans(deployment, config, show_hints)
         self.post_enable(deployment, config, show_hints)
         self.update_feature_info(deployment.get_client(), {"enabled": "true"})
 
     def pre_disable(self, deployment: Deployment, show_hints: bool) -> None:
         """Handler to perform tasks before disabling the feature."""
+        run_preflight_checks([JujuLoginCheck(deployment.juju_account)], console)
         self.check_enablement_requirements(deployment, state="disable")
 
     def post_disable(self, deployment: Deployment, show_hints: bool) -> None:
@@ -804,6 +810,7 @@ class EnableDisableFeature(BaseFeature, Generic[ConfigType]):
     def disable_feature(self, deployment: Deployment, show_hints: bool) -> None:
         """Disable feature command."""
         self.pre_disable(deployment, show_hints)
+
         self.run_disable_plans(deployment, show_hints)
         self.post_disable(deployment, show_hints)
         self.update_feature_info(deployment.get_client(), {"enabled": "false"})

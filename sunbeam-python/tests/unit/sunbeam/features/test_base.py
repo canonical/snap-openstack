@@ -553,6 +553,44 @@ class TestEnableDisableFeature:
         )
         feature.check_enablement_requirements(deployment, "disable")
 
+    def test_pre_enable_runs_juju_login_preflight_check(self, deployment, mocker):
+        feature = DummyFeature()
+        juju_account = Mock()
+        deployment.juju_account = juju_account
+        run_preflight_checks = mocker.patch(
+            "sunbeam.features.interface.v1.base.run_preflight_checks"
+        )
+        mocker.patch.object(feature, "check_enablement_requirements")
+        mocker.patch.object(feature, "enable_requirements")
+
+        feature.pre_enable(deployment, Mock(), show_hints=False)
+
+        run_preflight_checks.assert_called_once()
+        checks = run_preflight_checks.call_args.args[0]
+        assert len(checks) == 1
+        assert checks[0].step.juju_account == juju_account
+
+    def test_pre_disable_runs_juju_login_preflight_check(self, deployment, mocker):
+        feature = DummyFeature()
+        juju_account = Mock()
+        deployment.juju_account = juju_account
+        run_preflight_checks = mocker.patch(
+            "sunbeam.features.interface.v1.base.run_preflight_checks"
+        )
+        check_enablement_requirements = mocker.patch.object(
+            feature, "check_enablement_requirements"
+        )
+
+        feature.pre_disable(deployment, show_hints=False)
+
+        check_enablement_requirements.assert_called_once_with(
+            deployment, state="disable"
+        )
+        run_preflight_checks.assert_called_once()
+        checks = run_preflight_checks.call_args.args[0]
+        assert len(checks) == 1
+        assert checks[0].step.juju_account == juju_account
+
 
 class TestFeatureManager:
     """Test FeatureManager methods."""

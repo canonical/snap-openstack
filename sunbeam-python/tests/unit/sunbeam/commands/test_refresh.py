@@ -192,6 +192,7 @@ def _patch_upgrade_coordinators(mocker):
         autospec=True,
     )
     mocker.patch("sunbeam.commands.refresh.JujuHelper", autospec=True)
+    mocker.patch("sunbeam.commands.refresh.run_preflight_checks")
     mocker.patch("sunbeam.commands.refresh.run_plan")
 
 
