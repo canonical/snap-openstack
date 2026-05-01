@@ -136,6 +136,57 @@ class JujuSecretNotFound(JujuException):
     pass
 
 
+class JujuAuthenticationError(JujuException):
+    """Raised when Juju authentication has expired or is invalid.
+
+    This typically occurs when Juju login macaroons have expired (after 24h)
+    and the user needs to re-authenticate.
+    """
+
+    pass
+
+
+# Error patterns in juju CLI stderr that indicate expired/invalid authentication.
+# Sourced from juju/juju source code:
+#   - "please enter password" — cmd/modelcmd/base.go (CLI password prompt)
+#   - "cannot log in" — cmd/juju/user/login.go (login failure)
+#   - "invalid entity name or password" — apiserver/errors (ErrUnauthorized)
+#   - "login expired" — apiserver/errors (ErrLoginExpired)
+#   - "no credentials provided" — apiserver/errors (ErrNoCreds)
+#   - "not logged in" — apiserver/errors (ErrNotLoggedIn)
+#   - "unauthorized access" — rpc/params/apierror.go (CodeUnauthorized)
+#   - "macaroon discharge required" — rpc/params/apierror.go (CodeDischargeRequired)
+#   - "permission denied" — apiserver/errors (ErrPerm)
+_AUTH_ERROR_PATTERNS = (
+    "please enter password",
+    "cannot log in",
+    "invalid entity name or password",
+    "login expired",
+    "no credentials provided",
+    "not logged in",
+    "unauthorized access",
+    "macaroon discharge required",
+    "permission denied",
+)
+
+
+def _check_auth_error(
+    error: "jubilant.CLIError | subprocess.CalledProcessError",
+) -> None:
+    """Raise JujuAuthenticationError if the error indicates an auth failure.
+
+    :param error: The CLI error to check
+    :raises JujuAuthenticationError: If the error is an authentication failure
+    """
+    stderr = getattr(error, "stderr", "") or ""
+    stderr_lower = stderr.lower()
+    if any(pattern in stderr_lower for pattern in _AUTH_ERROR_PATTERNS):
+        raise JujuAuthenticationError(
+            "Juju login has expired or is invalid. "
+            "Please run 'sunbeam utils juju-login' to re-authenticate."
+        ) from error
+
+
 class ChannelUpdate(TypedDict):
     """Channel Update step.
 
@@ -276,7 +327,11 @@ class JujuHelper:
         if json_format:
             control_args.extend(("--format", "json"))
         args = (args[0],) + tuple(control_args) + args[1:]
-        ret = juju.cli(*args, **kwargs)
+        try:
+            ret = juju.cli(*args, **kwargs)
+        except jubilant.CLIError as e:
+            _check_auth_error(e)
+            raise
         if json_format:
             try:
                 return json.loads(ret)
@@ -1851,7 +1906,11 @@ class JujuStepHelper:
         cmd.extend(["--format", "json"])
 
         LOG.debug(f"Running command {' '.join(cmd)}")
-        process = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        try:
+            process = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        except subprocess.CalledProcessError as e:
+            _check_auth_error(e)
+            raise
         LOG.debug(f"Command finished. stdout={process.stdout}, stderr={process.stderr}")
 
         return json.loads(process.stdout.strip())
@@ -2055,6 +2114,7 @@ class JujuStepHelper:
                 f"Command finished. stdout={process.stdout}, stderr={process.stderr}"
             )
         except subprocess.CalledProcessError as e:
+            _check_auth_error(e)
             LOG.debug(e.stderr)
             if ignore_error_if_exists and "already exists" not in e.stderr:
                 raise e
