@@ -13,6 +13,7 @@ from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import JujuHelper
 from sunbeam.core.terraform import TerraformInitStep
 from sunbeam.steps.cinder_volume import DeployCinderVolumeApplicationStep
+from sunbeam.steps.juju import JujuLoginStep
 from sunbeam.steps.k8s import PatchCoreDNSStep
 from sunbeam.steps.microceph import (
     DeployMicrocephApplicationStep,
@@ -49,7 +50,6 @@ def resize(
     openstack_tfhelper = deployment.get_tfhelper("openstack-plan")
     microceph_tfhelper = deployment.get_tfhelper("microceph-plan")
     cinder_volume_tfhelper = deployment.get_tfhelper("cinder-volume-plan")
-    jhelper = JujuHelper(deployment.juju_controller)
 
     storage_nodes = client.cluster.list_nodes_by_role("storage")
 
@@ -57,7 +57,12 @@ def resize(
     if parameter_source == ParameterSource.COMMANDLINE:
         LOG.warning("WARNING: Option --force is deprecated and the value is ignored.")
 
-    plan = []
+    # Login to the Juju controller
+    run_plan([JujuLoginStep(deployment.juju_account)], console)
+
+    jhelper = JujuHelper(deployment.juju_controller)
+
+    plan: list = []
     if len(storage_nodes):
         # Change default-pool-size based on number of storage nodes
         plan.extend(

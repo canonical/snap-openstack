@@ -76,7 +76,7 @@ from sunbeam.features.interface.v1.openstack import (
     TerraformPlanLocation,
 )
 from sunbeam.steps import openstack
-from sunbeam.steps.juju import RemoveSaasApplicationsStep
+from sunbeam.steps.juju import JujuLoginStep, RemoveSaasApplicationsStep
 from sunbeam.steps.k8s import CREDENTIAL_SUFFIX
 from sunbeam.utils import click_option_show_hints, pass_method_obj
 from sunbeam.versions import TRAEFIK_CHANNEL
@@ -947,6 +947,9 @@ class EmbeddedObservabilityFeature(ObservabilityFeature):
     @pass_method_obj
     def dashboard_url(self, deployment: Deployment) -> None:
         """Retrieve COS Dashboard URL."""
+        # Login to the Juju controller
+        run_plan([JujuLoginStep(deployment.juju_account)], console)
+
         jhelper = JujuHelper(deployment.juju_controller)
 
         with console.status("Retrieving dashboard URL from Grafana service ... "):

@@ -21,6 +21,7 @@ def test_update_clusterd_credentials_invokes_plan(tmp_path, mocker):
         ctx.obj = deployment
         cmd.callback(show_hints=False)
 
-    assert run_plan_spy.call_count == 1
-    plan = run_plan_spy.call_args[0][0]
+    # First call is JujuLoginStep, second is the actual plan
+    assert run_plan_spy.call_count == 2
+    plan = run_plan_spy.call_args_list[1][0][0]
     assert isinstance(plan[0], MaasSaveClusterdCredentialsStep)

@@ -20,6 +20,7 @@ from sunbeam.core.common import (
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import JujuHelper
 from sunbeam.core.manifest import AddManifestStep
+from sunbeam.steps.juju import JujuLoginStep
 from sunbeam.steps.upgrades.base import UpgradeCoordinator
 from sunbeam.steps.upgrades.inter_channel import ChannelUpgradeCoordinator
 from sunbeam.steps.upgrades.intra_channel import (
@@ -163,7 +164,12 @@ def refresh(
         manifest = deployment.get_manifest()
 
     LOG.debug(f"Manifest used for deployment - core: {manifest.core}")
+
+    # Login to the Juju controller
+    run_plan([JujuLoginStep(deployment.juju_account)], console, show_hints)
+
     jhelper = JujuHelper(deployment.juju_controller)
+
     upgrade_coordinator: UpgradeCoordinator
     if upgrade_release:
         upgrade_coordinator = ChannelUpgradeCoordinator(
@@ -224,7 +230,11 @@ def refresh_mysql(
             default=False,
         )
 
+    # Login to the Juju controller
+    run_plan([JujuLoginStep(deployment.juju_account)], console, show_hints)
+
     jhelper = JujuHelper(deployment.juju_controller)
+
     upgrade_coordinator = MySQLInChannelUpgradeCoordinator(
         deployment, client, jhelper, manifest, reset_mysql_upgrade_state
     )
@@ -250,6 +260,10 @@ def refresh_vault(
     """Upgrade vault-k8s charm to latest stable channel."""
     deployment: Deployment = ctx.obj
     client = deployment.get_client()
+
+    # Login to the Juju controller
+    run_plan([JujuLoginStep(deployment.juju_account)], console, show_hints)
+
     jhelper = JujuHelper(deployment.juju_controller)
 
     manifest = None

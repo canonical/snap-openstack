@@ -37,6 +37,7 @@ from sunbeam.features.interface.v1.openstack import (
     OpenStackControlPlaneFeature,
     TerraformPlanLocation,
 )
+from sunbeam.steps.juju import JujuLoginStep
 from sunbeam.utils import click_option_show_hints, pass_method_obj
 from sunbeam.versions import OPENSTACK_CHANNEL
 
@@ -370,7 +371,12 @@ class LDAPFeature(OpenStackControlPlaneFeature):
             "domain-name": domain_name,
             "tls-ca-ldap": ca,
         }
+
+        # Login to the Juju controller
+        run_plan([JujuLoginStep(deployment.juju_account)], console, show_hints)
+
         jhelper = JujuHelper(deployment.juju_controller)
+
         plan = [
             TerraformInitStep(deployment.get_tfhelper(self.tfplan)),
             AddLDAPDomainStep(deployment, FeatureConfig(), jhelper, self, charm_config),
@@ -415,7 +421,12 @@ class LDAPFeature(OpenStackControlPlaneFeature):
             with Path(ca_cert_file).open(mode="r") as f:
                 ca = f.read()
             charm_config["tls-ca-ldap"] = ca
+
+        # Login to the Juju controller
+        run_plan([JujuLoginStep(deployment.juju_account)], console, show_hints)
+
         jhelper = JujuHelper(deployment.juju_controller)
+
         plan = [
             TerraformInitStep(deployment.get_tfhelper(self.tfplan)),
             UpdateLDAPDomainStep(deployment, jhelper, self, charm_config),
@@ -431,7 +442,11 @@ class LDAPFeature(OpenStackControlPlaneFeature):
         self, deployment: Deployment, domain_name: str, show_hints: bool
     ) -> None:
         """Remove LDAP backed domain."""
+        # Login to the Juju controller
+        run_plan([JujuLoginStep(deployment.juju_account)], console, show_hints)
+
         jhelper = JujuHelper(deployment.juju_controller)
+
         plan = [
             TerraformInitStep(deployment.get_tfhelper(self.tfplan)),
             DisableLDAPDomainStep(

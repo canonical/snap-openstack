@@ -956,6 +956,7 @@ class TestAmphoraCommandsSecretsPrerequisite:
         with (
             patch("click.get_current_context", return_value=ctx),
             patch.object(feature, "run_configure_plans") as mock_run,
+            patch("sunbeam.features.loadbalancer.feature.run_plan"),
         ):
             feature.configure.callback(feature, accept_defaults=False, show_hints=False)
             mock_run.assert_called_once()
@@ -976,7 +977,8 @@ class TestAmphoraCommandsSecretsPrerequisite:
             patch("sunbeam.features.loadbalancer.feature.JujuHelper"),
         ):
             feature.provide_certificates.callback(feature, show_hints=False)
-            mock_run.assert_called_once()
+            # Called twice: once for JujuLoginStep, once for the actual plan
+            assert mock_run.call_count == 2
 
     def test_list_outstanding_csrs_raises_when_secrets_disabled(self):
         feature = self._make_feature()
@@ -994,6 +996,7 @@ class TestAmphoraCommandsSecretsPrerequisite:
                 "sunbeam.features.loadbalancer.feature.handle_list_outstanding_csrs",
                 return_value=[],
             ),
+            patch("sunbeam.features.loadbalancer.feature.run_plan"),
         ):
             feature.list_outstanding_csrs.callback(feature, format="table")
 

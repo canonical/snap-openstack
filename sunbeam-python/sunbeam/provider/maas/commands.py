@@ -610,6 +610,10 @@ def deploy(
     deployment_location = deployment_path(Snap())
     deployments = DeploymentsConfig.load(deployment_location)
     maas_client = MaasClient.from_deployment(deployment)
+
+    # Login to the Juju controller
+    run_plan([JujuLoginStep(deployment.juju_account)], console, show_hints)
+
     jhelper = JujuHelper(deployment.juju_controller)
     clusterd_plan = [
         MaasSaveClusterdCredentialsStep(jhelper, deployment.name, deployments)
@@ -1120,6 +1124,10 @@ def configure_cmd(
 def list_nodes(ctx: click.Context, format: str, show_hints: bool) -> None:
     """List nodes in the custer."""
     deployment: MaasDeployment = ctx.obj
+
+    # Login to the Juju controller
+    run_plan([JujuLoginStep(deployment.juju_account)], console, show_hints)
+
     jhelper = JujuHelper(deployment.juju_controller)
     step = MaasClusterStatusStep(deployment, jhelper)
     results = run_plan([step], console, show_hints)
@@ -1782,6 +1790,9 @@ def destroy_deployment_cmd(
     jhelper = None
     manifest = deployment.get_manifest(manifest_path)
     try:
+        # Login to the Juju controller
+        run_plan([JujuLoginStep(deployment.juju_account)], console)
+
         jhelper = JujuHelper(deployment.juju_controller)
         hypervisor_tfhelper = deployment.get_tfhelper("hypervisor-plan")
         sunbeam_machine_tfhelper = deployment.get_tfhelper("sunbeam-machine-plan")
@@ -1889,6 +1900,10 @@ def configure_sriov(
     deployment: MaasDeployment = ctx.obj
     client = deployment.get_client()
     manifest = deployment.get_manifest(manifest_path)
+
+    # Login to the Juju controller
+    run_plan([JujuLoginStep(deployment.juju_account)], console, show_hints)
+
     jhelper = JujuHelper(deployment.juju_controller)
 
     admin_credentials = retrieve_admin_credentials(jhelper, deployment, OPENSTACK_MODEL)
@@ -1949,6 +1964,10 @@ def configure_dpdk(
     deployment: MaasDeployment = ctx.obj
     client = deployment.get_client()
     manifest = deployment.get_manifest(manifest_path)
+
+    # Login to the Juju controller
+    run_plan([JujuLoginStep(deployment.juju_account)], console, show_hints)
+
     jhelper = JujuHelper(deployment.juju_controller)
 
     admin_credentials = retrieve_admin_credentials(jhelper, deployment, OPENSTACK_MODEL)

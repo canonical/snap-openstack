@@ -28,6 +28,7 @@ from sunbeam.core.deployment import Deployment
 from sunbeam.core.openstack import DEFAULT_REGION, OPENSTACK_MODEL
 from sunbeam.core.terraform import TerraformHelper
 from sunbeam.steps.configure import CLOUD_CONFIG_SECTION
+from sunbeam.steps.juju import JujuLoginStep
 from sunbeam.utils import click_option_show_hints
 
 LOG = logging.getLogger(__name__)
@@ -253,6 +254,10 @@ def cloud_config(
     preflight_checks = []
     preflight_checks.append(VerifyBootstrappedCheck(client))
     run_preflight_checks(preflight_checks, console)
+
+    # Login to the Juju controller
+    run_plan([JujuLoginStep(deployment.juju_account)], console, show_hints)
+
     jhelper_keystone = deployment.get_juju_helper(keystone=True)
     if not jhelper_keystone.model_exists(OPENSTACK_MODEL):
         LOG.error(f"Expected model {OPENSTACK_MODEL} missing")

@@ -32,6 +32,7 @@ from sunbeam.provider.local.commands import LocalProvider
 from sunbeam.provider.local.deployment import LocalDeployment
 from sunbeam.provider.maas.commands import MaasProvider
 from sunbeam.provider.maas.steps import MaasSaveClusterdCredentialsStep
+from sunbeam.steps.juju import JujuLoginStep
 from sunbeam.utils import CatchGroup, click_option_show_hints
 
 console = Console()
@@ -243,7 +244,12 @@ def update_clusterd_credentials(ctx, show_hints: bool = False):
     snap = Snap()
     path = deployment_path(snap)
     deployments = DeploymentsConfig.load(path)
+
+    # Login to the Juju controller
+    run_plan([JujuLoginStep(deployment.juju_account)], console, show_hints)
+
     jhelper = JujuHelper(deployment.juju_controller)
+
     plan = [MaasSaveClusterdCredentialsStep(jhelper, deployment.name, deployments)]
     run_plan(plan, console, show_hints)
 

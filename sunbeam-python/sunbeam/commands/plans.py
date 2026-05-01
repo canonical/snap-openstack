@@ -17,10 +17,12 @@ from sunbeam.commands.configure import retrieve_admin_credentials
 from sunbeam.core.common import (
     FORMAT_TABLE,
     FORMAT_YAML,
+    run_plan,
 )
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.errors import SunbeamException
+from sunbeam.steps.juju import JujuLoginStep
 
 LOG = logging.getLogger(__name__)
 console = Console()
@@ -107,6 +109,10 @@ def shell_plan(ctx: click.Context, plan: str | None = None):
     with the environment variables set for the specified plan.
     """
     deployment: Deployment = ctx.obj
+
+    # Login to the Juju controller
+    run_plan([JujuLoginStep(deployment.juju_account)], console)
+
     jhelper_keystone = deployment.get_juju_helper(keystone=True)
 
     with console.status("Fetching OS admin credentials..."):
