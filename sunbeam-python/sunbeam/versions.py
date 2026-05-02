@@ -203,6 +203,8 @@ DEPLOY_OPENSTACK_TFVAR_MAP["charms"]["kratos-external-idp-integrator"] = {
 
 # mysql-k8s supports a config map when deployed in many-mysql mode
 DEPLOY_OPENSTACK_TFVAR_MAP["charms"]["mysql-k8s"]["config-map"] = "mysql-config-map"
+# traefik-k8s supports a config map to configure each traefik instance separately
+DEPLOY_OPENSTACK_TFVAR_MAP["charms"]["traefik-k8s"]["config-map"] = "traefik-config-map"
 # mysql-k8s supports a storage map when deployed in many-mysql mode
 DEPLOY_OPENSTACK_TFVAR_MAP["charms"]["mysql-k8s"]["storage-map"] = "mysql-storage-map"
 # mysql-k8s storage directive when deployed in single mode
