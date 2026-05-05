@@ -93,6 +93,9 @@ class LatestInChannel(BaseStep, JujuStepHelper):
     def is_track_changed_for_any_charm(self, deployed_apps: dict):
         """Check if chanel track is same in manifest and deployed app."""
         for app_name, (charm, channel, _) in deployed_apps.items():
+            # Infra apps are managed by dedicated subcommands; skip them.
+            if charm in INFRA_APPS:
+                continue
             charm_manifest = self.manifest.core.software.charms.get(charm)
             if not charm_manifest:
                 for _, feature in self.manifest.get_features():

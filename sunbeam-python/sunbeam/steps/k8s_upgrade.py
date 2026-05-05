@@ -12,7 +12,6 @@ from sunbeam.core.common import (
 )
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import (
-    ApplicationNotFoundException,
     JujuException,
     JujuHelper,
     JujuStepHelper,
@@ -20,6 +19,7 @@ from sunbeam.core.juju import (
     LeaderNotFoundException,
 )
 from sunbeam.core.manifest import Manifest
+from sunbeam.steps.charm_upgrade import CharmRefreshDecision, check_charm_needs_refresh
 from sunbeam.versions import K8S_CHANNEL
 
 LOG = logging.getLogger(__name__)
@@ -65,149 +65,36 @@ class K8SCharmUpgradeStep(BaseStep, JujuStepHelper):
         self.manifest = manifest
         self.jhelper = jhelper
         self.application = application
-        self._target_channel: str = K8S_CHANNEL
-        self._needs_channel_flag = False
+        self._decision: CharmRefreshDecision  # set by is_skip()
 
     @property
     def model(self) -> str:
         """Return the model where the k8s charm is deployed."""
         return self.deployment.openstack_machines_model
 
-    def _manifest_channel(self) -> str | None:
-        """Return the channel from the manifest, or None if not explicitly set."""
-        charm_manifest = self.manifest.find_charm(CHARM_NAME)
-        return (charm_manifest.channel if charm_manifest else None) or None
-
-    def _resolve_target_channel(self) -> str:
-        """Return the target channel from the manifest, falling back to K8S_CHANNEL."""
-        return self._manifest_channel() or K8S_CHANNEL
-
-    def _resolve_target_revision(self) -> int | None:
-        """Return the pinned revision from the manifest, or None."""
-        charm_manifest = self.manifest.find_charm(CHARM_NAME)
-        return charm_manifest.revision if charm_manifest else None
-
     def is_skip(self, context: StepContext) -> Result:
         """Skip if k8s is not deployed or already at the target revision."""
-        try:
-            app = self.jhelper.get_application(self.application, self.model)
-        except ApplicationNotFoundException:
+        decision = check_charm_needs_refresh(
+            self.jhelper,
+            self.manifest,
+            CHARM_NAME,
+            self.model,
+            self.application,
+            default_channel=K8S_CHANNEL,
+            support_track_upgrades=False,
+        )
+        self._decision = decision
+        if decision.result.result_type == ResultType.FAILED:
             return Result(
-                ResultType.SKIPPED,
-                f"{self.application!r} application has not been deployed yet",
+                ResultType.FAILED,
+                f"k8s upgrade failed: {decision.result.message}",
             )
-
-        target_revision = self._resolve_target_revision()
-        manifest_channel = self._manifest_channel()
-        deployed_channel = app.charm_channel or ""
-
-        # When the user provides only a revision (no channel in the manifest),
-        # try to resolve which channel that revision belongs to so we can still
-        # enforce the no-track-change rule.
-        if target_revision is not None and manifest_channel is None:
-            self._needs_channel_flag = False
-            if app.charm_rev == target_revision:
-                return Result(
-                    ResultType.SKIPPED,
-                    f"{CHARM_NAME} already at manifest pinned revision"
-                    f" {target_revision}",
-                )
-            # Look up the channel for the requested revision on CharmHub.
-            try:
-                revision_channel = self.jhelper.get_charm_channel_for_revision(
-                    CHARM_NAME, target_revision
-                )
-            except JujuException as e:
-                LOG.debug(
-                    "Could not determine channel for revision %s: %s",
-                    target_revision,
-                    e,
-                )
-                revision_channel = None
-
-            if revision_channel and deployed_channel:
-                deployed_track = deployed_channel.split("/")[0]
-                revision_track = revision_channel.split("/")[0]
-                if deployed_track != revision_track:
-                    return Result(
-                        ResultType.FAILED,
-                        "k8s upgrade failed: "
-                        f"Revision {target_revision} belongs to channel "
-                        f"{revision_channel!r} (track {revision_track!r}), "
-                        f"but the deployed charm is on track {deployed_track!r}. "
-                        "Track changes are not supported by this command.",
-                    )
-            return Result(ResultType.COMPLETED)
-
-        # When no manifest channel is set, stay on whatever channel is already
-        # deployed — this is a patch-only refresh within the same channel/risk.
-        # Only switch channel when the manifest explicitly requests one.
-        effective_target_channel = manifest_channel or deployed_channel or K8S_CHANNEL
-
-        # Block channel track changes (e.g. 1.32 -> 1.35) only when the manifest
-        # explicitly requests a different channel.
-        if manifest_channel and deployed_channel:
-            deployed_track = deployed_channel.split("/")[0]
-            target_track = effective_target_channel.split("/")[0]
-            if deployed_track != target_track:
-                return Result(
-                    ResultType.FAILED,
-                    "k8s upgrade failed: "
-                    f"Channel track change from {deployed_track!r} to "
-                    f"{target_track!r} is not supported by this command. ",
-                )
-
-        # _needs_channel_flag: True when the manifest requests a different risk
-        # level (e.g. stable -> edge). --channel will be passed to charm_refresh.
-        self._needs_channel_flag = deployed_channel != effective_target_channel
-
-        # If a specific revision is pinned together with a channel and already
-        # deployed at that exact combination, there is nothing to do.
-        if target_revision is not None:
-            if (
-                deployed_channel == effective_target_channel
-                and app.charm_rev == target_revision
-            ):
-                return Result(
-                    ResultType.SKIPPED,
-                    f"{CHARM_NAME} already at manifest pinned revision "
-                    f"{target_revision} for channel {effective_target_channel}",
-                )
-            return Result(ResultType.COMPLETED)
-
-        # For risk-level changes, always proceed (no revision check needed).
-        if self._needs_channel_flag:
-            return Result(ResultType.COMPLETED)
-
-        # Patch upgrade: check whether a newer revision is available.
-        try:
-            if app.base:
-                base = f"{app.base.name}@{app.base.channel}"
-                latest_rev = self.jhelper.get_available_charm_revision(
-                    CHARM_NAME, effective_target_channel, base
-                )
-            else:
-                latest_rev = self.jhelper.get_available_charm_revision(
-                    CHARM_NAME, effective_target_channel
-                )
-        except JujuException as e:
-            LOG.debug("Could not determine latest revision for %s: %s", CHARM_NAME, e)
-            # Can't determine; proceed with the refresh anyway.
-            return Result(ResultType.COMPLETED)
-
-        if app.charm_rev == latest_rev:
-            return Result(
-                ResultType.SKIPPED,
-                f"{CHARM_NAME} is already at the latest revision "
-                f"{latest_rev} for channel {effective_target_channel}",
-            )
-
-        return Result(ResultType.COMPLETED)
+        return decision.result
 
     def run(self, context: StepContext) -> Result:
         """Execute the k8s charm upgrade procedure."""
-        target_channel = self._resolve_target_channel()
-        target_revision = self._resolve_target_revision()
+        target_channel = self._decision.effective_channel
+        target_revision = self._decision.effective_revision
 
         # Step 1: pre-upgrade-check
         try:
@@ -239,7 +126,7 @@ class K8SCharmUpgradeStep(BaseStep, JujuStepHelper):
 
         # Step 2: juju refresh k8s [--channel CHANNEL]
         # Pass --channel only when the risk level differs from the deployed channel.
-        refresh_channel = target_channel if self._needs_channel_flag else None
+        refresh_channel = target_channel if self._decision.needs_channel_flag else None
         LOG.info(
             "Refreshing %s charm%s",
             self.application,

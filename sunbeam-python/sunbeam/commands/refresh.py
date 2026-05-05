@@ -12,6 +12,7 @@ from snaphelpers import Snap
 
 from sunbeam.clusterd.service import ManifestItemNotFoundException
 from sunbeam.core.common import (
+    ResultType,
     RiskLevel,
     get_step_message,
     infer_risk,
@@ -302,17 +303,19 @@ def refresh_k8s(
     manifest_path: Path | None = None,
     show_hints: bool = False,
 ) -> None:
-    """Upgrade k8s charm to latest revision in channel.
+    """Refresh the k8s charm to the latest patch revision.
 
-    Performs a patch upgrade (same channel, new revision) or a minor upgrade
-    (new channel track) following the Canonical Kubernetes upgrade procedure:
+    Performs a patch upgrade (same channel, newer revision) following
+    the Canonical Kubernetes upgrade procedure:
 
     1. Run the pre-upgrade-check action on the k8s leader unit.
-    2. Refresh the k8s charm (optionally to a new channel for minor upgrades).
+    2. Refresh the k8s charm within the currently deployed channel.
     3. Wait for all k8s units to return to active.
+    4. Apply the k8s Terraform plan to sync state.
 
-    The target channel is read from the manifest when provided; otherwise the
-    default channel from the snap is used.
+    Track (minor/major version) upgrades are not supported by this
+    command. A manifest channel entry may change the risk level within
+    the same track (e.g. 1.32/stable -> 1.32/edge).
     """
     deployment: Deployment = ctx.obj
     client = deployment.get_client()
@@ -327,15 +330,22 @@ def refresh_k8s(
         LOG.debug("Getting latest manifest from cluster db")
         manifest = deployment.get_manifest()
 
-    plan: list = [
-        K8SCharmUpgradeStep(
-            deployment,
-            client,
-            manifest,
-            jhelper,
-        ),
-        TerraformInitStep(deployment.get_tfhelper("k8s-plan")),
-    ]
+    upgrade_step = K8SCharmUpgradeStep(
+        deployment,
+        client,
+        manifest,
+        jhelper,
+    )
+    upgrade_results = run_plan([upgrade_step], console, show_hints)
+    upgrade_result = upgrade_results.get(K8SCharmUpgradeStep.__name__)
+    if upgrade_result and upgrade_result.result_type == ResultType.SKIPPED:
+        message = get_step_message(upgrade_results, K8SCharmUpgradeStep)
+        if message:
+            click.echo(message)
+        click.echo("k8s refresh skipped.")
+        return
+
+    plan: list = [TerraformInitStep(deployment.get_tfhelper("k8s-plan"))]
 
     if is_maas_deployment(deployment):
         from sunbeam.provider.maas.client import MaasClient  # noqa: PLC0415
@@ -369,9 +379,9 @@ def refresh_k8s(
             )
         )
 
-    plan_results = run_plan(plan, console, show_hints)
+    run_plan(plan, console, show_hints)
 
-    message = get_step_message(plan_results, K8SCharmUpgradeStep)
+    message = get_step_message(upgrade_results, K8SCharmUpgradeStep)
     if message:
         click.echo(message)
     click.echo("k8s refresh complete.")

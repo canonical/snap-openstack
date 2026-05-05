@@ -5,13 +5,14 @@ from unittest.mock import Mock
 
 import pytest
 
-from sunbeam.core.common import ResultType
+from sunbeam.core.common import Result, ResultType
 from sunbeam.core.juju import (
     ApplicationNotFoundException,
     JujuException,
     JujuWaitException,
     LeaderNotFoundException,
 )
+from sunbeam.steps.charm_upgrade import CharmRefreshDecision
 from sunbeam.steps.k8s_upgrade import CHARM_NAME, K8S_CHANNEL, K8SCharmUpgradeStep
 
 
@@ -73,7 +74,7 @@ class TestK8SCharmUpgradeStepIsSkip:
 
         assert result.result_type == ResultType.SKIPPED
         assert "500" in result.message
-        assert step._needs_channel_flag is False
+        assert step._decision.needs_channel_flag is False
 
     def test_not_skipped_when_revision_only_differs(
         self, step, basic_jhelper, basic_manifest, step_context
@@ -87,7 +88,7 @@ class TestK8SCharmUpgradeStepIsSkip:
         result = step.is_skip(step_context)
 
         assert result.result_type == ResultType.COMPLETED
-        assert step._needs_channel_flag is False
+        assert step._decision.needs_channel_flag is False
 
     def test_revision_only_proceeds_when_channel_not_found(
         self, step, basic_jhelper, basic_manifest, step_context
@@ -101,7 +102,7 @@ class TestK8SCharmUpgradeStepIsSkip:
         result = step.is_skip(step_context)
 
         assert result.result_type == ResultType.COMPLETED
-        assert step._needs_channel_flag is False
+        assert step._decision.needs_channel_flag is False
 
     def test_revision_only_fails_for_track_change(
         self, step, basic_jhelper, basic_manifest, step_context
@@ -141,15 +142,15 @@ class TestK8SCharmUpgradeStepIsSkip:
         # Use a non-K8S_CHANNEL value so the test catches any accidental fallback.
         app = Mock(charm_rev=199, charm_channel="1.32/edge", base=None)
         basic_jhelper.get_application.return_value = app
-        basic_jhelper.get_available_charm_revision.return_value = 200
+        basic_jhelper.get_available_charm_revisions.return_value = {"amd64": 200}
         basic_manifest.find_charm.return_value = None
 
         result = step.is_skip(step_context)
 
         assert result.result_type == ResultType.COMPLETED
-        assert step._needs_channel_flag is False
+        assert step._decision.needs_channel_flag is False
         # Charmhub lookup must use the *deployed* channel, not K8S_CHANNEL
-        basic_jhelper.get_available_charm_revision.assert_called_once_with(
+        basic_jhelper.get_available_charm_revisions.assert_called_once_with(
             CHARM_NAME, "1.32/edge"
         )
 
@@ -159,7 +160,7 @@ class TestK8SCharmUpgradeStepIsSkip:
         """No manifest: SKIPPED when already at latest revision in deployed channel."""
         app = Mock(charm_rev=200, charm_channel="1.32/edge", base=None)
         basic_jhelper.get_application.return_value = app
-        basic_jhelper.get_available_charm_revision.return_value = 200
+        basic_jhelper.get_available_charm_revisions.return_value = {"amd64": 200}
         basic_manifest.find_charm.return_value = None
 
         result = step.is_skip(step_context)
@@ -177,15 +178,15 @@ class TestK8SCharmUpgradeStepIsSkip:
         """
         app = Mock(charm_rev=199, charm_channel="1.32/stable", base=None)
         basic_jhelper.get_application.return_value = app
-        basic_jhelper.get_available_charm_revision.return_value = 200
+        basic_jhelper.get_available_charm_revisions.return_value = {"amd64": 200}
         # Simulate a manifest that exists but has no k8s entry
         basic_manifest.find_charm.return_value = None
 
         result = step.is_skip(step_context)
 
         assert result.result_type == ResultType.COMPLETED
-        assert step._needs_channel_flag is False
-        basic_jhelper.get_available_charm_revision.assert_called_once_with(
+        assert step._decision.needs_channel_flag is False
+        basic_jhelper.get_available_charm_revisions.assert_called_once_with(
             CHARM_NAME, "1.32/stable"
         )
 
@@ -219,14 +220,14 @@ class TestK8SCharmUpgradeStepIsSkip:
         result = step.is_skip(step_context)
 
         assert result.result_type == ResultType.COMPLETED
-        assert step._needs_channel_flag is True
+        assert step._decision.needs_channel_flag is True
 
     def test_skip_when_already_at_latest_patch_revision(
         self, step, basic_jhelper, basic_manifest, step_context
     ):
         app = Mock(charm_rev=200, charm_channel=K8S_CHANNEL, base=None)
         basic_jhelper.get_application.return_value = app
-        basic_jhelper.get_available_charm_revision.return_value = 200
+        basic_jhelper.get_available_charm_revisions.return_value = {"amd64": 200}
         basic_manifest.find_charm.return_value = None
 
         result = step.is_skip(step_context)
@@ -239,13 +240,13 @@ class TestK8SCharmUpgradeStepIsSkip:
     ):
         app = Mock(charm_rev=199, charm_channel=K8S_CHANNEL, base=None)
         basic_jhelper.get_application.return_value = app
-        basic_jhelper.get_available_charm_revision.return_value = 200
+        basic_jhelper.get_available_charm_revisions.return_value = {"amd64": 200}
         basic_manifest.find_charm.return_value = None
 
         result = step.is_skip(step_context)
 
         assert result.result_type == ResultType.COMPLETED
-        assert step._needs_channel_flag is False
+        assert step._decision.needs_channel_flag is False
 
     def test_proceeds_when_available_revision_lookup_fails(
         self, step, basic_jhelper, basic_manifest, step_context
@@ -253,7 +254,7 @@ class TestK8SCharmUpgradeStepIsSkip:
         """If charmhub can't be reached, proceed rather than skip."""
         app = Mock(charm_rev=200, charm_channel=K8S_CHANNEL, base=None)
         basic_jhelper.get_application.return_value = app
-        basic_jhelper.get_available_charm_revision.side_effect = JujuException(
+        basic_jhelper.get_available_charm_revisions.side_effect = JujuException(
             "network error"
         )
         basic_manifest.find_charm.return_value = None
@@ -270,24 +271,31 @@ class TestK8SCharmUpgradeStepIsSkip:
         base.channel = "24.04"
         app = Mock(charm_rev=199, charm_channel=K8S_CHANNEL, base=base)
         basic_jhelper.get_application.return_value = app
-        basic_jhelper.get_available_charm_revision.return_value = 200
+        basic_jhelper.get_available_charm_revisions.return_value = {"amd64": 200}
         basic_manifest.find_charm.return_value = None
 
         step.is_skip(step_context)
 
-        basic_jhelper.get_available_charm_revision.assert_called_once_with(
+        basic_jhelper.get_available_charm_revisions.assert_called_once_with(
             CHARM_NAME, K8S_CHANNEL, "ubuntu@24.04"
         )
 
 
 class TestK8SCharmUpgradeStepRun:
+    @pytest.fixture(autouse=True)
+    def default_decision(self, step):
+        """Set a sensible default _decision so run() tests don't need is_skip()."""
+        step._decision = CharmRefreshDecision(
+            result=Result(ResultType.COMPLETED),
+            effective_channel=K8S_CHANNEL,
+        )
+
     def test_run_patch_upgrade_success(
         self, step, basic_jhelper, basic_manifest, step_context
     ):
         """Patch upgrade: no channel passed, wait_until_active called."""
         basic_jhelper.get_leader_unit.return_value = "k8s/0"
         basic_manifest.find_charm.return_value = None
-        step._needs_channel_flag = False
 
         result = step.run(step_context)
 
@@ -303,15 +311,14 @@ class TestK8SCharmUpgradeStepRun:
         )
         basic_jhelper.wait_until_active.assert_called_once()
 
-    def test_run_risk_change_uses_new_channel(
-        self, step, basic_jhelper, basic_manifest, step_context
-    ):
+    def test_run_risk_change_uses_new_channel(self, step, basic_jhelper, step_context):
         """Risk-level change: charm_refresh called with the target channel."""
         basic_jhelper.get_leader_unit.return_value = "k8s/0"
-        basic_manifest.find_charm.return_value = Mock(
-            channel="1.32/edge", revision=None
+        step._decision = CharmRefreshDecision(
+            result=Result(ResultType.COMPLETED),
+            effective_channel="1.32/edge",
+            needs_channel_flag=True,
         )
-        step._needs_channel_flag = True
 
         result = step.run(step_context)
 
@@ -324,13 +331,15 @@ class TestK8SCharmUpgradeStepRun:
         )
 
     def test_run_uses_pinned_revision_from_manifest(
-        self, step, basic_jhelper, basic_manifest, step_context
+        self, step, basic_jhelper, step_context
     ):
         basic_jhelper.get_leader_unit.return_value = "k8s/0"
-        basic_manifest.find_charm.return_value = Mock(
-            channel="1.32/stable", revision=42
+        step._decision = CharmRefreshDecision(
+            result=Result(ResultType.COMPLETED),
+            effective_channel="1.32/stable",
+            needs_channel_flag=False,
+            effective_revision=42,
         )
-        step._needs_channel_flag = False
 
         result = step.run(step_context)
 
@@ -368,13 +377,11 @@ class TestK8SCharmUpgradeStepRun:
         basic_jhelper.charm_refresh.assert_not_called()
 
     def test_run_fails_when_charm_refresh_fails(
-        self, step, basic_jhelper, basic_manifest, step_context
+        self, step, basic_jhelper, step_context
     ):
         basic_jhelper.get_leader_unit.return_value = "k8s/0"
         basic_jhelper.run_action.return_value = {}
         basic_jhelper.charm_refresh.side_effect = JujuException("bad channel")
-        basic_manifest.find_charm.return_value = None
-        step._needs_channel_flag = False
 
         result = step.run(step_context)
 
@@ -383,15 +390,11 @@ class TestK8SCharmUpgradeStepRun:
         assert "bad channel" in result.message
         basic_jhelper.wait_until_active.assert_not_called()
 
-    def test_run_fails_on_wait_timeout(
-        self, step, basic_jhelper, basic_manifest, step_context
-    ):
+    def test_run_fails_on_wait_timeout(self, step, basic_jhelper, step_context):
         basic_jhelper.get_leader_unit.return_value = "k8s/0"
         basic_jhelper.run_action.return_value = {}
         basic_jhelper.charm_refresh.return_value = None
         basic_jhelper.wait_until_active.side_effect = TimeoutError("timed out")
-        basic_manifest.find_charm.return_value = None
-        step._needs_channel_flag = False
 
         result = step.run(step_context)
 
@@ -399,15 +402,11 @@ class TestK8SCharmUpgradeStepRun:
         assert "k8s upgrade failed" in result.message
         assert "Timed out" in result.message
 
-    def test_run_fails_on_juju_wait_exception(
-        self, step, basic_jhelper, basic_manifest, step_context
-    ):
+    def test_run_fails_on_juju_wait_exception(self, step, basic_jhelper, step_context):
         basic_jhelper.get_leader_unit.return_value = "k8s/0"
         basic_jhelper.run_action.return_value = {}
         basic_jhelper.charm_refresh.return_value = None
         basic_jhelper.wait_until_active.side_effect = JujuWaitException("wait error")
-        basic_manifest.find_charm.return_value = None
-        step._needs_channel_flag = False
 
         result = step.run(step_context)
 

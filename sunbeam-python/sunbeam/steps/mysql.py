@@ -479,18 +479,16 @@ class MySQLCharmUpgradeStep(BaseStep, JujuStepHelper):
         deployed = app.charm_rev
         if app.base:
             base = f"{app.base.name}@{app.base.channel}"
-            latest = self.jhelper.get_available_charm_revision(
+            latest_revs = self.jhelper.get_available_charm_revisions(
                 MYSQL_CHARM,
                 deployed_channel,
                 base,
-                arch="amd64",
             )
         else:
             LOG.debug("Could not determine base for mysql-k8s.")
-            latest = self.jhelper.get_available_charm_revision(
+            latest_revs = self.jhelper.get_available_charm_revisions(
                 MYSQL_CHARM,
                 deployed_channel,
-                arch="amd64",
             )
         try:
             leader = self.jhelper.get_leader_unit(self.application, self.model)
@@ -502,7 +500,7 @@ class MySQLCharmUpgradeStep(BaseStep, JujuStepHelper):
         unit_data = self.jhelper.show_unit(self.model, leader)
         stack_empty = not self._get_upgrade_stack(unit_data)
         # charm is already at the latest revision and no upgrade in progress
-        if deployed == latest and stack_empty:
+        if deployed in latest_revs.values() and stack_empty:
             msg = f"mysql-k8s already at latest revision {deployed}"
             LOG.debug(msg)
             return Result(ResultType.SKIPPED, msg)
