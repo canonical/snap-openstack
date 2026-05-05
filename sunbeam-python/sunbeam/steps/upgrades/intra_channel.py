@@ -30,7 +30,6 @@ from sunbeam.features.interface.v1.base import is_maas_deployment
 from sunbeam.steps.cinder_volume import DeployCinderVolumeApplicationStep
 from sunbeam.steps.hypervisor import ReapplyHypervisorTerraformPlanStep
 from sunbeam.steps.k8s import (
-    DeployK8SApplicationStep,
     EnsureCiliumDeviceByHostStep,
     EnsureDefaultL2AdvertisementMutedStep,
     EnsureL2AdvertisementByHostStep,
@@ -50,7 +49,7 @@ from sunbeam.steps.upgrades.base import UpgradeCoordinator, UpgradeFeatures
 LOG = logging.getLogger(__name__)
 console = Console()
 
-INFRA_APPS = ["mysql-k8s", "vault-k8s"]
+INFRA_APPS = ["mysql-k8s", "vault-k8s", "k8s"]
 
 # Snap-based charm applications that expose a refresh-snap action.
 # These need to be refreshed explicitly after the charm refresh because
@@ -440,22 +439,11 @@ class LatestInChannelCoordinator(UpgradeCoordinator):
             from sunbeam.provider.maas.client import MaasClient  # noqa: PLC0415
             from sunbeam.provider.maas.steps import (  # noqa: PLC0415
                 MaasCreateLoadBalancerIPPoolsStep,
-                MaasDeployK8SApplicationStep,
             )
 
             maas_client = MaasClient.from_deployment(self.deployment)
             plan.extend(
                 [
-                    TerraformInitStep(self.deployment.get_tfhelper("k8s-plan")),
-                    MaasDeployK8SApplicationStep(
-                        self.deployment,  # type: ignore [arg-type]
-                        self.client,
-                        maas_client,
-                        self.deployment.get_tfhelper("k8s-plan"),
-                        self.jhelper,
-                        self.manifest,
-                        self.deployment.openstack_machines_model,
-                    ),
                     EnsureCiliumDeviceByHostStep(
                         self.deployment,
                         self.client,
@@ -495,16 +483,6 @@ class LatestInChannelCoordinator(UpgradeCoordinator):
         else:
             plan.extend(
                 [
-                    TerraformInitStep(self.deployment.get_tfhelper("k8s-plan")),
-                    DeployK8SApplicationStep(
-                        self.deployment,
-                        self.client,
-                        self.deployment.get_tfhelper("k8s-plan"),
-                        self.jhelper,
-                        self.manifest,
-                        self.deployment.openstack_machines_model,
-                        refresh=True,
-                    ),
                     EnsureCiliumDeviceByHostStep(
                         self.deployment,
                         self.client,

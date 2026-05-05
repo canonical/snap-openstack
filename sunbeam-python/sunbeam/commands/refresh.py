@@ -20,6 +20,10 @@ from sunbeam.core.common import (
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import JujuHelper
 from sunbeam.core.manifest import AddManifestStep
+from sunbeam.core.terraform import TerraformInitStep
+from sunbeam.features.interface.v1.base import is_maas_deployment
+from sunbeam.steps.k8s import DeployK8SApplicationStep
+from sunbeam.steps.k8s_upgrade import K8SCharmUpgradeStep
 from sunbeam.steps.upgrades.base import UpgradeCoordinator
 from sunbeam.steps.upgrades.inter_channel import ChannelUpgradeCoordinator
 from sunbeam.steps.upgrades.intra_channel import (
@@ -281,3 +285,93 @@ def refresh_vault(
     if message:
         click.echo(message)
     click.echo("Vault refresh complete.")
+
+
+@refresh.command("k8s")
+@click.option(
+    "-m",
+    "--manifest",
+    "manifest_path",
+    help="Manifest file.",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+)
+@click_option_show_hints
+@click.pass_context
+def refresh_k8s(
+    ctx: click.Context,
+    manifest_path: Path | None = None,
+    show_hints: bool = False,
+) -> None:
+    """Upgrade k8s charm to latest revision in channel.
+
+    Performs a patch upgrade (same channel, new revision) or a minor upgrade
+    (new channel track) following the Canonical Kubernetes upgrade procedure:
+
+    1. Run the pre-upgrade-check action on the k8s leader unit.
+    2. Refresh the k8s charm (optionally to a new channel for minor upgrades).
+    3. Wait for all k8s units to return to active.
+
+    The target channel is read from the manifest when provided; otherwise the
+    default channel from the snap is used.
+    """
+    deployment: Deployment = ctx.obj
+    client = deployment.get_client()
+    jhelper = JujuHelper(deployment.juju_controller)
+
+    manifest = None
+    if manifest_path:
+        manifest = deployment.get_manifest(manifest_path)
+        run_plan([AddManifestStep(client, manifest_path)], console, show_hints)
+
+    if not manifest:
+        LOG.debug("Getting latest manifest from cluster db")
+        manifest = deployment.get_manifest()
+
+    plan: list = [
+        K8SCharmUpgradeStep(
+            deployment,
+            client,
+            manifest,
+            jhelper,
+        ),
+        TerraformInitStep(deployment.get_tfhelper("k8s-plan")),
+    ]
+
+    if is_maas_deployment(deployment):
+        from sunbeam.provider.maas.client import MaasClient  # noqa: PLC0415
+        from sunbeam.provider.maas.steps import (  # noqa: PLC0415
+            MaasDeployK8SApplicationStep,
+        )
+
+        maas_client = MaasClient.from_deployment(deployment)
+        plan.append(
+            MaasDeployK8SApplicationStep(
+                deployment,
+                client,
+                maas_client,
+                deployment.get_tfhelper("k8s-plan"),
+                jhelper,
+                manifest,
+                deployment.openstack_machines_model,
+                accept_defaults=True,
+            )
+        )
+    else:
+        plan.append(
+            DeployK8SApplicationStep(
+                deployment,
+                client,
+                deployment.get_tfhelper("k8s-plan"),
+                jhelper,
+                manifest,
+                deployment.openstack_machines_model,
+                refresh=True,
+            )
+        )
+
+    plan_results = run_plan(plan, console, show_hints)
+
+    message = get_step_message(plan_results, K8SCharmUpgradeStep)
+    if message:
+        click.echo(message)
+    click.echo("k8s refresh complete.")

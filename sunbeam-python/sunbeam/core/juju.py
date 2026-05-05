@@ -1637,6 +1637,37 @@ class JujuHelper:
             f"with base {base!r}"
         )
 
+    def get_charm_channel_for_revision(
+        self,
+        charm_name: str,
+        revision: int,
+    ) -> str | None:
+        """Return the first channel (track/risk) that publishes a given revision.
+
+        Scans all channels returned by ``juju info`` for *charm_name* and returns
+        the channel name (e.g. ``"1.32/stable"``) for the first entry whose
+        revision number matches *revision*.  Returns ``None`` if the revision is
+        not found in any channel.
+
+        :param charm_name: Name of charm to look up
+        :param revision: Charm revision number to find
+        """
+        output = json.loads(
+            self._juju.cli(
+                "info",
+                "--format",
+                "json",
+                charm_name,
+                include_model=False,
+            )
+        )
+        for track, risks in output.get("channels", {}).items():
+            for risk, entries in risks.items():
+                for entry in entries:
+                    if entry.get("revision") == revision:
+                        return f"{track}/{risk}"
+        return None
+
     @staticmethod
     def manual_cloud(cloud_name: str, ip_address: str) -> dict[str, dict]:
         """Create manual cloud definition."""
