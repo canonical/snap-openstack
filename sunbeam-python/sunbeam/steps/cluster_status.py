@@ -237,7 +237,7 @@ class ClusterStatusStep(abc.ABC, BaseStep):
             try:
                 _status_model = self._get_machines_status(model)
             except ModelNotFoundException as e:
-                LOG.debug(f"Model {model} not found", exc_info=True)
+                LOG.debug("Model %s not found", model, exc_info=True)
                 raise SunbeamException("Failed to query model status.") from e
             status[model] = merge_dict(
                 _status_model,

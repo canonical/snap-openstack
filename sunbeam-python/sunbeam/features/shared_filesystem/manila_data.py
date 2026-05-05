@@ -170,7 +170,7 @@ class DestroyManilaDataApplicationStep(DestroyMachineApplicationStep):
         try:
             resources = self.tfhelper.state_list()
         except TerraformException as e:
-            LOG.debug(f"Failed to list terraform state: {str(e)}")
+            LOG.debug("Failed to list terraform state: %r", e)
             return Result(ResultType.FAILED, "Failed to list terraform state")
 
         for resource in resources:
@@ -178,7 +178,7 @@ class DestroyManilaDataApplicationStep(DestroyMachineApplicationStep):
                 try:
                     self.tfhelper.state_rm(resource)
                 except TerraformException as e:
-                    LOG.debug(f"Failed to remove resource {resource}: {str(e)}")
+                    LOG.debug("Failed to remove resource %s: %r", resource, e)
                     return Result(
                         ResultType.FAILED,
                         f"Failed to remove resource {resource} from state",

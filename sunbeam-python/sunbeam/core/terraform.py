@@ -185,7 +185,7 @@ class TerraformHelper:
             if backend_updated:
                 LOG.debug("Backend updated, running terraform init -reconfigure")
                 cmd.append("-reconfigure")
-            LOG.debug(f"Running command {' '.join(cmd)}")
+            LOG.debug("Running command %s", " ".join(cmd))
             process = subprocess.run(
                 cmd,
                 capture_output=True,
@@ -195,11 +195,10 @@ class TerraformHelper:
                 env=os_env,
             )
             LOG.debug(
-                f"Command finished. stdout={process.stdout}, stderr={process.stderr}"
+                "Command finished. stdout=%r, stderr=%r", process.stdout, process.stderr
             )
         except subprocess.CalledProcessError as e:
-            LOG.error(f"terraform init failed: {e.output}")
-            LOG.warning(e.stderr)
+            LOG.exception("terraform init failed: %s", e.stderr)
             raise TerraformException(str(e))
 
     def apply(
@@ -258,7 +257,7 @@ class TerraformHelper:
 
         try:
             cmd = [self.terraform, "output", "-json", "-no-color"]
-            LOG.debug(f"Running command {' '.join(cmd)}")
+            LOG.debug("Running command %s", " ".join(cmd))
             process = subprocess.run(
                 cmd,
                 capture_output=True,
@@ -270,16 +269,15 @@ class TerraformHelper:
             stdout = process.stdout
             logged_output = ""
             if not hide_output:
-                logged_output = f" stdout={stdout}, stderr={process.stderr}"
-            LOG.debug("Command finished." + logged_output)
+                logged_output = f" stdout={stdout!r}, stderr={process.stderr!r}"
+            LOG.debug("Command finished. %r", logged_output)
             tf_output = json.loads(stdout)
             output = {}
             for key, value in tf_output.items():
                 output[key] = value["value"]
             return output
         except subprocess.CalledProcessError as e:
-            LOG.error(f"terraform output failed: {e.output}")
-            LOG.warning(e.stderr)
+            LOG.exception("terraform output failed: %s", e.stderr)
             raise TerraformException(str(e))
 
     def pull_state(self) -> dict:
@@ -294,7 +292,7 @@ class TerraformHelper:
 
         try:
             cmd = [self.terraform, "state", "pull"]
-            LOG.debug(f"Running command {' '.join(cmd)}")
+            LOG.debug("Running command %s", " ".join(cmd))
             process = subprocess.run(
                 cmd,
                 capture_output=True,
@@ -304,11 +302,10 @@ class TerraformHelper:
                 env=os_env,
             )
             # don't log the state as it can be large and contain sensitive data
-            LOG.debug(f"Command finished. stderr={process.stderr}")
+            LOG.debug("Command finished. stderr=%r", process.stderr)
             return json.loads(process.stdout)
         except subprocess.CalledProcessError as e:
-            LOG.error(f"terraform state pull failed: {e.output}")
-            LOG.error(e.stderr)
+            LOG.exception("terraform state pull failed: %s", e.stderr)
             raise TerraformException(str(e))
 
     def state_list(self) -> list:
@@ -323,7 +320,7 @@ class TerraformHelper:
 
         try:
             cmd = [self.terraform, "state", "list"]
-            LOG.debug(f"Running command {' '.join(cmd)}")
+            LOG.debug("Running command %s", " ".join(cmd))
             process = subprocess.run(
                 cmd,
                 capture_output=True,
@@ -333,12 +330,11 @@ class TerraformHelper:
                 env=os_env,
             )
             LOG.debug(
-                f"Command finished. stdout={process.stdout}, stderr={process.stderr}"
+                "Command finished. stdout=%r, stderr=%r", process.stdout, process.stderr
             )
             return process.stdout.splitlines()
         except subprocess.CalledProcessError as e:
-            LOG.error(f"terraform state list failed: {e.output}")
-            LOG.error(e.stderr)
+            LOG.exception("terraform state list failed: %s", e.stderr)
             raise TerraformException(str(e))
 
     def state_rm(self, resource: str) -> None:
@@ -353,7 +349,7 @@ class TerraformHelper:
 
         try:
             cmd = [self.terraform, "state", "rm", resource]
-            LOG.debug(f"Running command {' '.join(cmd)}")
+            LOG.debug("Running command %s", " ".join(cmd))
             process = subprocess.run(
                 cmd,
                 capture_output=True,
@@ -363,11 +359,10 @@ class TerraformHelper:
                 env=os_env,
             )
             LOG.debug(
-                f"Command finished. stdout={process.stdout}, stderr={process.stderr}"
+                "Command finished. stdout=%r, stderr=%r", process.stdout, process.stderr
             )
         except subprocess.CalledProcessError as e:
-            LOG.error(f"terraform state rm failed: {e.output}")
-            LOG.error(e.stderr)
+            LOG.exception("terraform state rm failed: %s", e.stderr)
             raise TerraformException(str(e))
 
     def sync(self, reporter: ProgressReporter | None = None) -> None:
@@ -413,7 +408,7 @@ class TerraformHelper:
             update_config(client, tfvar_config, data_to_save)
 
         self.write_tfvars(updated_tfvars)
-        LOG.debug(f"Applying plan {self.plan} with tfvars {updated_tfvars}")
+        LOG.debug("Applying plan %s with tfvars %s", self.plan, updated_tfvars)
         self.apply(tf_apply_extra_args, reporter=reporter)
 
     def update_tfvars_and_apply_tf(
@@ -464,7 +459,7 @@ class TerraformHelper:
             update_config(client, tfvar_config, data_to_save)
 
         self.write_tfvars(updated_tfvars)
-        LOG.debug(f"Applying plan {self.plan} with tfvars {updated_tfvars}")
+        LOG.debug("Applying plan %s with tfvars %s", self.plan, updated_tfvars)
         self.apply(tf_apply_extra_args, reporter=reporter)
 
     def _load_and_filter_db_tfvars(
@@ -725,7 +720,7 @@ class TerraformHelper:
         Reads stdout line-by-line, parses JSON events, and reports them.
         Reads stderr in a separate thread to avoid pipe buffer deadlock.
         """
-        LOG.debug(f"Running command {' '.join(cmd)}, cwd: {self.path}")
+        LOG.debug("Running command %s with cwd: %s", " ".join(cmd), self.path)
 
         process = subprocess.Popen(
             cmd,
@@ -764,9 +759,9 @@ class TerraformHelper:
         stderr_thread.join(timeout=10)
         stderr_output = "".join(stderr_lines)
 
-        LOG.debug(f"Command finished. returncode={process.returncode}")
+        LOG.debug("Command finished. returncode=%s", process.returncode)
         if stderr_output:
-            LOG.debug(f"stderr: {stderr_output}")
+            LOG.debug("stderr: %s", stderr_output)
 
         if process.returncode != 0:
             if state_lock_flag[0] or "remote state already locked" in stderr_output:

@@ -724,5 +724,8 @@ class StorageBackendBase(FeatureGateMixin, typing.Generic[BackendConfig]):
             cli_class_name = f"{self.backend_type.title()}CLI"
             return getattr(cli_module, cli_class_name)
         except (ImportError, AttributeError):
-            LOG.debug(f"{self.backend_type} does not implement custom cli class")
+            LOG.debug(
+                "%s does not implement custom cli class",
+                self.backend_type,
+            )
             return StorageBackendCLIBase

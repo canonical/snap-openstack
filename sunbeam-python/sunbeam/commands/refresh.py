@@ -162,7 +162,7 @@ def refresh(
         LOG.debug("Getting latest manifest from cluster db")
         manifest = deployment.get_manifest()
 
-    LOG.debug(f"Manifest used for deployment - core: {manifest.core}")
+    LOG.debug("Manifest used for deployment - core: %s", manifest.core)
     jhelper = JujuHelper(deployment.juju_controller)
     upgrade_coordinator: UpgradeCoordinator
     if upgrade_release:

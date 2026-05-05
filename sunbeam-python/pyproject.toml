@@ -778,6 +778,8 @@ select = [
     "S",   # bandit
     "I",   # isort
     "CPY", # flake8-copyright
+    "LOG", # flake8-logging
+    "G",   # flake8-logging-format
 ]
 ignore = [
     "F821",
@@ -807,6 +809,9 @@ extend-ignore = ["E203"]
     "N803",
     "N806",
     "S",    # Disable bandit rules in tests
+]
+"../tools/*" = [
+    "S310", # URL scheme is validated before urlopen
 ]
 "setup.py" = ["D100"]
 "**/__init__.py" = ["D104"]

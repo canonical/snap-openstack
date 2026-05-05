@@ -98,7 +98,7 @@ class InstancesStatusCheck(Check):
         if not_expected_status_instances:
             _msg = f"Instances not in expected status: {not_expected_status_instances}"
             if self.force:
-                LOG.warning(f"Ignore issue: {_msg}")
+                LOG.warning("Ignore issue: %s", _msg)
                 return True
             self.message = _msg
             return False
@@ -138,7 +138,7 @@ class NoEphemeralDiskCheck(Check):
         if unexpected_instances:
             _msg = f"Instances have ephemeral disk: {unexpected_instances}"
             if self.force:
-                LOG.warning(f"Ignore issue: {_msg}")
+                LOG.warning("Ignore issue: %s", _msg)
                 return True
             self.message = _msg
             return False
@@ -172,7 +172,7 @@ class NoInstancesOnNodeCheck(Check):
             instance_ids = ",".join([inst.id for inst in instances])
             _msg = f"Instances {instance_ids} still on node {self.node}"
             if self.force:
-                LOG.warning(f"Ignore issue: {_msg}")
+                LOG.warning("Ignore issue: %s", _msg)
                 return True
             self.message = _msg
             return False
@@ -209,7 +209,7 @@ class NovaInDisableStatusCheck(Check):
         if not len(expected_services) == 1:
             _msg = f"Nova compute still not disabled on node {self.node}"
             if self.force:
-                LOG.warning(f"Ignore issue: {_msg}")
+                LOG.warning("Ignore issue: %s", _msg)
                 return True
             self.message = _msg
             return False
@@ -265,7 +265,7 @@ class MicroCephMaintenancePreflightCheck(Check):
                 if action.get("error"):
                     msg = action.get("error")
                     if self.force:
-                        LOG.warning(f"Ignore issue: {msg}")
+                        LOG.warning("Ignore issue: %s", msg)
                     else:
                         self.message = msg
                         return False
@@ -485,7 +485,7 @@ class K8sDqliteRedundancyCheck(Check):
             )
             LOG.debug("Got config %s for %s", config, K8S_APP_NAME)
         except (ApplicationNotFoundException, JujuException) as e:
-            LOG.debug("%s", str(e))
+            LOG.debug("Failed to get config for %s: %r", K8S_APP_NAME, e)
             return {}
         return config
 
@@ -497,7 +497,7 @@ class K8sDqliteRedundancyCheck(Check):
             )
             LOG.debug("Got %s application", k8s_application)
         except ApplicationNotFoundException as e:
-            LOG.debug("%s", str(e))
+            LOG.debug("Failed to get application %s: %r", K8S_APP_NAME, e)
             return []
         return list(k8s_application.units.keys())
 
@@ -512,7 +512,7 @@ class K8sDqliteRedundancyCheck(Check):
                 K8S_APP_NAME,
             )
         except UnitNotFoundException:
-            LOG.debug("cannot find %s unit in '%s'", K8S_APP_NAME, node)
+            LOG.debug("Cannot find %s unit in %r", K8S_APP_NAME, node)
             return ""
 
     def _has_active_k8s_dqlite_svc(self, k8s_unit_name: str) -> bool:
@@ -524,10 +524,10 @@ class K8sDqliteRedundancyCheck(Check):
                 f"snap services {K8S_DQLITE_SVC_NAME} | grep active",
                 timeout=COMMAND_TIMEOUT,
             )
-            LOG.debug(result)
+            LOG.debug("Checking k8s dqlite svc for %s: %r", k8s_unit_name, result)
             status = result.stdout.split()[2]
         except (ExecFailedException, IndexError) as e:
-            LOG.debug("%s", str(e))
+            LOG.debug("Failed to check k8s dqlite svc for %s: %r", k8s_unit_name, e)
             return False
         return "active" == status
 
@@ -579,7 +579,7 @@ class ReplicasRedundancyCheck(Check):
                 ready_replicas = r.status.readyReplicas or 0
                 if ready_replicas <= 1:
                     LOG.debug(
-                        "name=%s kind=%s namespace=%s replicas=%d/%d",
+                        "K8S name=%s kind=%s namespace=%s replicas=%d/%d",
                         owner.name,
                         owner.kind,
                         namespace,
@@ -646,7 +646,7 @@ class NoJujuControllerPodCheck(Check):
             # Found juju controller pod in this node
             if pod.spec and pod.spec.nodeName == self.node:
                 LOG.debug(
-                    "Found juju controller pod '%s' in '%s'",
+                    "Found juju controller pod %r in %r",
                     pod.metadata.name,
                     self.node,
                 )

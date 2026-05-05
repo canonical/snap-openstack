@@ -221,7 +221,7 @@ class ConfigureValidationStep(BaseStep):
             charms = self.tfhelper.tfvar_map["charms"]
             tempest_k8s_config_var = charms["tempest-k8s"]["config"]
             roles = get_enabled_roles(self.deployment)
-            LOG.info(f"OpenStack roles enabled for Tempest: {roles}")
+            LOG.info("OpenStack roles enabled for Tempest: %s", roles)
             override_tfvars: dict[str, Any] = {}
             if self.config_changes.schedule is not None or roles:
                 override_tfvars[tempest_k8s_config_var] = {}
@@ -239,7 +239,7 @@ class ConfigureValidationStep(BaseStep):
                 reporter=context.reporter,
             )
         except (TerraformException, TerraformStateLockedException) as e:
-            LOG.exception("Error configuring validation feature.")
+            LOG.warning("Error configuring validation feature: %r", e)
             return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.COMPLETED)

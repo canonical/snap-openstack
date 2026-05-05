@@ -136,12 +136,13 @@ class TestClusterdSteps:
         assert result.result_type == ResultType.SKIPPED
         assert any(
             rec.levelno == logging.DEBUG
-            and "Juju user juju-user is found in database." in rec.getMessage()
+            and "Juju user juju-user is found in the database" in rec.getMessage()
             for rec in caplog.records
         )
         assert any(
             rec.levelno == logging.DEBUG
-            and "Juju user token is up to date, skipping update." in rec.getMessage()
+            and "Juju user juju-user token is up to date, skipping update"
+            in rec.getMessage()
             for rec in caplog.records
         )
 
@@ -155,10 +156,13 @@ class TestClusterdSteps:
         assert result.result_type == ResultType.COMPLETED
         assert any(
             rec.levelno == logging.DEBUG
-            and "Juju user juju-user is found in database." in rec.getMessage()
+            and "Juju user juju-user is found in the database" in rec.getMessage()
             for rec in caplog.records
         )
-        assert "Juju user token is up to date, skipping update." not in caplog.text
+        assert (
+            "Juju user juju-user token is up to date, skipping update"
+            not in caplog.text
+        )
 
         step.client.cluster.update_juju_user = MagicMock()
         result2 = step.run(step_context)
@@ -175,7 +179,7 @@ class TestClusterdSteps:
         assert result.result_type == ResultType.COMPLETED
         assert any(
             rec.levelno == logging.DEBUG
-            and "Juju user juju-user is not found in database, adding user."
+            and "Juju user juju-user is not found in the database, adding user"
             in rec.getMessage()
             for rec in caplog.records
         )

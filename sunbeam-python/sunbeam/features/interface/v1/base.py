@@ -95,15 +95,15 @@ class BaseRegisterable(ABC):
         :returns: True if validation is successful, else False.
         """
         self_commands = self.commands(conditions)
-        LOG.debug(f"Validating commands: {self_commands}")
+        LOG.debug("Validating commands: %s", self_commands)
         for group, commands in self_commands.items():
             for command in commands:
                 cmd_name = command.get("name")
                 cmd_func = command.get("command")
                 if None in (cmd_name, cmd_func):
                     LOG.warning(
-                        f"Feature {self.name}: Commands dictionary is not in "
-                        "required format"
+                        "Feature %s: Commands dictionary is not in the required format",
+                        self.name,
                     )
                     return False
 
@@ -114,8 +114,9 @@ class BaseRegisterable(ABC):
                     ]
                 ):
                     LOG.warning(
-                        f"Feature {self.name}: {cmd_func} should be either "
-                        "click.Group or click.Command"
+                        "Feature %s: %s should be either click.Group or click.Command",
+                        self.name,
+                        cmd_func,
                     )
                     return False
 
@@ -205,20 +206,23 @@ class BaseRegisterable(ABC):
 
         :param cli: Sunbeam main cli group
         """
-        LOG.debug(f"Registering feature {self.name}")
+        LOG.debug("Registering feature %s", self.name)
         if not self.validate_commands(conditions):
-            LOG.warning(f"Not able to register the feature {self.name}")
+            LOG.warning("Not able to register the feature %s", self.name)
             return
 
         groups = utils.get_all_registered_groups(cli)
-        LOG.debug(f"Registered groups: {groups}")
+        LOG.debug("Registered groups: %s", groups)
         for group, commands in self.commands(conditions).items():
             group_obj = groups.get(group)
             if not group_obj:
                 cmd_names = [command.get("name") for command in commands]
                 LOG.warning(
-                    f"Feature {self.name}: Not able to register command "
-                    f"{cmd_names} in group {group} as group does not exist"
+                    "Feature %s: Not able to register command %s in group %s"
+                    " as group does not exist",
+                    self.name,
+                    cmd_names,
+                    group,
                 )
                 continue
 
@@ -226,30 +230,40 @@ class BaseRegisterable(ABC):
                 cmd = command.get("command")
                 if not cmd:
                     LOG.warning(
-                        f"Feature {self.name}: Not able to register command "
-                        f"{command.get('name')} in group {group} as command is None"
+                        "Feature %s: Not able to register command %s in group %s"
+                        " as command is None",
+                        self.name,
+                        command.get("name"),
+                        group,
                     )
                     continue
                 cmd_name = command.get("name")
                 if cmd_name in group_obj.list_commands({}):
                     if isinstance(cmd, click.Command):
                         LOG.warning(
-                            f"Feature {self.name}: Discarding adding command "
-                            f"{cmd_name} as it already exists in group {group}"
+                            "Feature %s: Discarding adding command %s as it already"
+                            " exists in group %s",
+                            self.name,
+                            cmd_name,
+                            group,
                         )
                     else:
                         # Should be sub group and already exists
                         LOG.debug(
-                            f"Feature {self.name}: Group {cmd_name} already "
-                            f"part of parent group {group}"
+                            "Feature %s: Group %s is already part of parent group %s",
+                            self.name,
+                            cmd_name,
+                            group,
                         )
                     continue
 
                 cmd.callback = ClickInstantiator(cmd.callback, self)
                 group_obj.add_command(cmd, cmd_name)
                 LOG.debug(
-                    f"Feature {self.name}: Command {cmd_name} registered in "
-                    f"group {group}"
+                    "Feature %s: Command %s is registered in group %s",
+                    self.name,
+                    cmd_name,
+                    group,
                 )
 
                 # Add newly created click groups to the registered groups so that
@@ -601,9 +615,11 @@ class EnableDisableFeature(BaseFeature, Generic[ConfigType]):
             current_version = self.fetch_feature_version(
                 deployment.get_client(), requirement.name
             )
-            LOG.debug(f"Feature {requirement.name} version {current_version} found")
+            LOG.debug(
+                "Feature %s version %s is found", requirement.name, current_version
+            )
         except MissingVersionInfoError as e:
-            LOG.debug(f"Version info for feature {requirement.name} not found")
+            LOG.debug("Version info for feature %s is not found", requirement.name)
             raise FeatureError(
                 f"{requirement.name} has no version recorded,"
                 f" {requirement.specifier} required"
@@ -678,7 +694,9 @@ class EnableDisableFeature(BaseFeature, Generic[ConfigType]):
         feature_classes = features().values()
         for klass in feature_classes:
             if not issubclass(klass, EnableDisableFeature):
-                LOG.debug(f"Skipping {klass} as it is not of type EnableDisableFeature")
+                LOG.debug(
+                    "Skipping %s as it is not of type EnableDisableFeature", klass
+                )
                 continue
             feature = klass()
             if not feature.is_enabled(deployment.get_client()):
@@ -705,8 +723,8 @@ class EnableDisableFeature(BaseFeature, Generic[ConfigType]):
         for requirement in self.requires:
             if not issubclass(requirement.klass, EnableDisableFeature):
                 LOG.debug(
-                    f"Skipping {requirement.klass} as it is not of type"
-                    " EnableDisableFeature"
+                    "Skipping %s as it is not of type EnableDisableFeature",
+                    requirement.klass,
                 )
                 continue
             feature = requirement.klass()

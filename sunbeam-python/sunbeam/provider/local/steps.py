@@ -215,20 +215,20 @@ class LocalSetExternalNetworkUnitsOptionsStep(SetExternalNetworkUnitsOptionsStep
             current += 1
             if not physnets:
                 if len(candidate_nics) == 0:
-                    LOG.debug("No more candidate nics available, stopping prompt.")
+                    LOG.debug("No more candidate nics available, stopping prompt")
                     break
                 another = physnet_qs["configure_more"].ask()
                 if not another:
                     LOG.debug(
-                        "User chose not to configure more physnets, stopping prompt."
+                        "User chose not to configure more physnets, stopping prompt"
                     )
                     break
             else:
                 if current >= len(physnets):
-                    LOG.debug("Reached the end of physnets, stopping prompt.")
+                    LOG.debug("Reached the end of physnets, stopping prompt")
                     break
                 if len(candidate_nics) == 0:
-                    raise SunbeamException("No more candidate nics available.")
+                    raise SunbeamException("No more candidate nics available")
 
         return physnet_mapping
 
@@ -462,8 +462,9 @@ class LocalClusterStatusStep(ClusterStatusStep):
                         == node_name
                     ):
                         LOG.debug(
-                            f"Node name matched with address {node_name}, change name "
-                            f"to {member}"
+                            "Node name matched with address %s, change name to %s",
+                            node_name,
+                            member,
                         )
                         node_name = member
                         node_status["name"] = member
@@ -526,7 +527,7 @@ class LocalConfigSRIOVStep(BaseStep):
         available and should provide a reasonable default where possible.
         """
         if not console:
-            LOG.info("No console available, skipping prompt.")
+            LOG.info("No console available, skipping prompt")
             return
 
         self.variables = sunbeam.core.questions.load_answers(
@@ -557,7 +558,7 @@ class LocalConfigSRIOVStep(BaseStep):
             excluded_devices[self.node_name] = []
 
         if not self.clear_previous_config:
-            logging.debug("Picking up previous answers.")
+            LOG.debug("Picking up previous answers")
             for device_spec in previous_pci_whitelist:
                 if device_spec not in pci_whitelist:
                     pci_whitelist.append(device_spec)
@@ -571,7 +572,7 @@ class LocalConfigSRIOVStep(BaseStep):
         else:
             # The user requested to drop the previous answers instead of merging the
             # device lists with the previous ones.
-            logging.debug("Dropping previous answers.")
+            LOG.debug("Dropping previous answers")
 
         if not self.accept_defaults:
             self._do_prompt(pci_whitelist, excluded_devices, show_hint)
@@ -588,7 +589,8 @@ class LocalConfigSRIOVStep(BaseStep):
             )
         except (UnitNotFoundException, ActionFailedException) as e:
             LOG.debug(
-                f"Failed fetching GPUs from node {self.node_name}",
+                "Failed fetching GPUs from node %s",
+                self.node_name,
                 exc_info=True,
             )
             raise click.ClickException(
@@ -663,7 +665,7 @@ class LocalConfigSRIOVStep(BaseStep):
                 # pci@0000:03:00.0  enp3s0f0r0      network    Ethernet interface
                 # pci@0000:03:00.0  enp3s0f0r1      network    Ethernet interface
                 LOG.debug(
-                    "Duplicate PCI address: %s, interface names: %s %s.",
+                    "Duplicate PCI address: %s, interface names: %s %s",
                     pci_address,
                     nic_name,
                     pci_address_map[pci_address],
@@ -783,7 +785,7 @@ class LocalConfigSRIOVStep(BaseStep):
             )
         except (ActionFailedException, TimeoutError):
             msg = f"Unable to set hypervisor {name} configuration"
-            LOG.error(msg, exc_info=True)
+            LOG.warning(msg)
             return Result(ResultType.FAILED, msg)
 
         return Result(ResultType.COMPLETED)
@@ -909,7 +911,7 @@ class LocalConfigDPDKStep(BaseConfigDPDKStep):
         dpdk_manifest_ports = self._get_dpdk_manifest_ports() or {}
         if dpdk_manifest_ports.get(self.node_name):
             self.nics = dpdk_manifest_ports[self.node_name]
-            logging.debug("DPDK ports specified through the manifest: %s", self.nics)
+            LOG.debug("DPDK ports specified through the manifest: %s", self.nics)
             return
 
         with console:
@@ -921,30 +923,30 @@ class LocalConfigDPDKStep(BaseConfigDPDKStep):
         candidate_nics: list[dict] = []
         enabled_nic_names: list[str] = []
 
-        LOG.debug("Determining DPDK candidate interfaces.")
+        LOG.debug("Determining DPDK candidate interfaces")
         for nic in all_nics:
             if not nic.get("name"):
                 # Note that the interface name will no longer be visible once
                 # assigned to the "vfio-pci" driver.
-                LOG.debug("No interface name: %s, skipping.", nic.get("pci_address"))
+                LOG.debug("No interface name: %s, skipping", nic.get("pci_address"))
                 continue
             if nic.get("pf_pci_address"):
-                LOG.debug("Ignoring SR-IOV VF: %s.", nic.get("name"))
+                LOG.debug("Ignoring SR-IOV VF: %s", nic.get("name"))
                 continue
             if not nic.get("pci_address"):
-                LOG.debug("Not a PCI device: %s.", nic.get("name"))
+                LOG.debug("Not a PCI device: %s", nic.get("name"))
                 continue
             if nic.get("configured"):
-                LOG.debug("The interface has an IP assigned, skipping.")
+                LOG.debug("The interface has an IP assigned, skipping")
                 continue
 
             candidate_nics.append(nic)
 
         if not candidate_nics:
-            LOG.info("No candidate DPDK interfaces.")
+            LOG.info("No candidate DPDK interfaces")
             return
 
-        console.print("Configuring DPDK physical interfaces.")
+        console.print("Configuring DPDK physical interfaces")
         console.print(
             "\nWARNING: the specified interfaces will be reconfigured to use a "
             "DPDK-compatible driver (vfio-pci by default) and will no longer "
@@ -995,7 +997,7 @@ class LocalConfigDPDKStep(BaseConfigDPDKStep):
             )
         except (ActionFailedException, TimeoutError):
             msg = f"Unable to set hypervisor {name} configuration"
-            LOG.error(msg, exc_info=True)
+            LOG.warning(msg)
             return Result(ResultType.FAILED, msg)
 
         return Result(ResultType.COMPLETED)
