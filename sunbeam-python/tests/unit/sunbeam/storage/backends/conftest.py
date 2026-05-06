@@ -7,6 +7,7 @@ import pytest
 
 from sunbeam.storage.backends.dellsc.backend import DellSCBackend
 from sunbeam.storage.backends.hitachi.backend import HitachiBackend
+from sunbeam.storage.backends.hpe3par.backend import HPEthreeparBackend
 from sunbeam.storage.backends.infinidat.backend import InfinidatBackend
 from sunbeam.storage.backends.purestorage.backend import PureStorageBackend
 
