@@ -8,6 +8,7 @@ This feature have options to deploy a COS Lite stack internally
 or point to an external COS Lite.
 """
 
+import copy
 import enum
 import logging
 import queue
@@ -17,6 +18,7 @@ import click
 from packaging.version import Version
 from rich.console import Console
 
+from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import (
     ClusterServiceUnavailableException,
     ConfigItemNotFoundException,
@@ -52,6 +54,7 @@ from sunbeam.core.manifest import (
     Manifest,
     SoftwareConfig,
     TerraformManifest,
+    check_storage_modifications_in_manifest,
 )
 from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.core.steps import (
@@ -95,6 +98,15 @@ OBSERVABILITY_AGENT_CONFIG_KEY = (
     "TerraformVarsFeatureObservabilityPlanObservabilityAgent"
 )
 
+COS_STORAGE_KEY = "ObservabilityStorage"
+
+CHARM_STORAGE_MAP = {
+    "prometheus-k8s": "prometheus-storage",
+    "loki-k8s": "loki-storage",
+    "grafana-k8s": "grafana-storage",
+    "alertmanager-k8s": "alertmanager-storage",
+}
+
 COS_CHANNEL = "1/stable"
 OPENTELEMETRY_COLLECTOR_CHANNEL = "2/stable"
 OPENTELEMETRY_COLLECTOR_K8S_CHANNEL = "2/stable"
@@ -109,6 +121,59 @@ INTEGRATION_APPS = ["openstack-hypervisor", "microceph", "k8s"]
 class ProviderType(enum.Enum):
     EXTERNAL = 1
     EMBEDDED = 2
+
+
+def get_cos_storage_from_manifest(
+    manifest: Manifest,
+) -> dict[str, dict[str, str]]:
+    """Get charm storage for COS Lite from manifest file."""
+    storage: dict[str, dict[str, str]] = {}
+    for charm_name, tfvar_name in CHARM_STORAGE_MAP.items():
+        charm = manifest.find_charm(charm_name)
+        if charm and charm.model_extra:
+            charm_storage = charm.model_extra.get("storage")
+            if isinstance(charm_storage, dict) and charm_storage:
+                storage[tfvar_name] = charm_storage
+    return storage
+
+
+def get_cos_storage_dict(
+    client: Client, manifest: Manifest
+) -> dict[str, dict[str, str]]:
+    """Returns a dict containing the storage allocation for COS Lite.
+
+    Storage is retrieved for each COS charm.
+    Default storage sizes are defined in the Terraform variables.
+    """
+    try:
+        storage_from_db = read_config(client, COS_STORAGE_KEY)
+        if not isinstance(storage_from_db, dict):
+            LOG.warning(
+                "Invalid observability storage config in database: %s.", storage_from_db
+            )
+            raise ValueError("Invalid observability storage config in database")
+    except (ConfigItemNotFoundException, ValueError):
+        storage_from_db = {}
+
+    storage_from_manifest = get_cos_storage_from_manifest(manifest)
+
+    storage = copy.deepcopy(storage_from_db)
+    for charm_key, charm_storage in storage_from_manifest.items():
+        if (
+            charm_key in storage
+            and isinstance(storage[charm_key], dict)
+            and isinstance(charm_storage, dict)
+        ):
+            storage[charm_key].update(charm_storage)
+        else:
+            storage[charm_key] = charm_storage
+
+    return storage
+
+
+def write_cos_storage_dict(client: Client, storage: dict):
+    """Write the COS storage dict."""
+    update_config(client, COS_STORAGE_KEY, storage)
 
 
 class DeployObservabilityStackStep(BaseStep, JujuStepHelper):
@@ -132,6 +197,30 @@ class DeployObservabilityStackStep(BaseStep, JujuStepHelper):
         self.model = OBSERVABILITY_MODEL
         self.cloud = K8SHelper.get_cloud(deployment.name)
 
+    def is_skip(self, context: StepContext) -> Result:
+        """Determines if the step should be skipped or not.
+
+        :return: ResultType.SKIPPED if the Step should be skipped,
+                ResultType.COMPLETED or ResultType.FAILED otherwise
+        """
+        # Check for storage size modifications in manifest
+        client = self.deployment.get_client()
+        modified = check_storage_modifications_in_manifest(
+            client,
+            self.manifest,
+            self.tfhelper.tfvar_map,
+            self._CONFIG,
+            extra_tfvar_config_keys=[self.feature.get_tfvar_config_key()],
+        )
+        if modified:
+            return Result(
+                ResultType.FAILED,
+                "Storage sizes are immutable and cannot be modified"
+                f" in manifest: {', '.join(modified)}",
+            )
+
+        return Result(ResultType.COMPLETED)
+
     def run(self, context: StepContext) -> Result:
         """Execute configuration using terraform."""
         f_manifest = self.manifest.get_feature(self.feature.name.split(".")[-1])
@@ -145,12 +234,18 @@ class DeployObservabilityStackStep(BaseStep, JujuStepHelper):
         model_config.update(convert_proxy_to_model_configs(proxy_settings))
         model_config.update({"workload-storage": K8SHelper.get_default_storageclass()})
 
-        extra_tfvars = {
+        extra_tfvars: dict = {
             "model": self.model,
             "cloud": self.cloud,
             "credential": f"{self.cloud}{CREDENTIAL_SUFFIX}",
             "config": model_config,
         }
+
+        # Get COS storage from database and manifest
+        client = self.deployment.get_client()
+        cos_storage = get_cos_storage_dict(client, self.manifest)
+        write_cos_storage_dict(client, cos_storage)
+        extra_tfvars.update(cos_storage)
 
         try:
             self.update_status(context, "deploying services")
@@ -208,6 +303,26 @@ class UpdateObservabilityModelConfigStep(BaseStep, JujuStepHelper):
         self.client = deployment.get_client()
         self.model = OBSERVABILITY_MODEL
         self.cloud = K8SHelper.get_cloud(deployment.name)
+
+    def is_skip(self, context: StepContext) -> Result:
+        """Determines if the step should be skipped or not.
+
+        :return: ResultType.SKIPPED if the Step should be skipped,
+                ResultType.COMPLETED or ResultType.FAILED otherwise
+        """
+        modified = check_storage_modifications_in_manifest(
+            self.client,
+            self.manifest,
+            self.tfhelper.tfvar_map,
+            self._CONFIG,
+        )
+        if modified:
+            return Result(
+                ResultType.FAILED,
+                "Storage sizes are immutable and cannot be modified"
+                f" in manifest: {', '.join(modified)}",
+            )
+        return Result(ResultType.COMPLETED)
 
     def run(self, context: StepContext) -> Result:
         """Execute configuration using terraform."""
@@ -640,11 +755,13 @@ class ObservabilityFeature(OpenStackControlPlaneFeature):
                         "channel": "alertmanager-channel",
                         "revision": "alertmanager-revision",
                         "config": "alertmanager-config",
+                        "storage": "alertmanager-storage",
                     },
                     "grafana-k8s": {
                         "channel": "grafana-channel",
                         "revision": "grafana-revision",
                         "config": "grafana-config",
+                        "storage": "grafana-storage",
                     },
                     "catalogue-k8s": {
                         "channel": "catalogue-channel",
@@ -655,11 +772,13 @@ class ObservabilityFeature(OpenStackControlPlaneFeature):
                         "channel": "prometheus-channel",
                         "revision": "prometheus-revision",
                         "config": "prometheus-config",
+                        "storage": "prometheus-storage",
                     },
                     "loki-k8s": {
                         "channel": "loki-channel",
                         "revision": "loki-revision",
                         "config": "loki-config",
+                        "storage": "loki-storage",
                     },
                 }
             },

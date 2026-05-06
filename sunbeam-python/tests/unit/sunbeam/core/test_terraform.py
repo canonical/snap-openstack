@@ -53,6 +53,20 @@ core:
           rabbitmq-data: 4G
 """
 
+test_manifest_with_traefik_config_map = """
+core:
+  software:
+    charms:
+      traefik-k8s:
+        config-map:
+          traefik:
+            tls-ca: dGVzdC1jYQ==
+          traefik-public:
+            tls-ca: dGVzdC1jYQ==
+          traefik-rgw:
+            tls-ca: dGVzdC1jYQ==
+"""
+
 
 @pytest.fixture()
 def deployment():
@@ -292,6 +306,84 @@ class TestTerraformHelper:
                 key in saved_data["_computed_keys"]
                 for key in ["mysql-config", "mysql-config-map"]
             )
+
+    def test_traefik_config_map_from_manifest(
+        self,
+        mocker,
+        snap,
+        copytree,
+        deployment: Deployment,
+        read_config,
+    ):
+        """Test that traefik-config-map is read from manifest and passed as tfvar."""
+        tfplan = "openstack-plan"
+        read_config.return_value = {}
+
+        mocker.patch.object(deployment_mod, "Snap", return_value=snap)
+        mocker.patch.object(manifest_mod, "Snap", return_value=snap)
+        mocker.patch.object(terraform_mod, "Snap", return_value=snap)
+        client = Mock()
+        client.cluster.get_latest_manifest.return_value = {
+            "data": test_manifest_with_traefik_config_map
+        }
+        client.cluster.get_config.return_value = "{}"
+        deployment.get_client.return_value = client
+        manifest = deployment.get_manifest()
+
+        tfhelper = deployment.get_tfhelper(tfplan)
+        with (
+            patch.object(tfhelper, "write_tfvars") as write_tfvars,
+            patch.object(tfhelper, "apply"),
+        ):
+            tfhelper.update_tfvars_and_apply_tf(client, manifest, "fake-config", None)
+            applied_tfvars = write_tfvars.call_args.args[0]
+
+            # traefik-config-map should be populated from manifest config-map field
+            assert applied_tfvars.get("traefik-config-map") == {
+                "traefik": {"tls-ca": "dGVzdC1jYQ=="},
+                "traefik-public": {"tls-ca": "dGVzdC1jYQ=="},
+                "traefik-rgw": {"tls-ca": "dGVzdC1jYQ=="},
+            }
+
+    def test_traefik_config_map_removed_when_not_in_manifest(
+        self,
+        mocker,
+        snap,
+        copytree,
+        deployment: Deployment,
+        read_config,
+    ):
+        """Test traefik-config-map is removed from tfvars when absent from manifest."""
+        tfplan = "openstack-plan"
+        # DB has old traefik-config-map value (not computed, manifest-derived)
+        read_config.return_value = {
+            "_computed_keys": [],
+            "traefik-config-map": {
+                "traefik": {"tls-ca": "dGVzdC1jYQ=="},
+            },
+            "keystone-channel": OPENSTACK_CHANNEL,
+        }
+
+        mocker.patch.object(deployment_mod, "Snap", return_value=snap)
+        mocker.patch.object(manifest_mod, "Snap", return_value=snap)
+        mocker.patch.object(terraform_mod, "Snap", return_value=snap)
+        client = Mock()
+        # Use test_manifest which does NOT contain traefik config-map
+        client.cluster.get_latest_manifest.return_value = {"data": test_manifest}
+        client.cluster.get_config.return_value = "{}"
+        deployment.get_client.return_value = client
+        manifest = deployment.get_manifest()
+
+        tfhelper = deployment.get_tfhelper(tfplan)
+        with (
+            patch.object(tfhelper, "write_tfvars") as write_tfvars,
+            patch.object(tfhelper, "apply"),
+        ):
+            tfhelper.update_tfvars_and_apply_tf(client, manifest, "fake-config", None)
+            applied_tfvars = write_tfvars.call_args.args[0]
+
+            # traefik-config-map should be removed since it's no longer in manifest
+            assert "traefik-config-map" not in applied_tfvars
 
     def test_source_tracking_stale_manifest_values_removed(
         self,
