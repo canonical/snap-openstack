@@ -658,22 +658,28 @@ def test_jhelper_update_k8s_cloud(jhelper: jujulib.JujuHelper):
         )
 
 
-def test_get_available_charm_revision(jhelper: jujulib.JujuHelper, juju):
+def test_get_available_charm_revisions(jhelper: jujulib.JujuHelper, juju):
     cmd_out = {
         "channels": {
             "legacy": {
                 "edge": [
                     {
                         "revision": 121,
+                        "architectures": ["amd64"],
                         "bases": [{"name": "ubuntu", "channel": "24.04"}],
-                    }
+                    },
+                    {
+                        "revision": 122,
+                        "architectures": ["arm64"],
+                        "bases": [{"name": "ubuntu", "channel": "24.04"}],
+                    },
                 ]
             }
         }
     }
     juju.cli.return_value = json.dumps(cmd_out)
-    revno = jhelper.get_available_charm_revision("k8s", "legacy/edge")
-    assert revno == 121
+    revisions = jhelper.get_available_charm_revisions("k8s", "legacy/edge")
+    assert revisions == {"amd64": 121, "arm64": 122}
 
 
 def test_set_app_config(jhelper: jujulib.JujuHelper, juju):

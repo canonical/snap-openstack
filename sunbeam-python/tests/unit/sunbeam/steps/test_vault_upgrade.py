@@ -5,13 +5,14 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from sunbeam.core.common import ResultType
+from sunbeam.core.common import Result, ResultType
 from sunbeam.core.juju import (
     ApplicationNotFoundException,
     JujuException,
 )
 from sunbeam.core.terraform import TerraformException
 from sunbeam.features.vault.feature import VaultCommandFailedException
+from sunbeam.steps.charm_upgrade import CharmRefreshDecision
 from sunbeam.steps.vault import (
     CHARM_BASE,
     VAULT_CHANNEL,
@@ -64,8 +65,7 @@ class TestVaultCharmUpgradeStep:
             channel="1.16/stable", revision=None
         )
 
-        with patch.object(step, "channel_update_needed", return_value=False):
-            result = step.is_skip(step_context)
+        result = step.is_skip(step_context)
 
         assert result.result_type == ResultType.FAILED
         assert "track is below" in result.message
@@ -79,55 +79,50 @@ class TestVaultCharmUpgradeStep:
             channel="1.19/stable", revision=200
         )
 
-        with patch.object(step, "channel_update_needed", return_value=True):
-            result = step.is_skip(step_context)
+        result = step.is_skip(step_context)
 
         assert result.result_type == ResultType.COMPLETED
-        assert step._skip_charm_refresh is True
+        assert step._decision.result.result_type == ResultType.SKIPPED
 
     def test_no_skip_when_already_at_latest_revision_for_target(
         self, step, basic_jhelper, basic_manifest, step_context
     ):
         app = Mock(charm_rev=100, charm_channel=VAULT_CHANNEL, base=None)
         basic_jhelper.get_application.return_value = app
-        basic_jhelper.get_available_charm_revision.return_value = 100
+        basic_jhelper.get_available_charm_revisions.return_value = {"amd64": 100}
         basic_manifest.find_charm.return_value = None
 
         result = step.is_skip(step_context)
 
         assert result.result_type == ResultType.COMPLETED
-        assert step._skip_charm_refresh is True
+        assert step._decision.result.result_type == ResultType.SKIPPED
 
     def test_not_skipped_when_newer_revision_available(
         self, step, basic_jhelper, basic_manifest, step_context
     ):
         app = Mock(charm_rev=50, charm_channel="1.18/stable", base=None)
         basic_jhelper.get_application.return_value = app
-        basic_jhelper.get_available_charm_revision.return_value = 100
+        basic_jhelper.get_available_charm_revisions.return_value = {"amd64": 100}
         basic_manifest.find_charm.return_value = None
 
         result = step.is_skip(step_context)
 
         assert result.result_type == ResultType.COMPLETED
-        assert step._skip_charm_refresh is False
+        assert step._decision.result.result_type == ResultType.COMPLETED
 
     def test_not_skipped_when_manifest_channel_is_upgrade(
         self, step, basic_jhelper, basic_manifest, step_context
     ):
         app = Mock(charm_rev=100, charm_channel="1.18/stable", base=None)
         basic_jhelper.get_application.return_value = app
-        basic_jhelper.get_available_charm_revision.return_value = 120
         basic_manifest.find_charm.return_value = Mock(
             channel="1.19/stable", revision=None
         )
 
-        with patch.object(step, "channel_update_needed", return_value=True):
-            result = step.is_skip(step_context)
+        result = step.is_skip(step_context)
 
         assert result.result_type == ResultType.COMPLETED
-        basic_jhelper.get_available_charm_revision.assert_called_once_with(
-            "vault-k8s", "1.19/stable", arch="amd64"
-        )
+        basic_jhelper.get_available_charm_revisions.assert_not_called()
 
     def test_run_fails_when_vault_unsealed_after_upgrade(
         self,
@@ -141,6 +136,9 @@ class TestVaultCharmUpgradeStep:
         basic_manifest.find_charm.return_value = None
         vaulthelper.get_vault_status.return_value = {"sealed": False}
         basic_jhelper.get_leader_unit.return_value = "vault/0"
+        step._decision = CharmRefreshDecision(
+            result=Result(ResultType.COMPLETED), effective_channel=VAULT_CHANNEL
+        )
 
         result = step.run(step_context)
 
@@ -172,6 +170,9 @@ class TestVaultCharmUpgradeStep:
         vaulthelper.get_vault_status.return_value = {"sealed": True}
         basic_jhelper.get_leader_unit.return_value = "vault/0"
         mock_auto_unseal.return_value = None
+        step._decision = CharmRefreshDecision(
+            result=Result(ResultType.COMPLETED), effective_channel="1.18/stable"
+        )
 
         result = step.run(step_context)
 
@@ -193,6 +194,9 @@ class TestVaultCharmUpgradeStep:
         basic_jhelper.charm_refresh.side_effect = JujuException(
             "something bad happened"
         )
+        step._decision = CharmRefreshDecision(
+            result=Result(ResultType.COMPLETED), effective_channel=VAULT_CHANNEL
+        )
 
         result = step.run(step_context)
 
@@ -202,6 +206,9 @@ class TestVaultCharmUpgradeStep:
 
     def test_run_wait_times_out(self, step, basic_jhelper, step_context):
         basic_jhelper.wait_until_desired_status.side_effect = TimeoutError("timed out")
+        step._decision = CharmRefreshDecision(
+            result=Result(ResultType.COMPLETED), effective_channel=VAULT_CHANNEL
+        )
 
         result = step.run(step_context)
 
@@ -222,6 +229,9 @@ class TestVaultCharmUpgradeStep:
         mock_auto_unseal.side_effect = VaultCommandFailedException(
             "Vault is not in dev mode"
         )
+        step._decision = CharmRefreshDecision(
+            result=Result(ResultType.COMPLETED), effective_channel=VAULT_CHANNEL
+        )
 
         result = step.run(step_context)
 
@@ -240,6 +250,9 @@ class TestVaultCharmUpgradeStep:
         basic_jhelper.get_leader_unit.return_value = "vault/0"
         vaulthelper.get_vault_status.return_value = {"sealed": True}
         mock_auto_unseal.return_value = None
+        step._decision = CharmRefreshDecision(
+            result=Result(ResultType.COMPLETED), effective_channel=VAULT_CHANNEL
+        )
 
         result = step.run(step_context)
 
@@ -259,6 +272,9 @@ class TestVaultCharmUpgradeStep:
         basic_jhelper.get_leader_unit.return_value = "vault/0"
         vaulthelper.get_vault_status.return_value = {"sealed": True}
         mock_auto_unseal.side_effect = VaultCommandFailedException("unseal failed")
+        step._decision = CharmRefreshDecision(
+            result=Result(ResultType.COMPLETED), effective_channel=VAULT_CHANNEL
+        )
 
         result = step.run(step_context)
 
@@ -276,7 +292,9 @@ class TestVaultCharmUpgradeStep:
         step_context,
     ):
         basic_manifest.find_charm.return_value = None
-        step._skip_charm_refresh = True
+        step._decision = CharmRefreshDecision(
+            result=Result(ResultType.SKIPPED), effective_channel=VAULT_CHANNEL
+        )
 
         result = step.run(step_context)
 
@@ -299,7 +317,9 @@ class TestVaultCharmUpgradeStep:
         basic_tfhelper.update_tfvars_and_apply_tf.side_effect = TerraformException(
             "apply failed"
         )
-        step._skip_charm_refresh = True
+        step._decision = CharmRefreshDecision(
+            result=Result(ResultType.SKIPPED), effective_channel=VAULT_CHANNEL
+        )
 
         result = step.run(step_context)
 
@@ -318,6 +338,9 @@ class TestVaultCharmUpgradeStep:
         basic_manifest.find_charm.return_value = None
         basic_tfhelper.update_tfvars_and_apply_tf.side_effect = TerraformException(
             "apply failed"
+        )
+        step._decision = CharmRefreshDecision(
+            result=Result(ResultType.COMPLETED), effective_channel=VAULT_CHANNEL
         )
 
         result = step.run(step_context)
@@ -341,6 +364,9 @@ class TestVaultCharmUpgradeStep:
         vaulthelper.get_vault_status.return_value = {"sealed": True}
         basic_jhelper.get_leader_unit.return_value = "vault/0"
         mock_auto_unseal.return_value = None
+        step._decision = CharmRefreshDecision(
+            result=Result(ResultType.COMPLETED), effective_channel=VAULT_CHANNEL
+        )
 
         step.run(step_context)
 
@@ -365,6 +391,9 @@ class TestVaultCharmUpgradeStep:
         vaulthelper.get_vault_status.return_value = {"sealed": True}
         basic_jhelper.get_leader_unit.return_value = "vault/0"
         mock_auto_unseal.return_value = None
+        step._decision = CharmRefreshDecision(
+            result=Result(ResultType.COMPLETED), effective_channel="1.19/stable"
+        )
 
         step.run(step_context)
 
