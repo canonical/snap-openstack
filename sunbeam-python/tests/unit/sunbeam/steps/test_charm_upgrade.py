@@ -428,3 +428,18 @@ class TestCheckCharmNeedsRefreshPatchUpgrade:
         jhelper.get_available_charm_revisions.assert_called_once_with(
             CHARM_NAME, "1.18/stable", "ubuntu@24.04"
         )
+
+    def test_completed_on_branch_channel(self, jhelper, manifest):
+        """Branch channels proceed with refresh to pick up any new revision."""
+        app = Mock(
+            charm_rev=200, charm_channel="1.32/edge/hue-fix-kubelet-0405-1", base=None
+        )
+        jhelper.get_application.return_value = app
+        manifest.find_charm.return_value = None
+
+        decision = check_charm_needs_refresh(
+            jhelper, manifest, CHARM_NAME, MODEL, APPLICATION, DEFAULT_CHANNEL
+        )
+
+        assert decision.result.result_type == ResultType.COMPLETED
+        jhelper.get_available_charm_revisions.assert_not_called()

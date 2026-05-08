@@ -280,6 +280,21 @@ class TestK8SCharmUpgradeStepIsSkip:
             CHARM_NAME, K8S_CHANNEL, "ubuntu@24.04"
         )
 
+    def test_completed_on_branch_channel(
+        self, step, basic_jhelper, basic_manifest, step_context
+    ):
+        """Branch channel: proceed with refresh, no Charmhub revision lookup."""
+        app = Mock(
+            charm_rev=199, charm_channel="1.32/edge/hue-fix-kubelet-0405-1", base=None
+        )
+        basic_jhelper.get_application.return_value = app
+        basic_manifest.find_charm.return_value = None
+
+        result = step.is_skip(step_context)
+
+        assert result.result_type == ResultType.COMPLETED
+        basic_jhelper.get_available_charm_revisions.assert_not_called()
+
 
 class TestK8SCharmUpgradeStepRun:
     @pytest.fixture(autouse=True)

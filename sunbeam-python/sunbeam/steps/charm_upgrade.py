@@ -105,6 +105,14 @@ def _check_patch_upgrade(
     effective_channel: str,
 ) -> CharmRefreshDecision:
     """Handle patch upgrade: check whether a newer revision is available."""
+    # Branch channels (track/risk/branch) are not listed in the Charmhub
+    # channel map, so revision lookups will fail. Proceed with refresh
+    # anyway so juju picks up any new revision published to the branch.
+    if len(effective_channel.split("/")) > 2:
+        return CharmRefreshDecision(
+            result=Result(ResultType.COMPLETED),
+            effective_channel=effective_channel,
+        )
     try:
         if app.base:
             base = f"{app.base.name}@{app.base.channel}"
