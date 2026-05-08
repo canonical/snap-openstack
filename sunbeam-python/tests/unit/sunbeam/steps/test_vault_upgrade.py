@@ -124,6 +124,19 @@ class TestVaultCharmUpgradeStep:
         assert result.result_type == ResultType.COMPLETED
         basic_jhelper.get_available_charm_revisions.assert_not_called()
 
+    def test_completed_on_branch_channel(
+        self, step, basic_jhelper, basic_manifest, step_context
+    ):
+        """Branch channel: proceed with refresh, no Charmhub revision lookup."""
+        app = Mock(charm_rev=50, charm_channel="1.18/stable/my-fix-branch", base=None)
+        basic_jhelper.get_application.return_value = app
+        basic_manifest.find_charm.return_value = None
+
+        result = step.is_skip(step_context)
+
+        assert result.result_type == ResultType.COMPLETED
+        basic_jhelper.get_available_charm_revisions.assert_not_called()
+
     def test_run_fails_when_vault_unsealed_after_upgrade(
         self,
         step,

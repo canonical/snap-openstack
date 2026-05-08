@@ -118,6 +118,20 @@ class TestMySQLCharmUpgradeStep:
 
         assert result.result_type == ResultType.SKIPPED
 
+    def test_is_skip_branch_channel(
+        self, step, basic_jhelper, basic_manifest, step_context
+    ):
+        """Branch channels proceed with refresh to pick up any new revision."""
+        basic_jhelper.get_application.return_value = Mock(
+            charm_rev=255, base=None, charm_channel="8.0/edge/my-fix-branch"
+        )
+        basic_manifest.find_charm.return_value = Mock(revision=None, channel="8.0/edge")
+
+        result = step.is_skip(step_context)
+
+        assert result.result_type == ResultType.COMPLETED
+        basic_jhelper.get_available_charm_revisions.assert_not_called()
+
     def test_is_skip_channel_track_mismatch(
         self, step, basic_jhelper, basic_manifest, step_context
     ):

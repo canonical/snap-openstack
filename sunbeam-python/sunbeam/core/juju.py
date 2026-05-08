@@ -1620,7 +1620,12 @@ class JujuHelper:
         :param base: Base to lookup charm in, default is JUJU_BASE
         :raises JujuException: if the channel/base combination is not found
         """
-        track, risk = channel.split("/")
+        parts = channel.split("/")
+        if len(parts) < 2:
+            raise JujuException(
+                f"Invalid channel format {channel!r}: expected track/risk[/branch]"
+            )
+        track, risk = parts[0], parts[1]
         _, base_channel = base.split("@")
         output = json.loads(
             self._juju.cli(
@@ -1635,7 +1640,14 @@ class JujuHelper:
         )
 
         revisions: dict[str, int] = {}
-        for risk_info in output["channels"][track][risk]:
+        try:
+            channel_entries = output["channels"][track][risk]
+        except KeyError:
+            raise JujuException(
+                f"Could not find charm {charm_name!r} in channel {channel!r} "
+                f"with base {base!r}"
+            )
+        for risk_info in channel_entries:
             for base_info in risk_info["bases"]:
                 if base_info["channel"] == base_channel:
                     archs = risk_info.get("architectures") or ["all"]
@@ -2166,8 +2178,17 @@ class JujuStepHelper:
         """
         risks = ["stable", "candidate", "beta", "edge"]
         current_channel = self.normalise_channel(channel)
-        current_track, current_risk = current_channel.split("/")
-        new_track, new_risk = new_channel.split("/")
+        current_parts = current_channel.split("/")
+        if len(current_parts) < 2:
+            LOG.error("Invalid channel format %r", channel)
+            return False
+        current_track, current_risk = current_parts[0], current_parts[1]
+        new_channel = self.normalise_channel(new_channel)
+        new_parts = new_channel.split("/")
+        if len(new_parts) < 2:
+            LOG.error("Invalid channel format %r", new_channel)
+            return False
+        new_track, new_risk = new_parts[0], new_parts[1]
         if current_track != new_track:
             try:
                 return version.parse(current_track) < version.parse(new_track)
