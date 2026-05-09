@@ -132,6 +132,7 @@ class SecretsFeature(OpenStackControlPlaneFeature):
                 self.manifest,
                 deployment.openstack_machines_model,
                 extra_tfvars=extra_tfvars,
+                deployment=deployment,
             ),
         ]
         run_plan(plan2, console, show_hints)
@@ -156,6 +157,7 @@ class SecretsFeature(OpenStackControlPlaneFeature):
                 self.manifest,
                 deployment.openstack_machines_model,
                 extra_tfvars=extra_tfvars,
+                deployment=deployment,
             ),
             RemoveSaasApplicationsStep(
                 jhelper,

@@ -480,3 +480,40 @@ class FeatureManager:
                         "channels"
                     )
                     feature.upgrade_hook(deployment)
+
+    def _call_enabled_features_hook(
+        self,
+        deployment: Deployment,
+        node: typing.Any,
+        hook: typing.Literal["on_join", "on_depart"],
+        **kwargs: typing.Any,
+    ) -> None:
+        """Call hook on enabled features."""
+        client = deployment.get_client()
+        for feature in self.features().values():
+            if not isinstance(feature, EnableDisableFeature):
+                continue
+            try:
+                if not feature.is_enabled(client):
+                    continue
+            except Exception as e:
+                LOG.debug(
+                    "Failed to check if feature %r is enabled for hook %r: %r",
+                    feature.name,
+                    hook,
+                    e,
+                )
+                continue
+            getattr(feature, hook)(deployment, node, **kwargs)
+
+    def call_enabled_features_on_join(
+        self, deployment: Deployment, node: typing.Any, **kwargs: typing.Any
+    ) -> None:
+        """Call on_join on enabled features."""
+        self._call_enabled_features_hook(deployment, node, "on_join", **kwargs)
+
+    def call_enabled_features_on_depart(
+        self, deployment: Deployment, node: typing.Any, **kwargs: typing.Any
+    ) -> None:
+        """Call on_depart on enabled features."""
+        self._call_enabled_features_hook(deployment, node, "on_depart", **kwargs)

@@ -1,10 +1,13 @@
 # SPDX-FileCopyrightText: 2025 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 from unittest.mock import Mock, patch
 
 import pytest
 
+from sunbeam.clusterd.service import ConfigItemNotFoundException
+from sunbeam.core.common import ResultType
 from sunbeam.features.telemetry import feature as telemetry_feature
 
 
@@ -16,308 +19,307 @@ def deployment():
 
     client = deploy.get_client.return_value
     client.cluster.list_nodes_by_role.return_value = [{"name": "node1", "machineid": 1}]
+    # Return empty config for metrics backend (no S3 offer configured)
+    client.cluster.get_config.return_value = json.dumps({})
 
     return deploy
 
 
-@pytest.fixture()
-def mock_storage_backends():
-    """Mock storage backends with different principal applications."""
-    backend1 = Mock()
-    backend1.name = "backend1"
-    backend1.type = "type1"
-    backend1.principal = "cinder-volume-noha"
+class TestUpdateCinderVolumeTelemetryTfvarsStep:
+    """Test the UpdateCinderVolumeTelemetryTfvarsStep."""
 
-    backend2 = Mock()
-    backend2.name = "backend2"
-    backend2.type = "type2"
-    backend2.principal = "cinder-volume-noha"  # Same principal as backend1
+    @patch("sunbeam.features.telemetry.feature.read_config")
+    @patch("sunbeam.features.telemetry.feature.update_config")
+    def test_run_enables_telemetry_on_all_cinder_volumes(
+        self,
+        mock_update_config,
+        mock_read_config,
+        step_context,
+    ):
+        """Enabling telemetry should set flag=True on every cinder-volume entry."""
+        client = Mock()
+        mock_read_config.return_value = {
+            "backends": {"backend-a": {}},
+            "cinder-volumes": {
+                "cinder-volume": {"application_name": "cinder-volume"},
+                "cinder-volume-noha": {"application_name": "cinder-volume-noha"},
+            },
+        }
 
-    backend3 = Mock()
-    backend3.name = "backend3"
-    backend3.type = "type3"
-    backend3.principal = "cinder-volume"  # Different principal
+        step = telemetry_feature.UpdateCinderVolumeTelemetryTfvarsStep(
+            client, enable=True
+        )
+        result = step.run(step_context)
 
-    return [backend1, backend2, backend3]
+        assert result.result_type == ResultType.COMPLETED
+        written = mock_update_config.call_args[0][2]
+        for entry in written["cinder-volumes"].values():
+            assert entry["enable-telemetry-notifications"] is True
+
+    @patch("sunbeam.features.telemetry.feature.read_config")
+    @patch("sunbeam.features.telemetry.feature.update_config")
+    def test_run_disables_telemetry_on_all_cinder_volumes(
+        self,
+        mock_update_config,
+        mock_read_config,
+        step_context,
+    ):
+        """Disabling telemetry should set flag=False on every cinder-volume entry."""
+        client = Mock()
+        mock_read_config.return_value = {
+            "backends": {"backend-a": {}},
+            "cinder-volumes": {
+                "cinder-volume": {
+                    "application_name": "cinder-volume",
+                    "enable-telemetry-notifications": True,
+                },
+            },
+        }
+
+        step = telemetry_feature.UpdateCinderVolumeTelemetryTfvarsStep(
+            client, enable=False
+        )
+        result = step.run(step_context)
+
+        assert result.result_type == ResultType.COMPLETED
+        written = mock_update_config.call_args[0][2]
+        assert (
+            written["cinder-volumes"]["cinder-volume"]["enable-telemetry-notifications"]
+            is False
+        )
+
+    @patch("sunbeam.features.telemetry.feature.read_config")
+    def test_is_skip_when_no_config(self, mock_read_config, step_context):
+        """Step should skip when no storage backend config exists."""
+        client = Mock()
+        mock_read_config.side_effect = ConfigItemNotFoundException("not found")
+
+        step = telemetry_feature.UpdateCinderVolumeTelemetryTfvarsStep(
+            client, enable=True
+        )
+        result = step.is_skip(step_context)
+        assert result.result_type == ResultType.SKIPPED
+
+    @patch("sunbeam.features.telemetry.feature.read_config")
+    def test_is_skip_when_no_cinder_volumes(self, mock_read_config, step_context):
+        """Step should skip when cinder-volumes is empty."""
+        client = Mock()
+        mock_read_config.return_value = {
+            "backends": {"backend-a": {}},
+            "cinder-volumes": {},
+        }
+
+        step = telemetry_feature.UpdateCinderVolumeTelemetryTfvarsStep(
+            client, enable=True
+        )
+        result = step.is_skip(step_context)
+        assert result.result_type == ResultType.SKIPPED
+
+    @patch("sunbeam.features.telemetry.feature.read_config")
+    def test_is_skip_returns_completed_when_entries_exist(
+        self, mock_read_config, step_context
+    ):
+        """Step should not skip when cinder-volume entries exist."""
+        client = Mock()
+        mock_read_config.return_value = {
+            "cinder-volumes": {"cinder-volume": {"application_name": "cinder-volume"}},
+        }
+
+        step = telemetry_feature.UpdateCinderVolumeTelemetryTfvarsStep(
+            client, enable=True
+        )
+        result = step.is_skip(step_context)
+        assert result.result_type == ResultType.COMPLETED
+
+    @patch("sunbeam.features.telemetry.feature.read_config")
+    @patch("sunbeam.features.telemetry.feature.update_config")
+    def test_run_completes_when_no_cinder_volumes(
+        self, mock_update_config, mock_read_config, step_context
+    ):
+        """Run should complete gracefully when no cinder-volume entries."""
+        client = Mock()
+        mock_read_config.return_value = {"backends": {}, "cinder-volumes": {}}
+
+        step = telemetry_feature.UpdateCinderVolumeTelemetryTfvarsStep(
+            client, enable=True
+        )
+        result = step.run(step_context)
+
+        assert result.result_type == ResultType.COMPLETED
+        mock_update_config.assert_not_called()
 
 
-@pytest.fixture()
-def mock_backend_instances():
-    """Mock backend instances from StorageBackendManager."""
-    instance1 = Mock()
-    instance1.principal_application = "cinder-volume-noha"
+class TestTelemetryFeatureEnableDisablePlans:
+    """Test that enable/disable plans use the correct storage backend plan name."""
 
-    instance2 = Mock()
-    instance2.principal_application = "cinder-volume-noha"
-
-    instance3 = Mock()
-    instance3.principal_application = "cinder-volume"
-
-    return {
-        "type1": instance1,
-        "type2": instance2,
-        "type3": instance3,
-    }
-
-
-class TestTelemetryFeatureDeduplication:
-    """Test deduplication logic in telemetry feature enable/disable plans."""
-
+    @patch("sunbeam.features.telemetry.feature.register_storage_terraform_plan")
     @patch("sunbeam.features.telemetry.feature.JujuHelper")
-    @patch("sunbeam.features.telemetry.feature.StorageBackendManager")
-    @patch("sunbeam.features.telemetry.feature.DeploySpecificCinderVolumeStep")
     @patch("sunbeam.features.telemetry.feature.run_plan")
-    def test_run_enable_plans_deduplicates_shared_principals(
+    def test_run_enable_plans_uses_storage_backend_plan(
         self,
         mock_run_plan,
-        mock_deploy_step_class,
-        mock_storage_manager_class,
         mock_jhelper_class,
+        mock_register_storage,
         deployment,
-        mock_storage_backends,
-        mock_backend_instances,
     ):
-        """Test that enable plans deduplicates backends sharing the same principal."""
-        # Setup mocks
-        client = deployment.get_client.return_value
-        storage_backends_root = Mock()
-        storage_backends_root.root = mock_storage_backends
-        client.cluster.get_storage_backends.return_value = storage_backends_root
-
-        # Mock StorageBackendManager
-        mock_storage_manager = mock_storage_manager_class.return_value
-        mock_storage_manager.backends.return_value = mock_backend_instances
-
-        # Mock tfhelpers
+        """Enable plans should use storage-backend-plan, not storage-plan."""
         tfhelper = Mock()
         tfhelper_openstack = Mock()
         tfhelper_openstack.output.return_value = {"ceilometer-offer-url": "url"}
         tfhelper_hypervisor = Mock()
-        tfhelper_cinder_volume = Mock()
         tfhelper_storage = Mock()
 
         deployment.get_tfhelper.side_effect = lambda plan: {
             "telemetry-plan": tfhelper,
             "openstack-plan": tfhelper_openstack,
             "hypervisor-plan": tfhelper_hypervisor,
-            "cinder-volume-plan": tfhelper_cinder_volume,
-            "storage-plan": tfhelper_storage,
+            "storage-backend-plan": tfhelper_storage,
         }[plan]
 
-        # Create feature and run enable plans
         feature = telemetry_feature.TelemetryFeature()
         feature._manifest = Mock()
         feature.run_enable_plans(deployment, Mock(), False)
 
-        # Verify DeploySpecificCinderVolumeStep was called only twice
-        # (once for cinder-volume-noha, once for cinder-volume)
-        # NOT three times (which would be without deduplication)
-        assert mock_deploy_step_class.call_count == 2
+        # Verify that get_tfhelper was called with "storage-backend-plan"
+        # (it should NOT raise KeyError for "storage-plan")
+        calls = deployment.get_tfhelper.call_args_list
+        plan_names = [call[0][0] for call in calls]
+        assert "storage-backend-plan" in plan_names
+        assert "storage-plan" not in plan_names
 
-        # Verify the principals that were processed
-        principals_processed = set()
-        for call in mock_deploy_step_class.call_args_list:
-            backend_instance = call[0][6]  # 7th positional arg is backend_instance
-            principals_processed.add(backend_instance.principal_application)
-
-        assert principals_processed == {"cinder-volume-noha", "cinder-volume"}
-
+    @patch("sunbeam.features.telemetry.feature.register_storage_terraform_plan")
     @patch("sunbeam.features.telemetry.feature.JujuHelper")
-    @patch("sunbeam.features.telemetry.feature.StorageBackendManager")
-    @patch("sunbeam.features.telemetry.feature.DeploySpecificCinderVolumeStep")
     @patch("sunbeam.features.telemetry.feature.run_plan")
-    def test_run_disable_plans_deduplicates_shared_principals(
+    def test_run_disable_plans_uses_storage_backend_plan(
         self,
         mock_run_plan,
-        mock_deploy_step_class,
-        mock_storage_manager_class,
         mock_jhelper_class,
+        mock_register_storage,
         deployment,
-        mock_storage_backends,
-        mock_backend_instances,
     ):
-        """Test that disable plans deduplicates backends sharing the same principal."""
-        # Setup mocks
-        client = deployment.get_client.return_value
-        storage_backends_root = Mock()
-        storage_backends_root.root = mock_storage_backends
-        client.cluster.get_storage_backends.return_value = storage_backends_root
-
-        # Mock StorageBackendManager
-        mock_storage_manager = mock_storage_manager_class.return_value
-        mock_storage_manager.backends.return_value = mock_backend_instances
-
-        # Mock tfhelpers
+        """Disable plans should use storage-backend-plan, not storage-plan."""
         tfhelper = Mock()
         tfhelper.state_list.return_value = []
         tfhelper_openstack = Mock()
         tfhelper_hypervisor = Mock()
-        tfhelper_cinder_volume = Mock()
         tfhelper_storage = Mock()
 
         deployment.get_tfhelper.side_effect = lambda plan: {
             "telemetry-plan": tfhelper,
             "openstack-plan": tfhelper_openstack,
             "hypervisor-plan": tfhelper_hypervisor,
-            "cinder-volume-plan": tfhelper_cinder_volume,
-            "storage-plan": tfhelper_storage,
+            "storage-backend-plan": tfhelper_storage,
         }[plan]
 
-        # Create feature and run disable plans
         feature = telemetry_feature.TelemetryFeature()
         feature._manifest = Mock()
         feature.run_disable_plans(deployment, False)
 
-        # Verify DeploySpecificCinderVolumeStep was called only twice
-        # (once for cinder-volume-noha, once for cinder-volume)
-        assert mock_deploy_step_class.call_count == 2
+        calls = deployment.get_tfhelper.call_args_list
+        plan_names = [call[0][0] for call in calls]
+        assert "storage-backend-plan" in plan_names
+        assert "storage-plan" not in plan_names
 
-        # Verify the principals that were processed
-        principals_processed = set()
-        for call in mock_deploy_step_class.call_args_list:
-            backend_instance = call[0][6]  # 7th positional arg is backend_instance
-            principals_processed.add(backend_instance.principal_application)
-
-        assert principals_processed == {"cinder-volume-noha", "cinder-volume"}
-
+    @patch("sunbeam.features.telemetry.feature.register_storage_terraform_plan")
     @patch("sunbeam.features.telemetry.feature.JujuHelper")
-    @patch("sunbeam.features.telemetry.feature.StorageBackendManager")
     @patch("sunbeam.features.telemetry.feature.run_plan")
-    def test_run_enable_plans_no_storage_backends(
+    def test_run_enable_plans_includes_update_and_reapply_steps(
         self,
         mock_run_plan,
-        mock_storage_manager_class,
         mock_jhelper_class,
+        mock_register_storage,
         deployment,
     ):
-        """Test that enable plans works when there are no storage backends."""
-        # Setup mocks
-        client = deployment.get_client.return_value
-        storage_backends_root = Mock()
-        storage_backends_root.root = []  # No backends
-        client.cluster.get_storage_backends.return_value = storage_backends_root
+        """Enable plan3 should include update and reapply steps.
 
-        # Mock tfhelpers
+        Checks for UpdateCinderVolumeTelemetryTfvarsStep and
+        ReapplyStorageBackendTerraformPlanStep.
+        """
+        from sunbeam.storage.steps import ReapplyStorageBackendTerraformPlanStep
+
         tfhelper = Mock()
         tfhelper_openstack = Mock()
         tfhelper_openstack.output.return_value = {"ceilometer-offer-url": "url"}
         tfhelper_hypervisor = Mock()
-        tfhelper_cinder_volume = Mock()
+        tfhelper_storage = Mock()
 
         deployment.get_tfhelper.side_effect = lambda plan: {
             "telemetry-plan": tfhelper,
             "openstack-plan": tfhelper_openstack,
             "hypervisor-plan": tfhelper_hypervisor,
-            "cinder-volume-plan": tfhelper_cinder_volume,
+            "storage-backend-plan": tfhelper_storage,
         }[plan]
 
-        # Create feature and run enable plans
         feature = telemetry_feature.TelemetryFeature()
         feature._manifest = Mock()
         feature.run_enable_plans(deployment, Mock(), False)
 
-        # Verify run_plan was called for plan1 and plan2, but not plan3
-        # (plan3 is for storage backends which we don't have)
+        # run_plan is called 3 times: plan1, plan2, plan3
+        assert mock_run_plan.call_count == 3
+
+        # plan3 is the last call
+        plan3_steps = mock_run_plan.call_args_list[2][0][0]
+        step_types = [type(s) for s in plan3_steps]
+        assert telemetry_feature.UpdateCinderVolumeTelemetryTfvarsStep in step_types
+        assert ReapplyStorageBackendTerraformPlanStep in step_types
+
+        # Verify the update step has enable=True
+        update_steps = [
+            s
+            for s in plan3_steps
+            if isinstance(s, telemetry_feature.UpdateCinderVolumeTelemetryTfvarsStep)
+        ]
+        assert len(update_steps) == 1
+        assert update_steps[0].enable is True
+
+    @patch("sunbeam.features.telemetry.feature.register_storage_terraform_plan")
+    @patch("sunbeam.features.telemetry.feature.JujuHelper")
+    @patch("sunbeam.features.telemetry.feature.run_plan")
+    def test_run_disable_plans_includes_update_and_reapply_steps(
+        self,
+        mock_run_plan,
+        mock_jhelper_class,
+        mock_register_storage,
+        deployment,
+    ):
+        """Disable plan2 should include update and reapply steps.
+
+        Checks for UpdateCinderVolumeTelemetryTfvarsStep and
+        ReapplyStorageBackendTerraformPlanStep.
+        """
+        from sunbeam.storage.steps import ReapplyStorageBackendTerraformPlanStep
+
+        tfhelper = Mock()
+        tfhelper.state_list.return_value = []
+        tfhelper_openstack = Mock()
+        tfhelper_hypervisor = Mock()
+        tfhelper_storage = Mock()
+
+        deployment.get_tfhelper.side_effect = lambda plan: {
+            "telemetry-plan": tfhelper,
+            "openstack-plan": tfhelper_openstack,
+            "hypervisor-plan": tfhelper_hypervisor,
+            "storage-backend-plan": tfhelper_storage,
+        }[plan]
+
+        feature = telemetry_feature.TelemetryFeature()
+        feature._manifest = Mock()
+        feature.run_disable_plans(deployment, False)
+
+        # run_plan is called: plan (disable main), plan2 (storage update)
         assert mock_run_plan.call_count == 2
 
-    @patch("sunbeam.features.telemetry.feature.JujuHelper")
-    @patch("sunbeam.features.telemetry.feature.StorageBackendManager")
-    @patch("sunbeam.features.telemetry.feature.DeploySpecificCinderVolumeStep")
-    @patch("sunbeam.features.telemetry.feature.run_plan")
-    def test_run_enable_plans_passes_extra_tfvars(
-        self,
-        mock_run_plan,
-        mock_deploy_step_class,
-        mock_storage_manager_class,
-        mock_jhelper_class,
-        deployment,
-        mock_storage_backends,
-        mock_backend_instances,
-    ):
-        """Test that enable plans passes correct extra_tfvars to steps."""
-        # Setup mocks
-        client = deployment.get_client.return_value
-        storage_backends_root = Mock()
-        storage_backends_root.root = mock_storage_backends
-        client.cluster.get_storage_backends.return_value = storage_backends_root
+        # plan2 is the last call
+        plan2_steps = mock_run_plan.call_args_list[1][0][0]
+        step_types = [type(s) for s in plan2_steps]
+        assert telemetry_feature.UpdateCinderVolumeTelemetryTfvarsStep in step_types
+        assert ReapplyStorageBackendTerraformPlanStep in step_types
 
-        # Mock StorageBackendManager
-        mock_storage_manager = mock_storage_manager_class.return_value
-        mock_storage_manager.backends.return_value = mock_backend_instances
-
-        # Mock tfhelpers
-        tfhelper = Mock()
-        tfhelper_openstack = Mock()
-        tfhelper_openstack.output.return_value = {"ceilometer-offer-url": "url"}
-        tfhelper_hypervisor = Mock()
-        tfhelper_cinder_volume = Mock()
-        tfhelper_storage = Mock()
-
-        deployment.get_tfhelper.side_effect = lambda plan: {
-            "telemetry-plan": tfhelper,
-            "openstack-plan": tfhelper_openstack,
-            "hypervisor-plan": tfhelper_hypervisor,
-            "cinder-volume-plan": tfhelper_cinder_volume,
-            "storage-plan": tfhelper_storage,
-        }[plan]
-
-        # Create feature and run enable plans
-        feature = telemetry_feature.TelemetryFeature()
-        feature._manifest = Mock()
-        feature.run_enable_plans(deployment, Mock(), False)
-
-        # Verify all DeploySpecificCinderVolumeStep calls have correct extra_tfvars
-        for call in mock_deploy_step_class.call_args_list:
-            extra_tfvars = call[1]["extra_tfvars"]
-            assert extra_tfvars == {"enable-telemetry-notifications": True}
-
-    @patch("sunbeam.features.telemetry.feature.JujuHelper")
-    @patch("sunbeam.features.telemetry.feature.StorageBackendManager")
-    @patch("sunbeam.features.telemetry.feature.DeploySpecificCinderVolumeStep")
-    @patch("sunbeam.features.telemetry.feature.run_plan")
-    def test_run_disable_plans_passes_extra_tfvars(
-        self,
-        mock_run_plan,
-        mock_deploy_step_class,
-        mock_storage_manager_class,
-        mock_jhelper_class,
-        deployment,
-        mock_storage_backends,
-        mock_backend_instances,
-    ):
-        """Test that disable plans passes correct extra_tfvars to steps."""
-        # Setup mocks
-        client = deployment.get_client.return_value
-        storage_backends_root = Mock()
-        storage_backends_root.root = mock_storage_backends
-        client.cluster.get_storage_backends.return_value = storage_backends_root
-
-        # Mock StorageBackendManager
-        mock_storage_manager = mock_storage_manager_class.return_value
-        mock_storage_manager.backends.return_value = mock_backend_instances
-
-        # Mock tfhelpers
-        tfhelper = Mock()
-        tfhelper.state_list.return_value = []
-        tfhelper_openstack = Mock()
-        tfhelper_hypervisor = Mock()
-        tfhelper_cinder_volume = Mock()
-        tfhelper_storage = Mock()
-
-        deployment.get_tfhelper.side_effect = lambda plan: {
-            "telemetry-plan": tfhelper,
-            "openstack-plan": tfhelper_openstack,
-            "hypervisor-plan": tfhelper_hypervisor,
-            "cinder-volume-plan": tfhelper_cinder_volume,
-            "storage-plan": tfhelper_storage,
-        }[plan]
-
-        # Create feature and run disable plans
-        feature = telemetry_feature.TelemetryFeature()
-        feature._manifest = Mock()
-        feature.run_disable_plans(deployment, False)
-
-        # Verify all DeploySpecificCinderVolumeStep calls have correct extra_tfvars
-        for call in mock_deploy_step_class.call_args_list:
-            extra_tfvars = call[1]["extra_tfvars"]
-            assert extra_tfvars == {"enable-telemetry-notifications": False}
+        # Verify the update step has enable=False
+        update_steps = [
+            s
+            for s in plan2_steps
+            if isinstance(s, telemetry_feature.UpdateCinderVolumeTelemetryTfvarsStep)
+        ]
+        assert len(update_steps) == 1
+        assert update_steps[0].enable is False

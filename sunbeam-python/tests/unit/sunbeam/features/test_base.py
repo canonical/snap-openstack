@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2023 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
+import logging
 from unittest.mock import Mock, patch
 
 import click
@@ -311,6 +312,14 @@ def feature_klass(version_: str, enabled: bool = False) -> type[EnableDisableFea
 
 
 class TestEnableDisableFeature:
+    def test_on_join_default_hook(self, deployment):
+        feature = DummyFeature()
+        assert feature.on_join(deployment, "node-1") is None
+
+    def test_on_depart_default_hook(self, deployment):
+        feature = DummyFeature()
+        assert feature.on_depart(deployment, "node-1") is None
+
     def test_check_enabled_feature_is_compatible_with_compatible_requirement(
         self, deployment, mocker
     ):
@@ -609,3 +618,75 @@ class TestFeatureManager:
                 match="Feature test_feature is not of type EnableDisable",
             ):
                 manager.is_feature_enabled(deployment, "test_feature")
+
+    def test_call_enabled_features_on_join(self, deployment):
+        manager = FeatureManager()
+        enabled_feature = Mock(spec=EnableDisableFeature, name="enabled_feature")
+        enabled_feature.name = "enabled_feature"
+        enabled_feature.is_enabled.return_value = True
+        disabled_feature = Mock(spec=EnableDisableFeature, name="disabled_feature")
+        disabled_feature.name = "disabled_feature"
+        disabled_feature.is_enabled.return_value = False
+        base_feature = Mock(spec=BaseFeature, name="base_feature")
+
+        with patch.object(
+            manager,
+            "features",
+            return_value={
+                "enabled_feature": enabled_feature,
+                "disabled_feature": disabled_feature,
+                "base_feature": base_feature,
+            },
+        ):
+            manager.call_enabled_features_on_join(
+                deployment, "node-1", token="token-value"
+            )
+
+        enabled_feature.on_join.assert_called_once_with(
+            deployment, "node-1", token="token-value"
+        )
+        disabled_feature.on_join.assert_not_called()
+
+    def test_call_enabled_features_on_depart_propagates_hook_error(self, deployment):
+        manager = FeatureManager()
+        failing_feature = Mock(spec=EnableDisableFeature, name="failing_feature")
+        failing_feature.name = "failing_feature"
+        failing_feature.is_enabled.return_value = True
+        failing_feature.on_depart.side_effect = RuntimeError("hook failed")
+
+        with patch.object(
+            manager,
+            "features",
+            return_value={"failing_feature": failing_feature},
+        ):
+            with pytest.raises(RuntimeError, match="hook failed"):
+                manager.call_enabled_features_on_depart(deployment, "node-1")
+
+    def test_call_enabled_features_on_depart_logs_and_continues_on_enable_error(
+        self, deployment, caplog
+    ):
+        manager = FeatureManager()
+        failing_feature = Mock(spec=EnableDisableFeature, name="failing_feature")
+        failing_feature.name = "failing_feature"
+        failing_feature.is_enabled.side_effect = RuntimeError("enablement failed")
+        succeeding_feature = Mock(spec=EnableDisableFeature, name="succeeding_feature")
+        succeeding_feature.name = "succeeding_feature"
+        succeeding_feature.is_enabled.return_value = True
+
+        with patch.object(
+            manager,
+            "features",
+            return_value={
+                "failing_feature": failing_feature,
+                "succeeding_feature": succeeding_feature,
+            },
+        ):
+            with caplog.at_level(logging.DEBUG):
+                manager.call_enabled_features_on_depart(deployment, "node-1")
+
+        failing_feature.on_depart.assert_not_called()
+        succeeding_feature.on_depart.assert_called_once_with(deployment, "node-1")
+        assert (
+            "Failed to check if feature 'failing_feature' is enabled for hook "
+            "'on_depart'"
+        ) in caplog.text

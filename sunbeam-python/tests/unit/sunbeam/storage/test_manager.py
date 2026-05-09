@@ -8,6 +8,7 @@ from unittest.mock import Mock, patch
 import click
 import pytest
 
+from sunbeam.storage.base import HypervisorIntegration
 from sunbeam.storage.manager import StorageBackendManager
 from sunbeam.storage.models import StorageBackendInfo
 
@@ -354,3 +355,175 @@ class TestStorageCLICommands:
                 break
 
         assert show_command is not None
+
+
+class TestCollectHypervisorIntegrations:
+    """Tests for StorageBackendManager.collect_hypervisor_integrations."""
+
+    @pytest.fixture
+    def mock_client(self):
+        """Create a mock clusterd client."""
+        return Mock()
+
+    @pytest.fixture
+    def mock_deployment(self):
+        """Create a mock deployment."""
+        return Mock()
+
+    @pytest.fixture
+    def manager_with_backends(self):
+        """Create a manager with controlled backends."""
+        StorageBackendManager._backends = {}
+        StorageBackendManager._loaded = True
+        return StorageBackendManager()
+
+    def test_returns_integrations_from_registered_backends(
+        self, manager_with_backends, mock_deployment, mock_client
+    ):
+        """Returns integrations from backends that have registered instances."""
+        integration_a = HypervisorIntegration(
+            application_name="ceph-app",
+            endpoint_name="ceph-access",
+            hypervisor_endpoint_name="ceph",
+        )
+        integration_b = HypervisorIntegration(
+            application_name="iscsi-app",
+            endpoint_name="iscsi-access",
+            hypervisor_endpoint_name="iscsi",
+        )
+
+        backend_ceph = Mock()
+        backend_ceph.get_hypervisor_integrations.return_value = {integration_a}
+
+        backend_iscsi = Mock()
+        backend_iscsi.get_hypervisor_integrations.return_value = {integration_b}
+
+        manager_with_backends._backends["ceph"] = backend_ceph
+        manager_with_backends._backends["iscsi"] = backend_iscsi
+
+        # Simulate two registered backend instances, one ceph and one iscsi
+        registered_ceph = Mock()
+        registered_ceph.type = "ceph"
+        registered_iscsi = Mock()
+        registered_iscsi.type = "iscsi"
+        mock_client.cluster.get_storage_backends.return_value.root = [
+            registered_ceph,
+            registered_iscsi,
+        ]
+
+        result = manager_with_backends.collect_hypervisor_integrations(
+            mock_deployment, mock_client
+        )
+
+        assert result == {integration_a, integration_b}
+        backend_ceph.get_hypervisor_integrations.assert_called_once_with(
+            mock_deployment
+        )
+        backend_iscsi.get_hypervisor_integrations.assert_called_once_with(
+            mock_deployment
+        )
+
+    def test_returns_empty_set_when_no_backends_registered(
+        self, manager_with_backends, mock_deployment, mock_client
+    ):
+        """Returns empty set when no backends are registered in clusterd."""
+        mock_client.cluster.get_storage_backends.return_value.root = []
+
+        result = manager_with_backends.collect_hypervisor_integrations(
+            mock_deployment, mock_client
+        )
+
+        assert result == set()
+
+    def test_skips_unknown_backend_type(
+        self, manager_with_backends, mock_deployment, mock_client
+    ):
+        """Skips backend types not loaded in the manager."""
+        known_backend = Mock()
+        known_backend.get_hypervisor_integrations.return_value = set()
+        manager_with_backends._backends["known"] = known_backend
+
+        registered_known = Mock()
+        registered_known.type = "known"
+        registered_unknown = Mock()
+        registered_unknown.type = "unknown-type"
+        mock_client.cluster.get_storage_backends.return_value.root = [
+            registered_known,
+            registered_unknown,
+        ]
+
+        result = manager_with_backends.collect_hypervisor_integrations(
+            mock_deployment, mock_client
+        )
+
+        assert result == set()
+        known_backend.get_hypervisor_integrations.assert_called_once_with(
+            mock_deployment
+        )
+
+    def test_deduplicates_backend_types(
+        self, manager_with_backends, mock_deployment, mock_client
+    ):
+        """Calls get_hypervisor_integrations once per type, multiple instances."""
+        integration = HypervisorIntegration(
+            application_name="ceph-app",
+            endpoint_name="ceph-access",
+            hypervisor_endpoint_name="ceph",
+        )
+
+        backend = Mock()
+        backend.get_hypervisor_integrations.return_value = {integration}
+        manager_with_backends._backends["ceph"] = backend
+
+        # Two instances of the same type
+        instance1 = Mock()
+        instance1.type = "ceph"
+        instance2 = Mock()
+        instance2.type = "ceph"
+        mock_client.cluster.get_storage_backends.return_value.root = [
+            instance1,
+            instance2,
+        ]
+
+        result = manager_with_backends.collect_hypervisor_integrations(
+            mock_deployment, mock_client
+        )
+
+        assert result == {integration}
+        backend.get_hypervisor_integrations.assert_called_once_with(mock_deployment)
+
+    def test_unions_integrations_from_multiple_backends(
+        self, manager_with_backends, mock_deployment, mock_client
+    ):
+        """Returns the union of integrations from all matching backends."""
+        shared = HypervisorIntegration(
+            application_name="shared-app",
+            endpoint_name="shared-ep",
+            hypervisor_endpoint_name="shared",
+        )
+        unique = HypervisorIntegration(
+            application_name="unique-app",
+            endpoint_name="unique-ep",
+            hypervisor_endpoint_name="unique",
+        )
+
+        backend_a = Mock()
+        backend_a.get_hypervisor_integrations.return_value = {shared}
+        backend_b = Mock()
+        backend_b.get_hypervisor_integrations.return_value = {shared, unique}
+
+        manager_with_backends._backends["type-a"] = backend_a
+        manager_with_backends._backends["type-b"] = backend_b
+
+        reg_a = Mock()
+        reg_a.type = "type-a"
+        reg_b = Mock()
+        reg_b.type = "type-b"
+        mock_client.cluster.get_storage_backends.return_value.root = [reg_a, reg_b]
+
+        result = manager_with_backends.collect_hypervisor_integrations(
+            mock_deployment, mock_client
+        )
+
+        assert result == {shared, unique}
+        assert len(result) == 2

@@ -5,7 +5,7 @@ import base64
 import json
 import logging
 from pathlib import Path
-from typing import Tuple, Type
+from typing import Any, Tuple, Type
 
 import click
 import yaml
@@ -29,6 +29,14 @@ from sunbeam.commands.configure import (
 from sunbeam.commands.dashboard_url import retrieve_dashboard_url
 from sunbeam.commands.proxy import PromptForProxyStep
 from sunbeam.core import ovn
+from sunbeam.core.ceph import (
+    SetCephProviderStep,
+    ensure_default_ceph_feature,
+    get_default_ceph_bootstrap_steps,
+    is_internal_ceph_enabled,
+    is_internal_ceph_enabled_feature_aware,
+    set_ceph_feature_enabled_state,
+)
 from sunbeam.core.checks import (
     Check,
     DaemonGroupCheck,
@@ -84,6 +92,10 @@ from sunbeam.feature_gates import (
     feature_gate_option,
     split_roles_enabled,
 )
+from sunbeam.features.ceph.microceph import (
+    CheckMicrocephDistributionStep,
+    RemoveMicrocephUnitsStep,
+)
 from sunbeam.provider.base import ProviderBase
 from sunbeam.provider.common.multiregion import connect_to_region_controller
 from sunbeam.provider.local.deployment import LOCAL_TYPE, LocalDeployment
@@ -98,11 +110,6 @@ from sunbeam.provider.local.steps import (
 )
 from sunbeam.steps import cluster_status
 from sunbeam.steps.bootstrap_state import SetBootstrapped
-from sunbeam.steps.cinder_volume import (
-    CheckCinderVolumeDistributionStep,
-    DeployCinderVolumeApplicationStep,
-    RemoveCinderVolumeUnitsStep,
-)
 from sunbeam.steps.clusterd import (
     AskManagementCidrStep,
     ClusterAddJujuUserStep,
@@ -166,12 +173,6 @@ from sunbeam.steps.k8s import (
     StoreK8SKubeConfigStep,
     UpdateK8SCloudStep,
 )
-from sunbeam.steps.microceph import (
-    CheckMicrocephDistributionStep,
-    ConfigureMicrocephOSDStep,
-    DeployMicrocephApplicationStep,
-    RemoveMicrocephUnitsStep,
-)
 from sunbeam.steps.microovn import (
     DeployMicroOVNApplicationStep,
     ReapplyMicroOVNOptionalIntegrationsStep,
@@ -196,6 +197,10 @@ from sunbeam.steps.sunbeam_machine import (
     RemoveSunbeamMachineUnitsStep,
 )
 from sunbeam.steps.sync_feature_gates import SyncFeatureGatesToCluster
+from sunbeam.storage.steps import (
+    CheckStorageNodeRemovalStep,
+    RemoveStorageMachineUnitsStep,
+)
 from sunbeam.utils import (
     CatchGroup,
     click_option_show_hints,
@@ -216,6 +221,42 @@ def cluster(ctx):
 def remove_trailing_dot(value: str) -> str:
     """Remove trailing dot from the value."""
     return value.rstrip(".")
+
+
+def _call_enabled_feature_join_hooks(
+    deployment: LocalDeployment,
+    node_info: Any,
+    name: str,
+    roles: list[str],
+    accept_defaults: bool = False,
+) -> None:
+    """Call on_join hook for all enabled features."""
+    deployment.get_feature_manager().call_enabled_features_on_join(
+        deployment,
+        node_info,
+        node_name=name,
+        roles=roles,
+        status="joined",
+        accept_defaults=accept_defaults,
+    )
+
+
+def _call_enabled_feature_depart_hooks(
+    deployment: LocalDeployment,
+    node_info: Any,
+    name: str,
+    roles: list[str],
+    force: bool,
+) -> None:
+    """Call on_depart hook for all enabled features."""
+    deployment.get_feature_manager().call_enabled_features_on_depart(
+        deployment,
+        node_info,
+        node_name=name,
+        roles=roles,
+        status="departed",
+        force=force,
+    )
 
 
 class LocalProvider(ProviderBase):
@@ -624,6 +665,16 @@ def deploy_and_migrate_juju_controller(
     help="Token obtained from the region controller.",
     type=str,
 )
+@click.option(
+    "--no-default-storage",
+    "no_default_storage",
+    is_flag=True,
+    default=False,
+    help=(
+        "Do not deploy the default storage backend. "
+        "Storage role will still be available for external storage backends."
+    ),
+)
 @click_option_show_hints
 @click.pass_context
 def bootstrap(  # noqa: C901
@@ -636,6 +687,7 @@ def bootstrap(  # noqa: C901
     accept_defaults: bool = False,
     show_hints: bool = False,
     region_controller_token: str | None = None,
+    no_default_storage: bool = False,
 ) -> None:
     """Bootstrap the local node.
 
@@ -753,6 +805,7 @@ def bootstrap(  # noqa: C901
     plan.append(SyncFeatureGatesToCluster(client))
     plan.append(SaveManagementCidrStep(client, management_cidr))
     plan.append(SetOvnProviderStep(client, snap))
+    plan.append(SetCephProviderStep(client, no_default_storage=no_default_storage))
     plan.append(AddManifestStep(client, manifest_path))
     plan.append(
         PromptForProxyStep(
@@ -763,6 +816,8 @@ def bootstrap(  # noqa: C901
     plan.append(PromptRegionStep(client, manifest, accept_defaults))
     plan.append(ValidateIdentityManifest(client, manifest))
     run_plan(plan, console, show_hints)
+    if no_default_storage:
+        set_ceph_feature_enabled_state(deployment, client, enabled=False)
 
     if region_controller_token:
         connect_to_region_controller(
@@ -844,46 +899,23 @@ def bootstrap(  # noqa: C901
             )
         )
 
-    # Deploy Microceph application during bootstrap irrespective of node role.
-    microceph_tfhelper = deployment.get_tfhelper("microceph-plan")
-    plan1.append(TerraformInitStep(microceph_tfhelper))
-    plan1.append(
-        DeployMicrocephApplicationStep(
-            deployment,
-            client,
-            microceph_tfhelper,
-            jhelper,
-            manifest,
-            deployment.openstack_machines_model,
-        )
-    )
-    cinder_volume_tfhelper = deployment.get_tfhelper("cinder-volume-plan")
-    plan1.append(TerraformInitStep(cinder_volume_tfhelper))
-    plan1.append(
-        DeployCinderVolumeApplicationStep(
-            deployment,
-            client,
-            cinder_volume_tfhelper,
-            jhelper,
-            manifest,
-            deployment.openstack_machines_model,
-        )
-    )
-
     openstack_tfhelper = deployment.get_tfhelper("openstack-plan")
     plan1.append(TerraformInitStep(openstack_tfhelper))
 
-    if is_storage_node:
-        plan1.append(
-            ConfigureMicrocephOSDStep(
-                client,
-                fqdn,
-                jhelper,
-                deployment.openstack_machines_model,
-                accept_defaults=accept_defaults,
-                manifest=manifest,
-            )
+    # Inline microceph deploy + OSD config so data.juju_offer.microceph
+    # exists when DeployControlPlaneStep reads it.  Gated by the CLI
+    # flag and the bootstrap node's storage role (mirrors the
+    # MicrocephProvider.get_control_plane_tfvars gate on
+    # storage_node_count > 0).
+    plan1.extend(
+        get_default_ceph_bootstrap_steps(
+            deployment,
+            enabled=not no_default_storage,
+            expect_storage_node=is_storage_node,
+            node_name=fqdn if is_storage_node else None,
+            accept_defaults=accept_defaults,
         )
+    )
 
     if is_control_node or is_region_controller:
         plan1.append(
@@ -921,30 +953,6 @@ def bootstrap(  # noqa: C901
                 manifest,
             )
         )
-        # Redeploy of Microceph is required to fill terraform vars
-        # related to traefik-rgw/keystone-endpoints offers from
-        # openstack model
-        plan1.append(
-            DeployMicrocephApplicationStep(
-                deployment,
-                client,
-                microceph_tfhelper,
-                jhelper,
-                manifest,
-                deployment.openstack_machines_model,
-            )
-        )
-        # Fill AMQP / Keystone / MySQL offers from openstack model
-        plan1.append(
-            DeployCinderVolumeApplicationStep(
-                deployment,
-                client,
-                cinder_volume_tfhelper,
-                jhelper,
-                manifest,
-                deployment.openstack_machines_model,
-            )
-        )
         if microovn_necessary:
             plan1.append(
                 ReapplyMicroOVNOptionalIntegrationsStep(
@@ -959,6 +967,14 @@ def bootstrap(  # noqa: C901
             )
 
     run_plan(plan1, console, show_hints)
+
+    if is_storage_node and not no_default_storage:
+        ensure_default_ceph_feature(
+            deployment,
+            show_hints,
+            node_name=fqdn,
+            accept_defaults=accept_defaults,
+        )
 
     plan2: list[BaseStep] = []
 
@@ -977,7 +993,6 @@ def bootstrap(  # noqa: C901
                 client,
                 hypervisor_tfhelper,
                 openstack_tfhelper,
-                cinder_volume_tfhelper,
                 jhelper,
                 manifest,
                 deployment.openstack_machines_model,
@@ -1053,6 +1068,7 @@ def configure_sriov(
             jhelper,
             manifest,
             model=deployment.openstack_machines_model,
+            deployment=deployment,
         ),
     ]
     if manifest and manifest.core.config.pci and manifest.core.config.pci.aliases:
@@ -1125,6 +1141,7 @@ def configure_dpdk(
             jhelper,
             manifest,
             model=deployment.openstack_machines_model,
+            deployment=deployment,
         ),
     ]
     run_plan(plan, console, show_hints)
@@ -1472,8 +1489,6 @@ def join(  # noqa: C901
     proxy_settings = deployment.get_proxy_settings()
     sunbeam_machine_tfhelper = deployment.get_tfhelper("sunbeam-machine-plan")
     k8s_tfhelper = deployment.get_tfhelper("k8s-plan")
-    cinder_volume_tfhelper = deployment.get_tfhelper("cinder-volume-plan")
-    microceph_tfhelper = deployment.get_tfhelper("microceph-plan")
     openstack_tfhelper = deployment.get_tfhelper("openstack-plan")
     hypervisor_tfhelper = deployment.get_tfhelper("hypervisor-plan")
 
@@ -1548,7 +1563,6 @@ def join(  # noqa: C901
 
     plan4.append(TerraformInitStep(openstack_tfhelper))
     plan4.append(TerraformInitStep(hypervisor_tfhelper))
-    plan4.append(TerraformInitStep(cinder_volume_tfhelper))
     if microovn_necessary:
         microovn_tfhelper = deployment.get_tfhelper("microovn-plan")
         plan4.append(TerraformInitStep(microovn_tfhelper))
@@ -1599,35 +1613,19 @@ def join(  # noqa: C901
             )
 
     if is_storage_node:
-        plan4.append(TerraformInitStep(microceph_tfhelper))
-        plan4.append(
-            DeployMicrocephApplicationStep(
+        # Inline microceph deploy + OSD config must run before the
+        # first-storage DeployControlPlaneStep below so that the
+        # microceph offer exists when openstack-plan reads it.  The
+        # post-plan4 feature hooks / ensure_default_ceph_feature call
+        # still run afterwards and idempotently re-apply microceph +
+        # deploy the cinder-volume-ceph backend.
+        plan4.extend(
+            get_default_ceph_bootstrap_steps(
                 deployment,
-                client,
-                microceph_tfhelper,
-                jhelper,
-                manifest,
-                deployment.openstack_machines_model,
-            )
-        )
-        plan4.append(
-            ConfigureMicrocephOSDStep(
-                client,
-                name,
-                jhelper,
-                deployment.openstack_machines_model,
+                enabled=is_internal_ceph_enabled(client),
+                expect_storage_node=True,
+                node_name=name,
                 accept_defaults=accept_defaults,
-                manifest=manifest,
-            )
-        )
-        plan4.append(
-            DeployCinderVolumeApplicationStep(
-                deployment,
-                client,
-                cinder_volume_tfhelper,
-                jhelper,
-                manifest,
-                deployment.openstack_machines_model,
             )
         )
 
@@ -1647,46 +1645,6 @@ def join(  # noqa: C901
                 )
             )
 
-            # Redeploy of Microceph is required to fill terraform vars
-            # related to traefik-rgw/keystone-endpoints offers from
-            # openstack model
-            microceph_tfhelper = deployment.get_tfhelper("microceph-plan")
-            plan4.append(TerraformInitStep(microceph_tfhelper))
-            plan4.append(
-                DeployMicrocephApplicationStep(
-                    deployment,
-                    client,
-                    microceph_tfhelper,
-                    jhelper,
-                    manifest,
-                    deployment.openstack_machines_model,
-                )
-            )
-            # Fill AMQP / Keystone / MySQL offers from openstack model
-            plan4.append(
-                DeployCinderVolumeApplicationStep(
-                    deployment,
-                    client,
-                    cinder_volume_tfhelper,
-                    jhelper,
-                    manifest,
-                    deployment.openstack_machines_model,
-                )
-            )
-
-        plan4.append(
-            ReapplyHypervisorOptionalIntegrationsStep(
-                deployment,
-                client,
-                hypervisor_tfhelper,
-                openstack_tfhelper,
-                cinder_volume_tfhelper,
-                jhelper,
-                manifest,
-                deployment.openstack_machines_model,
-            )
-        )
-
     if is_compute_node:
         hypervisor_tfhelper = deployment.get_tfhelper("hypervisor-plan")
         plan4.extend(
@@ -1697,7 +1655,6 @@ def join(  # noqa: C901
                     client,
                     hypervisor_tfhelper,
                     openstack_tfhelper,
-                    cinder_volume_tfhelper,
                     jhelper,
                     manifest,
                     deployment.openstack_machines_model,
@@ -1741,6 +1698,7 @@ def join(  # noqa: C901
                     jhelper,
                     manifest,
                     model=deployment.openstack_machines_model,
+                    deployment=deployment,
                 ),
             ]
         )
@@ -1757,6 +1715,36 @@ def join(  # noqa: C901
             )
 
     run_plan(plan4, console, show_hints)
+    node_info = client.cluster.get_node_info(name)
+    _call_enabled_feature_join_hooks(
+        deployment, node_info, name, roles_str, accept_defaults=accept_defaults
+    )
+    if is_storage_node and is_internal_ceph_enabled(client):
+        ensure_default_ceph_feature(
+            deployment,
+            show_hints,
+            node_name=name,
+            accept_defaults=accept_defaults,
+        )
+
+    # Reapply hypervisor optional integrations AFTER
+    # ensure_default_ceph_feature has registered internal-ceph in
+    # clusterd, so collect_hypervisor_integrations finds the backend
+    # and wires the cinder-volume-ceph:ceph-access integration on
+    # first storage join.
+    if is_storage_node:
+        plan5: list[BaseStep] = [
+            ReapplyHypervisorOptionalIntegrationsStep(
+                deployment,
+                client,
+                hypervisor_tfhelper,
+                openstack_tfhelper,
+                jhelper,
+                manifest,
+                deployment.openstack_machines_model,
+            ),
+        ]
+        run_plan(plan5, console, show_hints)
 
     click.echo(f"Node joined cluster with roles: {pretty_roles}")
 
@@ -1817,6 +1805,12 @@ def remove(ctx: click.Context, name: str, force: bool, show_hints: bool) -> None
     deployment: LocalDeployment = ctx.obj
     client = deployment.get_client()
     jhelper = JujuHelper(deployment.juju_controller)
+    try:
+        node_info = client.cluster.get_node_info(name)
+    except Exception:
+        node_info = {"name": name}
+    node_roles = node_info.get("role", []) if isinstance(node_info, dict) else []
+    internal_ceph_enabled = is_internal_ceph_enabled_feature_aware(deployment, client)
 
     preflight_checks = [DaemonGroupCheck()]
     run_preflight_checks(preflight_checks, console)
@@ -1828,15 +1822,8 @@ def remove(ctx: click.Context, name: str, force: bool, show_hints: bool) -> None
     if not force:
         plan.append(PromptCheckNodeExistStep(client, name))
 
-    plan.extend(
-        [
-            CheckCinderVolumeDistributionStep(
-                client,
-                name,
-                jhelper,
-                deployment.openstack_machines_model,
-                force=force,
-            ),
+    if internal_ceph_enabled:
+        plan.append(
             CheckMicrocephDistributionStep(
                 client,
                 name,
@@ -1844,6 +1831,18 @@ def remove(ctx: click.Context, name: str, force: bool, show_hints: bool) -> None
                 deployment.openstack_machines_model,
                 force=force,
             ),
+        )
+    plan.append(
+        CheckStorageNodeRemovalStep(
+            client,
+            name,
+            jhelper,
+            deployment.openstack_machines_model,
+            force=force,
+        ),
+    )
+    plan.extend(
+        [
             CheckMysqlK8SDistributionStep(
                 client,
                 name,
@@ -1877,12 +1876,21 @@ def remove(ctx: click.Context, name: str, force: bool, show_hints: bool) -> None
                 deployment.openstack_machines_model,
                 force,
             ),
-            RemoveCinderVolumeUnitsStep(
-                client, name, jhelper, deployment.openstack_machines_model
-            ),
+        ]
+    )
+    plan.append(
+        RemoveStorageMachineUnitsStep(
+            client, name, jhelper, deployment.openstack_machines_model
+        ),
+    )
+    if internal_ceph_enabled:
+        plan.append(
             RemoveMicrocephUnitsStep(
                 client, name, jhelper, deployment.openstack_machines_model
             ),
+        )
+    plan.extend(
+        [
             RemoveMicroOVNUnitsStep(
                 client, name, jhelper, deployment.openstack_machines_model
             ),
@@ -1927,6 +1935,9 @@ def remove(ctx: click.Context, name: str, force: bool, show_hints: bool) -> None
     )
 
     run_plan(plan, console, show_hints)
+    _call_enabled_feature_depart_hooks(
+        deployment, node_info, name, node_roles, force=force
+    )
     click.echo(f"Removed node {name} from the cluster")
     # Removing machine does not clean up all deployed juju components. This is
     # deliberate, see https://bugs.launchpad.net/juju/+bug/1851489.
@@ -2059,6 +2070,7 @@ def configure_cmd(
                 jhelper,
                 manifest,
                 model=deployment.openstack_machines_model,
+                deployment=deployment,
             )
         )
 

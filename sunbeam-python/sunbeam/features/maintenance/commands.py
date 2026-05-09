@@ -8,6 +8,7 @@ from typing import Any
 import click
 from rich.console import Console
 
+from sunbeam.core.ceph import is_internal_ceph_enabled_feature_aware
 from sunbeam.core.checks import Check, run_preflight_checks
 from sunbeam.core.common import (
     BaseStep,
@@ -128,6 +129,9 @@ class EnableMaintenance(MaintenanceCommand):
         self.client = deployment.get_client()
         self.jhelper = JujuHelper(deployment.juju_controller)
         self.ops_viewer = OperationViewer(self.node, OperationGoal.EnableMaintenance)
+        self._internal_ceph = is_internal_ceph_enabled_feature_aware(
+            self.deployment, self.client
+        )
 
     def check(self, console: Console) -> None:
         """Run pre-flight checks."""
@@ -155,7 +159,7 @@ class EnableMaintenance(MaintenanceCommand):
                 ),
             ]
 
-        if "storage" in node_status:
+        if "storage" in node_status and self._internal_ceph:
             preflight_checks += [
                 checks.MicroCephMaintenancePreflightCheck(
                     client=self.client,
@@ -219,7 +223,7 @@ class EnableMaintenance(MaintenanceCommand):
                 )
             )
 
-        if "storage" in node_status:
+        if "storage" in node_status and self._internal_ceph:
             operation_plan.append(
                 MicroCephActionStep(
                     client=self.client,
@@ -308,7 +312,7 @@ class EnableMaintenance(MaintenanceCommand):
                 )
             )
 
-        if "storage" in node_status:
+        if "storage" in node_status and self._internal_ceph:
             generate_operation_plan.append(
                 MicroCephActionStep(
                     client=self.client,
@@ -363,7 +367,7 @@ class EnableMaintenance(MaintenanceCommand):
 
         if "compute" in node_status:
             self.ops_viewer.add_watch_actions(actions=audit_info["actions"])
-        if "storage" in node_status:
+        if "storage" in node_status and self._internal_ceph:
             self.ops_viewer.add_maintenance_action_steps(
                 action_result=microceph_enter_maintenance_dry_run_action_result
             )
@@ -399,6 +403,9 @@ class DisableMaintenance(MaintenanceCommand):
         self.client = deployment.get_client()
         self.jhelper = JujuHelper(deployment.juju_controller)
         self.ops_viewer = OperationViewer(node, OperationGoal.DisableMaintenance)
+        self._internal_ceph = is_internal_ceph_enabled_feature_aware(
+            self.deployment, self.client
+        )
 
     def check(self, console: Console) -> None:
         """Run pre-flight checks."""
@@ -446,7 +453,7 @@ class DisableMaintenance(MaintenanceCommand):
                         audit=audit_info["audit"],
                     ),
                 ]
-        if "storage" in node_status:
+        if "storage" in node_status and self._internal_ceph:
             operation_plan.append(
                 MicroCephActionStep(
                     client=self.client,
@@ -507,7 +514,7 @@ class DisableMaintenance(MaintenanceCommand):
                         deployment=self.deployment, node=self.node
                     )
                 )
-        if "storage" in node_status:
+        if "storage" in node_status and self._internal_ceph:
             generate_operation_plan.append(
                 MicroCephActionStep(
                     client=self.client,
@@ -552,7 +559,7 @@ class DisableMaintenance(MaintenanceCommand):
             self.ops_viewer.add_step(step_name=EnableHypervisorStep.__name__)
             if not self.disable_instance_rebalancing:
                 self.ops_viewer.add_watch_actions(actions=audit_info["actions"])
-        if "storage" in node_status:
+        if "storage" in node_status and self._internal_ceph:
             self.ops_viewer.add_maintenance_action_steps(
                 action_result=microceph_exit_maintenance_dry_run_action_result
             )

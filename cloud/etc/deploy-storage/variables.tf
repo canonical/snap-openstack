@@ -28,6 +28,8 @@ variable "cinder-volumes" {
 variable "backends" {
   description = "Map of storage backend configurations"
   type = map(object({
+    application_name      = optional(string)
+    units                 = optional(number)
     principal_application = string
     charm_name            = string
     charm_base            = string
@@ -36,6 +38,11 @@ variable "backends" {
     charm_config          = map(string)
     endpoint_bindings     = set(map(string))
     secrets               = map(string)
+    extra_integrations = optional(set(object({
+      application_name      = string
+      endpoint_name         = string
+      backend_endpoint_name = string
+    })), [])
   }))
   default = {}
 }

@@ -43,10 +43,12 @@ from sunbeam.versions import MANIFEST_ATTRIBUTES_TFVAR_MAP, TERRAFORM_DIR_NAMES
 
 if TYPE_CHECKING:
     from sunbeam.core import ovn
+    from sunbeam.core.ceph import CephProvider
     from sunbeam.feature_manager import FeatureManager
     from sunbeam.features.interface.v1.base import BaseFeature
     from sunbeam.storage.manager import StorageBackendManager
 else:
+    CephProvider = object
     FeatureManager = object
     BaseFeature = object
     StorageBackendManager = object
@@ -217,6 +219,28 @@ class Deployment(pydantic.BaseModel):
         from sunbeam.core import ovn
 
         return ovn.OvnManager(self.get_client())
+
+    def get_ceph_provider(self) -> "CephProvider":
+        """Return the Ceph storage provider for the deployment.
+
+        Returns MicrocephProvider when the deployment mode is MICROCEPH
+        (or unset, for backward compatibility), NoCephProvider otherwise.
+
+        Not cached: the mode can change within a single process when
+        SetCephProviderStep runs (e.g. during enable/disable flows).
+        """
+        from sunbeam.core.ceph import (
+            CephDeploymentMode,
+            NoCephProvider,
+            load_ceph_config,
+        )
+        from sunbeam.features.ceph.microceph import MicrocephProvider
+
+        config = load_ceph_config(self.get_client())
+        mode = config.mode if config.mode is not None else CephDeploymentMode.MICROCEPH
+        if mode == CephDeploymentMode.MICROCEPH:
+            return MicrocephProvider()
+        return NoCephProvider()
 
     def get_proxy_settings(self) -> dict:
         """Fetch proxy settings from clusterd, if not available use defaults."""

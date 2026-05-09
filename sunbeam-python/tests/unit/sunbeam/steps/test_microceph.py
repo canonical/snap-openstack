@@ -5,7 +5,10 @@ from unittest.mock import Mock
 
 from sunbeam.core.common import ResultType
 from sunbeam.core.juju import ActionFailedException
-from sunbeam.steps.microceph import ConfigureMicrocephOSDStep, SetCephMgrPoolSizeStep
+from sunbeam.features.ceph.microceph import (
+    ConfigureMicrocephOSDStep,
+    SetCephMgrPoolSizeStep,
+)
 
 
 class TestConfigureMicrocephOSDStep:

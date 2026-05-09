@@ -79,10 +79,14 @@ variable "ceilometer-offer-url" {
   default     = null
 }
 
-variable "cinder-volume-ceph-application-name" {
-  description = "Name for cinder-volume-ceph application"
-  type        = string
-  default     = null
+variable "extra_integrations" {
+  description = "Additional juju integrations for the hypervisor"
+  type = set(object({
+    application_name         = string
+    endpoint_name            = string
+    hypervisor_endpoint_name = string
+  }))
+  default = []
 }
 
 # Mandatory relation, no defaults
