@@ -9,6 +9,7 @@ from sunbeam.storage.backends.dellpowerstore.backend import DellPowerstoreBacken
 from sunbeam.storage.backends.dellsc.backend import DellSCBackend
 from sunbeam.storage.backends.hitachi.backend import HitachiBackend
 from sunbeam.storage.backends.hpe3par.backend import HPEthreeparBackend
+from sunbeam.storage.backends.infinidat.backend import InfinidatBackend
 from sunbeam.storage.backends.purestorage.backend import PureStorageBackend
 
 
@@ -36,13 +37,28 @@ def dellpowerstore_backend():
     return DellPowerstoreBackend()
 
 
-@pytest.fixture(params=["hitachi", "purestorage", "dellsc", "dellpowerstore"])
+@pytest.fixture
+def infinidat_backend():
+    """Provide an Infinidat backend instance."""
+    return InfinidatBackend()
+
+
+@pytest.fixture
 def hpe3par_backend():
     """Provide a HPE 3PAR Storage backend instance."""
     return HPEthreeparBackend()
 
 
-@pytest.fixture(params=["hitachi", "purestorage", "dellsc", "hpethreepar"])
+@pytest.fixture(
+    params=[
+        "hitachi",
+        "purestorage",
+        "dellsc",
+        "dellpowerstore",
+        "hpe3par",
+        "infinidat",
+    ]
+)
 def any_backend(request):
     """Parametrized fixture that provides each backend type."""
     backends = {
@@ -50,6 +66,7 @@ def any_backend(request):
         "purestorage": PureStorageBackend(),
         "dellsc": DellSCBackend(),
         "dellpowerstore": DellPowerstoreBackend(),
-        "hpethreepar": HPEthreeparBackend(),
+        "hpe3par": HPEthreeparBackend(),
+        "infinidat": InfinidatBackend(),
     }
     return backends[request.param]

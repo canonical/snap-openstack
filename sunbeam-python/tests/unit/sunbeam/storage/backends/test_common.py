@@ -161,6 +161,7 @@ def test_all_backends_have_unique_types(
     purestorage_backend,
     dellsc_backend,
     dellpowerstore_backend,
+    infinidat_backend,
     hpe3par_backend,
 ):
     """Test that all backends have unique type identifiers."""
@@ -170,6 +171,7 @@ def test_all_backends_have_unique_types(
         dellsc_backend,
         dellpowerstore_backend,
         hpe3par_backend,
+        infinidat_backend,
     ]
     types = [b.backend_type for b in backends]
 
@@ -182,6 +184,7 @@ def test_all_backends_have_unique_charm_names(
     purestorage_backend,
     dellsc_backend,
     dellpowerstore_backend,
+    infinidat_backend,
     hpe3par_backend,
 ):
     """Test that all backends have unique charm names."""
@@ -191,6 +194,7 @@ def test_all_backends_have_unique_charm_names(
         dellsc_backend,
         dellpowerstore_backend,
         hpe3par_backend,
+        infinidat_backend,
     ]
     charm_names = [b.charm_name for b in backends]
 
@@ -208,6 +212,7 @@ def test_all_backends_have_unique_charm_names(
         ("dellsc", "dellsc"),
         ("dellpowerstore", "dellpowerstore"),
         ("hpe3par", "hpe3par"),
+        ("infinidat", "infinidat"),
     ],
 )
 def test_backend_types_match_expected(any_backend, backend_type, expected_type):
@@ -224,6 +229,7 @@ def test_backend_types_match_expected(any_backend, backend_type, expected_type):
         ("dellsc", "cinder-volume-dellsc"),
         ("dellpowerstore", "cinder-volume-dellpowerstore"),
         ("hpe3par", "cinder-volume-hpe3par"),
+        ("infinidat", "cinder-volume-infinidat"),
     ],
 )
 def test_backend_charm_names_match_expected(any_backend, backend_type, expected_charm):
