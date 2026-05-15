@@ -18,6 +18,7 @@ from typing import Sequence, Tuple
 import click
 import tenacity
 from rich.console import Console
+from rich.status import Status
 from snaphelpers import Snap
 
 import sunbeam.core.questions
@@ -1042,7 +1043,7 @@ class NetworkMappingCompleteCheck(Check):
         )
         self.deployment = deployment
 
-    def run(self) -> bool:
+    def run(self, check_status: Status | None = None) -> bool:
         """Check network mapping is complete."""
         network_to_space_mapping = self.deployment.network_mapping
         spaces = network_to_space_mapping.values()
@@ -1066,7 +1067,7 @@ class JujuControllerCheck(Check):
         self.controller = juju_controller
         self.maas_client = maas_client.MaasClient.from_deployment(deployment)
 
-    def run(self) -> bool:
+    def run(self, check_status: Status | None = None) -> bool:
         """Check if juju controller is required."""
         machines = maas_client.list_machines(
             self.maas_client, tags=maas_deployment.RoleTags.JUJU_CONTROLLER.value

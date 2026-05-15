@@ -33,6 +33,7 @@ from sunbeam.core.checks import (
     DiagnosticResultType,
     DiagnosticsCheck,
     DiagnosticsResult,
+    JujuLoginCheck,
     JujuSnapCheck,
     LocalShareCheck,
     VerifyBootstrappedCheck,
@@ -589,6 +590,7 @@ def deploy(
     preflight_checks.append(JujuSnapCheck())
     preflight_checks.append(LocalShareCheck())
     preflight_checks.append(VerifyClusterdNotBootstrappedCheck())
+    preflight_checks.append(JujuLoginCheck(deployment.juju_account))
     run_preflight_checks(preflight_checks, console)
 
     if (
@@ -603,13 +605,14 @@ def deploy(
             deployment.juju_controller,
         )
         console.print(
-            f"{deployment.name!r} deployment is not complete, was bootstrap completed ?"
+            f"{deployment.name!r} deployment is not complete, was bootstrap completed?"
         )
         sys.exit(1)
 
     deployment_location = deployment_path(Snap())
     deployments = DeploymentsConfig.load(deployment_location)
     maas_client = MaasClient.from_deployment(deployment)
+
     jhelper = JujuHelper(deployment.juju_controller)
     clusterd_plan = [
         MaasSaveClusterdCredentialsStep(jhelper, deployment.name, deployments)
@@ -1120,6 +1123,10 @@ def configure_cmd(
 def list_nodes(ctx: click.Context, format: str, show_hints: bool) -> None:
     """List nodes in the custer."""
     deployment: MaasDeployment = ctx.obj
+
+    # Login to the Juju controller
+    run_preflight_checks([JujuLoginCheck(deployment.juju_account)], console)
+
     jhelper = JujuHelper(deployment.juju_controller)
     step = MaasClusterStatusStep(deployment, jhelper)
     results = run_plan([step], console, show_hints)
@@ -1749,13 +1756,17 @@ def destroy_deployment_cmd(
     """
     if not no_prompt:
         click.confirm("This will destroy the deployment. Are you sure?", abort=True)
+
+    deployment: MaasDeployment = ctx.obj
+
     preflight_checks = [
         JujuSnapCheck(),
         LocalShareCheck(),
+        JujuLoginCheck(deployment.juju_account),
     ]
     run_preflight_checks(preflight_checks, console)
     deployments = DeploymentsConfig.load(deployment_path(Snap()))
-    deployment: MaasDeployment = ctx.obj
+
     plan = []
 
     client = None
@@ -1889,6 +1900,10 @@ def configure_sriov(
     deployment: MaasDeployment = ctx.obj
     client = deployment.get_client()
     manifest = deployment.get_manifest(manifest_path)
+
+    # Login to the Juju controller
+    run_preflight_checks([JujuLoginCheck(deployment.juju_account)], console)
+
     jhelper = JujuHelper(deployment.juju_controller)
 
     admin_credentials = retrieve_admin_credentials(jhelper, deployment, OPENSTACK_MODEL)
@@ -1949,6 +1964,10 @@ def configure_dpdk(
     deployment: MaasDeployment = ctx.obj
     client = deployment.get_client()
     manifest = deployment.get_manifest(manifest_path)
+
+    # Login to the Juju controller
+    run_preflight_checks([JujuLoginCheck(deployment.juju_account)], console)
+
     jhelper = JujuHelper(deployment.juju_controller)
 
     admin_credentials = retrieve_admin_credentials(jhelper, deployment, OPENSTACK_MODEL)

@@ -26,6 +26,7 @@ from sunbeam.clusterd.service import (
 from sunbeam.core.checks import (
     Check,
     JujuControllerRegistrationCheck,
+    JujuLoginCheck,
     run_preflight_checks,
 )
 from sunbeam.core.common import (
@@ -1066,6 +1067,9 @@ class EmbeddedObservabilityFeature(ObservabilityFeature):
     @pass_method_obj
     def dashboard_url(self, deployment: Deployment) -> None:
         """Retrieve COS Dashboard URL."""
+        # Login to the Juju controller
+        run_preflight_checks([JujuLoginCheck(deployment.juju_account)], console)
+
         jhelper = JujuHelper(deployment.juju_controller)
 
         with console.status("Retrieving dashboard URL from Grafana service ... "):

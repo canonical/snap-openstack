@@ -16,7 +16,11 @@ from rich.console import Console
 import sunbeam.core.questions
 from sunbeam.clusterd.client import Client
 from sunbeam.commands.configure import retrieve_admin_credentials
-from sunbeam.core.checks import VerifyBootstrappedCheck, run_preflight_checks
+from sunbeam.core.checks import (
+    JujuLoginCheck,
+    VerifyBootstrappedCheck,
+    run_preflight_checks,
+)
 from sunbeam.core.common import (
     BaseStep,
     Result,
@@ -250,9 +254,12 @@ def cloud_config(
 
     deployment: Deployment = ctx.obj
     client = deployment.get_client()
-    preflight_checks = []
-    preflight_checks.append(VerifyBootstrappedCheck(client))
+    preflight_checks = [
+        VerifyBootstrappedCheck(client),
+        JujuLoginCheck(deployment.juju_account),
+    ]
     run_preflight_checks(preflight_checks, console)
+
     jhelper_keystone = deployment.get_juju_helper(keystone=True)
     if not jhelper_keystone.model_exists(OPENSTACK_MODEL):
         LOG.error(f"Expected model {OPENSTACK_MODEL} missing")
