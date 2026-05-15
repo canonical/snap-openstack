@@ -1597,22 +1597,36 @@ class JujuHelper:
                 trust=trust,
             )
 
-    def get_available_charm_revision(
+    def get_available_charm_revisions(
         self,
         charm_name: str,
         channel: str,
         base: str = JUJU_BASE,
-        arch: str | None = None,
-    ) -> int:
-        """Find the latest available revision of a charm in a given channel.
+    ) -> dict[str, int]:
+        """Return a mapping of architecture to revision for a channel+base.
+
+        Each entry in the juju info channel listing may cover one or more
+        architectures, or have a different revision per architecture.  This
+        method expands the list into an ``{arch: revision}`` dict so callers
+        can do either an arch-aware lookup (``revisions.get("amd64")``) or a
+        simple membership check across all architectures
+        (``app.charm_rev in revisions.values()``).
+
+        When no architectures are listed for an entry, the key ``"all"`` is
+        used as a fallback.
 
         :param charm_name: Name of charm to look up
         :param channel: Channel to lookup charm in
         :param base: Base to lookup charm in, default is JUJU_BASE
-        :param arch: Architecture to filter by, or None to match any
+        :raises JujuException: if the channel/base combination is not found
         """
-        track, risk = channel.split("/")
-        base_name, base_channel = base.split("@")
+        parts = channel.split("/")
+        if len(parts) < 2:
+            raise JujuException(
+                f"Invalid channel format {channel!r}: expected track/risk[/branch]"
+            )
+        track, risk = parts[0], parts[1]
+        _, base_channel = base.split("@")
         output = json.loads(
             self._juju.cli(
                 "info",
@@ -1625,17 +1639,58 @@ class JujuHelper:
             )
         )
 
-        for risk_info in output["channels"][track][risk]:
-            if arch is not None and arch not in risk_info.get("architectures", []):
-                continue
+        revisions: dict[str, int] = {}
+        try:
+            channel_entries = output["channels"][track][risk]
+        except KeyError:
+            raise JujuException(
+                f"Could not find charm {charm_name!r} in channel {channel!r} "
+                f"with base {base!r}"
+            )
+        for risk_info in channel_entries:
             for base_info in risk_info["bases"]:
                 if base_info["channel"] == base_channel:
-                    return risk_info["revision"]
+                    archs = risk_info.get("architectures") or ["all"]
+                    for arch in archs:
+                        revisions[arch] = risk_info["revision"]
 
-        raise JujuException(
-            f"Could not find charm {charm_name!r} in channel {channel!r} "
-            f"with base {base!r}"
+        if not revisions:
+            raise JujuException(
+                f"Could not find charm {charm_name!r} in channel {channel!r} "
+                f"with base {base!r}"
+            )
+        return revisions
+
+    def get_charm_channel_for_revision(
+        self,
+        charm_name: str,
+        revision: int,
+    ) -> str | None:
+        """Return the first channel (track/risk) that publishes a given revision.
+
+        Scans all channels returned by ``juju info`` for *charm_name* and returns
+        the channel name (e.g. ``"1.32/stable"``) for the first entry whose
+        revision number matches *revision*.  Returns ``None`` if the revision is
+        not found in any channel.
+
+        :param charm_name: Name of charm to look up
+        :param revision: Charm revision number to find
+        """
+        output = json.loads(
+            self._juju.cli(
+                "info",
+                "--format",
+                "json",
+                charm_name,
+                include_model=False,
+            )
         )
+        for track, risks in output.get("channels", {}).items():
+            for risk, entries in risks.items():
+                for entry in entries:
+                    if entry.get("revision") == revision:
+                        return f"{track}/{risk}"
+        return None
 
     @staticmethod
     def manual_cloud(cloud_name: str, ip_address: str) -> dict[str, dict]:
@@ -2123,8 +2178,17 @@ class JujuStepHelper:
         """
         risks = ["stable", "candidate", "beta", "edge"]
         current_channel = self.normalise_channel(channel)
-        current_track, current_risk = current_channel.split("/")
-        new_track, new_risk = new_channel.split("/")
+        current_parts = current_channel.split("/")
+        if len(current_parts) < 2:
+            LOG.error("Invalid channel format %r", channel)
+            return False
+        current_track, current_risk = current_parts[0], current_parts[1]
+        new_channel = self.normalise_channel(new_channel)
+        new_parts = new_channel.split("/")
+        if len(new_parts) < 2:
+            LOG.error("Invalid channel format %r", new_channel)
+            return False
+        new_track, new_risk = new_parts[0], new_parts[1]
         if current_track != new_track:
             try:
                 return version.parse(current_track) < version.parse(new_track)

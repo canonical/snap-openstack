@@ -12,7 +12,6 @@ from sunbeam.core.common import (
 )
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import (
-    ApplicationNotFoundException,
     JujuException,
     JujuHelper,
     JujuStepHelper,
@@ -33,6 +32,7 @@ from sunbeam.features.vault.feature import (
     auto_unseal_vault,
     migrate_vault_config_in_db,
 )
+from sunbeam.steps.charm_upgrade import CharmRefreshDecision, check_charm_needs_refresh
 from sunbeam.versions import VAULT_CHANNEL
 
 LOG = logging.getLogger(__name__)
@@ -65,7 +65,7 @@ class VaultCharmUpgradeStep(BaseStep, JujuStepHelper):
         self.tfhelper = tfhelper
         self.application = application
         self.tfvar_config = OPENSTACK_TERRAFORM_VARS
-        self._skip_charm_refresh = False
+        self._decision: CharmRefreshDecision
 
     def upgrade(
         self, revision: int | None = None, channel: str = VAULT_CHANNEL
@@ -81,75 +81,6 @@ class VaultCharmUpgradeStep(BaseStep, JujuStepHelper):
             trust=True,
         )
 
-    def _needs_charm_refresh(self) -> Result:
-        """Determine whether the charm itself needs refreshing.
-
-        Returns SKIPPED when the deployed charm already matches the target,
-        FAILED when the manifest channel is invalid, COMPLETED otherwise.
-        """
-        try:
-            app = self.jhelper.get_application(self.application, OPENSTACK_MODEL)
-        except ApplicationNotFoundException:
-            return Result(
-                ResultType.SKIPPED,
-                f"{self.application} application has not been deployed yet",
-            )
-
-        charm_manifest = self.manifest.find_charm(CHARM_NAME)
-        target_channel = (
-            charm_manifest.channel if charm_manifest else None
-        ) or VAULT_CHANNEL
-        deployed_channel = app.charm_channel or ""
-
-        if charm_manifest and charm_manifest.channel:
-            target_track = target_channel.split("/")[0]
-            minimum_vault_track = VAULT_CHANNEL.split("/")[0]
-            if target_track != minimum_vault_track and not self.channel_update_needed(
-                VAULT_CHANNEL, target_channel
-            ):
-                msg = (
-                    f"Manifest channel {target_channel} track is below "
-                    f"{VAULT_CHANNEL}. "
-                    "Can not refresh to this channel."
-                )
-                LOG.warning(msg)
-                return Result(ResultType.FAILED, msg)
-
-        if charm_manifest and charm_manifest.revision:
-            if (
-                deployed_channel == target_channel
-                and app.charm_rev == charm_manifest.revision
-            ):
-                msg = (
-                    f"{CHARM_NAME} already at manifest pinned revision "
-                    f"{charm_manifest.revision} for channel {target_channel}"
-                )
-                LOG.debug(msg)
-                return Result(ResultType.SKIPPED, msg)
-            return Result(ResultType.COMPLETED)
-
-        try:
-            if app.base:
-                base = f"{app.base.name}@{app.base.channel}"
-                latest_rev = self.jhelper.get_available_charm_revision(
-                    CHARM_NAME, target_channel, base, arch="amd64"
-                )
-            else:
-                latest_rev = self.jhelper.get_available_charm_revision(
-                    CHARM_NAME, target_channel, arch="amd64"
-                )
-        except JujuException as e:
-            LOG.debug("Could not determine latest revision for %s: %s", CHARM_NAME, e)
-            return Result(ResultType.COMPLETED)
-
-        if deployed_channel == target_channel and app.charm_rev == latest_rev:
-            return Result(
-                ResultType.SKIPPED,
-                f"{CHARM_NAME} is already at the latest revision for "
-                f"channel {target_channel}",
-            )
-        return Result(ResultType.COMPLETED)
-
     def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
@@ -157,30 +88,32 @@ class VaultCharmUpgradeStep(BaseStep, JujuStepHelper):
         invalid.  The step always runs otherwise so that the DB migration
         and terraform apply happen even when no charm refresh is needed.
         """
-        result = self._needs_charm_refresh()
-        if result.result_type == ResultType.FAILED:
-            return result
-        # Remember whether the charm refresh itself can be skipped so that
-        # run() can avoid the unnecessary upgrade + wait cycle.
-        self._skip_charm_refresh = result.result_type == ResultType.SKIPPED
-        try:
-            self.jhelper.get_application(self.application, OPENSTACK_MODEL)
-        except ApplicationNotFoundException:
-            return Result(
-                ResultType.SKIPPED,
-                f"{self.application} application has not been deployed yet",
-            )
+        decision = check_charm_needs_refresh(
+            self.jhelper,
+            self.manifest,
+            CHARM_NAME,
+            OPENSTACK_MODEL,
+            self.application,
+            default_channel=VAULT_CHANNEL,
+            support_track_upgrades=True,
+        )
+        if (
+            decision.app_not_deployed
+            or decision.result.result_type == ResultType.FAILED
+        ):
+            return decision.result
+        self._decision = decision
+        # Vault always runs (for DB migration + terraform apply) even when
+        # the charm itself is already up-to-date.
         return Result(ResultType.COMPLETED)
 
     def run(self, context: StepContext) -> Result:
         """Run vault-k8s charm upgrade steps."""
-        charm_manifest = self.manifest.find_charm(CHARM_NAME)
-        revision = charm_manifest.revision if charm_manifest else None
-        target_channel = (
-            charm_manifest.channel if charm_manifest else None
-        ) or VAULT_CHANNEL
+        target_channel = self._decision.effective_channel
+        revision = self._decision.effective_revision
+        skip_charm_refresh = self._decision.result.result_type == ResultType.SKIPPED
 
-        if not self._skip_charm_refresh:
+        if not skip_charm_refresh:
             try:
                 self.update_status(
                     context, f"Refreshing Vault to channel {target_channel}"
@@ -227,7 +160,7 @@ class VaultCharmUpgradeStep(BaseStep, JujuStepHelper):
                 f"Failed to apply terraform plan after vault config migration: {e}",
             )
 
-        if self._skip_charm_refresh:
+        if skip_charm_refresh:
             return Result(
                 ResultType.COMPLETED,
                 "Vault config migrated, no charm refresh needed.",

@@ -853,9 +853,7 @@ class TestLatestInChannelCoordinator:
             mock_maas_client
         )
 
-        mock_maas_deploy_k8s_cls = Mock()
         mock_maas_steps_module = Mock()
-        mock_maas_steps_module.MaasDeployK8SApplicationStep = mock_maas_deploy_k8s_cls
 
         with patch.dict(
             sys.modules,
@@ -873,8 +871,10 @@ class TestLatestInChannelCoordinator:
         assert EnsureCiliumDeviceByHostStep in step_types
         assert OpenStackPatchLoadBalancerServicesIPPoolStep in step_types
         assert EnsureDefaultL2AdvertisementMutedStep in step_types
-        # MaasDeployK8SApplicationStep was called; its return value is in the plan
-        assert mock_maas_deploy_k8s_cls.return_value in plan
+        # k8s charm refresh is handled by `sunbeam cluster refresh k8s`, not here
+        assert (
+            mock_maas_steps_module.MaasDeployK8SApplicationStep.return_value not in plan
+        )
 
     @patch(f"{_INTRA_CHANNEL}.is_maas_deployment")
     def test_get_plan_always_includes_core_steps(self, mock_is_maas):

@@ -118,6 +118,20 @@ class TestMySQLCharmUpgradeStep:
 
         assert result.result_type == ResultType.SKIPPED
 
+    def test_is_skip_branch_channel(
+        self, step, basic_jhelper, basic_manifest, step_context
+    ):
+        """Branch channels proceed with refresh to pick up any new revision."""
+        basic_jhelper.get_application.return_value = Mock(
+            charm_rev=255, base=None, charm_channel="8.0/edge/my-fix-branch"
+        )
+        basic_manifest.find_charm.return_value = Mock(revision=None, channel="8.0/edge")
+
+        result = step.is_skip(step_context)
+
+        assert result.result_type == ResultType.COMPLETED
+        basic_jhelper.get_available_charm_revisions.assert_not_called()
+
     def test_is_skip_channel_track_mismatch(
         self, step, basic_jhelper, basic_manifest, step_context
     ):
@@ -135,7 +149,7 @@ class TestMySQLCharmUpgradeStep:
     def test_is_skip_already_latest(self, step, basic_jhelper, step_context):
         app = Mock(charm_rev=343, base=None)
         basic_jhelper.get_application.return_value = app
-        basic_jhelper.get_available_charm_revision.return_value = 343
+        basic_jhelper.get_available_charm_revisions.return_value = {"amd64": 343}
         basic_jhelper.show_unit.return_value = {}
 
         result = step.is_skip(step_context)
@@ -147,7 +161,7 @@ class TestMySQLCharmUpgradeStep:
     ):
         app = Mock(charm_rev=255, base=None)
         basic_jhelper.get_application.return_value = app
-        basic_jhelper.get_available_charm_revision.return_value = 343
+        basic_jhelper.get_available_charm_revisions.return_value = {"amd64": 343}
         basic_jhelper.show_unit.return_value = {
             "relation-info": [
                 {
@@ -167,7 +181,7 @@ class TestMySQLCharmUpgradeStep:
         basic_manifest.find_charm.return_value = charm_manifest
         app = Mock(charm_rev=255, charm_channel="8.0/stable", base=None)
         basic_jhelper.get_application.return_value = app
-        basic_jhelper.get_available_charm_revision.return_value = 343
+        basic_jhelper.get_available_charm_revisions.return_value = {"amd64": 343}
         basic_jhelper.show_unit.return_value = {}
 
         result = step.is_skip(step_context)
