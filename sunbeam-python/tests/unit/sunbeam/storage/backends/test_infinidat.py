@@ -177,11 +177,11 @@ class TestInfinidatBackend(BaseBackendTests):
 
     def test_infinidat_supports_ha(self, backend):
         """Test that Infinidat backend supports HA deployments."""
-        assert backend.supports_ha is True
+        assert backend.supports_ha is False
 
     def test_infinidat_principal_application_is_ha(self, backend):
-        """Test that principal application is cinder-volume (HA)."""
-        assert backend.principal_application == "cinder-volume"
+        """Test that principal application is the non-HA cinder app."""
+        assert backend.principal_application == "cinder-volume-noha"
 
     def test_infinidat_new_optional_fields_default_to_none(self, backend):
         """Test that new optional fields default to None."""
