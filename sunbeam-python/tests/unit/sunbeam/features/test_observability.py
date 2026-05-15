@@ -43,6 +43,18 @@ def k8shelper():
         yield p
 
 
+@pytest.fixture()
+def run_plan_obs():
+    with patch("sunbeam.features.observability.feature.run_plan") as p:
+        yield p
+
+
+@pytest.fixture()
+def juju_helper_obs():
+    with patch("sunbeam.features.observability.feature.JujuHelper") as p:
+        yield p
+
+
 class TestDeployObservabilityStackStep:
     def test_run(
         self,
@@ -640,3 +652,45 @@ class TestCosStorage:
             "active-index-directory": "4G",
             "loki-chunks": "8G",
         }
+
+
+class TestObservabilityFeaturePostEnable:
+    """Test the post_enable grant access logic."""
+
+    def test_post_enable_grants_access_to_all_nodes(
+        self, deployment, update_config, run_plan_obs, juju_helper_obs
+    ):
+        """All nodes get JujuGrantModelAccessStep called via run_plan."""
+        deployment.get_client.return_value.cluster.list_nodes.return_value = [
+            {"name": "node-1"},
+            {"name": "node-2"},
+            {"name": "node-3"},
+        ]
+        feature = observability_feature.EmbeddedObservabilityFeature()
+
+        feature.post_enable(deployment, MagicMock(), show_hints=False)
+
+        assert run_plan_obs.call_count == 3
+        for i, call in enumerate(run_plan_obs.call_args_list, start=1):
+            plan = call[0][0]
+            assert len(plan) == 1
+            step = plan[0]
+            assert isinstance(step, observability_feature.JujuGrantModelAccessStep)
+            assert step.username == f"node-{i}"
+            assert step.model == observability_feature.OBSERVABILITY_MODEL
+
+    def test_post_enable_handles_grant_failure_gracefully(
+        self, deployment, update_config, run_plan_obs, juju_helper_obs
+    ):
+        """If granting access fails for one node, others are still processed."""
+        deployment.get_client.return_value.cluster.list_nodes.return_value = [
+            {"name": "node-1"},
+            {"name": "node-2"},
+            {"name": "node-3"},
+        ]
+        run_plan_obs.side_effect = [None, Exception("grant failed"), None]
+        feature = observability_feature.EmbeddedObservabilityFeature()
+
+        feature.post_enable(deployment, MagicMock(), show_hints=False)
+
+        assert run_plan_obs.call_count == 3

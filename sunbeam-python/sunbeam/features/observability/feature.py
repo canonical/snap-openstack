@@ -79,7 +79,10 @@ from sunbeam.features.interface.v1.openstack import (
     TerraformPlanLocation,
 )
 from sunbeam.steps import openstack
-from sunbeam.steps.juju import RemoveSaasApplicationsStep
+from sunbeam.steps.juju import (
+    JujuGrantModelAccessStep,
+    RemoveSaasApplicationsStep,
+)
 from sunbeam.steps.k8s import CREDENTIAL_SUFFIX
 from sunbeam.utils import click_option_show_hints, pass_method_obj
 from sunbeam.versions import TRAEFIK_CHANNEL
@@ -879,6 +882,22 @@ class ObservabilityFeature(OpenStackControlPlaneFeature):
             "provider": self.get_provider_type().name,
         }
         update_config(deployment.get_client(), OBSERVABILITY_FEATURE_KEY, provider)
+
+        # Grant all existing Juju users access to the observability model
+        client = deployment.get_client()
+        jhelper = JujuHelper(deployment.juju_controller)
+
+        for node in client.cluster.list_nodes():
+            node_name = node["name"]
+            try:
+                plan = [
+                    JujuGrantModelAccessStep(jhelper, node_name, OBSERVABILITY_MODEL)
+                ]
+                run_plan(plan, console, show_hints)
+            except Exception as e:
+                LOG.warning(
+                    "Failed to grant %s access to observability model: %s", node_name, e
+                )
 
     def pre_disable(self, deployment: Deployment, show_hints: bool) -> None:
         """Handler to perform tasks before disabling the feature."""
