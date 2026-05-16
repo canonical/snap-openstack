@@ -103,6 +103,7 @@ class DeployMicrocephApplicationStep(DeployMachineApplicationStep):
         jhelper: JujuHelper,
         manifest: Manifest,
         model: str,
+        wait_for_readiness: bool = True,
     ):
         super().__init__(
             deployment,
@@ -116,6 +117,7 @@ class DeployMicrocephApplicationStep(DeployMachineApplicationStep):
             [Role.STORAGE],
             "Deploy MicroCeph",
             "Deploying MicroCeph",
+            wait_for_readiness=wait_for_readiness,
         )
 
     def get_application_timeout(self) -> int:
