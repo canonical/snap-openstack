@@ -24,7 +24,7 @@ A manifest used during bootstrap (and other Sunbeam operations) may be provided.
 
 Newly introduced features may not have been backported or promoted to the
 `stable` channel yet, so make sure to specify the necessary snap and charm
-channels in the manifest (e.g. `2025.1/edge`).
+channels in the manifest (e.g. `2026.1/edge`).
 
 ### Kernel parameters
 

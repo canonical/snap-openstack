@@ -2428,7 +2428,7 @@ class MaasConfigSRIOVStep(BaseStep):
                         "pci-excluded-devices": json.dumps(node_excluded_devices),
                     },
                 )
-            except (ActionFailedException, TimeoutError):
+            except ActionFailedException, TimeoutError:
                 msg = f"Unable to set hypervisor {node_name} configuration"
                 LOG.error(msg, exc_info=True)
                 return Result(ResultType.FAILED, msg)
@@ -2599,7 +2599,7 @@ class MaasConfigDPDKStep(BaseConfigDPDKStep):
                         "ovs-dpdk-ports": ",".join(dpdk_ports or ""),
                     },
                 )
-            except (ActionFailedException, TimeoutError):
+            except ActionFailedException, TimeoutError:
                 msg = f"Unable to set hypervisor {node_name} configuration"
                 LOG.error(msg, exc_info=True)
                 return Result(ResultType.FAILED, msg)

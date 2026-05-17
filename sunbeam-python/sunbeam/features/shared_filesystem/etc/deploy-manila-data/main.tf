@@ -27,7 +27,7 @@ resource "juju_application" "manila-data" {
     name     = "manila-data"
     channel  = var.charm-manila-data-channel
     revision = var.charm-manila-data-revision
-    base     = "ubuntu@24.04"
+    base     = "ubuntu@26.04"
   }
 
   config = merge({

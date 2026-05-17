@@ -155,7 +155,7 @@ def list_feature_gates(ctx: click.Context, format: str) -> None:
     client = None
     try:
         client = deployment.get_client()
-    except (ClusterServiceUnavailableException, ValueError):
+    except ClusterServiceUnavailableException, ValueError:
         LOG.debug("Cluster service unavailable, will check snap config only")
         client = None
 
@@ -392,7 +392,7 @@ class FeatureManager:
             if deployment:
                 try:
                     client = deployment.get_client()
-                except (SunbeamException, ValueError):
+                except SunbeamException, ValueError:
                     # Cannot get client (e.g., insufficient permissions,
                     # clusterd not configured). Check will proceed with
                     # client=None

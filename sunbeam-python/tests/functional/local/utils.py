@@ -200,7 +200,7 @@ def is_hw_offload_available(ifname: str) -> bool:
         with open(phys_port_name_file, "r") as f:
             phys_port_name = f.readline().strip()
             return phys_port_name != ""
-    except (OSError, IOError):
+    except OSError, IOError:
         return False
 
 

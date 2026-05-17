@@ -802,7 +802,7 @@ class ProvideCertificatesStep(BaseStep):
                     apps=["octavia"],
                     timeout=60,
                 )
-            except (JujuWaitException, TimeoutError):
+            except JujuWaitException, TimeoutError:
                 return Result(
                     ResultType.FAILED,
                     "No outstanding certificate requests, but Octavia is not yet "

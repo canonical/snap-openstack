@@ -829,7 +829,7 @@ class EnableDisableFeature(BaseFeature, Generic[ConfigType]):
             commands.update(self.enabled_commands())
         return commands
 
-    def toggle_commands(self) -> tuple[click.BaseCommand, click.BaseCommand]:
+    def toggle_commands(self) -> tuple["click.BaseCommand", "click.BaseCommand"]:  # type: ignore[valid-type]
         """Return enable and disable commands."""
         return self.enable_cmd, self.disable_cmd
 

@@ -89,7 +89,7 @@ def vault_pki_config_key(channel: str) -> str:
     try:
         track = channel.split("/")[0]
         version = Version(track)
-    except (ValueError, IndexError):
+    except ValueError, IndexError:
         return "pki_ca_common_name"
     if version >= VAULT_PKI_CA_COMMON_NAME_MIN_VERSION:
         return "pki_ca_common_name"

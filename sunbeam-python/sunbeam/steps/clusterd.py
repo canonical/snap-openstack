@@ -153,7 +153,7 @@ class AskManagementCidrStep(BaseStep):
                 # And it *might* be called afterwards
                 # We don't allow updating it
                 return
-        except (ClusterServiceUnavailableException, URLNotFoundException):
+        except ClusterServiceUnavailableException, URLNotFoundException:
             self.variables = {}
         self.variables.setdefault("bootstrap", {})
         preseed = {}

@@ -479,12 +479,18 @@ class DeleteClusterAPI(BaseStep):
         # so workaround by using client request
         # client request expects resource name for delete operation,
         # as a workaround pass empty string
-        capi_label_selector = {"clusterctl.cluster.x-k8s.io": None}
+        capi_label_selector: dict[str, str | None] = {
+            "clusterctl.cluster.x-k8s.io": None
+        }
         self.kube._client.request(
             "delete",
             res=apiextensions_v1.CustomResourceDefinition,
             name="",
-            params={"labelSelector": selector.build_selector(capi_label_selector)},
+            params={
+                "labelSelector": selector.build_selector(
+                    capi_label_selector  # type: ignore[arg-type]
+                )
+            },
         )
 
         # Delete ORC CRD, ignore if delete fails

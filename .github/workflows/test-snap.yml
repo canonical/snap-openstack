@@ -6,17 +6,17 @@ on:
       snap-channel:
         description: Specify openstack snap channel
         required: true
-        default: 2024.1/candidate
+        default: 2026.1/candidate
         type: string
       os-charm-channel:
         description: Specify openstack charms channel
         required: true
-        default: 2024.1/candidate
+        default: 2026.1/candidate
         type: string
       ovn-charm-channel:
         description: Specify ovn charms channel
         required: true
-        default: 24.03/candidate
+        default: 26.03/candidate
         type: string
       microceph-charm-channel:
         description: Specify microceph charms channel
@@ -63,8 +63,8 @@ jobs:
         run: |
           export COLUMNS=256
           set +x
-          # 2023.x, 2024.1/beta does not support k8s provider
-          if [[ ! ${{ inputs.snap-channel }} =~ "2024.1/edge" && ${{ inputs.k8s-provider }} == "k8s" ]]; then echo "k8s provider not supported"; exit 1; fi
+          # 2023.x, 2026.1/beta does not support k8s provider
+          if [[ ! ${{ inputs.snap-channel }} =~ "2026.1/edge" && ${{ inputs.k8s-provider }} == "k8s" ]]; then echo "k8s provider not supported"; exit 1; fi
 
           sudo snap remove --purge lxd
           sudo snap install juju --channel 3.6/stable
@@ -73,9 +73,9 @@ jobs:
           sudo snap connect openstack:juju-bin juju:juju-bin
           sudo snap set openstack k8s.provider=${{ inputs.k8s-provider }}
 
-          # New manifest is applicable from 2024.1/edge
-          # Change this condition once 2024.1/edge is released to beta
-          if [[ ${{ inputs.snap-channel }} =~ "2024.1/edge" ]];
+          # New manifest is applicable from 2026.1/edge
+          # Change this condition once 2026.1/edge is released to beta
+          if [[ ${{ inputs.snap-channel }} =~ "2026.1/edge" ]];
           then
               cp .github/assets/testing/manifest.yml manifest.yml
           else

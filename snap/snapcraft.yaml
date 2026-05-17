@@ -1,13 +1,20 @@
 name: openstack
-base: core24
+base: core26
+build-base: devel
 summary: Dead simple OpenStack installation
 license: Apache-2.0
 description: |
   snap-openstack aims to provide a scalable, simple to deploy OpenStack solution.
-version: "2024.1"
+version: "2026.1"
 
 confinement: strict
-grade: stable
+grade: devel
+
+environment:
+  # Snap hooks (install, configure, post-refresh) use #!/usr/bin/env python3
+  # which resolves to the staged system interpreter; it needs PYTHONPATH to
+  # find packages installed by the uv plugin in lib/python3.14/site-packages.
+  PYTHONPATH: $SNAP/lib/python3.14/site-packages
 
 platforms:
   amd64:
@@ -69,6 +76,10 @@ parts:
     autotools-configure-parameters:
       - --prefix=
       - --enable-build-raft
+    build-environment:
+      # GCC 14 (Ubuntu 26.04) treats memchr(const char*,...) -> char* as
+      # -Werror=discarded-qualifiers; suppress until fixed upstream in dqlite.
+      - CFLAGS: "${CFLAGS:-} -Wno-error=discarded-qualifiers"
     stage-packages:
       - libuv1
       - liblz4-1
@@ -191,8 +202,8 @@ parts:
       '*': etc/manifests/
     override-prime: |
       craftctl default
-      # For backward compatibility, we symlink 2024.1 manifests to the root manifests dir
-      for manifest in $CRAFT_PRIME/etc/manifests/2024.1/*yml;
+      # For backward compatibility, we symlink 2026.1 manifests to the root manifests dir
+      for manifest in $CRAFT_PRIME/etc/manifests/2026.1/*yml;
       do
         link=$CRAFT_PRIME/etc/manifests/$(basename $manifest)
         [ -e $link ] && rm $link || true
@@ -200,12 +211,12 @@ parts:
       done
 
   sunbeam-and-openstackclients:
-    plugin: python
+    plugin: uv
     source: .
     source-subdir: sunbeam-python/
     build-snaps: [astral-uv]
-    python-requirements:
-      - requirements.txt
+    uv-extras:
+      - openstackclients
     build-packages:
       - libffi-dev
       - libssl-dev
@@ -218,11 +229,14 @@ parts:
       - cargo
     stage-packages:
       - openssh-client
+      - python3-venv
     override-build: |
-      uv export --directory sunbeam-python --extra=openstackclients --frozen --no-hashes --format=requirements-txt -o requirements.txt
       craftctl default
     override-prime: |
       craftctl default
+      # Remove dangling venv symlinks pointing into the build directory.
+      rm -f $CRAFT_PRIME/bin/python
+      rm -f $CRAFT_PRIME/bin/python3.14
       # Write out snap hooks
       snap-helpers write-hooks
       # This is the last step, let's now compile all our pyc files.

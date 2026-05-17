@@ -22,10 +22,10 @@ def _make_manifest_data(risk: str) -> str:
         "core": {
             "software": {
                 "charms": {
-                    "nova-k8s": {"channel": f"2024.1/{risk}"},
-                    "neutron-k8s": {"channel": f"2024.1/{risk}"},
-                    "keystone-k8s": {"channel": f"2024.1/{risk}"},
-                    "glance-k8s": {"channel": f"2024.1/{risk}"},
+                    "nova-k8s": {"channel": f"2026.1/{risk}"},
+                    "neutron-k8s": {"channel": f"2026.1/{risk}"},
+                    "keystone-k8s": {"channel": f"2026.1/{risk}"},
+                    "glance-k8s": {"channel": f"2026.1/{risk}"},
                     "microceph": {"channel": f"squid/{risk}"},
                 }
             }
@@ -43,10 +43,10 @@ def _make_mixed_manifest_data(majority_risk: str, minority_risk: str) -> str:
         "core": {
             "software": {
                 "charms": {
-                    "nova-k8s": {"channel": f"2024.1/{majority_risk}"},
-                    "neutron-k8s": {"channel": f"2024.1/{majority_risk}"},
-                    "keystone-k8s": {"channel": f"2024.1/{majority_risk}"},
-                    "glance-k8s": {"channel": f"2024.1/{majority_risk}"},
+                    "nova-k8s": {"channel": f"2026.1/{majority_risk}"},
+                    "neutron-k8s": {"channel": f"2026.1/{majority_risk}"},
+                    "keystone-k8s": {"channel": f"2026.1/{majority_risk}"},
+                    "glance-k8s": {"channel": f"2026.1/{majority_risk}"},
                     # User-customised single charm
                     "custom-charm": {"channel": f"latest/{minority_risk}"},
                 }
@@ -131,7 +131,7 @@ class TestStoredManifestRisk:
                 "core": {
                     "software": {
                         "charms": {
-                            "nova-k8s": {"channel": "2024.1"},  # no risk part
+                            "nova-k8s": {"channel": "2026.1"},  # no risk part
                             "keystone-k8s": {"channel": ""},  # empty
                             "neutron-k8s": {},  # no channel key
                         }

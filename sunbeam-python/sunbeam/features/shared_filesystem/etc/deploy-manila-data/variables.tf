@@ -4,7 +4,7 @@
 variable "charm-manila-data-channel" {
   description = "Operator channel for manila_data deployment"
   type        = string
-  default     = "2024.1/edge"
+  default     = "2026.1/edge"
 }
 
 variable "charm-manila-data-revision" {
@@ -22,7 +22,7 @@ variable "charm-manila-data-config" {
 variable "manila-data-channel" {
   description = "Manila Data snap channel to deploy, not the operator channel"
   type        = string
-  default     = "2024.1/edge"
+  default     = "2026.1/edge"
 }
 
 variable "machine_ids" {

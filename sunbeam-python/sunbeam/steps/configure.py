@@ -580,7 +580,7 @@ class SetExternalNetworkUnitsOptionsStep(BaseStep, UnitGetterMixin):
                     self.ACTION,
                     action_params=action_params,
                 )
-            except (ActionFailedException, TimeoutError):
+            except ActionFailedException, TimeoutError:
                 _message = f"Unable to set {name!r} configuration"
                 LOG.debug(_message, exc_info=True)
                 return Result(ResultType.FAILED, _message)
