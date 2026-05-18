@@ -32,6 +32,7 @@ from sunbeam.core.common import (
 )
 from sunbeam.core.deployment import Deployment, Networks
 from sunbeam.core.juju import (
+    ApplicationNotFoundException,
     ControllerNotFoundException,
     ControllerNotReachableException,
     JujuException,
@@ -424,6 +425,19 @@ class BaseStorageBackendDeployStep(BaseStep):
             self.backend_name,
             validated_config,
         )
+
+        # If the HA cinder-volume application exists and this backend is
+        # non-HA, override the principal_application so the backend
+        # subordinates to the existing HA app.
+        actual_principal = self.backend_instance.principal_application
+        if actual_principal != APPLICATION:
+            try:
+                self.jhelper.get_application(APPLICATION, self.model)
+                backends[backend_key]["principal_application"] = APPLICATION
+                actual_principal = APPLICATION
+            except ApplicationNotFoundException:
+                pass
+
         try:
             # Update Terraform variables and apply with merged map
             self.tfhelper.update_tfvars_and_apply_tf(
@@ -447,7 +461,7 @@ class BaseStorageBackendDeployStep(BaseStep):
             "name": self.backend_name,
             "backend_type": self.backend_instance.backend_type,
             "config": validated_config.model_dump(exclude_none=True, by_alias=True),
-            "principal": self.backend_instance.principal_application,
+            "principal": actual_principal,
             "model_uuid": model["model-uuid"],
         }
         try:
@@ -661,6 +675,34 @@ class DeploySpecificCinderVolumeStep(BaseStep):
                 ResultType.SKIPPED,
                 f"Backend {self.backend_name} supports main cinder-volume;"
                 " skipping specific cinder-volume deployment.",
+            )
+
+        # Skip deploying non-HA cinder-volume if the HA cinder-volume
+        # application already exists in the model. Non-HA backends should
+        # subordinate to the existing HA application instead.
+        try:
+            self.jhelper.get_application(APPLICATION, self.model)
+            LOG.debug(
+                "HA cinder-volume application already exists in model %r;"
+                " skipping non-HA cinder-volume deployment for backend %r.",
+                self.model,
+                self.backend_name,
+            )
+            return Result(
+                ResultType.SKIPPED,
+                f"HA {APPLICATION} already exists in model {self.model!r};"
+                f" backend {self.backend_name} will use the existing application.",
+            )
+        except ApplicationNotFoundException:
+            pass
+        except JujuException as exc:
+            LOG.debug(
+                "Unable to confirm whether HA %s exists in model %r for backend %r;"
+                " proceeding with specific cinder-volume deployment: %s",
+                APPLICATION,
+                self.model,
+                self.backend_name,
+                exc,
             )
 
         return Result(ResultType.COMPLETED)
