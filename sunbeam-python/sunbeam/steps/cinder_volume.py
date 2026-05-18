@@ -8,6 +8,7 @@ import sunbeam.steps.microceph as microceph
 from sunbeam import versions
 from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import (
+    ClusterServiceUnavailableException,
     NodeNotExistInClusterException,
 )
 from sunbeam.core.common import BaseStep, Result, ResultType, Role, StepContext
@@ -92,6 +93,36 @@ class DeployCinderVolumeApplicationStep(DeployMachineApplicationStep):
         self._offers: dict[str, str | None] = {}
         self._optional_offers: dict[str, str | None] = {}
         self.override_tfvars: dict[str, Any] = extra_tfvars or {}
+
+    def is_skip(self, context: StepContext) -> Result:
+        """Skip deploying HA cinder-volume when only non-HA backends exist.
+
+        If all registered storage backends use a non-HA principal application,
+        the HA cinder-volume deployment is unnecessary and should be skipped.
+        When no backends are registered yet (initial bootstrap), proceed
+        normally to deploy the HA application as the default.
+        """
+        try:
+            backends = self.client.cluster.get_storage_backends()
+            if backends.root and all(
+                backend.principal != APPLICATION for backend in backends.root
+            ):
+                LOG.debug(
+                    "All registered storage backends are non-HA;"
+                    " skipping HA cinder-volume deployment."
+                )
+                return Result(
+                    ResultType.SKIPPED,
+                    "All registered storage backends use non-HA principal;"
+                    " HA cinder-volume deployment is not needed.",
+                )
+        except (
+            ClusterServiceUnavailableException,
+            NodeNotExistInClusterException,
+        ) as e:
+            LOG.debug(f"Failed to check storage backends: {e}")
+
+        return Result(ResultType.COMPLETED)
 
     def get_application_timeout(self) -> int:
         """Return application timeout in seconds."""
