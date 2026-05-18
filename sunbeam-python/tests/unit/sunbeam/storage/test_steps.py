@@ -7,9 +7,13 @@ from unittest.mock import Mock, patch
 import pydantic
 import pytest
 
+from sunbeam.clusterd.service import StorageBackendNotFoundException
+from sunbeam.core.common import ResultType
+from sunbeam.core.juju import ApplicationNotFoundException
 from sunbeam.core.questions import PasswordPromptQuestion, PromptQuestion
 from sunbeam.storage.models import SecretDictField
 from sunbeam.storage.steps import (
+    BaseStorageBackendDeployStep,
     DeploySpecificCinderVolumeStep,
     basemodel_validator,
     generate_questions_from_config,
@@ -356,3 +360,117 @@ class TestDeploySpecificCinderVolumeStep:
             ]
             is True
         )
+
+    def test_is_skip_no_storage_nodes(
+        self, deploy_specific_cinder_volume_step, basic_client, step_context
+    ):
+        basic_client.cluster.list_nodes_by_role.return_value = []
+        result = deploy_specific_cinder_volume_step.is_skip(step_context)
+        assert result.result_type == ResultType.FAILED
+
+    def test_is_skip_ha_backend_skips(
+        self, deploy_specific_cinder_volume_step, basic_client, step_context
+    ):
+        basic_client.cluster.list_nodes_by_role.return_value = [{"machineid": "0"}]
+        deploy_specific_cinder_volume_step.backend_instance.principal_application = (
+            "cinder-volume"
+        )
+        result = deploy_specific_cinder_volume_step.is_skip(step_context)
+        assert result.result_type == ResultType.SKIPPED
+
+    def test_is_skip_ha_app_already_exists(
+        self,
+        deploy_specific_cinder_volume_step,
+        basic_client,
+        basic_jhelper,
+        step_context,
+    ):
+        basic_client.cluster.list_nodes_by_role.return_value = [{"machineid": "0"}]
+        basic_jhelper.get_application.return_value = Mock()
+        result = deploy_specific_cinder_volume_step.is_skip(step_context)
+        assert result.result_type == ResultType.SKIPPED
+
+    def test_is_skip_no_ha_app_proceeds(
+        self,
+        deploy_specific_cinder_volume_step,
+        basic_client,
+        basic_jhelper,
+        step_context,
+    ):
+        basic_client.cluster.list_nodes_by_role.return_value = [{"machineid": "0"}]
+        basic_jhelper.get_application.side_effect = ApplicationNotFoundException(
+            "not found"
+        )
+        result = deploy_specific_cinder_volume_step.is_skip(step_context)
+        assert result.result_type == ResultType.COMPLETED
+
+
+class TestBaseStorageBackendDeployStepPrincipalOverride:
+    """Test principal_application override when HA app exists."""
+
+    @patch("sunbeam.storage.steps.read_config")
+    @patch("sunbeam.storage.steps.write_answers")
+    def test_run_overrides_principal_when_ha_exists(
+        self,
+        mock_write_answers,
+        mock_read_config,
+        basic_deployment,
+        basic_client,
+        basic_tfhelper,
+        basic_jhelper,
+        basic_manifest,
+        test_model,
+        step_context,
+    ):
+        mock_read_config.return_value = {}
+        basic_jhelper.get_model.return_value = {"model-uuid": "test-uuid"}
+        basic_jhelper.get_application.return_value = Mock()  # HA app exists
+        basic_jhelper.wait_application_ready = Mock()
+        basic_client.cluster.get_storage_backend.side_effect = (
+            StorageBackendNotFoundException("not found")
+        )
+        basic_deployment.reload_tfhelpers = Mock()
+
+        backend_instance = Mock()
+        backend_instance.principal_application = "cinder-volume-noha"
+        backend_instance.supports_ha = False
+        backend_instance.display_name = "Test Backend"
+        backend_instance.backend_type = "test"
+        backend_instance.tfvar_config_key = "TerraformVarsStorageBackends"
+        backend_instance.config_key.return_value = "TestBackendConfig"
+        backend_instance.config_type.return_value = Mock(
+            model_validate=Mock(
+                return_value=Mock(model_dump=Mock(return_value={"san_ip": "1.2.3.4"}))
+            )
+        )
+        backend_instance.build_terraform_vars.return_value = {
+            "principal_application": "cinder-volume-noha",
+        }
+        backend_instance.enable_backend = Mock()
+
+        step = BaseStorageBackendDeployStep(
+            basic_deployment,
+            basic_client,
+            basic_tfhelper,
+            basic_jhelper,
+            basic_manifest,
+            {},
+            "my-backend",
+            backend_instance,
+            test_model,
+        )
+        step.variables = {"san_ip": "1.2.3.4"}
+
+        step.run(step_context)
+
+        # Verify terraform vars have overridden principal
+        call_args = basic_tfhelper.update_tfvars_and_apply_tf.call_args
+        tfvars = call_args[1]["override_tfvars"]
+        assert (
+            tfvars["backends"]["my-backend"]["principal_application"] == "cinder-volume"
+        )
+
+        # Verify clusterd record uses overridden principal
+        basic_client.cluster.add_storage_backend.assert_called_once()
+        add_call = basic_client.cluster.add_storage_backend.call_args
+        assert add_call[1]["principal"] == "cinder-volume"

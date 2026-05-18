@@ -5,7 +5,9 @@ from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
+from sunbeam.core.common import ResultType
 from sunbeam.steps.cinder_volume import (
+    APPLICATION,
     CINDER_VOLUME_APP_TIMEOUT,
     CINDER_VOLUME_UNIT_TIMEOUT,
     DeployCinderVolumeApplicationStep,
@@ -336,6 +338,42 @@ class TestDeployCinderVolumeApplicationStep:
         feature_manager.is_feature_enabled.assert_called_once_with(
             deployment_with_tfhelpers, "telemetry"
         )
+
+    def test_is_skip_no_backends_proceeds(
+        self, deploy_cinder_volume_step, basic_client, step_context
+    ):
+        basic_client.cluster.get_storage_backends.return_value = Mock(root=[])
+        result = deploy_cinder_volume_step.is_skip(step_context)
+        assert result.result_type == ResultType.COMPLETED
+
+    def test_is_skip_all_non_ha_backends_skips(
+        self, deploy_cinder_volume_step, basic_client, step_context
+    ):
+        non_ha_backend = Mock(principal="cinder-volume-noha")
+        basic_client.cluster.get_storage_backends.return_value = Mock(
+            root=[non_ha_backend]
+        )
+        result = deploy_cinder_volume_step.is_skip(step_context)
+        assert result.result_type == ResultType.SKIPPED
+
+    def test_is_skip_ha_backend_exists_proceeds(
+        self, deploy_cinder_volume_step, basic_client, step_context
+    ):
+        ha_backend = Mock(principal=APPLICATION)
+        basic_client.cluster.get_storage_backends.return_value = Mock(root=[ha_backend])
+        result = deploy_cinder_volume_step.is_skip(step_context)
+        assert result.result_type == ResultType.COMPLETED
+
+    def test_is_skip_exception_proceeds(
+        self, deploy_cinder_volume_step, basic_client, step_context
+    ):
+        from sunbeam.clusterd.service import ClusterServiceUnavailableException
+
+        basic_client.cluster.get_storage_backends.side_effect = (
+            ClusterServiceUnavailableException("err")
+        )
+        result = deploy_cinder_volume_step.is_skip(step_context)
+        assert result.result_type == ResultType.COMPLETED
 
 
 class TestRemoveCinderVolumeUnitsStep:
