@@ -1540,7 +1540,7 @@ class DestroyControlPlaneStep(BaseStep):
             LOG.debug(
                 "Timeout waiting for model to be removed, trying through provider sdk"
             )
-            if not self.jhelper.model_exists(self._MODEL):
+            if not self.jhelper.model_exists_live(self._MODEL):
                 return Result(ResultType.COMPLETED)
             self.jhelper.destroy_model(self._MODEL, destroy_storage=True, force=True)
             try:
