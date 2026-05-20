@@ -1196,10 +1196,18 @@ def add(
         JujuLoginStep(deployment.juju_account),
         ClusterAddNodeStep(client, name),
         CreateJujuUserStep(name),
-        JujuGrantModelAccessStep(jhelper, name, deployment.openstack_machines_model),
-        JujuGrantModelAccessStep(jhelper, name, OPENSTACK_MODEL),
     ]
+
     plan1_results = run_plan(plan1, console, show_hints)
+
+    # Grant the new node access to all Juju models
+    plan_access = [
+        JujuGrantModelAccessStep(jhelper, name, model["short-name"])
+        for model in jhelper.models()
+        if model["short-name"]
+    ]
+    if plan_access:
+        run_plan(plan_access, console, show_hints)
 
     add_node_step_result = get_step_result(plan1_results, ClusterAddNodeStep)
     create_juju_user_step_result = get_step_result(plan1_results, CreateJujuUserStep)
