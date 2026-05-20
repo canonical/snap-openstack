@@ -1569,6 +1569,27 @@ class JujuHelper:
                 timeout=timeout,
             )
 
+    def is_k8s_model(self, model: str) -> bool:
+        """Return True if the model is a k8s (CAAS) model.
+
+        :param model: Name of the model
+        """
+        return self.get_model(model).get("model-type") == "caas"
+
+    def charm_trust(self, application_name: str, model: str) -> None:
+        """Grant cluster-scoped trust to a k8s charm application.
+
+        On k8s models, ``juju refresh --trust`` does not create a
+        ClusterRoleBinding. Only ``juju trust <app> --scope=cluster``
+        creates the binding required for hooks that access the k8s API
+        (e.g. patching StatefulSets).
+
+        :param application_name: Name of application
+        :param model: Model containing the application
+        """
+        with self._model(model) as juju:
+            juju.trust(application_name, scope="cluster")
+
     def charm_refresh(
         self,
         application_name: str,
@@ -1585,9 +1606,12 @@ class JujuHelper:
         :param channel: Channel to refresh to, if None uses current channel
         :param revision: Revision to refresh to, if None uses latest revision
         :param base: Select a different base than is currently running
-        :param trust: If true, allows charm to run hooks that require access to
-            cloud credentials
+        :param trust: If true, grants cluster-scoped k8s RBAC trust before
+            refresh so that upgrade-charm hooks can access the k8s API.
+            On non-k8s models, trust is passed directly to juju refresh.
         """
+        if trust and self.is_k8s_model(model):
+            self.charm_trust(application_name, model)
         with self._model(model) as juju:
             juju.refresh(
                 application_name,
