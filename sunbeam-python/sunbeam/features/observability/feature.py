@@ -10,6 +10,7 @@ or point to an external COS Lite.
 
 import copy
 import enum
+import json
 import logging
 import queue
 from pathlib import Path
@@ -17,6 +18,7 @@ from pathlib import Path
 import click
 from packaging.version import Version
 from rich.console import Console
+from rich.table import Table
 
 from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import (
@@ -35,6 +37,7 @@ from sunbeam.core.common import (
     ResultType,
     StepContext,
     convert_proxy_to_model_configs,
+    get_step_message,
     read_config,
     run_plan,
     update_config,
@@ -97,10 +100,12 @@ OBSERVABILITY_DEPLOY_TIMEOUT = 1800  # 30 minutes
 OBSERVABILITY_AGENT_K8S_DEPLOY_TIMEOUT = 1800  # 30 minutes
 COS_TFPLAN = "cos-plan"
 OBSERVABILITY_AGENT_TFPLAN = "grafana-agent-plan"
+HARDWARE_OBSERVER_TFPLAN = "hardware-observer-plan"
 COS_CONFIG_KEY = "TerraformVarsFeatureObservabilityPlanCos"
 OBSERVABILITY_AGENT_CONFIG_KEY = (
     "TerraformVarsFeatureObservabilityPlanObservabilityAgent"
 )
+HARDWARE_OBSERVER_CONFIG_KEY = "TerraformVarsFeatureObservabilityPlanHardwareObserver"
 
 COS_STORAGE_KEY = "ObservabilityStorage"
 
@@ -119,7 +124,13 @@ OBSERVABILITY_OFFER_INTERFACES = [
     "prometheus_remote_write",
     "loki_push_api",
 ]
-INTEGRATION_APPS = ["openstack-hypervisor", "microceph", "k8s"]
+OBSERVABILITY_AGNET_INTEGRATION_APPS = ["openstack-hypervisor", "microceph", "k8s"]
+OBSERVABILITY_AGENT_APP = "opentelemetry-collector"
+MICROOVN_APP = "microovn"
+SUNBEAM_MACHINE_APP = "sunbeam-machine"
+
+HARDWARE_OBSERVER_APP = "hardware-observer"
+HARDWARE_OBSERVER_CHANNEL = "latest/stable"
 
 
 class ProviderType(enum.Enum):
@@ -383,9 +394,17 @@ class DeployObservabilityAgentStep(BaseStep, JujuStepHelper):
 
     def run(self, context: StepContext) -> Result:
         """Execute configuration using terraform."""
+        model_status = self.jhelper.get_model_status(self.model)
+        integration_apps = list(OBSERVABILITY_AGNET_INTEGRATION_APPS)
+        # network role is optional, only add microovn if it's deployed in the model
+        if MICROOVN_APP in model_status.apps:
+            integration_apps.append(MICROOVN_APP)
         extra_tfvars = {
             "principal-application-model-uuid": self.jhelper.get_model_uuid(self.model),
-            "observability-agent-integration-apps": INTEGRATION_APPS,
+            "observability-agent-integration-apps": integration_apps,
+            "observability-agent-integration-apps-juju-info": [SUNBEAM_MACHINE_APP],
+            # Workaround for https://github.com/canonical/opentelemetry-collector-k8s-operator/issues/265
+            "opentelemetry-collector-config": {"tls_insecure_skip_verify": True},
         }
         # Offer URLs from COS are added from feature
         extra_tfvars.update(
@@ -419,6 +438,180 @@ class DeployObservabilityAgentStep(BaseStep, JujuStepHelper):
             return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.COMPLETED)
+
+
+class DeployHardwareObserverStep(BaseStep, JujuStepHelper):
+    """Deploy Hardware Observer using Terraform."""
+
+    _CONFIG = HARDWARE_OBSERVER_CONFIG_KEY
+
+    def __init__(
+        self,
+        deployment: Deployment,
+        config: FeatureConfig,
+        feature: "ObservabilityFeature",
+        tfhelper: TerraformHelper,
+        jhelper: JujuHelper,
+        accepted_app_status: list[str] = ["active", "blocked"],
+    ):
+        super().__init__("Deploy Hardware Observer", "Deploy Hardware Observer")
+        self.deployment = deployment
+        self.config = config
+        self.feature = feature
+        self.tfhelper = tfhelper
+        self.jhelper = jhelper
+        self.manifest = self.feature.manifest
+        self.accepted_app_status = accepted_app_status
+        self.client = self.deployment.get_client()
+        self.model = self.deployment.openstack_machines_model
+
+    def run(self, context: StepContext) -> Result:
+        """Deploy hardware-observer and wait for it to settle."""
+        extra_tfvars = {
+            "principal-application-model-uuid": self.jhelper.get_model_uuid(self.model),
+            "principal-applications": [SUNBEAM_MACHINE_APP],
+            "observability-agent-app": OBSERVABILITY_AGENT_APP,
+        }
+
+        try:
+            self.update_status(context, "deploying services")
+            self.tfhelper.update_tfvars_and_apply_tf(
+                self.client,
+                self.manifest,
+                tfvar_config=self._CONFIG,
+                override_tfvars=extra_tfvars,
+                reporter=context.reporter,
+            )
+        except (TerraformException, TerraformStateLockedException) as e:
+            LOG.exception("Error deploying hardware observer")
+            return Result(ResultType.FAILED, str(e))
+
+        LOG.debug("Application monitored for readiness: %s", HARDWARE_OBSERVER_APP)
+        try:
+            self.jhelper.wait_application_ready(
+                HARDWARE_OBSERVER_APP,
+                self.model,
+                accepted_status=self.accepted_app_status,
+                timeout=OBSERVABILITY_DEPLOY_TIMEOUT,
+            )
+        except (JujuWaitException, TimeoutError) as e:
+            LOG.debug("Failed to deploy hardware observer", exc_info=True)
+            return Result(ResultType.FAILED, str(e))
+
+        return Result(ResultType.COMPLETED)
+
+
+class RemoveHardwareObserverStep(BaseStep, JujuStepHelper):
+    """Remove Hardware Observer using Terraform."""
+
+    _CONFIG = HARDWARE_OBSERVER_CONFIG_KEY
+
+    def __init__(
+        self,
+        deployment: Deployment,
+        feature: "ObservabilityFeature",
+        tfhelper: TerraformHelper,
+        jhelper: JujuHelper,
+    ):
+        super().__init__("Remove Hardware Observer", "Removing Hardware Observer")
+        self.deployment = deployment
+        self.feature = feature
+        self.tfhelper = tfhelper
+        self.jhelper = jhelper
+        self.manifest = self.feature.manifest
+        self.client = deployment.get_client()
+        self.model = deployment.openstack_machines_model
+
+    def run(self, context: StepContext) -> Result:
+        """Destroy hardware-observer terraform plan and wait for app to be gone."""
+        try:
+            self.tfhelper.destroy(reporter=context.reporter)
+        except TerraformException as e:
+            LOG.exception("Error destroying hardware observer")
+            return Result(ResultType.FAILED, str(e))
+
+        try:
+            self.jhelper.wait_application_gone(
+                [HARDWARE_OBSERVER_APP],
+                self.model,
+                timeout=OBSERVABILITY_DEPLOY_TIMEOUT,
+            )
+        except TimeoutError as e:
+            LOG.debug("Failed to destroy hardware observer", exc_info=True)
+            return Result(ResultType.FAILED, str(e))
+
+        extra_tfvars = {
+            "principal-application-model-uuid": self.jhelper.get_model_uuid(self.model),
+        }
+        update_config(self.client, self._CONFIG, extra_tfvars)
+
+        return Result(ResultType.COMPLETED)
+
+
+class AttachHardwareObserverResourceStep(BaseStep):
+    """Attach a file resource to the hardware-observer application."""
+
+    def __init__(
+        self,
+        deployment: Deployment,
+        jhelper: JujuHelper,
+        resource_name: str,
+        resource_path: str,
+    ):
+        super().__init__(
+            "Attach Hardware Observer Resource",
+            f"Attaching resource {resource_name!r} to {HARDWARE_OBSERVER_APP}",
+        )
+        self.deployment = deployment
+        self.jhelper = jhelper
+        self.resource_name = resource_name
+        self.resource_path = resource_path
+        self.model = deployment.openstack_machines_model
+
+    def run(self, context: StepContext) -> Result:
+        """Upload a local file resource to the hardware-observer charm."""
+        try:
+            self.jhelper.attach_resource(
+                HARDWARE_OBSERVER_APP,
+                self.model,
+                self.resource_name,
+                self.resource_path,
+            )
+        except Exception as e:
+            LOG.exception("Error attaching resource to hardware observer")
+            return Result(ResultType.FAILED, str(e))
+
+        return Result(ResultType.COMPLETED)
+
+
+class ListHardwareObserverResourcesStep(BaseStep):
+    """List resources defined for the hardware-observer application."""
+
+    def __init__(
+        self,
+        deployment: Deployment,
+        jhelper: JujuHelper,
+    ):
+        super().__init__(
+            "List Hardware Observer Resources",
+            f"Listing resources for {HARDWARE_OBSERVER_APP}",
+        )
+        self.deployment = deployment
+        self.jhelper = jhelper
+        self.model = deployment.openstack_machines_model
+
+    def run(self, context: StepContext) -> Result:
+        """Retrieve resource names from the hardware-observer application."""
+        try:
+            resources = self.jhelper.get_application_resources(
+                HARDWARE_OBSERVER_APP,
+                self.model,
+            )
+        except Exception as e:
+            LOG.exception("Error listing resources for hardware observer")
+            return Result(ResultType.FAILED, str(e))
+
+        return Result(ResultType.COMPLETED, json.dumps(resources))
 
 
 class RemoveObservabilityStackStep(BaseStep, JujuStepHelper):
@@ -700,6 +893,8 @@ class ObservabilityFeature(OpenStackControlPlaneFeature):
         self.tfplan_observability_agent = OBSERVABILITY_AGENT_TFPLAN
         self.tfplan_observability_agent_dir = "deploy-grafana-agent"
         self.tfplan_observability_agent_k8s_dir = "deploy-grafana-agent-k8s"
+        self.tfplan_hardware_observer = HARDWARE_OBSERVER_TFPLAN
+        self.tfplan_hardware_observer_dir = "deploy-hardware-observer"
 
         self.prometheus_offer_url = ""
         self.grafana_offer_url = ""
@@ -732,6 +927,7 @@ class ObservabilityFeature(OpenStackControlPlaneFeature):
                 "opentelemetry-collector-k8s": CharmManifest(
                     channel=OPENTELEMETRY_COLLECTOR_K8S_CHANNEL
                 ),
+                "hardware-observer": CharmManifest(channel=HARDWARE_OBSERVER_CHANNEL),
             },
             terraform={
                 self.tfplan_cos: TerraformManifest(
@@ -741,6 +937,11 @@ class ObservabilityFeature(OpenStackControlPlaneFeature):
                     source=Path(__file__).parent
                     / "etc"
                     / self.tfplan_observability_agent_dir
+                ),
+                self.tfplan_hardware_observer: TerraformManifest(
+                    source=Path(__file__).parent
+                    / "etc"
+                    / self.tfplan_hardware_observer_dir
                 ),
             },
         )
@@ -792,7 +993,16 @@ class ObservabilityFeature(OpenStackControlPlaneFeature):
                         "channel": "opentelemetry-collector-channel",
                         "revision": "opentelemetry-collector-revision",
                         "config": "opentelemetry-collector-config",
-                    }
+                    },
+                }
+            },
+            self.tfplan_hardware_observer: {
+                "charms": {
+                    "hardware-observer": {
+                        "channel": "hardware-observer-channel",
+                        "revision": "hardware-observer-revision",
+                        "config": "hardware-observer-config",
+                    },
                 }
             },
             self.tfplan: {
@@ -829,6 +1039,8 @@ class ObservabilityFeature(OpenStackControlPlaneFeature):
         """Set terraform variables to enable the application."""
         tfvars = {
             "enable-observability": True,
+            # Workaround for https://github.com/canonical/opentelemetry-collector-k9s-operator/issues/265
+            "opentelemetry-collector-config": {"tls_insecure_skip_verify": True},
         }
         tfvars.update(self.get_cos_offer_urls(deployment))
         return tfvars
@@ -943,6 +1155,72 @@ class ObservabilityFeature(OpenStackControlPlaneFeature):
     #         )
     #         self.disable_feature(deployment, FeatureConfig())
 
+    @click.command()
+    @click.argument("resource-name", type=str)
+    @click.argument("resource-path", type=click.Path(exists=True, dir_okay=False))
+    @pass_method_obj
+    def attach_resource(
+        self, deployment: Deployment, resource_name: str, resource_path: str
+    ) -> None:
+        """Attach a file resource to the hardware-observer charm.
+
+        RESOURCE_NAME is the name of the resource.
+
+        RESOURCE_PATH is the local path to the resource file to attach.
+
+        Use the `sunbeam observability hardware-monitoring-utility list` command to see
+        the available resource names.
+        """
+        jhelper = JujuHelper(deployment.juju_controller)
+
+        list_plan = [ListHardwareObserverResourcesStep(deployment, jhelper)]
+        list_results = run_plan(list_plan, console)
+        raw = get_step_message(list_results, ListHardwareObserverResourcesStep)
+        if raw is None:
+            raise click.ClickException("Failed to retrieve resource list.")
+        valid_names = [r["name"] for r in json.loads(raw)]
+        if resource_name not in valid_names:
+            raise click.ClickException(
+                f"Unknown resource {resource_name!r}. "
+                "Use the `sunbeam observability hardware-monitoring-utility list` "
+                "command to see valid names."
+            )
+
+        plan = [
+            AttachHardwareObserverResourceStep(
+                deployment, jhelper, resource_name, resource_path
+            )
+        ]
+        run_plan(plan, console)
+        click.echo(f"Resource {resource_name!r} attached to {HARDWARE_OBSERVER_APP}.")
+
+    @click.command()
+    @pass_method_obj
+    def list_resources(self, deployment: Deployment) -> None:
+        """List available resource names for the hardware-observer charm."""
+        jhelper = JujuHelper(deployment.juju_controller)
+        plan = [ListHardwareObserverResourcesStep(deployment, jhelper)]
+        plan_results = run_plan(plan, console)
+        result = get_step_message(plan_results, ListHardwareObserverResourcesStep)
+        if result is None:
+            raise click.ClickException("Failed to retrieve resource list.")
+        resources = json.loads(result)
+        table = Table(title=f"{HARDWARE_OBSERVER_APP} resources")
+        table.add_column("Name")
+        table.add_column("Type")
+        table.add_column("Description")
+        for r in resources:
+            table.add_row(
+                r.get("name", ""),
+                r.get("type", ""),
+                r.get("description", ""),
+            )
+        console.print(table)
+
+    @click.group()
+    def hardware_monitoring_utility(self):
+        """Manage hardware monitoring utility resources."""
+
     @click.group()
     def observability_group(self):
         """Manage Observability."""
@@ -999,6 +1277,9 @@ class EmbeddedObservabilityFeature(ObservabilityFeature):
         tfhelper_observability_agent = deployment.get_tfhelper(
             self.tfplan_observability_agent
         )
+        tfhelper_hardware_observer = deployment.get_tfhelper(
+            self.tfplan_hardware_observer
+        )
 
         client = deployment.get_client()
         plan = []
@@ -1035,10 +1316,18 @@ class EmbeddedObservabilityFeature(ObservabilityFeature):
             ),
         ]
 
+        hardware_observer_plan = [
+            TerraformInitStep(tfhelper_hardware_observer),
+            DeployHardwareObserverStep(
+                deployment, config, self, tfhelper_hardware_observer, jhelper
+            ),
+        ]
+
         run_plan(plan, console, show_hints)
         run_plan(cos_plan, console, show_hints)
         run_plan(observability_agent_k8s_plan, console, show_hints)
         run_plan(observability_agent_plan, console, show_hints)
+        run_plan(hardware_observer_plan, console, show_hints)
 
         click.echo("Observability enabled.")
 
@@ -1050,12 +1339,22 @@ class EmbeddedObservabilityFeature(ObservabilityFeature):
         tfhelper_observability_agent = deployment.get_tfhelper(
             self.tfplan_observability_agent
         )
+        tfhelper_hardware_observer = deployment.get_tfhelper(
+            self.tfplan_hardware_observer
+        )
 
         observability_agent_k8s_plan = [
             TerraformInitStep(tfhelper),
             DisableOpenStackApplicationStep(deployment, tfhelper, jhelper, self),
             RemoveSaasApplicationsStep(
                 jhelper, OPENSTACK_MODEL, offering_model=OBSERVABILITY_MODEL
+            ),
+        ]
+
+        hardware_observer_plan = [
+            TerraformInitStep(tfhelper_hardware_observer),
+            RemoveHardwareObserverStep(
+                deployment, self, tfhelper_hardware_observer, jhelper
             ),
         ]
 
@@ -1077,6 +1376,7 @@ class EmbeddedObservabilityFeature(ObservabilityFeature):
         ]
 
         run_plan(observability_agent_k8s_plan, console, show_hints)
+        run_plan(hardware_observer_plan, console, show_hints)
         run_plan(observability_agent_plan, console, show_hints)
         run_plan(cos_plan, console, show_hints)
 
@@ -1136,7 +1436,15 @@ class EmbeddedObservabilityFeature(ObservabilityFeature):
         return {
             "init": [{"name": "observability", "command": self.observability_group}],
             "init.observability": [
-                {"name": "dashboard-url", "command": self.dashboard_url}
+                {"name": "dashboard-url", "command": self.dashboard_url},
+                {
+                    "name": "hardware-monitoring-utility",
+                    "command": self.hardware_monitoring_utility,
+                },
+            ],
+            "init.observability.hardware-monitoring-utility": [
+                {"name": "add", "command": self.attach_resource},
+                {"name": "list", "command": self.list_resources},
             ],
         }
 
@@ -1170,6 +1478,9 @@ class ExternalObservabilityFeature(ObservabilityFeature):
         tfhelper_observability_agent = deployment.get_tfhelper(
             self.tfplan_observability_agent
         )
+        tfhelper_hardware_observer = deployment.get_tfhelper(
+            self.tfplan_hardware_observer
+        )
 
         client = deployment.get_client()
         plan = []
@@ -1200,6 +1511,13 @@ class ExternalObservabilityFeature(ObservabilityFeature):
             ),
         ]
 
+        hardware_observer_plan = [
+            TerraformInitStep(tfhelper_hardware_observer),
+            DeployHardwareObserverStep(
+                deployment, config, self, tfhelper_hardware_observer, jhelper
+            ),
+        ]
+
         # Workaround as integrations are not handled in terraform plan
         # https://github.com/juju/terraform-provider-juju/issues/119
         observability_integrations_plan = [
@@ -1209,6 +1527,7 @@ class ExternalObservabilityFeature(ObservabilityFeature):
         run_plan(plan, console, show_hints)
         run_plan(observability_agent_k8s_plan, console, show_hints)
         run_plan(observability_agent_plan, console, show_hints)
+        run_plan(hardware_observer_plan, console, show_hints)
         run_plan(observability_integrations_plan, console, show_hints)
 
         click.echo("Observability enabled.")
@@ -1219,6 +1538,9 @@ class ExternalObservabilityFeature(ObservabilityFeature):
         tfhelper = deployment.get_tfhelper(self.tfplan)
         tfhelper_observability_agent = deployment.get_tfhelper(
             self.tfplan_observability_agent
+        )
+        tfhelper_hardware_observer = deployment.get_tfhelper(
+            self.tfplan_hardware_observer
         )
 
         # Workaround as integrations are not handled in terraform plan
@@ -1237,6 +1559,13 @@ class ExternalObservabilityFeature(ObservabilityFeature):
             ),
         ]
 
+        hardware_observer_plan = [
+            TerraformInitStep(tfhelper_hardware_observer),
+            RemoveHardwareObserverStep(
+                deployment, self, tfhelper_hardware_observer, jhelper
+            ),
+        ]
+
         grafana_agent_plan = [
             TerraformInitStep(tfhelper_observability_agent),
             RemoveObservabilityAgentStep(
@@ -1251,6 +1580,7 @@ class ExternalObservabilityFeature(ObservabilityFeature):
 
         run_plan(observability_remove_offers_plan, console, show_hints)
         run_plan(observability_agent_k8s_plan, console, show_hints)
+        run_plan(hardware_observer_plan, console, show_hints)
         run_plan(grafana_agent_plan, console, show_hints)
 
         click.echo("Observability disabled.")
@@ -1306,6 +1636,25 @@ class ExternalObservabilityFeature(ObservabilityFeature):
     def get_provider_type(self) -> ProviderType:
         """Return provide type external or embedded."""
         return ProviderType.EXTERNAL
+
+    def enabled_commands(self) -> dict[str, list[dict]]:
+        """Dict of clickgroup along with commands.
+
+        Return the commands available once the feature is enabled.
+        """
+        return {
+            "init": [{"name": "observability", "command": self.observability_group}],
+            "init.observability": [
+                {
+                    "name": "hardware-monitoring-utility",
+                    "command": self.hardware_monitoring_utility,
+                },
+            ],
+            "init.observability.hardware-monitoring-utility": [
+                {"name": "add", "command": self.attach_resource},
+                {"name": "list", "command": self.list_resources},
+            ],
+        }
 
     def get_cos_offer_urls(self, deployment: Deployment) -> dict:
         """Return COS offer URLs."""

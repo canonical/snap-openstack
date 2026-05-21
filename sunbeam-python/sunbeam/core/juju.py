@@ -1590,6 +1590,44 @@ class JujuHelper:
         with self._model(model) as juju:
             juju.trust(application_name, scope="cluster")
 
+    def attach_resource(
+        self,
+        application_name: str,
+        model: str,
+        resource_name: str,
+        resource_path: str,
+    ) -> None:
+        """Upload a file resource to a deployed application.
+
+        :param application_name: Name of the application
+        :param model: Name of the model
+        :param resource_name: Name of the resource as defined in the charm metadata
+        :param resource_path: Local path to the resource file to upload
+        """
+        with self._model(model) as juju:
+            juju.cli(
+                "attach-resource",
+                application_name,
+                f"{resource_name}={resource_path}",
+            )
+
+    def get_application_resources(
+        self,
+        application_name: str,
+        model: str,
+    ) -> list[dict]:
+        """Return the resources defined for a deployed application.
+
+        :param application_name: Name of the application
+        :param model: Name of the model
+        :returns: List of resource dicts sorted by name, each containing at
+            minimum the keys ``name``, ``type``, and ``description``.
+        """
+        with self._model(model) as juju:
+            raw = juju.cli("resources", "--format", "json", application_name)
+        data = json.loads(raw)
+        return sorted(data.get("resources", []), key=lambda r: r["name"])
+
     def charm_refresh(
         self,
         application_name: str,
