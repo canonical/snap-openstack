@@ -289,11 +289,48 @@ def test_charm_refresh_with_base(jhelper, juju):
     )
 
 
-def test_charm_refresh_with_trust(jhelper, juju):
-    jhelper.charm_refresh("app", "test-model", trust=True)
+def test_charm_refresh_with_trust_on_k8s_model(jhelper, juju):
+    """On a k8s model, trust=True triggers juju.trust(scope=cluster) before refresh."""
+    with patch.object(jhelper, "is_k8s_model", return_value=True):
+        jhelper.charm_refresh("app", "test-model", trust=True)
+    juju.trust.assert_called_once_with("app", scope="cluster")
     juju.refresh.assert_called_with(
         "app", channel=None, revision=None, base=None, trust=True
     )
+
+
+def test_charm_refresh_with_trust_on_machine_model(jhelper, juju):
+    """On a machine model with trust=True, juju.trust must NOT be called."""
+    with patch.object(jhelper, "is_k8s_model", return_value=False):
+        jhelper.charm_refresh("app", "test-model", trust=True)
+    juju.trust.assert_not_called()
+    juju.refresh.assert_called_with(
+        "app", channel=None, revision=None, base=None, trust=True
+    )
+
+
+def test_charm_refresh_without_trust_does_not_call_juju_trust(jhelper, juju):
+    """When trust=False (default), juju.trust must not be called."""
+    jhelper.charm_refresh("app", "test-model")
+    juju.trust.assert_not_called()
+
+
+def test_charm_trust(jhelper, juju):
+    """charm_trust calls juju.trust with scope=cluster."""
+    jhelper.charm_trust("app", "test-model")
+    juju.trust.assert_called_once_with("app", scope="cluster")
+
+
+def test_is_k8s_model_caas(jhelper):
+    """is_k8s_model returns True for caas model-type."""
+    with patch.object(jhelper, "get_model", return_value={"model-type": "caas"}):
+        assert jhelper.is_k8s_model("openstack") is True
+
+
+def test_is_k8s_model_iaas(jhelper):
+    """is_k8s_model returns False for iaas model-type."""
+    with patch.object(jhelper, "get_model", return_value={"model-type": "iaas"}):
+        assert jhelper.is_k8s_model("openstack-machines") is False
 
 
 def test_get_spaces(jhelper):

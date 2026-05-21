@@ -55,8 +55,8 @@ class TestLatestInChannel:
         # Execute
         result = self.upgrader.refresh_apps(apps, model)
 
-        # Verify charm_refresh was called without channel/revision
-        self.jhelper.charm_refresh.assert_called_once_with("nova", model)
+        # Verify charm_refresh was called without channel/revision, trust=False
+        self.jhelper.charm_refresh.assert_called_once_with("nova", model, trust=False)
         assert result.result_type == ResultType.COMPLETED
 
     def test_refresh_apps_with_manifest_channel_and_revision(self):
@@ -79,12 +79,13 @@ class TestLatestInChannel:
         # Execute
         result = self.upgrader.refresh_apps(apps, model)
 
-        # Verify charm_refresh was called with channel and revision
+        # Verify charm_refresh was called with channel and revision, trust=False
         self.jhelper.charm_refresh.assert_called_once_with(
             "nova",
             model,
             channel="2024.1/stable",
             revision=150,
+            trust=False,
         )
         assert result.result_type == ResultType.COMPLETED
 
@@ -108,12 +109,13 @@ class TestLatestInChannel:
         # Execute
         result = self.upgrader.refresh_apps(apps, model)
 
-        # Verify charm_refresh was called with channel but None revision
+        # Verify charm_refresh was called with channel but None revision, trust=False
         self.jhelper.charm_refresh.assert_called_once_with(
             "nova",
             model,
             channel="2024.1/stable",
             revision=None,
+            trust=False,
         )
         assert result.result_type == ResultType.COMPLETED
 
@@ -145,16 +147,72 @@ class TestLatestInChannel:
         # Verify charm_refresh was called for all apps
         assert self.jhelper.charm_refresh.call_count == 3
 
-        # Check calls
+        # Check calls — all non-octavia charms get trust=False
         calls = self.jhelper.charm_refresh.call_args_list
+        assert (
+            call("nova", model, channel="2024.1/candidate", revision=200, trust=False)
+            in calls
+        )
+        assert call("neutron", model, trust=False) in calls
+        assert call("cinder", model, trust=False) in calls
 
-        # Nova should be called with manifest config
-        assert call("nova", model, channel="2024.1/candidate", revision=200) in calls
+        assert result.result_type == ResultType.COMPLETED
 
-        # Neutron and Cinder should be called without channel/revision
-        assert call("neutron", model) in calls
-        assert call("cinder", model) in calls
+    def test_refresh_apps_octavia_passes_trust_true(self):
+        """octavia-k8s is in CHARMS_REQUIRING_TRUST so trust=True must be passed."""
+        apps = {
+            "octavia": ("octavia-k8s", "2024.1/stable", 157),
+        }
+        model = "openstack"
 
+        self.jhelper.wait_until_active = Mock()
+
+        result = self.upgrader.refresh_apps(apps, model)
+
+        self.jhelper.charm_refresh.assert_called_once_with("octavia", model, trust=True)
+        assert result.result_type == ResultType.COMPLETED
+
+    def test_refresh_apps_octavia_with_manifest_passes_trust_true(self):
+        """octavia-k8s with manifest entry still gets trust=True."""
+        apps = {
+            "octavia": ("octavia-k8s", "2024.1/stable", 157),
+        }
+        model = "openstack"
+
+        manifest_charm = Mock()
+        manifest_charm.channel = "2024.1/beta"
+        manifest_charm.revision = 204
+        self.manifest.find_charm.return_value = manifest_charm
+
+        self.jhelper.wait_until_active = Mock()
+
+        result = self.upgrader.refresh_apps(apps, model)
+
+        self.jhelper.charm_refresh.assert_called_once_with(
+            "octavia",
+            model,
+            channel="2024.1/beta",
+            revision=204,
+            trust=True,
+        )
+        assert result.result_type == ResultType.COMPLETED
+
+    def test_refresh_apps_mixed_trust_and_non_trust_charms(self):
+        """Octavia gets trust=True; other charms get trust=False in the same batch."""
+        apps = {
+            "nova": ("nova-k8s", "2024.1/stable", 123),
+            "octavia": ("octavia-k8s", "2024.1/stable", 157),
+        }
+        model = "openstack"
+
+        self.manifest.find_charm.return_value = None
+        self.jhelper.wait_until_active = Mock()
+
+        result = self.upgrader.refresh_apps(apps, model)
+
+        calls = self.jhelper.charm_refresh.call_args_list
+        assert call("nova", model, trust=False) in calls
+        assert call("octavia", model, trust=True) in calls
         assert result.result_type == ResultType.COMPLETED
 
     def test_refresh_apps_machine_model(self):
@@ -171,8 +229,10 @@ class TestLatestInChannel:
         # Execute
         result = self.upgrader.refresh_apps(apps, model)
 
-        # Verify charm_refresh was called
-        self.jhelper.charm_refresh.assert_called_once_with("nova-compute", model)
+        # Verify charm_refresh was called with trust=False
+        self.jhelper.charm_refresh.assert_called_once_with(
+            "nova-compute", model, trust=False
+        )
 
         # Verify wait_application_ready was called (not wait_until_active)
         self.jhelper.wait_application_ready.assert_called_once()
@@ -259,7 +319,7 @@ class TestLatestInChannel:
             result = self.upgrader.refresh_apps(apps, model)
 
         # charm_refresh still called, result still COMPLETED
-        self.jhelper.charm_refresh.assert_called_once_with("nova", model)
+        self.jhelper.charm_refresh.assert_called_once_with("nova", model, trust=False)
         assert result.result_type == ResultType.COMPLETED
 
 

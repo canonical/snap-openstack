@@ -51,6 +51,11 @@ console = Console()
 
 INFRA_APPS = ["mysql-k8s", "vault-k8s", "k8s"]
 
+# Charms that must be refreshed with trust=True so that their upgrade-charm
+# hook has the necessary k8s RBAC permissions (e.g. get/patch StatefulSets).
+# octavia-k8s needs trust to remove legacy containers during upgrade.
+CHARMS_REQUIRING_TRUST = {"octavia-k8s"}
+
 # Snap-based charm applications that expose a refresh-snap action.
 # These need to be refreshed explicitly after the charm refresh because
 # their snaps are held to prevent spontaneous snapd auto-refreshes.
@@ -214,10 +219,11 @@ class LatestInChannel(BaseStep, JujuStepHelper):
             if charm in INFRA_APPS:
                 continue
             manifest_charm = self.manifest.find_charm(charm)
+            trust = charm in CHARMS_REQUIRING_TRUST
 
             if not manifest_charm:
                 LOG.debug(f"Running refresh for app {app_name} (no manifest entry)")
-                self.jhelper.charm_refresh(app_name, model)
+                self.jhelper.charm_refresh(app_name, model, trust=trust)
                 refreshed_apps.append(app_name)
             else:
                 LOG.debug(f"Running refresh for app {app_name} with manifest config")
@@ -226,6 +232,7 @@ class LatestInChannel(BaseStep, JujuStepHelper):
                     model,
                     channel=manifest_charm.channel,
                     revision=manifest_charm.revision,
+                    trust=trust,
                 )
                 refreshed_apps.append(app_name)
 
