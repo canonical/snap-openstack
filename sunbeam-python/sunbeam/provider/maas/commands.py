@@ -134,6 +134,7 @@ from sunbeam.steps.clusterd import (
     DeploySunbeamClusterdApplicationStep,
 )
 from sunbeam.steps.features import DisableEnabledFeatures
+from sunbeam.steps.horizon import AttachHorizonThemeStep
 from sunbeam.steps.hypervisor import (
     DeployHypervisorApplicationStep,
     DestroyHypervisorApplicationStep,
@@ -1039,6 +1040,7 @@ def configure_cmd(
     tfhelper.env = (tfhelper.env or {}) | admin_credentials
     answer_file = tfhelper.path / "config.auto.tfvars.json"
     tfhelper_hypervisor = deployment.get_tfhelper("hypervisor-plan")
+    tfhelper_openstack = deployment.get_tfhelper("openstack-plan")
     compute = list(
         map(_name_mapper, client.cluster.list_nodes_by_role(RoleTags.COMPUTE.value))
     )
@@ -1089,6 +1091,14 @@ def configure_cmd(
             jhelper,
             manifest,
             model=deployment.openstack_machines_model,
+        ),
+        TerraformInitStep(tfhelper_openstack),
+        AttachHorizonThemeStep(
+            client=client,
+            jhelper=jhelper,
+            tfhelper=tfhelper_openstack,
+            manifest=manifest,
+            model=OPENSTACK_MODEL,
         ),
         MaasSetOpenStackNetworkAgentsStep(
             client,

@@ -364,6 +364,34 @@ class JujuHelper:
         except ModelNotFoundException:
             LOG.debug("Model %s not found", model)
 
+    def attach_resource(
+        self,
+        model: str,
+        application: str,
+        resource: str,
+        filepath: str,
+    ):
+        """Attach a file resource to a juju application.
+
+        :model: Name of the model
+        :application: Name of the application
+        :resource: Name of the resource
+        :filepath: Local filepath to the file to be attached
+        """
+        try:
+            with self._model(model):
+                self.cli(
+                    "attach-resource",
+                    application,
+                    f"{resource}={filepath}",
+                    json_format=False,
+                    include_controller=False,
+                )
+        except jubilant.CLIError as e:
+            raise JujuException(
+                f"Failed to attach resource {resource} to {application}: {e.stderr}"
+            )
+
     def integrate(
         self,
         model: str,
