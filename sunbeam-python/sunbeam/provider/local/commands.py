@@ -117,6 +117,7 @@ from sunbeam.steps.clusterd import (
     PromptCheckNodeExistStep,
     SaveManagementCidrStep,
 )
+from sunbeam.steps.horizon import AttachHorizonThemeStep
 from sunbeam.steps.hypervisor import (
     DeployHypervisorApplicationStep,
     ReapplyHypervisorOptionalIntegrationsStep,
@@ -2117,6 +2118,19 @@ def configure_cmd(
                 manifest,
                 deployment.openstack_machines_model,
                 deployment.get_ovn_manager(),
+            )
+        )
+
+    if "control" in node["role"]:
+        openstack_tfhelper = deployment.get_tfhelper("openstack-plan")
+        plan.append(TerraformInitStep(openstack_tfhelper))
+        plan.append(
+            AttachHorizonThemeStep(
+                client=client,
+                jhelper=jhelper,
+                tfhelper=openstack_tfhelper,
+                manifest=manifest,
+                model=OPENSTACK_MODEL,
             )
         )
 
