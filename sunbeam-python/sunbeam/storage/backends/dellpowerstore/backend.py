@@ -28,7 +28,6 @@ class DellPowerstoreConfig(StorageBackendConfig):
     san_ip: Annotated[
         str,
         Field(description="Dell PowerStore management IP"),
-        SecretDictField(field="san-ip"),
     ]
     san_login: Annotated[
         str,

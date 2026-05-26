@@ -108,17 +108,12 @@ class TestDellpowerstoreBackend(BaseBackendTests):
         )
         assert has_secret_marker, "san_password should be marked as secret"
 
-    def test_dellpowerstore_network_is_secret(self, backend):
-        """Test that SAN IP is properly marked as secret."""
-        from sunbeam.storage.models import SecretDictField
-
+    def test_dellpowerstore_network_is_required(self, backend):
+        """Test that SAN IP is a required field."""
         config_class = backend.config_type()
         ip_field = config_class.model_fields.get("san_ip")
         assert ip_field is not None
-        has_secret_marker = any(
-            isinstance(m, SecretDictField) for m in ip_field.metadata
-        )
-        assert has_secret_marker, "san_ip should be marked as secret"
+        assert ip_field.is_required(), "san_ip should be a required field"
 
     def test_dellpowerstore_config_optional_fields_work(self, backend):
         """Test that optional fields can be omitted."""
