@@ -77,7 +77,7 @@ class StxBackend(StorageBackendBase):
     @property
     def charm_channel(self) -> str:
         """Return the default charm channel."""
-        return "latest/edge"
+        return "2024.1/edge"
 
     @property
     def charm_revision(self) -> str | None:

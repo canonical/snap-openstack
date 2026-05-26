@@ -156,170 +156,22 @@ class TestAllBackends(BaseBackendTests):
 # Backend uniqueness tests
 
 
-def test_all_backends_have_unique_types(
-    hitachi_backend,
-    purestorage_backend,
-    dellsc_backend,
-    datacore_backend,
-    datera_backend,
-    dellpowermax_backend,
-    dellpowervault_backend,
-    fujitsueternusdx_backend,
-    hpexp_backend,
-    ibmflashsystemcommon_backend,
-    ibmflashsystemiscsi_backend,
-    ibmgpfs_backend,
-    nimble_backend,
-    ibmibmstorage_backend,
-    ibmstorwizesvc_backend,
-    inspuras13000_backend,
-    inspurinstorage_backend,
-    kaminario_backend,
-    linstor_backend,
-    macrosan_backend,
-    necv_backend,
-    netapp_backend,
-    nexenta_backend,
-    opene_backend,
-    prophetstor_backend,
-    qnap_backend,
-    sandstone_backend,
-    stx_backend,
-    synology_backend,
-    toyouacs5000_backend,
-    veritasaccess_backend,
-    yadro_backend,
-    zadara_backend,
-    dellpowerstore_backend,
-    solidfire_backend,
-    hpe3par_backend,
-    infinidat_backend,
-):
+def test_all_backends_have_unique_types():
     """Test that all backends have unique type identifiers."""
-    backends = [
-        hitachi_backend,
-        purestorage_backend,
-        dellsc_backend,
-        datacore_backend,
-        datera_backend,
-        dellpowermax_backend,
-        dellpowervault_backend,
-        fujitsueternusdx_backend,
-        hpexp_backend,
-        ibmflashsystemcommon_backend,
-        ibmflashsystemiscsi_backend,
-        ibmgpfs_backend,
-        nimble_backend,
-        ibmibmstorage_backend,
-        ibmstorwizesvc_backend,
-        inspuras13000_backend,
-        inspurinstorage_backend,
-        kaminario_backend,
-        linstor_backend,
-        macrosan_backend,
-        necv_backend,
-        netapp_backend,
-        nexenta_backend,
-        opene_backend,
-        prophetstor_backend,
-        qnap_backend,
-        sandstone_backend,
-        stx_backend,
-        synology_backend,
-        toyouacs5000_backend,
-        veritasaccess_backend,
-        yadro_backend,
-        zadara_backend,
-        dellpowerstore_backend,
-        solidfire_backend,
-        hpe3par_backend,
-        infinidat_backend,
-    ]
+    from tests.unit.sunbeam.storage.backends.conftest import BACKENDS
+
+    backends = [cls() for cls in BACKENDS.values()]
     types = [b.backend_type for b in backends]
 
     # Check no duplicates
     assert len(types) == len(set(types)), f"Duplicate backend types found: {types}"
 
 
-def test_all_backends_have_unique_charm_names(
-    hitachi_backend,
-    purestorage_backend,
-    dellsc_backend,
-    datacore_backend,
-    datera_backend,
-    dellpowermax_backend,
-    dellpowervault_backend,
-    fujitsueternusdx_backend,
-    hpexp_backend,
-    ibmflashsystemcommon_backend,
-    ibmflashsystemiscsi_backend,
-    ibmgpfs_backend,
-    nimble_backend,
-    ibmibmstorage_backend,
-    ibmstorwizesvc_backend,
-    inspuras13000_backend,
-    inspurinstorage_backend,
-    kaminario_backend,
-    linstor_backend,
-    macrosan_backend,
-    necv_backend,
-    netapp_backend,
-    nexenta_backend,
-    opene_backend,
-    prophetstor_backend,
-    qnap_backend,
-    sandstone_backend,
-    stx_backend,
-    synology_backend,
-    toyouacs5000_backend,
-    veritasaccess_backend,
-    yadro_backend,
-    zadara_backend,
-    dellpowerstore_backend,
-    solidfire_backend,
-    hpe3par_backend,
-    infinidat_backend,
-):
+def test_all_backends_have_unique_charm_names():
     """Test that all backends have unique charm names."""
-    backends = [
-        hitachi_backend,
-        purestorage_backend,
-        dellsc_backend,
-        datacore_backend,
-        datera_backend,
-        dellpowermax_backend,
-        dellpowervault_backend,
-        fujitsueternusdx_backend,
-        hpexp_backend,
-        ibmflashsystemcommon_backend,
-        ibmflashsystemiscsi_backend,
-        ibmgpfs_backend,
-        nimble_backend,
-        ibmibmstorage_backend,
-        ibmstorwizesvc_backend,
-        inspuras13000_backend,
-        inspurinstorage_backend,
-        kaminario_backend,
-        linstor_backend,
-        macrosan_backend,
-        necv_backend,
-        netapp_backend,
-        nexenta_backend,
-        opene_backend,
-        prophetstor_backend,
-        qnap_backend,
-        sandstone_backend,
-        stx_backend,
-        synology_backend,
-        toyouacs5000_backend,
-        veritasaccess_backend,
-        yadro_backend,
-        zadara_backend,
-        dellpowerstore_backend,
-        solidfire_backend,
-        hpe3par_backend,
-        infinidat_backend,
-    ]
+    from tests.unit.sunbeam.storage.backends.conftest import BACKENDS
+
+    backends = [cls() for cls in BACKENDS.values()]
     charm_names = [b.charm_name for b in backends]
 
     # Check no duplicates
@@ -328,97 +180,25 @@ def test_all_backends_have_unique_charm_names(
     )
 
 
-@pytest.mark.parametrize(
-    "backend_type,expected_type",
-    [
-        ("hitachi", "hitachi"),
-        ("purestorage", "purestorage"),
-        ("dellsc", "dellsc"),
-        ("datacore", "datacore"),
-        ("datera", "datera"),
-        ("dellpowermax", "dellpowermax"),
-        ("dellpowervault", "dellpowervault"),
-        ("fujitsueternusdx", "fujitsueternusdx"),
-        ("hpexp", "hpexp"),
-        ("ibmflashsystemcommon", "ibmflashsystemcommon"),
-        ("ibmflashsystemiscsi", "ibmflashsystemiscsi"),
-        ("ibmgpfs", "ibmgpfs"),
-        ("nimble", "nimble"),
-        ("ibmibmstorage", "ibmibmstorage"),
-        ("ibmstorwizesvc", "ibmstorwizesvc"),
-        ("inspuras13000", "inspuras13000"),
-        ("inspurinstorage", "inspurinstorage"),
-        ("kaminario", "kaminario"),
-        ("linstor", "linstor"),
-        ("macrosan", "macrosan"),
-        ("necv", "necv"),
-        ("netapp", "netapp"),
-        ("nexenta", "nexenta"),
-        ("opene", "opene"),
-        ("prophetstor", "prophetstor"),
-        ("qnap", "qnap"),
-        ("sandstone", "sandstone"),
-        ("stx", "stx"),
-        ("synology", "synology"),
-        ("toyouacs5000", "toyouacs5000"),
-        ("veritasaccess", "veritasaccess"),
-        ("yadro", "yadro"),
-        ("zadara", "zadara"),
-        ("dellpowerstore", "dellpowerstore"),
-        ("solidfire", "solidfire"),
-        ("hpe3par", "hpe3par"),
-        ("infinidat", "infinidat"),
-    ],
-)
-def test_backend_types_match_expected(any_backend, backend_type, expected_type):
-    """Test that backend types match expected values."""
-    if any_backend.backend_type == backend_type:
-        assert any_backend.backend_type == expected_type
+def test_backend_types_match_expected():
+    """Test that each backend's type matches its registry key."""
+    from tests.unit.sunbeam.storage.backends.conftest import BACKENDS
+
+    for key, cls in BACKENDS.items():
+        backend = cls()
+        assert backend.backend_type == key, (
+            f"Backend registered as '{key}' has type '{backend.backend_type}'"
+        )
 
 
-@pytest.mark.parametrize(
-    "backend_type,expected_charm",
-    [
-        ("hitachi", "cinder-volume-hitachi"),
-        ("purestorage", "cinder-volume-purestorage"),
-        ("dellsc", "cinder-volume-dellsc"),
-        ("datacore", "cinder-volume-datacore"),
-        ("datera", "cinder-volume-datera"),
-        ("dellpowermax", "cinder-volume-dellpowermax"),
-        ("dellpowervault", "cinder-volume-dellpowervault"),
-        ("fujitsueternusdx", "cinder-volume-fujitsueternusdx"),
-        ("hpexp", "cinder-volume-hpexp"),
-        ("ibmflashsystemcommon", "cinder-volume-ibmflashsystemcommon"),
-        ("ibmflashsystemiscsi", "cinder-volume-ibmflashsystemiscsi"),
-        ("ibmgpfs", "cinder-volume-ibmgpfs"),
-        ("nimble", "cinder-volume-nimble"),
-        ("ibmibmstorage", "cinder-volume-ibmibmstorage"),
-        ("ibmstorwizesvc", "cinder-volume-ibmstorwizesvc"),
-        ("inspuras13000", "cinder-volume-inspuras13000"),
-        ("inspurinstorage", "cinder-volume-inspurinstorage"),
-        ("kaminario", "cinder-volume-kaminario"),
-        ("linstor", "cinder-volume-linstor"),
-        ("macrosan", "cinder-volume-macrosan"),
-        ("necv", "cinder-volume-necv"),
-        ("netapp", "cinder-volume-netapp"),
-        ("nexenta", "cinder-volume-nexenta"),
-        ("opene", "cinder-volume-opene"),
-        ("prophetstor", "cinder-volume-prophetstor"),
-        ("qnap", "cinder-volume-qnap"),
-        ("sandstone", "cinder-volume-sandstone"),
-        ("stx", "cinder-volume-stx"),
-        ("synology", "cinder-volume-synology"),
-        ("toyouacs5000", "cinder-volume-toyouacs5000"),
-        ("veritasaccess", "cinder-volume-veritasaccess"),
-        ("yadro", "cinder-volume-yadro"),
-        ("zadara", "cinder-volume-zadara"),
-        ("dellpowerstore", "cinder-volume-dellpowerstore"),
-        ("solidfire", "cinder-volume-solidfire"),
-        ("hpe3par", "cinder-volume-hpe3par"),
-        ("infinidat", "cinder-volume-infinidat"),
-    ],
-)
-def test_backend_charm_names_match_expected(any_backend, backend_type, expected_charm):
-    """Test that backend charm names match expected values."""
-    if any_backend.backend_type == backend_type:
-        assert any_backend.charm_name == expected_charm
+def test_backend_charm_names_match_expected():
+    """Test that each backend's charm name follows convention."""
+    from tests.unit.sunbeam.storage.backends.conftest import BACKENDS
+
+    for key, cls in BACKENDS.items():
+        backend = cls()
+        expected_charm = f"cinder-volume-{key}"
+        assert backend.charm_name == expected_charm, (
+            f"Backend '{key}' has charm_name '{backend.charm_name}', "
+            f"expected '{expected_charm}'"
+        )
