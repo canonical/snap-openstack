@@ -33,7 +33,7 @@ variable "multus-network-attachment-definitions" {
 variable "openstack-port-cni-channel" {
   description = "Operator channel for openstack-port-cni-k8s deployment"
   type        = string
-  default     = "2025.1/edge"
+  default     = "2026.1/stable"
 }
 
 variable "openstack-port-cni-revision" {

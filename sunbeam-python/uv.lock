@@ -2966,7 +2966,7 @@ wheels = [
 
 [[package]]
 name = "sunbeam"
-version = "2024.1"
+version = "2026.1"
 source = { editable = "." }
 dependencies = [
     { name = "click" },

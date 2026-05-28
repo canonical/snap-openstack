@@ -6,9 +6,10 @@ from unittest.mock import Mock, patch
 
 import click
 import pytest
+from snaphelpers import UnknownConfigKey
 
 from sunbeam.clusterd.service import ClusterServiceUnavailableException
-from sunbeam.core.common import Role, validate_roles
+from sunbeam.core.common import Role, infer_version, validate_roles
 from sunbeam.core.deployment import Deployment
 
 
@@ -195,3 +196,9 @@ def test_validate_roles_gated():
     with patch("sunbeam.core.common._is_role_enabled", return_value=True):
         result = validate_roles(Mock(), Mock(), ("region_controller",))
         assert result == [Role.REGION_CONTROLLER]
+
+
+def test_infer_version_defaults_to_current_release(snap):
+    snap.config.get.side_effect = UnknownConfigKey("deployment.version")
+
+    assert infer_version(snap) == "2026.1"
