@@ -1,0 +1,13 @@
+# Sunbeam Feature Functional Test Configuration
+# Copy this file to test_config.yaml and fill in your values
+
+sunbeam:
+  # Deployment name in Sunbeam (from `sunbeam deployment list`)
+  deployment_name: "ps6"
+
+juju:
+  # Juju model name (default: "openstack")
+  model: "openstack"
+  # Juju controller (auto-detected from sunbeam if not specified)
+  # controller: "your-controller"
+
