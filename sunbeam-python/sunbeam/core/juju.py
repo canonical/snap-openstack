@@ -370,13 +370,14 @@ class JujuHelper:
         application: str,
         resource: str,
         filepath: str,
-    ):
+    ) -> int: 
         """Attach a file resource to a juju application.
 
         :model: Name of the model
         :application: Name of the application
         :resource: Name of the resource
         :filepath: Local filepath to the file to be attached
+        :returns: Revision number of the attached resource
         """
         try:
             with self._model(model):
@@ -387,10 +388,22 @@ class JujuHelper:
                     json_format=False,
                     include_controller=False,
                 )
+                resources = self.cli(
+                    "resources",
+                    application,
+                    include_controller=False,
+                )
         except jubilant.CLIError as e:
             raise JujuException(
                 f"Failed to attach resource {resource} to {application}: {e.stderr}"
             )
+
+        for r in resources.get("resources", []):
+            if r.get("name") == resource:
+                return r["revision"]
+        raise JujuException(
+            f"Resource {resource} not found on {application} after attach"
+        )
 
     def integrate(
         self,
