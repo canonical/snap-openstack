@@ -4,8 +4,10 @@
 import logging
 from pathlib import Path
 
+from sunbeam.clusterd.service import ConfigItemNotFoundException
 from sunbeam.core.common import (
     BaseStep,
+    read_config,
     Result,
     ResultType,
     StepContext,
@@ -177,7 +179,16 @@ class AttachHorizonThemeStep(BaseStep):
                 "custom-theme-name": None,
             }
 
-        override_tfvars = {"horizon-config": horizon_config}
+        try:
+            current_tfvars = read_config(self.client, OPENSTACK_TFVAR_CONFIG_KEY)
+        except ConfigItemNotFoundException:
+            current_tfvars = {}
+        except Exception as e:
+            LOG.exception("Error reading current tfvars")
+            return Result(ResultType.FAILED, f"failed to read tfvars: {str(e)}")
+
+        merged_tfvars = {**current_tfvars, **horizon_config}
+        override_tfvars = {"horizon-config": merged_tfvars}
         self.tfhelper.update_tfvars_and_apply_tf(
             self.client,
             self.manifest,
