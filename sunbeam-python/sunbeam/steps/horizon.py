@@ -145,21 +145,24 @@ class AttachHorizonThemeStep(BaseStep):
 
     def run(self, context: StepContext) -> Result:
         """Attach the resource and push the configuration via Terraform."""
-        self.variables = load_answers(self.client, THEME_CONFIG_SECTION)
 
+        self.variables = load_answers(self.client, THEME_CONFIG_SECTION)
         if self.variables.get("enable_custom_theme"):
             theme_path = Path(self.variables.get("theme_path", ""))
             if not theme_path.exists() or not theme_path.is_file():
                 return Result(
                     ResultType.FAILED, f"Theme file {theme_path} is invalid or missing."
                 )
-
-            self.jhelper.attach_resource(
-                application="horizon",
-                model=self.model,
-                resource="custom-theme",
-                filepath=str(theme_path),
-            )
+            try:
+                self.jhelper.attach_resource(
+                    application="horizon",
+                    model=self.model,
+                    resource="custom-theme",
+                    filepath=str(theme_path),
+                )
+            except JujuException as e:
+                LOG.expection("Failed to attach horizon theme resource")
+                return Result(ResultType.FAILED, f"failed to attach resource: {str(theme_path)}")
 
             horizon_config = {
                 "include-default-themes": not self.variables.get(
@@ -189,11 +192,15 @@ class AttachHorizonThemeStep(BaseStep):
 
         merged_tfvars = {**current_tfvars, **horizon_config}
         override_tfvars = {"horizon-config": merged_tfvars}
-        self.tfhelper.update_tfvars_and_apply_tf(
-            self.client,
-            self.manifest,
-            tfvar_config=OPENSTACK_TFVAR_CONFIG_KEY,
-            override_tfvars=override_tfvars,
-            reporter=context.reporter,
-        )
+        try:
+            self.tfhelper.update_tfvars_and_apply_tf(
+                self.client,
+                self.manifest,
+                tfvar_config=OPENSTACK_TFVAR_CONFIG_KEY,
+                override_tfvars=override_tfvars,
+                reporter=context.reporter,
+            )
+        except (TerraformException, TerraformStateLockedException) as e:
+            LOG.exception("Failed to update tfvars")
+            return Result(ResultType.FAILED, f"failed to update tfvars: {str(override_tfvars)}")
         return Result(ResultType.COMPLETED)
