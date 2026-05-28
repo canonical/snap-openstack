@@ -173,7 +173,7 @@ class AttachHorizonThemeStep(BaseStep):
                     ResultType.FAILED, f"Theme file {theme_path} is invalid or missing."
                 )
             try:
-                self.jhelper.attach_resource(
+                theme_revision = self.jhelper.attach_resource(
                     application="horizon",
                     model=self.model,
                     resource="custom-theme",
@@ -182,6 +182,8 @@ class AttachHorizonThemeStep(BaseStep):
             except JujuException as e:
                 LOG.expection("Failed to attach horizon theme resource")
                 return Result(ResultType.FAILED, f"failed to attach resource: {str(theme_path)}")
+
+            horizon_resources = {"custom-theme": theme_revision}
 
             horizon_config = {
                 "include-default-themes": not self.variables.get(
@@ -194,6 +196,8 @@ class AttachHorizonThemeStep(BaseStep):
                 "custom-theme-name": self.variables.get("custom_theme_name", "custom"),
             }
         else:
+            horizon_resources = {}
+
             horizon_config = {
                 "include-default-themes": True,
                 "include-ubuntu-theme": True,
@@ -209,8 +213,14 @@ class AttachHorizonThemeStep(BaseStep):
             LOG.exception("Error reading current tfvars")
             return Result(ResultType.FAILED, f"failed to read tfvars: {str(e)}")
 
-        merged_tfvars = {**current_tfvars, **horizon_config}
-        override_tfvars = {"horizon-config": merged_tfvars}
+        merged_resources = {**current_tfvars.get("horizon-resources", {}), **horizon_resources}
+        merged_config = {**current_tfvars.get("horizon-config", {}), **horizon_config}
+
+        override_tfvars = {
+            "horizon-resources": merged_resources,
+            "horizon-config": merged_config,
+        }
+
         try:
             self.tfhelper.update_tfvars_and_apply_tf(
                 self.client,
