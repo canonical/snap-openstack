@@ -956,6 +956,8 @@ class TestAmphoraCommandsSecretsPrerequisite:
         with (
             patch("click.get_current_context", return_value=ctx),
             patch.object(feature, "run_configure_plans") as mock_run,
+            patch("sunbeam.features.loadbalancer.feature.run_preflight_checks"),
+            patch("sunbeam.features.loadbalancer.feature.run_plan"),
         ):
             feature.configure.callback(feature, accept_defaults=False, show_hints=False)
             mock_run.assert_called_once()
@@ -973,6 +975,7 @@ class TestAmphoraCommandsSecretsPrerequisite:
         with (
             patch("click.get_current_context", return_value=ctx),
             patch("sunbeam.features.loadbalancer.feature.run_plan") as mock_run,
+            patch("sunbeam.features.loadbalancer.feature.run_preflight_checks"),
             patch("sunbeam.features.loadbalancer.feature.JujuHelper"),
         ):
             feature.provide_certificates.callback(feature, show_hints=False)
@@ -994,6 +997,8 @@ class TestAmphoraCommandsSecretsPrerequisite:
                 "sunbeam.features.loadbalancer.feature.handle_list_outstanding_csrs",
                 return_value=[],
             ),
+            patch("sunbeam.features.loadbalancer.feature.run_preflight_checks"),
+            patch("sunbeam.features.loadbalancer.feature.run_plan"),
         ):
             feature.list_outstanding_csrs.callback(feature, format="table")
 
@@ -1032,6 +1037,7 @@ class TestRunConfigurePlansEarlyExit:
                 "sunbeam.features.loadbalancer.feature.questions.load_answers",
                 side_effect=lambda *_: dict(next(load_answers_iter)),
             ),
+            patch("sunbeam.features.loadbalancer.feature.run_preflight_checks"),
             patch("sunbeam.features.loadbalancer.feature.run_plan") as mock_run_plan,
             patch("sunbeam.features.loadbalancer.feature.JujuHelper"),
             patch("click.echo") as mock_echo,
@@ -1063,6 +1069,7 @@ class TestRunConfigurePlansEarlyExit:
                 "sunbeam.features.loadbalancer.feature.questions.load_answers",
                 side_effect=lambda *_: dict(next(load_answers_iter)),
             ),
+            patch("sunbeam.features.loadbalancer.feature.run_preflight_checks"),
             patch("sunbeam.features.loadbalancer.feature.run_plan") as mock_run_plan,
             patch("sunbeam.features.loadbalancer.feature.JujuHelper"),
             patch("click.echo"),
@@ -1576,6 +1583,7 @@ class TestRunConfigurePlansDisableIncludesCleanup:
                 "sunbeam.features.loadbalancer.feature.run_plan",
                 side_effect=capture_run_plan,
             ),
+            patch("sunbeam.features.loadbalancer.feature.run_preflight_checks"),
             patch("sunbeam.features.loadbalancer.feature.JujuHelper"),
             patch("click.echo"),
         ):

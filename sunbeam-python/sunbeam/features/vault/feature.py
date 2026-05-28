@@ -21,6 +21,7 @@ from sunbeam.clusterd.service import (
     ClusterServiceUnavailableException,
     ConfigItemNotFoundException,
 )
+from sunbeam.core.checks import JujuLoginCheck, run_preflight_checks
 from sunbeam.core.common import (
     FORMAT_DEFAULT,
     FORMAT_JSON,
@@ -774,7 +775,11 @@ class VaultFeature(OpenStackControlPlaneFeature):
         format: str,
     ):
         """Initialize Vault."""
+        # Login to the Juju controller
+        run_preflight_checks([JujuLoginCheck(deployment.juju_account)], console)
+
         jhelper = JujuHelper(deployment.juju_controller)
+
         plan = [VaultInitStep(jhelper, key_shares, key_threshold)]
         plan_results = run_plan(plan, console)
 
@@ -813,7 +818,11 @@ class VaultFeature(OpenStackControlPlaneFeature):
         if unseal_key == "-":
             unseal_key = get_stdin_reopen_tty()
 
+        # Login to the Juju controller
+        run_preflight_checks([JujuLoginCheck(deployment.juju_account)], console)
+
         jhelper = JujuHelper(deployment.juju_controller)
+
         plan = [VaultUnsealStep(jhelper, unseal_key)]
         plan_results = run_plan(plan, console)
         click.echo(get_step_message(plan_results, VaultUnsealStep))
@@ -829,7 +838,11 @@ class VaultFeature(OpenStackControlPlaneFeature):
         if root_token == "-":
             root_token = get_stdin_reopen_tty()
 
+        # Login to the Juju controller
+        run_preflight_checks([JujuLoginCheck(deployment.juju_account)], console)
+
         jhelper = JujuHelper(deployment.juju_controller)
+
         plan = [AuthorizeVaultCharmStep(jhelper, root_token)]
         run_plan(plan, console)
         click.echo("Vault charm is authorized.")
@@ -845,7 +858,11 @@ class VaultFeature(OpenStackControlPlaneFeature):
     @pass_method_obj
     def vault_status(self, deployment: Deployment, format: str):
         """Vault status."""
+        # Login to the Juju controller
+        run_preflight_checks([JujuLoginCheck(deployment.juju_account)], console)
+
         jhelper = JujuHelper(deployment.juju_controller)
+
         plan = [VaultStatusStep(jhelper)]
         plan_results = run_plan(plan, console)
 

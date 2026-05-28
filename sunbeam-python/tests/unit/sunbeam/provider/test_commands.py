@@ -14,6 +14,7 @@ def test_update_clusterd_credentials_invokes_plan(tmp_path, mocker):
     deployment = Mock()
     deployment.juju_controller = Mock()
     run_plan_spy = mocker.patch.object(provider_commands, "run_plan")
+    mocker.patch.object(provider_commands, "run_preflight_checks")
 
     # Act
     cmd = provider_commands.update_clusterd_credentials
@@ -22,5 +23,5 @@ def test_update_clusterd_credentials_invokes_plan(tmp_path, mocker):
         cmd.callback(show_hints=False)
 
     assert run_plan_spy.call_count == 1
-    plan = run_plan_spy.call_args[0][0]
+    plan = run_plan_spy.call_args_list[0][0][0]
     assert isinstance(plan[0], MaasSaveClusterdCredentialsStep)

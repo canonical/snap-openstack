@@ -8,6 +8,7 @@ from click.core import ParameterSource
 from rich.console import Console
 
 from sunbeam.clusterd.client import Client
+from sunbeam.core.checks import JujuLoginCheck, run_preflight_checks
 from sunbeam.core.common import click_option_topology, run_plan
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import JujuHelper
@@ -46,10 +47,12 @@ def resize(
     client: Client = deployment.get_client()
     manifest = deployment.get_manifest()
 
+    # Login to the Juju controller
+    run_preflight_checks([JujuLoginCheck(deployment.juju_account)], console)
+
     openstack_tfhelper = deployment.get_tfhelper("openstack-plan")
     microceph_tfhelper = deployment.get_tfhelper("microceph-plan")
     cinder_volume_tfhelper = deployment.get_tfhelper("cinder-volume-plan")
-    jhelper = JujuHelper(deployment.juju_controller)
 
     storage_nodes = client.cluster.list_nodes_by_role("storage")
 
@@ -57,7 +60,9 @@ def resize(
     if parameter_source == ParameterSource.COMMANDLINE:
         LOG.warning("WARNING: Option --force is deprecated and the value is ignored.")
 
-    plan = []
+    jhelper = JujuHelper(deployment.juju_controller)
+
+    plan: list = []
     if len(storage_nodes):
         # Change default-pool-size based on number of storage nodes
         plan.extend(

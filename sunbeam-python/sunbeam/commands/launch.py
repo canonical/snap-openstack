@@ -11,6 +11,7 @@ from rich.console import Console
 from snaphelpers import Snap
 
 from sunbeam.commands.configure import retrieve_admin_credentials
+from sunbeam.core.checks import JujuLoginCheck, run_preflight_checks
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.core.terraform import TerraformException
@@ -61,6 +62,9 @@ def launch(
     compute_nodes = deployment.get_client().cluster.list_nodes_by_role("compute")
     if not compute_nodes:
         raise click.ClickException("No compute role found. Cannot launch instance.")
+
+    # Login to the Juju controller
+    run_preflight_checks([JujuLoginCheck(deployment.juju_account)], console)
 
     jhelper = deployment.get_juju_helper()
     jhelper_keystone = deployment.get_juju_helper(keystone=True)

@@ -7,7 +7,11 @@ import click
 from rich.console import Console
 
 from sunbeam.commands.configure import retrieve_admin_credentials
-from sunbeam.core.checks import VerifyBootstrappedCheck, run_preflight_checks
+from sunbeam.core.checks import (
+    JujuLoginCheck,
+    VerifyBootstrappedCheck,
+    run_preflight_checks,
+)
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.openstack import OPENSTACK_MODEL
 
@@ -21,8 +25,10 @@ def openrc(ctx: click.Context) -> None:
     """Retrieve openrc for cloud admin account."""
     deployment: Deployment = ctx.obj
     client = deployment.get_client()
-    preflight_checks = []
-    preflight_checks.append(VerifyBootstrappedCheck(client))
+    preflight_checks = [
+        VerifyBootstrappedCheck(client),
+        JujuLoginCheck(deployment.juju_account),
+    ]
     run_preflight_checks(preflight_checks, console)
 
     jhelper = deployment.get_juju_helper(keystone=True)

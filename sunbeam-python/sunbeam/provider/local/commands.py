@@ -33,6 +33,7 @@ from sunbeam.core.checks import (
     Check,
     DaemonGroupCheck,
     JujuControllerRegistrationCheck,
+    JujuLoginCheck,
     JujuSnapCheck,
     LocalShareCheck,
     LxdGroupCheck,
@@ -1025,6 +1026,10 @@ def configure_sriov(
         return
 
     manifest = deployment.get_manifest(manifest_path)
+
+    # Login to the Juju controller
+    run_preflight_checks([JujuLoginCheck(deployment.juju_account)], console)
+
     jhelper = deployment.get_juju_helper()
     jhelper_keystone = deployment.get_juju_helper(keystone=True)
 
@@ -1098,6 +1103,10 @@ def configure_dpdk(
         return
 
     manifest = deployment.get_manifest(manifest_path)
+
+    # Login to the Juju controller
+    run_preflight_checks([JujuLoginCheck(deployment.juju_account)], console)
+
     jhelper = deployment.get_juju_helper()
     jhelper_keystone = deployment.get_juju_helper(keystone=True)
 
@@ -1807,9 +1816,11 @@ def list_nodes(
     show_hints: bool,
 ) -> None:
     """List nodes in the cluster."""
-    preflight_checks = [DaemonGroupCheck()]
-    run_preflight_checks(preflight_checks, console)
     deployment: LocalDeployment = ctx.obj
+
+    preflight_checks = [DaemonGroupCheck(), JujuLoginCheck(deployment.juju_account)]
+    run_preflight_checks(preflight_checks, console)
+
     jhelper = JujuHelper(deployment.juju_controller)
     step = LocalClusterStatusStep(deployment, jhelper)
     results = run_plan([step], console, show_hints)
@@ -1835,12 +1846,10 @@ def remove(ctx: click.Context, name: str, force: bool, show_hints: bool) -> None
     client = deployment.get_client()
     jhelper = JujuHelper(deployment.juju_controller)
 
-    preflight_checks = [DaemonGroupCheck()]
+    preflight_checks = [DaemonGroupCheck(), JujuLoginCheck(deployment.juju_account)]
     run_preflight_checks(preflight_checks, console)
 
-    plan: list[BaseStep] = [
-        JujuLoginStep(deployment.juju_account),
-    ]
+    plan: list[BaseStep] = []
 
     if not force:
         plan.append(PromptCheckNodeExistStep(client, name))

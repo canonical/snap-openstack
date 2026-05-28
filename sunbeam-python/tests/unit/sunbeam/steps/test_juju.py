@@ -122,7 +122,13 @@ class TestJujuLoginStep:
             assert step.is_skip(step_context).result_type == ResultType.COMPLETED
 
         with patch(
-            "sunbeam.steps.juju.pexpect.spawn", Mock(return_value=Mock(exitstatus=0))
+            "sunbeam.steps.juju.pexpect.spawn",
+            Mock(
+                return_value=Mock(
+                    __enter__=Mock(return_value=Mock(exitstatus=0)),
+                    __exit__=Mock(return_value=False),
+                )
+            ),
         ):
             result = step.run(step_context)
         assert result.result_type == ResultType.COMPLETED
@@ -144,7 +150,13 @@ class TestJujuLoginStep:
             "sunbeam.steps.juju.pexpect.spawn",
             Mock(
                 return_value=Mock(
-                    exitstatus=0, expect=Mock(side_effect=pexpect.TIMEOUT("timeout"))
+                    __enter__=Mock(
+                        return_value=Mock(
+                            exitstatus=0,
+                            expect=Mock(side_effect=pexpect.TIMEOUT("timeout")),
+                        )
+                    ),
+                    __exit__=Mock(return_value=False),
                 )
             ),
         ):
@@ -165,7 +177,13 @@ class TestJujuLoginStep:
             assert step.is_skip(step_context).result_type == ResultType.COMPLETED
 
         with patch(
-            "sunbeam.steps.juju.pexpect.spawn", Mock(return_value=Mock(exitstatus=1))
+            "sunbeam.steps.juju.pexpect.spawn",
+            Mock(
+                return_value=Mock(
+                    __enter__=Mock(return_value=Mock(exitstatus=1)),
+                    __exit__=Mock(return_value=False),
+                )
+            ),
         ):
             result = step.run(step_context)
         assert result.result_type == ResultType.FAILED
@@ -532,13 +550,12 @@ class TestScaleJujuStep:
         result = step.is_skip(step_context)
         assert result.result_type == ResultType.COMPLETED
 
-    @patch("subprocess.run")
-    def test_run(self, mock_run, mocker, step_context):
+    def test_run(self, mocker, step_context):
         step = juju.ScaleJujuStep("controller", n=3, extra_args=["--arg1", "--arg2"])
-        mocker.patch.object(step, "_get_juju_binary", return_value="/juju-mock")
+        mocker.patch.object(step, "_juju_cmd")
         result = step.run(step_context)
 
-        assert mock_run.call_count == 2
+        assert step._juju_cmd.call_count == 2
         assert result.result_type == ResultType.COMPLETED
 
 
@@ -619,20 +636,22 @@ class TestUnregisterJujuControllerStep:
         result = step.is_skip(step_context)
         assert result.result_type == ResultType.SKIPPED
 
-    @patch("subprocess.run")
-    def test_run(self, mock_run, mocker, tmp_path, step_context):
+    def test_run(self, mocker, tmp_path, step_context):
         step = juju.UnregisterJujuController("testcontroller", tmp_path)
-        mocker.patch.object(step, "_get_juju_binary", return_value="/juju-mock")
+        mocker.patch.object(step, "_juju_cmd")
         result = step.run(step_context)
-        assert mock_run.call_count == 1
+        assert step._juju_cmd.call_count == 1
         assert result.result_type == ResultType.COMPLETED
 
-    @patch("subprocess.run", side_effect=subprocess.CalledProcessError(1, "command"))
-    def test_run_unregister_failed(self, mock_run, mocker, tmp_path, step_context):
+    def test_run_unregister_failed(self, mocker, tmp_path, step_context):
         step = juju.UnregisterJujuController("testcontroller", tmp_path)
-        mocker.patch.object(step, "_get_juju_binary", return_value="/juju-mock")
+        mocker.patch.object(
+            step,
+            "_juju_cmd",
+            side_effect=subprocess.CalledProcessError(1, "command"),
+        )
         result = step.run(step_context)
-        assert mock_run.call_count == 1
+        assert step._juju_cmd.call_count == 1
         assert result.result_type == ResultType.FAILED
 
 
@@ -790,26 +809,28 @@ class TestBoostrapJujuStep:
 
 
 class TestResetJujuUserStep:
-    @patch("subprocess.run")
-    def test_parses_token_success(self, mock_run, step_context):
+    def test_parses_token_success(self, step_context):
         step = juju.ResetJujuUserStep("test-user")
-        step._juju_cmd = Mock(return_value=[{"user-name": "test-user"}])
-        step._get_juju_binary = Mock(return_value="/juju")
-        mock_run.return_value = Mock(stdout="", stderr="juju register new-user\n")
+        step._juju_cmd = Mock(
+            side_effect=[
+                [{"user-name": "test-user"}],
+                Mock(stdout="", stderr="juju register new-user\n"),
+            ]
+        )
         result = step.run(step_context)
         assert result.result_type == ResultType.COMPLETED
         assert result.message == "new-user"
 
-    @patch(
-        "subprocess.run",
-        side_effect=subprocess.CalledProcessError(1, "command", stderr="error"),
-    )
-    def test_called_process_error(self, mock_run, step_context):
+    def test_called_process_error(self, step_context):
         step = juju.ResetJujuUserStep("test-user")
-        step._juju_cmd = Mock(return_value=[{"user-name": "test-user"}])
+        step._juju_cmd = Mock(
+            side_effect=[
+                [{"user-name": "test-user"}],
+                subprocess.CalledProcessError(1, "command", stderr="error"),
+            ]
+        )
         result = step.run(step_context)
         assert result.result_type == ResultType.FAILED
-        assert mock_run.call_count == 1
 
     def test_user_not_found(self, step_context):
         step = juju.ResetJujuUserStep("missing-user")
