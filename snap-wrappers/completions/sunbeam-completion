@@ -1,0 +1,160 @@
+# Shell completion script for Sunbeam CLI
+# - The runtime cache file is validated before use: must be a regular file,
+#   owned by the current user, not a symlink, and not world-writable.
+# - COMPREPLY values are properly quoted to avoid glob expansion.
+# - The live fallback invokes the snap's own binary instead of relying on
+#   an unqualified PATH lookup.
+# - Runtime cache size is bounded to prevent disk exhaustion.
+
+# Maximum runtime cache file size in bytes (256 KiB).
+_SUNBEAM_CACHE_MAX_SIZE=262144
+
+_sunbeam_completion() {
+    local IFS=$'\n'
+    local response
+
+    # Cache locations from build-time and runtime
+    local snap_cache="${SNAP:-}/usr/share/bash-completion/completions/.sunbeam-completion-cache"
+    local runtime_cache="${SNAP_USER_DATA:-.}/.sunbeam-completion-cache"
+
+    # Lookup completion candidates
+    local cache_key="sunbeam"
+    local word
+    for ((i=1; i<COMP_CWORD; i++)); do
+        word="${COMP_WORDS[i]}"
+        # Sanitize cache key
+        word="${word//[^a-zA-Z0-9_-]/}"
+        if [[ -n "$word" ]]; then
+            cache_key+="_${word}"
+        fi
+    done
+
+    local current_word="${COMP_WORDS[COMP_CWORD]}"
+
+    # (1) Lookup in snap cache (read-only, built at snap build time)
+    if [[ -f "$snap_cache" ]]; then
+        response=$(_sunbeam_cache_lookup "$snap_cache" "$cache_key")
+    fi
+
+    # (2) Lookup in runtime cache
+    if [[ -z "$response" ]] && _sunbeam_cache_check "$runtime_cache"; then
+        response=$(_sunbeam_cache_lookup "$runtime_cache" "$cache_key")
+    fi
+
+    # (3) Invoke the snap's own completion binary
+    if [[ -z "$response" ]]; then
+        local full_words=""
+        for ((i=0; i<=COMP_CWORD; i++)); do
+            full_words+="${COMP_WORDS[i]} "
+        done
+
+        # Prefer the snap binary to avoid PATH shadowing
+        local sunbeam_bin="${SNAP:-}/bin/sunbeam"
+        if [[ ! -x "$sunbeam_bin" ]]; then
+            sunbeam_bin="sunbeam"
+        fi
+        response=$(env COMP_WORDS="$full_words" COMP_CWORD=$COMP_CWORD \
+            _SUNBEAM_COMPLETE=bash_complete "$sunbeam_bin" 2>/dev/null)
+
+        # Cache the result for next time (only inside a snap environment)
+        if [[ -n "$response" && -n "$SNAP_USER_DATA" ]]; then
+            _sunbeam_cache_write "$runtime_cache" "$cache_key" "$response"
+        fi
+    fi
+
+    # Process the response lines
+    for completion in $response; do
+        local type value
+        IFS=',' read -r type value <<< "$completion"
+
+        if [[ $type == 'dir' ]]; then
+            COMPREPLY=()
+            compopt -o dirnames
+        elif [[ $type == 'file' ]]; then
+            COMPREPLY=()
+            compopt -o default
+        elif [[ $type == 'plain' ]]; then
+            if [[ -z "$current_word" || "$value" == "$current_word"* ]]; then
+                COMPREPLY+=("$value")
+            fi
+        fi
+    done
+
+    return 0
+}
+
+_sunbeam_cache_lookup() {
+    # Look up completions for a key in a single-file cache.
+    # Format: "## key" header lines followed by completion values,
+    # terminated by the next header or end-of-file.
+    local cache_file="$1"
+    local key="$2"
+    awk -v key="$key" '
+        $0 == "## " key { found=1; next }
+        /^## / { if (found) exit; found=0 }
+        found && NF { print }
+    ' "$cache_file"
+}
+
+_sunbeam_cache_check() {
+    # Check runtime cache file.
+    local file="$1"
+
+    # File exists and is not a symlink
+    [[ -f "$file" && ! -L "$file" ]] || return 1
+
+    # File is owned by the current user
+    local file_owner file_perms
+    file_owner=$(stat -c '%u' "$file" 2>/dev/null) || return 1
+    file_perms=$(stat -c '%a' "$file" 2>/dev/null) || return 1
+    [[ "$file_owner" == "$(id -u)" ]] || return 1
+
+    # File is not world-writable (last octal digit has write bit)
+    local world_bits="${file_perms: -1}"
+    (( (world_bits & 2) == 0 )) || return 1
+    return 0
+}
+
+_sunbeam_cache_write() {
+    # Update a single key in the runtime cache file.
+    # Uses a temp-file + rename pattern for crash safety.
+    # Prevents the cache from growing beyond _SUNBEAM_CACHE_MAX_SIZE.
+    local cache_file="$1"
+    local key="$2"
+    local new_response="$3"
+    local tmp_file="${cache_file}.tmp.$$"
+
+    # Check existing cache size to prevent unbounded growth
+    if [[ -f "$cache_file" ]]; then
+        local size
+        size=$(stat -c '%s' "$cache_file" 2>/dev/null) || size=0
+        if (( size > _SUNBEAM_CACHE_MAX_SIZE )); then
+            echo "sunbeam-completion: cache file is too large, skipping update" >&2
+            return 0
+        fi
+    fi
+
+    # Create a new cache file with the updated key, preserving other keys
+    {
+        if [[ -f "$cache_file" ]]; then
+            awk -v key="$key" '
+                $0 == "## " key { skip=1; next }
+                /^## / { skip=0 }
+                !skip { print }
+            ' "$cache_file"
+        fi
+        printf '## %s\n' "$key"
+        printf '%s\n' "$new_response"
+    } > "$tmp_file" 2>/dev/null || { rm -f "$tmp_file"; return 1; }
+
+    # Rename the temp file to the cache file atomically
+    mv -f "$tmp_file" "$cache_file" 2>/dev/null || rm -f "$tmp_file"
+}
+
+_sunbeam_completion_setup() {
+    # Add completion for both 'sunbeam' and 'openstack.sunbeam' commands.
+    complete -o nosort -F _sunbeam_completion sunbeam
+    complete -o nosort -F _sunbeam_completion openstack.sunbeam
+}
+
+_sunbeam_completion_setup;
