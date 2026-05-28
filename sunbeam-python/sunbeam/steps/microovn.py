@@ -292,7 +292,7 @@ class EnableMicroOVNStep(BaseStep, JujuStepHelper):
             node = self.client.cluster.get_node_info(self.node)
             self.machine_id = str(node.get("machineid"))
         except NodeNotExistInClusterException:
-            LOG.debug("Machine %s does not exist, skipping.", self.node)
+            LOG.debug("Machine %s does not exist, skipping", self.node)
             return Result(ResultType.SKIPPED)
 
         try:

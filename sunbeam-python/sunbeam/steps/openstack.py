@@ -1119,7 +1119,7 @@ class UpdateOpenStackModelConfigStep(BaseStep):
             )
             return Result(ResultType.COMPLETED)
         except TerraformException as e:
-            LOG.warning("Error updating modelconfigs for openstack plan: %r", e)
+            LOG.warning("Error updating modelconfigs for OpenStack plan: %r", e)
             return Result(ResultType.FAILED, str(e))
 
 

@@ -260,7 +260,7 @@ class RemoveHypervisorUnitStep(BaseStep, JujuStepHelper):
                 self.unit = unit_name
                 break
         if not self.unit:
-            LOG.debug("Unit is not deployed on machine: %s, skipping.", self.machine_id)
+            LOG.debug("Unit is not deployed on machine: %s, skipping", self.machine_id)
             return Result(ResultType.SKIPPED)
         try:
             results = self.jhelper.run_action(self.unit, self.model, "running-guests")
@@ -494,7 +494,7 @@ class EnableHypervisorStep(BaseStep, JujuStepHelper):
             node = self.client.cluster.get_node_info(self.node)
             self.machine_id = str(node.get("machineid"))
         except NodeNotExistInClusterException:
-            LOG.debug("Machine %s does not exist, skipping.", self.node)
+            LOG.debug("Machine %s does not exist, skipping", self.node)
             return Result(ResultType.SKIPPED)
 
         try:
@@ -513,7 +513,7 @@ class EnableHypervisorStep(BaseStep, JujuStepHelper):
                 self.unit = unit_name
                 break
         if not self.unit:
-            LOG.debug("Unit is not deployed on machine: %s, skipping.", self.machine_id)
+            LOG.debug("Unit is not deployed on machine: %s, skipping", self.machine_id)
             return Result(ResultType.SKIPPED)
         return Result(ResultType.COMPLETED)
 

@@ -187,7 +187,7 @@ class UpgradeControlPlane(BaseUpgrade):
             return result
 
         # Step 2: Upgrade all openstack core charms
-        LOG.debug("Upgrading openstack core charms")
+        LOG.debug("Upgrading OpenStack core charms")
         charms = (
             list(MISC_CHARMS_K8S.keys())
             + list(OVN_CHARMS_K8S.keys())
@@ -207,7 +207,7 @@ class UpgradeControlPlane(BaseUpgrade):
             return result
 
         # Step 3: Upgrade all features that uses openstack-plan
-        LOG.debug("Upgrading openstack features that are enabled")
+        LOG.debug("Upgrading OpenStack features that are enabled")
         # TODO(gboutry): We have a loaded manifest, can't we get charms from there ?
         charms = (
             self.deployment.get_feature_manager().get_all_charms_in_openstack_plan()

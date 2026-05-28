@@ -85,7 +85,7 @@ def launch(
         try:
             tf_output = tfhelper.output(hide_output=True)
         except TerraformException:
-            LOG.debug("Failed to load credentials from terraform", exc_info=True)
+            LOG.debug("Failed to load credentials from Terraform", exc_info=True)
             raise click.ClickException(
                 "Failed to load user credentials from deployment. See logs for details."
             )

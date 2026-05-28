@@ -572,7 +572,7 @@ class BaseStorageBackendDestroyStep(BaseStep):
             self.backend_instance.tfvar_config_key,
             tfvars,
         )
-        LOG.info("Configuration updated, now running terraform apply...")
+        LOG.info("Configuration updated, now running Terraform apply")
 
         try:
             LOG.info(

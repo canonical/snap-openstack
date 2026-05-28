@@ -183,7 +183,7 @@ class TerraformHelper:
         try:
             cmd = [self.terraform, "init", "-upgrade", "-no-color"]
             if backend_updated:
-                LOG.debug("Backend updated, running terraform init -reconfigure")
+                LOG.debug("Backend updated, running Terraform init -reconfigure")
                 cmd.append("-reconfigure")
             LOG.debug("Running command %s", " ".join(cmd))
             process = subprocess.run(
@@ -198,7 +198,7 @@ class TerraformHelper:
                 "Command finished. stdout=%r, stderr=%r", process.stdout, process.stderr
             )
         except subprocess.CalledProcessError as e:
-            LOG.exception("terraform init failed: %s", e.stderr)
+            LOG.exception("Terraform init failed: %s", e.stderr)
             raise TerraformException(str(e))
 
     def apply(
@@ -277,7 +277,7 @@ class TerraformHelper:
                 output[key] = value["value"]
             return output
         except subprocess.CalledProcessError as e:
-            LOG.exception("terraform output failed: %s", e.stderr)
+            LOG.exception("Terraform output failed: %s", e.stderr)
             raise TerraformException(str(e))
 
     def pull_state(self) -> dict:
@@ -305,7 +305,7 @@ class TerraformHelper:
             LOG.debug("Command finished. stderr=%r", process.stderr)
             return json.loads(process.stdout)
         except subprocess.CalledProcessError as e:
-            LOG.exception("terraform state pull failed: %s", e.stderr)
+            LOG.exception("Terraform state pull failed: %s", e.stderr)
             raise TerraformException(str(e))
 
     def state_list(self) -> list:
@@ -334,7 +334,7 @@ class TerraformHelper:
             )
             return process.stdout.splitlines()
         except subprocess.CalledProcessError as e:
-            LOG.exception("terraform state list failed: %s", e.stderr)
+            LOG.exception("Terraform state list failed: %s", e.stderr)
             raise TerraformException(str(e))
 
     def state_rm(self, resource: str) -> None:
@@ -362,7 +362,7 @@ class TerraformHelper:
                 "Command finished. stdout=%r, stderr=%r", process.stdout, process.stderr
             )
         except subprocess.CalledProcessError as e:
-            LOG.exception("terraform state rm failed: %s", e.stderr)
+            LOG.exception("Terraform state rm failed: %s", e.stderr)
             raise TerraformException(str(e))
 
     def sync(self, reporter: ProgressReporter | None = None) -> None:

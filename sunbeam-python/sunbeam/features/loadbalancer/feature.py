@@ -1086,7 +1086,7 @@ class RemoveCNIInfraStep(BaseStep, JujuStepHelper):
             state = self.tfhelper.pull_state()
         except TerraformException:
             # State backend not initialised — CNI plan was never applied.
-            LOG.debug("CNI terraform state unavailable; skipping", exc_info=True)
+            LOG.debug("CNI Terraform state unavailable; skipping", exc_info=True)
             return Result(ResultType.SKIPPED, "No CNI resources to remove")
         if not state.get("resources"):
             return Result(ResultType.SKIPPED, "No CNI resources to remove")

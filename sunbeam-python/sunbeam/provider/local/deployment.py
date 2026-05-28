@@ -80,7 +80,7 @@ class LocalDeployment(Deployment):
             LOG.debug("Local account found: %s", juju_account.user)
             return juju_account
         except JujuAccountNotFound:
-            LOG.debug("No juju account found", exc_info=True)
+            LOG.debug("No Juju account found", exc_info=True)
             return None
 
     def _load_juju_controller(self) -> JujuController | None:
@@ -90,13 +90,13 @@ class LocalDeployment(Deployment):
             LOG.debug("Url not found, is microcluster bootstrapped?", exc_info=True)
             return None
         except ConfigItemNotFoundException:
-            LOG.debug("No juju controller found", exc_info=True)
+            LOG.debug("No Juju controller found", exc_info=True)
             return None
         except ClusterServiceUnavailableException:
             LOG.debug("Clusterd service unavailable", exc_info=True)
             return None
         except SunbeamException:
-            LOG.debug("Failed to load juju controller", exc_info=True)
+            LOG.debug("Failed to load Juju controller", exc_info=True)
             return None
 
     def _load_cert_pair(self) -> CertPair | None:

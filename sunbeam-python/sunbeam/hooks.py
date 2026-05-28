@@ -222,7 +222,7 @@ def install(snap: Snap) -> None:
     :return:
     """
     setup_logging(snap.paths.common / "hooks.log")
-    LOG.debug("Running install hook...")
+    LOG.debug("Running install hook")
     LOG.info("Setting default config: %s", DEFAULT_CONFIG)
     snap.config.set(DEFAULT_CONFIG)
 
@@ -236,7 +236,7 @@ def upgrade(snap: Snap) -> None:
     :param snap: the snap reference
     """
     setup_logging(snap.paths.common / "hooks.log")
-    LOG.debug("Running the upgrade hook...")
+    LOG.debug("Running the upgrade hook")
 
 
 def configure(snap: Snap) -> None:

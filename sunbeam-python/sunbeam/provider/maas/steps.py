@@ -1801,7 +1801,7 @@ class MaasConfigureMicrocephOSDStep(BaseStep):
             microceph_disks = self._get_microceph_disks()
             LOG.debug("Computing disk mapping: %r", microceph_disks)
         except ValueError as e:
-            LOG.debug("Failed to list microceph disks from units", exc_info=True)
+            LOG.debug("Failed to list MicroCeph disks from units", exc_info=True)
             return Result(ResultType.FAILED, str(e))
 
         try:

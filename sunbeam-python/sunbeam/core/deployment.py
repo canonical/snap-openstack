@@ -440,7 +440,7 @@ class Deployment(pydantic.BaseModel):
             tfplan_dir = TERRAFORM_DIR_NAMES.get(tfplan, tfplan)
             src = tf_manifest.source
             dst = self.plans_directory / tfplan_dir
-            LOG.debug("Updating %s from %s...", dst, src)
+            LOG.debug("Updating %s from %s", dst, src)
             shutil.copytree(src, dst, dirs_exist_ok=True)
 
             self._tfhelpers[tfplan] = TerraformHelper(

@@ -43,7 +43,7 @@ def connect_to_region_controller(
     Returns a tuple containing the Juju controller name and the
     primary region name.
     """
-    LOG.debug("Connecting to the region controller.")
+    LOG.debug("Connecting to the region controller")
     snap = Snap()
     data_location = snap.paths.user_data
 

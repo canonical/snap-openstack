@@ -706,7 +706,7 @@ class ControlRoleNodeCordonedCheck(Check):
             return True
 
         if self.force:
-            LOG.debug("Ignore issue: node is not cordoned.")
+            LOG.debug("Ignore issue: node is not cordoned")
             return True
 
         self.message = "node is not cordoned."
@@ -744,7 +744,7 @@ class ControlRoleNodeUncordonedCheck(Check):
             return True
 
         if self.force:
-            LOG.debug("Ignore issue: node is not uncordoned.")
+            LOG.debug("Ignore issue: node is not uncordoned")
             return True
 
         self.message = "node is not uncordoned."

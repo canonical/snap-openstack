@@ -83,7 +83,7 @@ def load_upgrade_state(client: Client) -> dict:
     except ConfigItemNotFoundException as e:
         LOG.debug("Config item for %s not found: %r", MYSQL_UPGRADE_CONFIG_KEY, e)
     except (json.JSONDecodeError, TypeError) as e:
-        LOG.warning("Found malformed mysql upgrade state from clusterd: %r", e)
+        LOG.warning("Found malformed MySQL upgrade state from clusterd: %r", e)
     return state
 
 
@@ -132,7 +132,7 @@ class MySQLCharmUpgradeStep(BaseStep, JujuStepHelper):
         self.original_revision: int | None = None
         self.original_scale: int | None = None
         if reset_mysql_upgrade_state:
-            LOG.debug("Resetting mysql upgrade state")
+            LOG.debug("Resetting MySQL upgrade state")
             self._reset_state()
 
     def _get_upgrade_stack(self, unit_data: dict) -> list[str]:
@@ -174,7 +174,7 @@ class MySQLCharmUpgradeStep(BaseStep, JujuStepHelper):
         try:
             self.client.cluster.delete_config(MYSQL_UPGRADE_CONFIG_KEY)
         except ConfigItemNotFoundException as e:
-            LOG.warning("mysql-k8s upgrade state not found in clusterd: %r", e)
+            LOG.warning("MySQL upgrade state not found in clusterd: %r", e)
 
     def _target_scale_for_upgrade(self, original_scale: int) -> int:
         """Calculate target scale for upgrading mysql-k8s.
@@ -498,7 +498,7 @@ class MySQLCharmUpgradeStep(BaseStep, JujuStepHelper):
                 base,
             )
         else:
-            LOG.debug("Could not determine base for mysql-k8s.")
+            LOG.debug("Could not determine base for mysql-k8s")
             latest_revs = self.jhelper.get_available_charm_revisions(
                 MYSQL_CHARM,
                 deployed_channel,
@@ -538,11 +538,11 @@ class MySQLCharmUpgradeStep(BaseStep, JujuStepHelper):
         try:
             self.state = MySQLUpgradeState[state_name]
         except KeyError:
-            LOG.warning("Invalid mysql-k8s upgrade state: %s", state_name)
+            LOG.warning("Invalid MySQL upgrade state: %s", state_name)
             self.state = MySQLUpgradeState.INIT
         self.original_revision = persisted.get("original_revision")
         self.original_scale = persisted.get("original_scale")
-        LOG.debug("Starting from mysql upgrade state: %s", self.state.name)
+        LOG.debug("Starting from MySQL upgrade state: %s", self.state.name)
 
         try:
             self.record_original_state(context)

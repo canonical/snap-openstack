@@ -1980,7 +1980,7 @@ class JujuStepHelper:
             if controller:
                 cmd.extend(["--controller", controller])
         clouds_from_juju_cmd = self._juju_cmd(*cmd)
-        LOG.debug("Available clouds in juju are %s", list(clouds_from_juju_cmd.keys()))
+        LOG.debug("Available clouds in Juju are %s", list(clouds_from_juju_cmd.keys()))
 
         for name, details in clouds_from_juju_cmd.items():
             if details["type"] == cloud_type:
