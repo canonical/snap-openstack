@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
+import tarfile
 from pathlib import Path
-from tarfile import is_tarfile
 
 from sunbeam.clusterd.service import ConfigItemNotFoundException
 from sunbeam.core.common import (
@@ -42,7 +42,7 @@ def _validate_theme_path(path_str: str):
     p = Path(path_str)
     if not p.is_file():
         raise ValueError(f"Theme file does not exist: {path_str}")
-    if not is_tarfile(p):
+    if not tarfile.is_tarfile(p):
         raise ValueError(f"Theme file is not a valid tarball: {path_str}")
 
 
@@ -205,7 +205,7 @@ class AttachHorizonThemeStep(BaseStep):
                     ResultType.FAILED, f"Theme file {theme_path} is invalid or missing."
                 )
             try:
-                theme_revision = self.jhelper.attach_resource(
+                self.jhelper.attach_resource(
                     application="horizon",
                     model=self.model,
                     resource="custom-theme",
@@ -218,8 +218,6 @@ class AttachHorizonThemeStep(BaseStep):
                     f"failed to attach resource {str(theme_path)}: {str(e)}",
                 )
 
-            horizon_resources = {"custom-theme": theme_revision}
-
             horizon_config = {
                 "include-default-themes": not self.variables.get(
                     "disable_default_themes", False
@@ -231,8 +229,6 @@ class AttachHorizonThemeStep(BaseStep):
                 "custom-theme-name": self.variables.get("custom_theme_name", "custom"),
             }
         else:
-            horizon_resources = {}
-
             horizon_config = {
                 "include-default-themes": True,
                 "include-ubuntu-theme": True,
@@ -248,14 +244,9 @@ class AttachHorizonThemeStep(BaseStep):
             LOG.exception("Error reading current tfvars")
             return Result(ResultType.FAILED, f"failed to read tfvars: {str(e)}")
 
-        merged_resources = {
-            **current_tfvars.get("horizon-resources", {}),
-            **horizon_resources,
-        }
         merged_config = {**current_tfvars.get("horizon-config", {}), **horizon_config}
 
         override_tfvars = {
-            "horizon-resources": merged_resources,
             "horizon-config": merged_config,
         }
 
