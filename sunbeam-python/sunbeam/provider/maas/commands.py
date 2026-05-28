@@ -25,7 +25,7 @@ from sunbeam.commands.configure import (
     UserOpenRCStep,
     retrieve_admin_credentials,
 )
-from sunbeam.commands.dashboard_url import retrieve_dashboard_url
+from sunbeam.commands.dashboard import retrieve_dashboard_url
 from sunbeam.commands.proxy import PromptForProxyStep
 from sunbeam.core import ovn
 from sunbeam.core.checks import (
@@ -866,6 +866,15 @@ def deploy(
             is_region_controller=bool(nb_region_controllers),
         )
     )
+    plan2.append(
+        AttachHorizonThemeStep(
+            client=client,
+            jhelper=jhelper,
+            tfhelper=tfhelper_openstack_deploy,
+            manifest=manifest,
+            model=OPENSTACK_MODEL,
+        )
+    )
     if microovn_necessary:
         plan2.append(
             ReapplyMicroOVNOptionalIntegrationsStep(
@@ -1040,7 +1049,6 @@ def configure_cmd(
     tfhelper.env = (tfhelper.env or {}) | admin_credentials
     answer_file = tfhelper.path / "config.auto.tfvars.json"
     tfhelper_hypervisor = deployment.get_tfhelper("hypervisor-plan")
-    tfhelper_openstack = deployment.get_tfhelper("openstack-plan")
     compute = list(
         map(_name_mapper, client.cluster.list_nodes_by_role(RoleTags.COMPUTE.value))
     )
@@ -1091,14 +1099,6 @@ def configure_cmd(
             jhelper,
             manifest,
             model=deployment.openstack_machines_model,
-        ),
-        TerraformInitStep(tfhelper_openstack),
-        AttachHorizonThemeStep(
-            client=client,
-            jhelper=jhelper,
-            tfhelper=tfhelper_openstack,
-            manifest=manifest,
-            model=OPENSTACK_MODEL,
         ),
         MaasSetOpenStackNetworkAgentsStep(
             client,

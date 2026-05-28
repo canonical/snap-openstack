@@ -1,18 +1,20 @@
-# SPDX-FileCopyrightText: 2023 - Canonical Ltd
+# SPDX-FileCopyrightText: 2026 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
 from pathlib import Path
+from tarfile import is_tarfile
 
 from sunbeam.clusterd.service import ConfigItemNotFoundException
 from sunbeam.core.common import (
     BaseStep,
-    read_config,
+    PromptMode,
     Result,
     ResultType,
     StepContext,
+    read_config,
 )
-from sunbeam.core.juju import JujuHelper
+from sunbeam.core.juju import JujuException, JujuHelper
 from sunbeam.core.manifest import Manifest
 from sunbeam.core.questions import (
     ConfirmQuestion,
@@ -21,25 +23,28 @@ from sunbeam.core.questions import (
     load_answers,
     write_answers,
 )
-from sunbeam.core.terraform import TerraformHelper
+from sunbeam.core.terraform import (
+    TerraformException,
+    TerraformHelper,
+    TerraformStateLockedException,
+)
 from sunbeam.steps.openstack import CONFIG_KEY as OPENSTACK_TFVAR_CONFIG_KEY
-from tarfile import is_tarfile
 
 LOG = logging.getLogger(__name__)
 THEME_CONFIG_SECTION = "Horizon"
 
+
 def _validate_theme_path(path_str: str):
-    """Validate path is a non-empty .tar.gz archive and contains a valid theme"""
+    """Validate path is a non-empty .tar.gz archive and contains a valid theme."""
     if not path_str:
         raise ValueError("Theme path is required")
-    if not path_str.endswith(".tar.gz", ".tgz"):
-        raise ValueError(f"Theme file must be a .tar.gz archive: {path_str}")
 
     p = Path(path_str)
     if not p.is_file():
         raise ValueError(f"Theme file does not exist: {path_str}")
     if not is_tarfile(p):
         raise ValueError(f"Theme file is not a valid tarball: {path_str}")
+
 
 class AttachHorizonThemeStep(BaseStep):
     """Prompt for and configure custom theme resources for Horizon."""
@@ -52,6 +57,7 @@ class AttachHorizonThemeStep(BaseStep):
         manifest: Manifest,
         model: str,
         accept_defaults: bool = False,
+        prompt_mode: PromptMode = PromptMode.AUTO,
     ):
         super().__init__("Configure Horizon Themes", "Configuring themes for Horizon")
         self.client = client
@@ -60,15 +66,38 @@ class AttachHorizonThemeStep(BaseStep):
         self.manifest = manifest
         self.model = model
         self.accept_defaults = accept_defaults
+        self.prompt_mode = prompt_mode
         self.variables: dict = {}
+
+    def _get_horizon_config_from_manifest(self) -> dict:
+        if not self.manifest or not self.manifest.core.config.horizon:
+            return {}
+        base = self.manifest.core.config.horizon
+        cfg = base.dict(exclude_none=True, exclude={"resources"})
+        if base.resources and base.resources.custom_theme:
+            cfg["theme_path"] = str(base.resources.custom_theme)
+        return cfg
 
     def has_prompts(self) -> bool:
         """Indicate that this step requires interactive user input."""
+        if self.prompt_mode == PromptMode.NEVER:
+            return False
+        if self.prompt_mode == PromptMode.FORCE:
+            return True
+
+        manifest_cfg = self._get_horizon_config_from_manifest()
+        stored = load_answers(self.client, THEME_CONFIG_SECTION)
+        if "enable_custom_theme" in manifest_cfg:
+            return False
+        if "enable_custom_theme" in stored:
+            return False
         return True
 
     def prompt(self, console=None, show_hint=False) -> None:
         """Execute the interactive prompts dynamically."""
         self.variables = load_answers(self.client, THEME_CONFIG_SECTION)
+        manifest_cfg = self._get_horizon_config_from_manifest()
+        self.variables.update(manifest_cfg)
 
         enable_bank = QuestionBank(
             questions={
@@ -164,8 +193,11 @@ class AttachHorizonThemeStep(BaseStep):
 
     def run(self, context: StepContext) -> Result:
         """Attach the resource and push the configuration via Terraform."""
+        if not self.variables:
+            stored = load_answers(self.client, THEME_CONFIG_SECTION)
+            manifest_cfg = self._get_horizon_config_from_manifest()
+            self.variables = {**stored, **manifest_cfg}
 
-        self.variables = load_answers(self.client, THEME_CONFIG_SECTION)
         if self.variables.get("enable_custom_theme"):
             theme_path = Path(self.variables.get("theme_path", ""))
             if not theme_path.exists() or not theme_path.is_file():
@@ -180,8 +212,11 @@ class AttachHorizonThemeStep(BaseStep):
                     filepath=str(theme_path),
                 )
             except JujuException as e:
-                LOG.expection("Failed to attach horizon theme resource")
-                return Result(ResultType.FAILED, f"failed to attach resource: {str(theme_path)}")
+                LOG.exception("Failed to attach horizon theme resource")
+                return Result(
+                    ResultType.FAILED,
+                    f"failed to attach resource {str(theme_path)}: {str(e)}",
+                )
 
             horizon_resources = {"custom-theme": theme_revision}
 
@@ -213,7 +248,10 @@ class AttachHorizonThemeStep(BaseStep):
             LOG.exception("Error reading current tfvars")
             return Result(ResultType.FAILED, f"failed to read tfvars: {str(e)}")
 
-        merged_resources = {**current_tfvars.get("horizon-resources", {}), **horizon_resources}
+        merged_resources = {
+            **current_tfvars.get("horizon-resources", {}),
+            **horizon_resources,
+        }
         merged_config = {**current_tfvars.get("horizon-config", {}), **horizon_config}
 
         override_tfvars = {
@@ -231,5 +269,8 @@ class AttachHorizonThemeStep(BaseStep):
             )
         except (TerraformException, TerraformStateLockedException) as e:
             LOG.exception("Failed to update tfvars")
-            return Result(ResultType.FAILED, f"failed to update tfvars: {str(override_tfvars)}")
+            return Result(
+                ResultType.FAILED,
+                f"failed to update tfvars: {str(e)}",
+            )
         return Result(ResultType.COMPLETED)

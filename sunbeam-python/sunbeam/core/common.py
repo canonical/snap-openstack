@@ -232,6 +232,14 @@ class StepResult:
             self.__setattr__(key, value)
 
 
+class PromptMode(enum.Enum):
+    """Controls whether a step prompts the user interactively."""
+
+    AUTO = "auto"
+    FORCE = "force"
+    NEVER = "never"
+
+
 @dataclass
 class StepContext:
     """Cross-cutting concerns passed to every step during plan execution."""
