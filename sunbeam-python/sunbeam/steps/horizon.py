@@ -61,7 +61,7 @@ class AttachHorizonThemeStep(BaseStep):
                     "Customize available Horizon themes?",
                     default_value=False,
                     description=(
-                        "Enables custom themeing as well as controls built-in themes"
+                        "Enables custom theming as well as controls built-in themes"
                     ),
                 )
             },
