@@ -38,6 +38,7 @@ class AttachHorizonThemeStep(BaseStep):
         tfhelper: TerraformHelper,
         manifest: Manifest,
         model: str,
+        accept_defaults: bool = False,
     ):
         super().__init__("Configure Horizon Themes", "Configuring themes for Horizon")
         self.client = client
@@ -45,6 +46,7 @@ class AttachHorizonThemeStep(BaseStep):
         self.tfhelper = tfhelper
         self.manifest = manifest
         self.model = model
+        self.accept_defaults = accept_defaults
         self.variables: dict = {}
 
     def has_prompts(self) -> bool:
@@ -68,6 +70,7 @@ class AttachHorizonThemeStep(BaseStep):
             console=console,
             previous_answers=self.variables,
             show_hint=show_hint,
+            accept_defaults=self.accept_defaults,
         )
         enable = enable_bank.enable_custom_theme.ask()
         self.variables["enable_custom_theme"] = enable
@@ -110,6 +113,7 @@ class AttachHorizonThemeStep(BaseStep):
                 console=console,
                 previous_answers=self.variables,
                 show_hint=show_hint,
+                accept_defaults=self.accept_defaults,
             )
             self.variables["custom_theme_name"] = details_bank.custom_theme_name.ask()
             self.variables["theme_path"] = details_bank.theme_path.ask()
@@ -138,6 +142,7 @@ class AttachHorizonThemeStep(BaseStep):
                 console=console,
                 previous_answers=self.variables,
                 show_hint=show_hint,
+                accept_defaults=self.accept_defaults,
             )
             self.variables["default_theme"] = default_theme_bank.default_theme.ask()
 
