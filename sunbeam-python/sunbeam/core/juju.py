@@ -370,7 +370,7 @@ class JujuHelper:
         application: str,
         resource: str,
         filepath: str,
-    ) -> int: 
+    ) -> int:
         """Attach a file resource to a juju application.
 
         :model: Name of the model
