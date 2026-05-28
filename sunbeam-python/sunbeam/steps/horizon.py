@@ -23,10 +23,23 @@ from sunbeam.core.questions import (
 )
 from sunbeam.core.terraform import TerraformHelper
 from sunbeam.steps.openstack import CONFIG_KEY as OPENSTACK_TFVAR_CONFIG_KEY
+from tarfile import is_tarfile
 
 LOG = logging.getLogger(__name__)
 THEME_CONFIG_SECTION = "Horizon"
 
+def _validate_theme_path(path_str: str):
+    """Validate path is a non-empty .tar.gz archive and contains a valid theme"""
+    if not path_str:
+        raise ValueError("Theme path is required")
+    if not path_str.endswith(".tar.gz", ".tgz"):
+        raise ValueError(f"Theme file must be a .tar.gz archive: {path_str}")
+
+    p = Path(path_str)
+    if not p.is_file():
+        raise ValueError(f"Theme file does not exist: {path_str}")
+    if not is_tarfile(p):
+        raise ValueError(f"Theme file is not a valid tarball: {path_str}")
 
 class AttachHorizonThemeStep(BaseStep):
     """Prompt for and configure custom theme resources for Horizon."""
@@ -93,6 +106,7 @@ class AttachHorizonThemeStep(BaseStep):
                             "Local filepath to a tarball (.tar.gz) created"
                             "at the root of your theme"
                         ),
+                        validation_function=_validate_theme_path,
                     ),
                     "disable_default_themes": ConfirmQuestion(
                         "Disable default openstack themes",
