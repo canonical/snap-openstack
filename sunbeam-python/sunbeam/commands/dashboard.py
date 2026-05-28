@@ -7,7 +7,11 @@ import click
 from rich.console import Console
 
 from sunbeam.core import juju
-from sunbeam.core.checks import VerifyBootstrappedCheck, run_preflight_checks
+from sunbeam.core.checks import (
+    JujuLoginCheck,
+    VerifyBootstrappedCheck,
+    run_preflight_checks,
+)
 from sunbeam.core.common import (
     PromptMode,
     run_plan,

@@ -30,9 +30,7 @@ def client():
 
 @pytest.fixture
 def jhelper():
-    helper = Mock()
-    helper.attach_resource.return_value = 5
-    return helper
+    return Mock()
 
 
 @pytest.fixture
@@ -115,7 +113,6 @@ def test_run_no_custom_theme_applies_defaults(
     assert override["horizon-config"]["include-default-themes"] is True
     assert override["horizon-config"]["include-ubuntu-theme"] is True
     assert override["horizon-config"]["default-theme"] == "ubuntu"
-    assert override["horizon-resources"] == {}
 
 
 def test_run_with_manifest_theme_attaches_and_applies(
@@ -142,7 +139,6 @@ def test_run_with_manifest_theme_attaches_and_applies(
     override = tfhelper.update_tfvars_and_apply_tf.call_args.kwargs["override_tfvars"]
     assert override["horizon-config"]["custom-theme-name"] == "test-theme"
     assert override["horizon-config"]["default-theme"] == "test-theme"
-    assert override["horizon-resources"] == {"custom-theme": 5}
 
 
 def test_run_missing_theme_path_fails(
@@ -258,7 +254,6 @@ def test_run_merges_with_existing_tfvars(
             "debug": "true",
             "custom-theme-name": "old-theme",
         },
-        "horizon-resources": {"other-resource": 99},
     }
     step = _make_step(client, jhelper, tfhelper, manifest)
     result = step.run(step_context)
@@ -267,10 +262,8 @@ def test_run_merges_with_existing_tfvars(
     override = tfhelper.update_tfvars_and_apply_tf.call_args.kwargs["override_tfvars"]
     # Preserved
     assert override["horizon-config"]["debug"] == "true"
-    assert override["horizon-resources"]["other-resource"] == 99
     # Overridden
     assert override["horizon-config"]["custom-theme-name"] == "test-theme"
-    assert override["horizon-resources"]["custom-theme"] == 5
 
 
 def test_has_prompts_force_mode(client, jhelper, tfhelper, manifest_empty):

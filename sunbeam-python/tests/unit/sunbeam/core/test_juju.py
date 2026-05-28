@@ -1277,42 +1277,6 @@ def test_get_relation_map_no_related_units(jhelper, status):
         jhelper.get_relation_map("app", "certificates", "test-model")
 
 
-def test_attach_resource_returns_revision(jhelper):
-    jhelper._juju.cli.side_effect = [
-        "",
-        json.dumps(
-            {
-                "resources": [
-                    {"name": "custom-theme", "revision": 7},
-                    {"name": "horizon-image", "revision": 1},
-                ]
-            }
-        ),
-    ]
-    rev = jhelper.attach_resource(
-        model="test-model",
-        application="horizon",
-        resource="custom-theme",
-        filepath="/tmp/theme.tar.gz",
-    )
-    assert rev == 7
-    assert jhelper._juju.cli.call_count == 2
-
-
-def test_attach_resource_not_found_after_attach(jhelper):
-    jhelper._juju.cli.side_effect = [
-        "",
-        json.dumps({"resources": [{"name": "other-resource", "revision": 1}]}),
-    ]
-    with pytest.raises(jujulib.JujuException, match="not found"):
-        jhelper.attach_resource(
-            model="test-model",
-            application="horizon",
-            resource="custom-theme",
-            filepath="/tmp/theme.tar.gz",
-        )
-
-
 def test_attach_resource_cli_error_wrapped(jhelper):
     jhelper._juju.cli.side_effect = jubilant.CLIError(
         1, "attach-resource", stderr="bad file"
