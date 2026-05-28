@@ -261,6 +261,17 @@ class CoreConfig(pydantic.BaseModel):
         # Excluded PCI addresses per node.
         excluded_devices: dict[str, list[str]] | None = None
 
+    class _HorizonConfig(pydantic.BaseModel):
+        class _Resources(pydantic.BaseModel):
+            custom_theme: Path | None = None
+
+        enable_custom_theme: bool | None = None
+        custom_theme_name: str | None = None
+        theme_path: str | None = None
+        disable_default_themes: bool | None = None
+        disable_ubuntu_theme: bool | None = None
+        resources: _Resources | None = None
+
     class _Endpoints(pydantic.BaseModel):
         class _Endpoint(pydantic.BaseModel):
             hostname: str | None = None
@@ -304,6 +315,7 @@ class CoreConfig(pydantic.BaseModel):
     )
     microceph_config: pydantic.RootModel[dict[str, _HostMicroCephConfig]] | None = None
     pci: _PCI | None = None
+    horizon: _HorizonConfig | None = None
     dpdk: _DPDK | None = None
 
 
