@@ -60,7 +60,6 @@ class SandstoneBackend(StorageBackendBase):
 
     backend_type = "sandstone"
     display_name = "Sds iSCSI"
-    generally_available = True
 
     @property
     def charm_name(self) -> str:

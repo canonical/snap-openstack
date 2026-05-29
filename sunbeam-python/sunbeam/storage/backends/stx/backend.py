@@ -67,7 +67,6 @@ class StxBackend(StorageBackendBase):
 
     backend_type = "stx"
     display_name = "Stx"
-    generally_available = True
 
     @property
     def charm_name(self) -> str:

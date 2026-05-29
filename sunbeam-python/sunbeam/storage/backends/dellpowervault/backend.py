@@ -65,7 +65,6 @@ class DellPowerVaultBackend(StorageBackendBase):
 
     backend_type = "dellpowervault"
     display_name = "Dell PowerVault"
-    generally_available = False
 
     @property
     def charm_name(self) -> str:

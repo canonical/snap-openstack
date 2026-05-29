@@ -123,7 +123,6 @@ class IbmgpfsBackend(StorageBackendBase):
 
     backend_type = "ibmgpfs"
     display_name = "GPFS"
-    generally_available = True
 
     @property
     def charm_name(self) -> str:

@@ -164,7 +164,6 @@ class MacrosanBackend(StorageBackendBase):
 
     backend_type = "macrosan"
     display_name = "MacroSAN"
-    generally_available = True
 
     @property
     def charm_name(self) -> str:

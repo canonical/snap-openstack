@@ -56,7 +56,6 @@ class VeritasAccessBackend(StorageBackendBase):
 
     backend_type = "veritasaccess"
     display_name = "Veritas Access"
-    generally_available = True
 
     @property
     def charm_name(self) -> str:

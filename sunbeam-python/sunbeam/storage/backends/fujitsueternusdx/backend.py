@@ -65,7 +65,6 @@ class FujitsueternusdxBackend(StorageBackendBase):
 
     backend_type = "fujitsueternusdx"
     display_name = "FJDX FC"
-    generally_available = True
 
     @property
     def charm_name(self) -> str:

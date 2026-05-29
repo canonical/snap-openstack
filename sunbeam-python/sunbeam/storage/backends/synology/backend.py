@@ -93,7 +93,6 @@ class SynologyBackend(StorageBackendBase):
 
     backend_type = "synology"
     display_name = "Synology iSCSI"
-    generally_available = True
 
     @property
     def charm_name(self) -> str:

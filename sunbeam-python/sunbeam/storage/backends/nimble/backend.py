@@ -81,7 +81,6 @@ class NimbleBackend(StorageBackendBase):
 
     backend_type = "nimble"
     display_name = "HPE Nimble Storage"
-    generally_available = True
 
     @property
     def charm_name(self) -> str:

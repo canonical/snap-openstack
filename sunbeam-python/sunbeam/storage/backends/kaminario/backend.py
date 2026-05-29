@@ -52,7 +52,6 @@ class KaminarioBackend(StorageBackendBase):
 
     backend_type = "kaminario"
     display_name = "Kaminario iSCSI"
-    generally_available = True
 
     @property
     def charm_name(self) -> str:

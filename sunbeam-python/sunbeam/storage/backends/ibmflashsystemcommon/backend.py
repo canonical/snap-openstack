@@ -72,7 +72,6 @@ class IbmflashsystemcommonBackend(StorageBackendBase):
 
     backend_type = "ibmflashsystemcommon"
     display_name = "IBM FlashSystem Common"
-    generally_available = True
 
     @property
     def charm_name(self) -> str:

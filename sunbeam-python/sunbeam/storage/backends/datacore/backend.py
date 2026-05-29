@@ -94,7 +94,6 @@ class DatacoreBackend(StorageBackendBase):
 
     backend_type = "datacore"
     display_name = "DataCore"
-    generally_available = True
 
     @property
     def charm_name(self) -> str:

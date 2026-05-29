@@ -52,7 +52,6 @@ class IbmflashsystemiscsiBackend(StorageBackendBase):
 
     backend_type = "ibmflashsystemiscsi"
     display_name = "FlashSystem iSCSI"
-    generally_available = True
 
     @property
     def charm_name(self) -> str:

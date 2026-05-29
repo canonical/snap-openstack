@@ -77,7 +77,6 @@ class LinstorBackend(StorageBackendBase):
 
     backend_type = "linstor"
     display_name = "LINSTOR iSCSI"
-    generally_available = True
 
     @property
     def charm_name(self) -> str:

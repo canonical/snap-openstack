@@ -385,7 +385,6 @@ class NetAppBackend(StorageBackendBase):
 
     backend_type = "netapp"
     display_name = "NetApp ONTAP"
-    generally_available = True
 
     @property
     def charm_name(self) -> str:
