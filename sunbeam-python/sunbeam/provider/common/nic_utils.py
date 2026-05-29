@@ -13,7 +13,7 @@ LOG = logging.getLogger(__name__)
 
 
 def fetch_nics(client: Client, node_name: str, jhelper: JujuHelper, model: str):
-    LOG.debug("Fetching nics...")
+    LOG.debug("Fetching nics")
     node = client.cluster.get_node_info(node_name)
     machine_id = str(node.get("machineid"))
     unit = jhelper.get_unit_from_machine("openstack-hypervisor", machine_id, model)
@@ -29,7 +29,7 @@ def fetch_nics_from_subordinate(
     principal_app: str,
     subordinate_app: str,
 ):
-    LOG.debug("Fetching nics from subordinate...")
+    LOG.debug("Fetching nics from subordinate")
     node = client.cluster.get_node_info(node_name)
     machine_id = str(node.get("machineid"))
     principal_unit = jhelper.get_unit_from_machine(principal_app, machine_id, model)
@@ -43,7 +43,7 @@ def fetch_nics_from_subordinate(
 
 
 def fetch_gpus(client: Client, node_name: str, jhelper: JujuHelper, model: str):
-    LOG.debug("Fetching gpus...")
+    LOG.debug("Fetching gpus")
     node = client.cluster.get_node_info(node_name)
     machine_id = str(node.get("machineid"))
     unit = jhelper.get_unit_from_machine("openstack-hypervisor", machine_id, model)

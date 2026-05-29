@@ -35,7 +35,7 @@ def generate_software_manifest(
 
     try:
         software_dict = software_config.model_dump(by_alias=True)
-        LOG.debug(f"Manifest software dict with extra fields: {software_dict}")
+        LOG.debug("Manifest software dict with extra fields: %s", software_dict)
 
         # Remove terraform default sources
         manifest_terraform_dict = software_dict.get("terraform", {})
@@ -60,8 +60,8 @@ def generate_software_manifest(
         software_content = f"{indent}{comment}software:\n{software_yaml_commented}"
         return software_content
     except Exception as e:
-        LOG.debug(e)
-        raise click.ClickException(f"Manifest generation failed: {str(e)}")
+        LOG.exception("Software manifest generation failed")
+        raise click.ClickException(f"Software manifest generation failed: {str(e)}")
 
 
 def _dump_feature(
@@ -167,7 +167,7 @@ def generate(
         home = os.environ["SNAP_REAL_HOME"]
         manifest_file = Path(home) / ".config" / "openstack" / "manifest.yaml"
 
-    LOG.debug(f"Creating {manifest_file} parent directory if it does not exist")
+    LOG.debug("Creating %s parent directory if it does not exist", manifest_file)
     manifest_file.parent.mkdir(mode=0o775, parents=True, exist_ok=True)
 
     manifest = deployment.get_manifest()
@@ -197,7 +197,7 @@ def generate(
             file.write("# Generated Sunbeam Deployment Manifest\n\n")
             file.write(manifest_content)
     except IOError as e:
-        LOG.debug(e)
+        LOG.exception("Manifest generation failed")
         raise click.ClickException(f"Manifest generation failed: {str(e)}")
 
     click.echo(f"Generated manifest is at {str(manifest_file)}")

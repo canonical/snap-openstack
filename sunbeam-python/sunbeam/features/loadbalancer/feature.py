@@ -937,7 +937,7 @@ class DeployAmphoraInfraStep(BaseStep, JujuStepHelper):
                 },
             )
         except (TerraformException, TerraformStateLockedException) as e:
-            LOG.exception("Error deploying Amphora infrastructure")
+            LOG.warning("Error deploying Amphora infrastructure: %r", e)
             return Result(ResultType.FAILED, str(e))
 
         apps = ["multus", "openstack-port-cni"]
@@ -953,7 +953,7 @@ class DeployAmphoraInfraStep(BaseStep, JujuStepHelper):
                 queue=status_queue,
             )
         except (JujuWaitException, TimeoutError) as e:
-            LOG.warning(str(e))
+            LOG.warning("Timed out waiting for CNI applications %s: %s", apps, e)
             return Result(ResultType.FAILED, str(e))
         finally:
             task.stop()
@@ -1056,7 +1056,7 @@ class UpdateCiliumCNIExclusiveStep(BaseStep):
                 },
             )
         except (TerraformException, TerraformStateLockedException) as e:
-            LOG.exception("Error updating k8s cluster-annotations for Cilium")
+            LOG.warning("Error updating k8s cluster-annotations for Cilium: %r", e)
             return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.COMPLETED)
@@ -1086,7 +1086,7 @@ class RemoveCNIInfraStep(BaseStep, JujuStepHelper):
             state = self.tfhelper.pull_state()
         except TerraformException:
             # State backend not initialised — CNI plan was never applied.
-            LOG.debug("CNI terraform state unavailable; skipping", exc_info=True)
+            LOG.debug("CNI Terraform state unavailable; skipping", exc_info=True)
             return Result(ResultType.SKIPPED, "No CNI resources to remove")
         if not state.get("resources"):
             return Result(ResultType.SKIPPED, "No CNI resources to remove")
@@ -1099,7 +1099,7 @@ class RemoveCNIInfraStep(BaseStep, JujuStepHelper):
             self.tfhelper.destroy()
             delete_config(self.deployment.get_client(), LOADBALANCER_CNI_CONFIG_KEY)
         except TerraformException as e:
-            LOG.exception("Error removing Amphora CNI infrastructure")
+            LOG.warning("Error removing Amphora CNI infrastructure: %r", e)
             return Result(ResultType.FAILED, str(e))
 
         apps = ["multus", "openstack-port-cni"]
@@ -1111,7 +1111,7 @@ class RemoveCNIInfraStep(BaseStep, JujuStepHelper):
                 timeout=LOADBALANCER_CNI_DEPLOY_TIMEOUT,
             )
         except TimeoutError as e:
-            LOG.warning(str(e))
+            LOG.warning("Timed out waiting for CNI applications to be removed: %s", e)
             return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.COMPLETED)
@@ -1214,7 +1214,7 @@ class DestroyAmphoraResourcesStep(BaseStep):
             self.tfhelper.destroy()
             delete_config(self.deployment.get_client(), LOADBALANCER_SETUP_CONFIG_KEY)
         except TerraformException as e:
-            LOG.exception("Error destroying Amphora OpenStack resources")
+            LOG.warning("Error destroying Amphora OpenStack resources: %r", e)
             return Result(ResultType.FAILED, str(e))
         return Result(ResultType.COMPLETED)
 
@@ -1321,7 +1321,7 @@ class CreateAmphoraResourcesStep(BaseStep):
             )
             outputs = self.tfhelper.output()
         except (TerraformException, TerraformStateLockedException) as e:
-            LOG.exception("Error creating Amphora OpenStack resources")
+            LOG.warning("Error creating Amphora OpenStack resources: %r", e)
             return Result(ResultType.FAILED, str(e))
 
         # Outputs are always populated (data sources provide real IDs for
@@ -1453,7 +1453,7 @@ class UpdateOctaviaAmphoraConfigStep(BaseStep, JujuStepHelper):
                 ],
             )
         except (TerraformException, TerraformStateLockedException) as e:
-            LOG.exception("Error updating Octavia charm config for Amphora")
+            LOG.warning("Error updating Octavia charm config for Amphora: %r", e)
             return Result(ResultType.FAILED, str(e))
 
         # When Amphora is enabled Octavia will be blocked until TLS certificates

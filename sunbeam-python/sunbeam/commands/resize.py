@@ -58,7 +58,7 @@ def resize(
 
     parameter_source = click.get_current_context().get_parameter_source("force")
     if parameter_source == ParameterSource.COMMANDLINE:
-        LOG.warning("WARNING: Option --force is deprecated and the value is ignored.")
+        LOG.warning("Option --force is deprecated and the value is ignored")
 
     jhelper = JujuHelper(deployment.juju_controller)
 

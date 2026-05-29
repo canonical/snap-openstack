@@ -643,5 +643,5 @@ class AddManifestStep(BaseStep):
             )
             return Result(ResultType.COMPLETED, id)
         except Exception as e:
-            LOG.debug(e)
+            LOG.debug("Failed to add manifest to cluster db: %r", e)
             return Result(ResultType.FAILED, str(e))

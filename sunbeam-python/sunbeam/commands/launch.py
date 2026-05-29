@@ -71,7 +71,7 @@ def launch(
 
     with console.status("Fetching user credentials ... "):
         if not jhelper.model_exists(OPENSTACK_MODEL):
-            LOG.error(f"Expected model {OPENSTACK_MODEL} missing")
+            LOG.error("Expected model %s is missing", OPENSTACK_MODEL)
             raise click.ClickException(
                 f"Cannot find {OPENSTACK_MODEL}. Please destroy and re-bootstrap."
             )
@@ -85,7 +85,7 @@ def launch(
         try:
             tf_output = tfhelper.output(hide_output=True)
         except TerraformException:
-            LOG.debug("Failed to load credentials from terraform", exc_info=True)
+            LOG.debug("Failed to load credentials from Terraform", exc_info=True)
             raise click.ClickException(
                 "Failed to load user credentials from deployment. See logs for details."
             )
@@ -102,7 +102,7 @@ def launch(
             cacert=admin_auth_info.get("OS_CACERT"),
         )
     except openstack.exceptions.SDKException:
-        LOG.error("Could not authenticate to Keystone.")
+        LOG.exception("Could not authenticate to Keystone")
         raise click.ClickException("Unable to connect to OpenStack")
 
     with console.status("Checking for SSH key pair ... ") as status:
@@ -138,8 +138,8 @@ def launch(
             )
 
             server = conn.compute.wait_for_server(server, wait=INSTANCE_WAIT_TIMEOUT)
-        except openstack.exceptions.SDKException as e:
-            LOG.error(f"Instance creation request failed: {e}")
+        except openstack.exceptions.SDKException:
+            LOG.exception("Instance creation request failed")
             raise click.ClickException(
                 "Unable to request new instance. Please run `sunbeam configure` first."
             )
@@ -153,8 +153,8 @@ def launch(
             console.print(
                 f"`ssh -i {key_path} ubuntu@{ip_.floating_ip_address}`",
             )
-        except openstack.exceptions.SDKException as e:
-            LOG.error(f"Error allocating IP address: {e}")
+        except openstack.exceptions.SDKException:
+            LOG.exception("Error allocating IP address")
             raise click.ClickException(
                 "Could not allocate IP address. Check your configuration."
             )

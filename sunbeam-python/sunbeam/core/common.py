@@ -169,7 +169,7 @@ def _is_role_enabled(role: Role) -> bool:
     # Check feature gate (will return True if GA or snap config enabled)
     enabled = is_feature_gate_enabled(gate_key)
     if not enabled:
-        LOG.debug(f"Role {role.name} is gated by {gate_key} (disabled)")
+        LOG.debug("Role %s is gated by %s (disabled)", role.name, gate_key)
     return enabled
 
 
@@ -323,7 +323,7 @@ def run_plan(
     results = {}
 
     for step in plan:
-        LOG.debug(f"Starting step {step.name!r}")
+        LOG.debug("Starting step %r", step.name)
         with console.status(step.status) as status:
             rich_reporter = RichProgressReporter(status, step.status)
             logging_reporter = LoggingProgressReporter()
@@ -338,7 +338,7 @@ def run_plan(
             skip_result = step.is_skip(context)
             if skip_result.result_type == ResultType.SKIPPED:
                 results[step.__class__.__name__] = skip_result
-                LOG.debug(f"Skipping step {step.name}")
+                LOG.debug("Skipping step %r", step.name)
                 continue
 
             if skip_result.result_type == ResultType.FAILED:
@@ -347,11 +347,11 @@ def run_plan(
                     break
                 raise click.ClickException(skip_result.message)
 
-            LOG.debug(f"Running step {step.name}")
+            LOG.debug("Running step %r", step.name)
             result = step.run(context)
             results[step.__class__.__name__] = result
             LOG.debug(
-                f"Finished running step {step.name!r}. Result: {result.result_type}"
+                "Finished running step %r. Result: %r", step.name, result.result_type
             )
 
         if result.result_type == ResultType.FAILED:

@@ -15,6 +15,8 @@ from sunbeam import utils as sunbeam_utils
 
 from . import snap
 
+LOG = logging.getLogger(__name__)
+
 # Sunbeam may also be installed through tox but we're actually interested in
 # using the snap executable.
 SUNBEAM_BINARY = "/snap/bin/sunbeam"
@@ -47,7 +49,7 @@ def get_sunbeam_deployments() -> dict:
 
 
 def install_bootstrap_prerequisites():
-    logging.info("Installing Sunbeam bootstrap prerequisites.")
+    LOG.info("Installing Sunbeam bootstrap prerequisites")
     script = subprocess.check_output(
         [SUNBEAM_BINARY, "prepare-node-script", "--bootstrap"]
     )
@@ -64,7 +66,7 @@ def bootstrap_local_cluster(
         roles = ["control", "compute", "storage"]
     role_arg = ",".join(roles)
 
-    logging.info("Bootstrapping Sunbeam. Manifest: %s, roles: %s", manifest_path, roles)
+    LOG.info("Bootstrapping Sunbeam. Manifest: %s, roles: %s", manifest_path, roles)
     cmd = f"-v cluster bootstrap --accept-defaults --role {role_arg}"
     if manifest_path:
         cmd += f" --manifest {manifest_path}"
@@ -72,7 +74,7 @@ def bootstrap_local_cluster(
 
 
 def ensure_openstack_snap_installed(snap_channel: str | None = None):
-    logging.info("Ensuring that the Openstack snap in installed.")
+    LOG.info("Ensuring that the Openstack snap is installed")
     snap_cache = snap.SnapCache()
     openstack_snap = snap_cache["openstack"]
     if not openstack_snap.present:
@@ -91,7 +93,7 @@ def ensure_local_cluster_bootstrapped(
     active_deployment_name = info.get("active")
 
     if not deployments:
-        logging.info("No Sunbeam deployment found, bootstrapping a new cluster.")
+        LOG.info("No Sunbeam deployment found, bootstrapping a new cluster")
         return bootstrap_local_cluster(manifest_path, roles)
 
     active_deployment = None
@@ -105,7 +107,7 @@ def ensure_local_cluster_bootstrapped(
     if active_deployment["type"] != "local":
         raise Exception("The active Sunbeam deployment is not a local deployment.")
 
-    logging.info("Reusing local Sunbeam deployment: %s", active_deployment["name"])
+    LOG.info("Reusing local Sunbeam deployment: %s", active_deployment["name"])
 
 
 def apply_manifest(

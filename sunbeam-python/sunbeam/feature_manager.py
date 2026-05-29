@@ -112,7 +112,7 @@ def _check_gate_enabled(
             if gate and gate.enabled:
                 return True
         except Exception:
-            LOG.debug(f"Failed to get feature gate {gate_key} from cluster")
+            LOG.debug("Failed to get feature gate %r from cluster", gate_key)
             # Fall through to snap config check
 
     # Check snap config
@@ -412,7 +412,7 @@ class FeatureManager:
             try:
                 enabled = feature.is_enabled(deployment.get_client())  # type: ignore
             except AttributeError:
-                LOG.debug("Feature %r is not enable / disable feature", feature.name)
+                LOG.debug("Feature %r is not an enable / disable feature", feature.name)
                 enabled = False
             except (
                 SunbeamException,
@@ -471,12 +471,12 @@ class FeatureManager:
         """
         for feature in self.enabled_features(deployment):
             if hasattr(feature, "upgrade_hook"):
-                LOG.debug(f"Upgrading feature {feature.name}")
+                LOG.debug("Upgrading feature %r", feature.name)
                 try:
                     feature.upgrade_hook(deployment, upgrade_release=upgrade_release)
                 except TypeError:
                     LOG.debug(
-                        f"Feature {feature.name} does not support upgrades between "
-                        "channels"
+                        "Feature %r does not support upgrades between channels",
+                        feature.name,
                     )
                     feature.upgrade_hook(deployment)

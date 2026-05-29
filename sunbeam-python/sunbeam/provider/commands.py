@@ -46,7 +46,7 @@ def load_deployment(path: Path) -> Deployment:
     deployments = DeploymentsConfig.load(path)
 
     if deployments.active is None:
-        LOG.debug("No active deployment found.")
+        LOG.debug("No active deployment found")
         return LocalDeployment()
 
     return deployments.get_active()

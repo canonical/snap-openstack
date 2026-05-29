@@ -33,6 +33,6 @@ class CleanTerraformPlansStep(BaseStep):
         try:
             shutil.rmtree(self.tf_plans)
         except Exception as e:
-            LOG.error("Error cleaning terraform directories: %s", e)
+            LOG.error("Error cleaning Terraform directories: %s", e)
             return Result(ResultType.FAILED)
         return Result(ResultType.COMPLETED)
