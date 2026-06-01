@@ -70,12 +70,15 @@ locals {
   lb_mgmt_icmp_proto = can(regex(":", local.lb_mgmt_cidr)) ? "ipv6-icmp" : "icmp"
 }
 
-# Amphora image - downloaded from upstream URL and uploaded to Glance
+# Amphora image - imported via Glance web-download from upstream URL.
+# Using web_download=true so Glance fetches the image server-side, avoiding
+# terraform's HTTP client which only trusts the internal CA (not public CAs).
 # Skipped when create-amphora-image = false (user provides an existing image).
 resource "openstack_images_image_v2" "amphora" {
   count            = var.create-amphora-image ? 1 : 0
   name             = var.amphora-image-name
   image_source_url = var.amphora-image-url
+  web_download     = true
   container_format = "bare"
   disk_format      = "qcow2"
   visibility       = "public"
