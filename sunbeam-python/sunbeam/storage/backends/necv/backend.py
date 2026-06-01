@@ -266,7 +266,6 @@ class NecvBackend(StorageBackendBase):
 
     backend_type = "necv"
     display_name = "VStorage"
-    generally_available = True
 
     @property
     def charm_name(self) -> str:

@@ -92,7 +92,6 @@ class ZadaraBackend(StorageBackendBase):
 
     backend_type = "zadara"
     display_name = "ZadaraVPSA iSCSI"
-    generally_available = True
 
     @property
     def charm_name(self) -> str:

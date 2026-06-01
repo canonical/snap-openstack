@@ -157,7 +157,6 @@ class HPEthreeparBackend(StorageBackendBase):
 
     backend_type = "hpe3par"
     display_name = "HPE 3Par"
-    generally_available = True
 
     @property
     def charm_name(self) -> str:

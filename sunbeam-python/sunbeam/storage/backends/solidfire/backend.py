@@ -131,7 +131,6 @@ class SolidFireBackend(StorageBackendBase):
 
     backend_type = "solidfire"
     display_name = "NetApp SolidFire"
-    generally_available = False
 
     @property
     def charm_name(self) -> str:

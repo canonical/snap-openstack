@@ -86,7 +86,6 @@ class Toyouacs5000Backend(StorageBackendBase):
 
     backend_type = "toyouacs5000"
     display_name = "Acs5000 FC/iSCSI"
-    generally_available = True
 
     @property
     def charm_name(self) -> str:

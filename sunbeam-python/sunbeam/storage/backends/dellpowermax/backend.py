@@ -186,7 +186,6 @@ class DellpowermaxBackend(StorageBackendBase):
 
     backend_type = "dellpowermax"
     display_name = "Dell PowerMax"
-    generally_available = True
 
     @property
     def charm_name(self) -> str:

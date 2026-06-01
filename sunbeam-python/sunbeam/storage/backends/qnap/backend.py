@@ -82,7 +82,6 @@ class QnapBackend(StorageBackendBase):
 
     backend_type = "qnap"
     display_name = "QNAP Storage"
-    generally_available = True
 
     @property
     def charm_name(self) -> str:

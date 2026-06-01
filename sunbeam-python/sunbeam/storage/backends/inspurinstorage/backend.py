@@ -150,7 +150,6 @@ class InspurinstorageBackend(StorageBackendBase):
 
     backend_type = "inspurinstorage"
     display_name = "InStorageMCS"
-    generally_available = True
 
     @property
     def charm_name(self) -> str:

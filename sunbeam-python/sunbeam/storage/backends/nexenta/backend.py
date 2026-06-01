@@ -300,7 +300,6 @@ class NexentaBackend(StorageBackendBase):
 
     backend_type = "nexenta"
     display_name = "Nexenta iSCSI"
-    generally_available = True
 
     @property
     def charm_name(self) -> str:

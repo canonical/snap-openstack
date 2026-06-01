@@ -129,7 +129,6 @@ class IbmibmstorageBackend(StorageBackendBase):
 
     backend_type = "ibmibmstorage"
     display_name = "IBMStorage"
-    generally_available = True
 
     @property
     def charm_name(self) -> str:

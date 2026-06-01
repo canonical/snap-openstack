@@ -109,7 +109,6 @@ class DateraBackend(StorageBackendBase):
 
     backend_type = "datera"
     display_name = "Datera"
-    generally_available = True
 
     @property
     def charm_name(self) -> str:

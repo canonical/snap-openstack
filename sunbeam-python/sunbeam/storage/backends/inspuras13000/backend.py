@@ -76,7 +76,6 @@ class Inspuras13000Backend(StorageBackendBase):
 
     backend_type = "inspuras13000"
     display_name = "AS13000"
-    generally_available = True
 
     @property
     def charm_name(self) -> str:

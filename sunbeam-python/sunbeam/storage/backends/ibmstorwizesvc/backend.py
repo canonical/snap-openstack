@@ -275,7 +275,6 @@ class IbmstorwizesvcBackend(StorageBackendBase):
 
     backend_type = "ibmstorwizesvc"
     display_name = "IBM Storwize SVC"
-    generally_available = True
 
     @property
     def charm_name(self) -> str:

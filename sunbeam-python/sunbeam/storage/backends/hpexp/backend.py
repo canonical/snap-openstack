@@ -311,7 +311,6 @@ class HpexpBackend(StorageBackendBase):
 
     backend_type = "hpexp"
     display_name = "HPE XP"
-    generally_available = True
 
     @property
     def charm_name(self) -> str:

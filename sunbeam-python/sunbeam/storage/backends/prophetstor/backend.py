@@ -58,7 +58,6 @@ class ProphetStorBackend(StorageBackendBase):
 
     backend_type = "prophetstor"
     display_name = "ProphetStor FC"
-    generally_available = True
 
     @property
     def charm_name(self) -> str:

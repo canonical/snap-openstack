@@ -69,7 +69,6 @@ class OpeneBackend(StorageBackendBase):
 
     backend_type = "opene"
     display_name = "Jovian iSCSI"
-    generally_available = True
 
     @property
     def charm_name(self) -> str:

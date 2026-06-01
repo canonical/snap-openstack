@@ -88,7 +88,6 @@ class YadroBackend(StorageBackendBase):
 
     backend_type = "yadro"
     display_name = "Tatlin FCVolume"
-    generally_available = True
 
     @property
     def charm_name(self) -> str:
