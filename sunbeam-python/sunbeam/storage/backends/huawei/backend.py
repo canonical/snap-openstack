@@ -5,7 +5,7 @@
 
 import logging
 from enum import StrEnum
-from typing import Annotated, Literal
+from typing import Annotated
 
 from pydantic import Field
 from rich.console import Console
@@ -52,7 +52,7 @@ class HuaweiConfig(StorageBackendConfig):
 
     # Optional backend configuration
     protocol: Annotated[
-        Literal["iscsi", "fc"] | None,
+        Protocol | None,
         Field(description="Protocol selector: iscsi, fc."),
     ] = None
 
