@@ -20,8 +20,8 @@ data "juju_model" "openstack" {
 }
 
 resource "juju_application" "multus" {
-  name  = "multus"
-  trust = true
+  name       = "multus"
+  trust      = true
   model_uuid = data.juju_model.openstack.uuid
 
   charm {
@@ -39,8 +39,8 @@ resource "juju_application" "multus" {
 }
 
 resource "juju_application" "openstack-port-cni" {
-  name  = "openstack-port-cni"
-  trust = true
+  name       = "openstack-port-cni"
+  trust      = true
   model_uuid = data.juju_model.openstack.uuid
 
   charm {
@@ -63,5 +63,19 @@ resource "juju_integration" "port-cni-keystone" {
   application {
     name     = "keystone"
     endpoint = "identity-credentials"
+  }
+}
+
+resource "juju_integration" "port-cni-keystone-cacert" {
+  model_uuid = data.juju_model.openstack.uuid
+
+  application {
+    name     = juju_application.openstack-port-cni.name
+    endpoint = "receive-ca-cert"
+  }
+
+  application {
+    name     = "keystone"
+    endpoint = "send-ca-cert"
   }
 }
