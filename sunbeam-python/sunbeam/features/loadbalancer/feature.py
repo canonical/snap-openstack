@@ -934,6 +934,7 @@ class DeployAmphoraInfraStep(BaseStep, JujuStepHelper):
                 override_tfvars={
                     "model_uuid": self.jhelper.get_model_uuid(self.model),
                     "multus-network-attachment-definitions": nad_yaml,
+                    "openstack-port-cni-region": self.deployment.get_region_name(),
                 },
             )
         except (TerraformException, TerraformStateLockedException) as e:
