@@ -47,3 +47,9 @@ variable "openstack-port-cni-config" {
   type        = map(string)
   default     = {}
 }
+
+variable "openstack-port-cni-region" {
+  description = "OpenStack region name passed to openstack-port-cni-k8s as the 'region' config option"
+  type        = string
+  default     = "RegionOne"
+}

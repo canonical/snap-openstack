@@ -49,7 +49,10 @@ resource "juju_application" "openstack-port-cni" {
     revision = var.openstack-port-cni-revision
   }
 
-  config = var.openstack-port-cni-config
+  config = merge(
+    { "region" = var.openstack-port-cni-region },
+    var.openstack-port-cni-config
+  )
 }
 
 resource "juju_integration" "port-cni-keystone" {
