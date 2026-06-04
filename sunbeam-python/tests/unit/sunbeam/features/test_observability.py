@@ -661,10 +661,10 @@ class TestObservabilityFeaturePostEnable:
         self, deployment, update_config, run_plan_obs, juju_helper_obs
     ):
         """All nodes get JujuGrantModelAccessStep called via run_plan."""
-        deployment.get_client.return_value.cluster.list_nodes.return_value = [
-            {"name": "node-1"},
-            {"name": "node-2"},
-            {"name": "node-3"},
+        deployment.get_client.return_value.cluster.list_juju_users.return_value = [
+            {"username": "node-1", "token": "t"},
+            {"username": "node-2", "token": "t"},
+            {"username": "node-3", "token": "t"},
         ]
         feature = observability_feature.EmbeddedObservabilityFeature()
 
@@ -683,10 +683,10 @@ class TestObservabilityFeaturePostEnable:
         self, deployment, update_config, run_plan_obs, juju_helper_obs
     ):
         """If granting access fails for one node, others are still processed."""
-        deployment.get_client.return_value.cluster.list_nodes.return_value = [
-            {"name": "node-1"},
-            {"name": "node-2"},
-            {"name": "node-3"},
+        deployment.get_client.return_value.cluster.list_juju_users.return_value = [
+            {"username": "node-1", "token": "t"},
+            {"username": "node-2", "token": "t"},
+            {"username": "node-3", "token": "t"},
         ]
         run_plan_obs.side_effect = [None, Exception("grant failed"), None]
         feature = observability_feature.EmbeddedObservabilityFeature()
