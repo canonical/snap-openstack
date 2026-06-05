@@ -1100,16 +1100,16 @@ class ObservabilityFeature(OpenStackControlPlaneFeature):
         client = deployment.get_client()
         jhelper = JujuHelper(deployment.juju_controller)
 
-        for node in client.cluster.list_nodes():
-            node_name = node["name"]
+        for user in client.cluster.list_juju_users():
+            user_name = user["username"]
             try:
                 plan = [
-                    JujuGrantModelAccessStep(jhelper, node_name, OBSERVABILITY_MODEL)
+                    JujuGrantModelAccessStep(jhelper, user_name, OBSERVABILITY_MODEL)
                 ]
                 run_plan(plan, console, show_hints)
             except Exception as e:
                 LOG.warning(
-                    "Failed to grant %s access to observability model: %s", node_name, e
+                    "Failed to grant %s access to observability model: %s", user_name, e
                 )
 
     def pre_disable(self, deployment: Deployment, show_hints: bool) -> None:
