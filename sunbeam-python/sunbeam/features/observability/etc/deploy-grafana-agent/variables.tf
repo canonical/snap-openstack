@@ -4,7 +4,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 variable "observability-agent-integration-apps" {
-  description = "List of the deployed principal applications that integrate with opentelemetry collector"
+  description = "List of the deployed principal applications that integrate with opentelemetry collector via cos_agent interface"
+  type        = list(string)
+  default     = []
+}
+
+variable "observability-agent-integration-apps-juju-info" {
+  description = "List of the deployed principal applications that integrate with opentelemetry collector via juju-info interface"
   type        = list(string)
   default     = []
 }

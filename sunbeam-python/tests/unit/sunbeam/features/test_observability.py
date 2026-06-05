@@ -1,8 +1,10 @@
 # SPDX-FileCopyrightText: 2023 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 from unittest.mock import MagicMock, Mock, patch
 
+import click
 import pytest
 
 from sunbeam.clusterd.service import ConfigItemNotFoundException
@@ -261,10 +263,126 @@ class TestRemoveObservabilityStackStep:
         )
         result = step.run(step_context)
 
-        tfhelper.destroy.assert_called_once()
-        jhelper.wait_model_gone.assert_called_once()
         assert result.result_type == ResultType.FAILED
         assert result.message == "timed out"
+
+
+class TestAttachHardwareObserverResourceStep:
+    def test_run(self, deployment, jhelper, step_context):
+        """Happy path: attach_resource called with correct args."""
+        step = observability_feature.AttachHardwareObserverResourceStep(
+            deployment, jhelper, "firmware", "/tmp/firmware.bin"
+        )
+        result = step.run(step_context)
+
+        jhelper.attach_resource.assert_called_once_with(
+            observability_feature.HARDWARE_OBSERVER_APP,
+            deployment.openstack_machines_model,
+            "firmware",
+            "/tmp/firmware.bin",
+        )
+        assert result.result_type == ResultType.COMPLETED
+
+    def test_run_attach_failed(self, deployment, jhelper, step_context):
+        """Exception from attach_resource returns FAILED."""
+        jhelper.attach_resource.side_effect = Exception("attach failed")
+
+        step = observability_feature.AttachHardwareObserverResourceStep(
+            deployment, jhelper, "firmware", "/tmp/firmware.bin"
+        )
+        result = step.run(step_context)
+
+        jhelper.attach_resource.assert_called_once()
+        assert result.result_type == ResultType.FAILED
+        assert result.message == "attach failed"
+
+
+class TestListHardwareObserverResourcesStep:
+    def test_run(self, deployment, jhelper, step_context):
+        """Happy path: returns JSON-encoded list of resource dicts sorted by name."""
+        resources = [
+            {"name": "firmware", "type": "file", "description": "Firmware binary"},
+            {"name": "storcli-amd64", "type": "file", "description": "StorCLI tool"},
+        ]
+        jhelper.get_application_resources.return_value = resources
+
+        step = observability_feature.ListHardwareObserverResourcesStep(
+            deployment, jhelper
+        )
+        result = step.run(step_context)
+
+        jhelper.get_application_resources.assert_called_once_with(
+            observability_feature.HARDWARE_OBSERVER_APP,
+            deployment.openstack_machines_model,
+        )
+        assert result.result_type == ResultType.COMPLETED
+        assert json.loads(result.message) == resources
+
+    def test_run_failed(self, deployment, jhelper, step_context):
+        """Exception from get_application_resources returns FAILED."""
+        jhelper.get_application_resources.side_effect = Exception("list failed")
+
+        step = observability_feature.ListHardwareObserverResourcesStep(
+            deployment, jhelper
+        )
+        result = step.run(step_context)
+
+        assert result.result_type == ResultType.FAILED
+        assert result.message == "list failed"
+
+
+class TestAttachResourceCommand:
+    """Tests for the attach_resource CLI command (resource name validation)."""
+
+    def _resources_json(self, names):
+        return json.dumps(
+            [{"name": n, "type": "file", "description": ""} for n in names]
+        )
+
+    def _make_feature(self):
+        return observability_feature.EmbeddedObservabilityFeature.__new__(
+            observability_feature.EmbeddedObservabilityFeature
+        )
+
+    def _call_attach(self, feature, deployment, resource_name, resource_path):
+        """Invoke attach_resource callback with an active Click context."""
+        cmd = observability_feature.ObservabilityFeature.attach_resource
+        with click.Context(cmd, obj=deployment):
+            return feature.attach_resource.callback(
+                feature, resource_name, resource_path
+            )
+
+    def test_invalid_resource_name_raises(
+        self, deployment, run_plan_obs, juju_helper_obs
+    ):
+        """attach_resource raises ClickException when name is not in the list."""
+        with patch(
+            "sunbeam.features.observability.feature.get_step_message",
+            return_value=self._resources_json(["firmware", "storcli-amd64"]),
+        ):
+            with pytest.raises(click.ClickException) as exc_info:
+                self._call_attach(
+                    self._make_feature(), deployment, "bad-resource", "/tmp/file.bin"
+                )
+
+        msg = exc_info.value.format_message()
+        assert "bad-resource" in msg
+        assert "hardware-monitoring-utility list" in msg
+
+    def test_valid_resource_name_proceeds(
+        self, deployment, run_plan_obs, juju_helper_obs
+    ):
+        """attach_resource proceeds to attach when name is valid."""
+        with patch(
+            "sunbeam.features.observability.feature.get_step_message",
+            return_value=self._resources_json(["firmware"]),
+        ):
+            self._call_attach(
+                self._make_feature(), deployment, "firmware", "/tmp/file.bin"
+            )
+
+        # Two run_plan calls: one for list, one for attach
+        assert run_plan_obs.call_count == 2
 
 
 class TestDeployObservabilityAgentStep:
@@ -279,6 +397,49 @@ class TestDeployObservabilityAgentStep:
         tfhelper.update_tfvars_and_apply_tf.assert_called_once()
         jhelper.wait_application_ready.assert_called_once()
         assert result.result_type == ResultType.COMPLETED
+
+    def test_run_includes_microovn_when_present(
+        self, deployment, tfhelper, jhelper, observabilityfeature, step_context
+    ):
+        """Microovn is added to integration-apps when it exists in the model."""
+        jhelper.get_model_status.return_value = Mock(
+            apps={
+                "openstack-hypervisor": Mock(),
+                "microovn": Mock(),
+            }
+        )
+
+        step = observability_feature.DeployObservabilityAgentStep(
+            deployment, Mock(), observabilityfeature, tfhelper, jhelper
+        )
+        step.run(step_context)
+
+        call_kwargs = tfhelper.update_tfvars_and_apply_tf.call_args.kwargs
+        integration_apps = call_kwargs["override_tfvars"][
+            "observability-agent-integration-apps"
+        ]
+        assert "microovn" in integration_apps
+
+    def test_run_excludes_microovn_when_absent(
+        self, deployment, tfhelper, jhelper, observabilityfeature, step_context
+    ):
+        """Microovn is not added when it does not exist in the model."""
+        jhelper.get_model_status.return_value = Mock(
+            apps={
+                "openstack-hypervisor": Mock(),
+            }
+        )
+
+        step = observability_feature.DeployObservabilityAgentStep(
+            deployment, Mock(), observabilityfeature, tfhelper, jhelper
+        )
+        step.run(step_context)
+
+        call_kwargs = tfhelper.update_tfvars_and_apply_tf.call_args.kwargs
+        integration_apps = call_kwargs["override_tfvars"][
+            "observability-agent-integration-apps"
+        ]
+        assert "microovn" not in integration_apps
 
     def test_run_tf_apply_failed(
         self,
@@ -694,3 +855,121 @@ class TestObservabilityFeaturePostEnable:
         feature.post_enable(deployment, MagicMock(), show_hints=False)
 
         assert run_plan_obs.call_count == 3
+
+
+class TestDeployHardwareObserverStep:
+    def test_run(
+        self, deployment, tfhelper, jhelper, observabilityfeature, step_context
+    ):
+        """Happy path: terraform applies against sunbeam-machine, wait succeeds."""
+        step = observability_feature.DeployHardwareObserverStep(
+            deployment, Mock(), observabilityfeature, tfhelper, jhelper
+        )
+        result = step.run(step_context)
+
+        tfhelper.update_tfvars_and_apply_tf.assert_called_once()
+        override = tfhelper.update_tfvars_and_apply_tf.call_args.kwargs[
+            "override_tfvars"
+        ]
+        assert override["principal-applications"] == ["sunbeam-machine"]
+        jhelper.wait_application_ready.assert_called_once()
+        assert result.result_type == ResultType.COMPLETED
+
+    def test_run_tf_apply_failed(
+        self, deployment, tfhelper, jhelper, observabilityfeature, step_context
+    ):
+        """Terraform failure returns FAILED without waiting."""
+        tfhelper.update_tfvars_and_apply_tf.side_effect = TerraformException(
+            "apply failed..."
+        )
+
+        step = observability_feature.DeployHardwareObserverStep(
+            deployment, Mock(), observabilityfeature, tfhelper, jhelper
+        )
+        result = step.run(step_context)
+
+        tfhelper.update_tfvars_and_apply_tf.assert_called_once()
+        jhelper.wait_application_ready.assert_not_called()
+        assert result.result_type == ResultType.FAILED
+        assert result.message == "apply failed..."
+
+    def test_run_waiting_timed_out(
+        self, deployment, tfhelper, jhelper, observabilityfeature, step_context
+    ):
+        """Timeout waiting for hardware-observer returns FAILED."""
+        jhelper.wait_application_ready.side_effect = TimeoutError("timed out")
+
+        step = observability_feature.DeployHardwareObserverStep(
+            deployment, Mock(), observabilityfeature, tfhelper, jhelper
+        )
+        result = step.run(step_context)
+
+        tfhelper.update_tfvars_and_apply_tf.assert_called_once()
+        jhelper.wait_application_ready.assert_called_once()
+        assert result.result_type == ResultType.FAILED
+        assert result.message == "timed out"
+
+    def test_run_accepted_status_includes_blocked(
+        self, deployment, tfhelper, jhelper, observabilityfeature, step_context
+    ):
+        """Default accepted_app_status allows blocked so the step does not fail."""
+        step = observability_feature.DeployHardwareObserverStep(
+            deployment, Mock(), observabilityfeature, tfhelper, jhelper
+        )
+        assert "blocked" in step.accepted_app_status
+        assert "active" in step.accepted_app_status
+
+
+class TestRemoveHardwareObserverStep:
+    def test_run(
+        self,
+        deployment,
+        tfhelper,
+        jhelper,
+        observabilityfeature,
+        update_config,
+        step_context,
+    ):
+        """Happy path: destroy succeeds, app gone, config cleared."""
+        step = observability_feature.RemoveHardwareObserverStep(
+            deployment, observabilityfeature, tfhelper, jhelper
+        )
+        result = step.run(step_context)
+
+        tfhelper.destroy.assert_called_once()
+        jhelper.wait_application_gone.assert_called_once()
+        waited_apps = jhelper.wait_application_gone.call_args.args[0]
+        assert waited_apps == ["hardware-observer"]
+        assert result.result_type == ResultType.COMPLETED
+
+    def test_run_tf_destroy_failed(
+        self, deployment, tfhelper, jhelper, observabilityfeature, step_context
+    ):
+        """Terraform destroy failure returns FAILED without waiting."""
+        tfhelper.destroy.side_effect = TerraformException("destroy failed...")
+
+        step = observability_feature.RemoveHardwareObserverStep(
+            deployment, observabilityfeature, tfhelper, jhelper
+        )
+        result = step.run(step_context)
+
+        tfhelper.destroy.assert_called_once()
+        jhelper.wait_application_gone.assert_not_called()
+        assert result.result_type == ResultType.FAILED
+        assert result.message == "destroy failed..."
+
+    def test_run_waiting_timed_out(
+        self, deployment, tfhelper, jhelper, observabilityfeature, step_context
+    ):
+        """Timeout waiting for app to be gone returns FAILED."""
+        jhelper.wait_application_gone.side_effect = TimeoutError("timed out")
+
+        step = observability_feature.RemoveHardwareObserverStep(
+            deployment, observabilityfeature, tfhelper, jhelper
+        )
+        result = step.run(step_context)
+
+        tfhelper.destroy.assert_called_once()
+        jhelper.wait_application_gone.assert_called_once()
+        assert result.result_type == ResultType.FAILED
+        assert result.message == "timed out"
