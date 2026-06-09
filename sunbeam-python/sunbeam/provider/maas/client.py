@@ -29,6 +29,9 @@ else:
 LOG = logging.getLogger(__name__)
 console = Console()
 
+# "amd64" is the Debian/MAAS name for x86_64.
+DEFAULT_ARCHITECTURE = "amd64"
+
 
 class MaasClient:
     """Facade to MAAS APIs."""
@@ -278,6 +281,11 @@ def _convert_raw_machine(machine_raw: dict, root_disk: dict | None) -> dict:
             }
         )
 
+    # MAAS returns architecture as e.g. "amd64/generic" or "arm64/generic".
+    # Normalise to the bare arch string ("amd64" / "arm64").
+    raw_arch = machine_raw.get("architecture", "")
+    architecture = raw_arch.split("/")[0] if raw_arch else DEFAULT_ARCHITECTURE
+
     return {
         "system_id": machine_raw["system_id"],
         "hostname": machine_raw["hostname"],
@@ -290,6 +298,7 @@ def _convert_raw_machine(machine_raw: dict, root_disk: dict | None) -> dict:
         "nics": nics,
         "cores": machine_raw["cpu_count"],
         "memory": machine_raw["memory"],
+        "architecture": architecture,
     }
 
 
@@ -312,6 +321,21 @@ def get_machine(client: MaasClient, machine: str) -> dict:
         machine_raw, _find_root_devices(client, machine_raw)
     )
     LOG.debug("Retrieved machine %s: %r", machine, machine_dict)
+    return machine_dict
+
+
+def get_machine_by_system_id(client: MaasClient, system_id: str) -> dict:
+    """Get machine by MAAS system_id, return consumable dict.
+
+    Unlike get_machine() which looks up by hostname, this function
+    looks up by the unique MAAS system_id (e.g. "abc123").  This is
+    used when we only have the system_id stored in clusterd.
+    """
+    machine_raw = client._client.machines.get(system_id)._data  # type: ignore
+    machine_dict = _convert_raw_machine(
+        machine_raw, _find_root_devices(client, machine_raw)
+    )
+    LOG.debug("Retrieved machine by system_id %s: %r", system_id, machine_dict)
     return machine_dict
 
 

@@ -92,6 +92,8 @@ Roles can be assigned to a machine by applying tags in MAAS.
 More on assigning tags: https://maas.io/docs/how-to-use-machine-tags
 """
 MACHINE_DEPLOY_TIMEOUT = 3600
+# "amd64" is the Debian/MAAS name for x86_64.
+DEFAULT_ARCHITECTURE = "amd64"
 
 
 class AddMaasDeployment(BaseStep):
@@ -1502,12 +1504,16 @@ class MaasDeployMachinesStep(BaseStep):
         client: Client,
         jhelper: JujuHelper,
         model: str,
+        maas_client: "maas_client.MaasClient | None" = None,
+        manifest: "Manifest | None" = None,
     ):
         super().__init__("Deploy machines", "Deploying machines in Juju")
         self.client = client
         self.deployment = deployment
         self.jhelper = jhelper
         self.model = model
+        self.maas_client = maas_client
+        self.manifest = manifest
 
     def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not."""
@@ -1560,15 +1566,74 @@ class MaasDeployMachinesStep(BaseStep):
             return Result(ResultType.SKIPPED)
         return Result(ResultType.COMPLETED)
 
+    def _fetch_node_architecture(self, node: dict) -> str:
+        """Fetch the architecture of a node from MAAS.
+
+        Returns the architecture string (e.g. "amd64", "arm64").
+        Falls back to DEFAULT_ARCHITECTURE if the MAAS client is
+        unavailable or the lookup fails.
+        """
+        if self.maas_client is None:
+            return DEFAULT_ARCHITECTURE
+        try:
+            machine_info = maas_client.get_machine_by_system_id(
+                self.maas_client, node["systemid"]
+            )
+            return machine_info.get("architecture", DEFAULT_ARCHITECTURE)
+        except Exception:
+            LOG.debug(
+                "Could not fetch architecture for node %r, defaulting to %s",
+                node["name"],
+                DEFAULT_ARCHITECTURE,
+                exc_info=True,
+            )
+            return DEFAULT_ARCHITECTURE
+
+    def _get_node_constraints(self, node: dict) -> list[str]:
+        """Return the Juju constraints for deploying this node.
+
+        For arm64 nodes with a custom image configured in the manifest,
+        adds image-id and arch constraints so MAAS deploys the correct
+        OS image (e.g. BF DOCA on a DPU).
+        """
+        constraints = ["tags=" + self.deployment.resource_tag]
+
+        arm64_image_id = (
+            self.manifest.core.software.juju.arm64_image_id
+            if self.manifest is not None
+            else None
+        )
+        if arm64_image_id is None:
+            return constraints
+
+        architecture = self._fetch_node_architecture(node)
+
+        if architecture == "arm64":
+            LOG.debug(
+                "Node %r is arm64 — adding image-id=%r constraint",
+                node["name"],
+                arm64_image_id,
+            )
+            constraints.append("image-id=" + arm64_image_id)
+            constraints.append("arch=arm64")
+
+        return constraints
+
     def run(self, context: StepContext) -> Result:
         """Deploy machines in Juju."""
         for node in self.nodes_to_deploy:
             self.update_status(context, f"deploying {node['name']}")
-            LOG.debug("Adding machine %s to model %s", node["name"], self.model)
+            constraints = self._get_node_constraints(node)
+            LOG.debug(
+                "Adding machine %s to model %s with constraints %s",
+                node["name"],
+                self.model,
+                constraints,
+            )
             juju_machine = self.jhelper.add_machine(
                 "system-id=" + node["systemid"],
                 self.model,
-                constraints=["tags=" + self.deployment.resource_tag],
+                constraints=constraints,
             )
             self.client.cluster.update_node_info(
                 node["name"], machineid=int(juju_machine)

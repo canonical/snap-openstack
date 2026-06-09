@@ -1105,6 +1105,26 @@ class TestMaasDeployMachinesStep:
         model = "test_model"
         return MaasDeployMachinesStep(deployment, client, jhelper, model)
 
+    @pytest.fixture
+    def step_with_arm64_manifest(self):
+        """Step configured with a manifest that sets arm64_image_id."""
+        deployment = Mock()
+        deployment.resource_tag = "test-tag"
+        client = Mock()
+        jhelper = Mock()
+        model = "test_model"
+        maas_client_mock = Mock()
+        manifest = Mock()
+        manifest.core.software.juju.arm64_image_id = "bf-321-v2-ovs-hack"
+        return MaasDeployMachinesStep(
+            deployment,
+            client,
+            jhelper,
+            model,
+            maas_client=maas_client_mock,
+            manifest=manifest,
+        )
+
     def test_is_skip_with_no_clusterd_nodes(
         self, maas_deploy_machines_step, step_context
     ):
@@ -1177,6 +1197,91 @@ class TestMaasDeployMachinesStep:
         assert (
             maas_deploy_machines_step.jhelper.wait_all_machines_deployed.call_count == 1
         )
+
+    def test_get_node_constraints_returns_default_when_no_manifest(
+        self, maas_deploy_machines_step
+    ):
+        """No manifest → only default tag constraint."""
+        maas_deploy_machines_step.manifest = None
+        node = {"name": "n1", "systemid": "s1"}
+        constraints = maas_deploy_machines_step._get_node_constraints(node)
+        assert constraints == ["tags=test-tag"]
+
+    def test_get_node_constraints_returns_default_when_image_id_is_none(
+        self, maas_deploy_machines_step
+    ):
+        """Manifest present but arm64_image_id not set → only tag constraint."""
+        manifest = Mock()
+        manifest.core.software.juju.arm64_image_id = None
+        maas_deploy_machines_step.manifest = manifest
+        node = {"name": "n1", "systemid": "s1"}
+        constraints = maas_deploy_machines_step._get_node_constraints(node)
+        assert constraints == ["tags=test-tag"]
+
+    def test_get_node_constraints_adds_image_id_for_arm64_node(
+        self, step_with_arm64_manifest
+    ):
+        """arm64 node with arm64_image_id in manifest → adds image-id constraint."""
+        step = step_with_arm64_manifest
+        with patch(
+            "sunbeam.provider.maas.client.get_machine_by_system_id",
+            return_value={"architecture": "arm64"},
+        ):
+            constraints = step._get_node_constraints(
+                {"name": "n4-dpu", "systemid": "arm-sys"}
+            )
+        assert "tags=test-tag" in constraints
+        assert "image-id=bf-321-v2-ovs-hack" in constraints
+        assert "arch=arm64" in constraints
+
+    def test_get_node_constraints_no_image_id_for_amd64_node(
+        self, step_with_arm64_manifest
+    ):
+        """amd64 node with arm64_image_id in manifest → no image-id constraint."""
+        step = step_with_arm64_manifest
+        with patch(
+            "sunbeam.provider.maas.client.get_machine_by_system_id",
+            return_value={"architecture": "amd64"},
+        ):
+            constraints = step._get_node_constraints(
+                {"name": "n1", "systemid": "x86-sys"}
+            )
+        assert constraints == ["tags=test-tag"]
+        assert "image-id=bf-321-v2-ovs-hack" not in constraints
+
+    def test_run_uses_image_id_constraint_for_arm64_and_default_for_amd64(
+        self, step_with_arm64_manifest, step_context
+    ):
+        """Mixed cluster: arm64 DPU gets image-id constraint, amd64 does not."""
+        step = step_with_arm64_manifest
+        step.nodes_to_deploy = [
+            {"name": "n1-x86", "systemid": "x86-sys"},
+            {"name": "n4-dpu", "systemid": "arm-sys"},
+        ]
+        step.nodes_to_update = []
+        step.jhelper.add_machine.side_effect = ["0", "1"]
+        step.jhelper.get_machines.return_value = {}
+
+        arch_map = {"x86-sys": "amd64", "arm-sys": "arm64"}
+
+        def fake_get_machine_by_system_id(client, system_id):
+            return {"architecture": arch_map[system_id]}
+
+        with patch(
+            "sunbeam.provider.maas.client.get_machine_by_system_id",
+            side_effect=fake_get_machine_by_system_id,
+        ):
+            result = step.run(step_context)
+
+        assert result.result_type == ResultType.COMPLETED
+        calls = step.jhelper.add_machine.call_args_list
+        # First call: x86 node → only tags constraint
+        assert calls[0].kwargs["constraints"] == ["tags=test-tag"]
+        # Second call: arm64 DPU → tags + image-id + arch constraints
+        arm_constraints = calls[1].kwargs["constraints"]
+        assert "tags=test-tag" in arm_constraints
+        assert "image-id=bf-321-v2-ovs-hack" in arm_constraints
+        assert "arch=arm64" in arm_constraints
 
 
 class TestMaasDeployInfraMachinesStep:
