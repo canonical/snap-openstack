@@ -492,6 +492,15 @@ class LatestInChannelCoordinator(UpgradeCoordinator):
                         Networks.PUBLIC,
                         self.deployment.public_ip_pool,  # type: ignore [attr-defined]
                     ),
+                    EnsureL2AdvertisementByHostStep(
+                        self.deployment,
+                        self.client,
+                        self.jhelper,
+                        self.deployment.openstack_machines_model,
+                        Networks.STORAGE,
+                        self.deployment.storage_ip_pool,  # type: ignore [attr-defined]
+                        optional_if_pool_missing=True,
+                    ),
                     OpenStackPatchLoadBalancerServicesIPPoolStep(
                         self.client,
                         self.deployment.public_api_label,  # type: ignore [attr-defined]

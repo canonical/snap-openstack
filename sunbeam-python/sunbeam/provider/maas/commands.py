@@ -780,6 +780,17 @@ def deploy(
             deployment.public_ip_pool,
         )
     )
+    plan2.append(
+        EnsureL2AdvertisementByHostStep(
+            deployment,
+            client,
+            jhelper,
+            deployment.openstack_machines_model,
+            Networks.STORAGE,
+            deployment.storage_ip_pool,
+            optional_if_pool_missing=True,
+        )
+    )
     plan2.append(AddK8SCloudStep(deployment, jhelper))
     plan2.append(PatchCoreDNSStep(deployment, jhelper))
 
@@ -1717,6 +1728,15 @@ def remove_node(ctx: click.Context, name: str, force: bool, show_hints: bool) ->
             deployment.openstack_machines_model,
             Networks.PUBLIC,
             deployment.public_ip_pool,
+        ),
+        EnsureL2AdvertisementByHostStep(
+            deployment,
+            client,
+            jhelper,
+            deployment.openstack_machines_model,
+            Networks.STORAGE,
+            deployment.storage_ip_pool,
+            optional_if_pool_missing=True,
         ),
         RemoveSunbeamMachineUnitsStep(
             client, name, jhelper, deployment.openstack_machines_model

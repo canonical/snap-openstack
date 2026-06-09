@@ -417,6 +417,24 @@ class TestEnsureL2AdvertisementByHostStep:
         assert result.result_type == ResultType.COMPLETED
         assert len(step.to_delete) == 1
 
+    def test_is_skip_optional_pool_missing(self, step, step_context):
+        api_error = ApiError.__new__(ApiError)
+        api_error.status = Mock(code=404)
+        step.optional_if_pool_missing = True
+        step.to_update = [{"name": "stale-node", "machineid": "99"}]
+        step.to_delete = [{"name": "stale-deleted"}]
+        step._get_outdated_resources = Mock()
+        with patch(
+            "sunbeam.steps.k8s.get_kube_client", return_value=Mock()
+        ) as kube_mock:
+            kube_mock.return_value.get.side_effect = api_error
+            result = step.is_skip(step_context)
+
+        assert result.result_type == ResultType.SKIPPED
+        assert step.to_update == []
+        assert step.to_delete == []
+        step._get_outdated_resources.assert_not_called()
+
     def test_is_skip_single_node_fqdn_preserves_other_resources(
         self, deployment, client, jhelper, step_context
     ):
