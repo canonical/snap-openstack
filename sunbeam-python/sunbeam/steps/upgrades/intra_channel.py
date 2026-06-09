@@ -49,7 +49,7 @@ from sunbeam.steps.upgrades.base import UpgradeCoordinator, UpgradeFeatures
 LOG = logging.getLogger(__name__)
 console = Console()
 
-INFRA_APPS = ["mysql-k8s", "vault-k8s", "k8s"]
+INFRA_APPS = ["mysql-k8s", "vault-k8s", "k8s", "manual-tls-certificates"]
 
 # Charms that must be refreshed with trust=True so that their upgrade-charm
 # hook has the necessary k8s RBAC permissions (e.g. get/patch StatefulSets).
