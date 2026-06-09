@@ -14,6 +14,7 @@ from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.steps.k8s import (
     EnsureCiliumDeviceByHostStep,
     EnsureDefaultL2AdvertisementMutedStep,
+    EnsureL2AdvertisementByHostStep,
 )
 from sunbeam.steps.openstack import OpenStackPatchLoadBalancerServicesIPPoolStep
 from sunbeam.steps.upgrades.base import UpgradeFeatures
@@ -906,6 +907,7 @@ class TestLatestInChannelCoordinator:
         """MAAS deployment plan should include LB IP pool and pool management steps."""
         mock_is_maas.return_value = True
         self.deployment.public_api_label = "test-public-api"
+        self.deployment.storage_ip_pool = "test-storage-ippool"
 
         mock_maas_client = Mock()
         mock_maas_client_module = Mock()
@@ -931,6 +933,14 @@ class TestLatestInChannelCoordinator:
         assert EnsureCiliumDeviceByHostStep in step_types
         assert OpenStackPatchLoadBalancerServicesIPPoolStep in step_types
         assert EnsureDefaultL2AdvertisementMutedStep in step_types
+        l2_steps = [
+            step for step in plan if isinstance(step, EnsureL2AdvertisementByHostStep)
+        ]
+        assert len(l2_steps) == 3
+        storage_l2_steps = [step for step in l2_steps if step.network.name == "STORAGE"]
+        assert len(storage_l2_steps) == 1
+        assert storage_l2_steps[0].pool == "test-storage-ippool"
+        assert storage_l2_steps[0].optional_if_pool_missing is True
         # k8s charm refresh is handled by `sunbeam cluster refresh k8s`, not here
         assert (
             mock_maas_steps_module.MaasDeployK8SApplicationStep.return_value not in plan

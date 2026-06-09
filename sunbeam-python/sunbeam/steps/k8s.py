@@ -1732,6 +1732,7 @@ class EnsureL2AdvertisementByHostStep(_PerHostK8SResourceStep):
         network: Networks,
         pool: str,
         fqdn: str | None = None,
+        optional_if_pool_missing: bool = False,
     ):
         super().__init__(
             "Ensure L2 advertisement",
@@ -1745,10 +1746,39 @@ class EnsureL2AdvertisementByHostStep(_PerHostK8SResourceStep):
             fqdn=fqdn,
         )
         self.pool = pool
+        self.optional_if_pool_missing = optional_if_pool_missing
+        self.lbpool_resource = K8SHelper.get_lightkube_loadbalancer_resource()
         self.l2_advertisement_resource = (
             K8SHelper.get_lightkube_l2_advertisement_resource()
         )
         self.l2_advertisement_namespace = K8SHelper.get_loadbalancer_namespace()
+
+    def is_skip(self, context: StepContext) -> Result:
+        """Skip optional advertisements when the IPAddressPool is absent."""
+        self.to_update = []
+        self.to_delete = []
+        if self.optional_if_pool_missing:
+            try:
+                kube = get_kube_client(self.client, self.kube_namespace)
+                kube.get(
+                    self.lbpool_resource,
+                    name=self.pool,
+                    namespace=self.l2_advertisement_namespace,
+                )
+            except KubeClientError as e:
+                LOG.debug("Failed to create k8s client", exc_info=True)
+                return Result(ResultType.FAILED, str(e))
+            except l_exceptions.ApiError as e:
+                if e.status.code == 404:
+                    LOG.debug(
+                        "Skipping L2 advertisement for missing optional pool %s",
+                        self.pool,
+                    )
+                    return Result(ResultType.SKIPPED)
+                LOG.debug("Failed to get ipaddresspool %s", self.pool, exc_info=True)
+                return Result(ResultType.FAILED, str(e))
+
+        return super().is_skip(context)
 
     def _labels(self, name: str, space: str) -> dict[str, str]:
         """Return labels for the L2 advertisement."""
