@@ -870,7 +870,6 @@ def deploy(
         AttachHorizonThemeStep(
             client=client,
             jhelper=jhelper,
-            tfhelper=tfhelper_openstack_deploy,
             manifest=manifest,
             model=OPENSTACK_MODEL,
         )

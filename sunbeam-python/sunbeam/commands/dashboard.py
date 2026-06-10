@@ -20,7 +20,6 @@ from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import JujuHelper
 from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.core.questions import write_answers
-from sunbeam.core.terraform import TerraformInitStep
 from sunbeam.steps.horizon import THEME_CONFIG_SECTION, AttachHorizonThemeStep
 from sunbeam.utils import click_option_show_hints
 
@@ -89,14 +88,11 @@ def set_theme(ctx: click.Context, show_hints: bool) -> None:
     client = deployment.get_client()
     jhelper = JujuHelper(deployment.juju_controller)
     manifest = deployment.get_manifest()
-    tfhelper = deployment.get_tfhelper("openstack-plan")
 
     plan = [
-        TerraformInitStep(tfhelper),
         AttachHorizonThemeStep(
             client=client,
             jhelper=jhelper,
-            tfhelper=tfhelper,
             manifest=manifest,
             model=OPENSTACK_MODEL,
             prompt_mode=PromptMode.FORCE,
@@ -115,16 +111,13 @@ def clear_theme(ctx: click.Context, show_hints: bool) -> None:
     client = deployment.get_client()
     jhelper = JujuHelper(deployment.juju_controller)
     manifest = deployment.get_manifest()
-    tfhelper = deployment.get_tfhelper("openstack-plan")
 
-    write_answers(client, THEME_CONFIG_SECTION, {"enable_custom_theme": False})
+    write_answers(client, THEME_CONFIG_SECTION, {"theme_path": ""})
 
     plan = [
-        TerraformInitStep(tfhelper),
         AttachHorizonThemeStep(
             client=client,
             jhelper=jhelper,
-            tfhelper=tfhelper,
             manifest=manifest,
             model=OPENSTACK_MODEL,
             prompt_mode=PromptMode.NEVER,

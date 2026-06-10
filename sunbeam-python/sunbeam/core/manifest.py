@@ -265,11 +265,6 @@ class CoreConfig(pydantic.BaseModel):
         class _Resources(pydantic.BaseModel):
             custom_theme: Path | None = None
 
-        enable_custom_theme: bool | None = None
-        custom_theme_name: str | None = None
-        theme_path: str | None = None
-        disable_default_themes: bool | None = None
-        disable_ubuntu_theme: bool | None = None
         resources: _Resources | None = None
 
     class _Endpoints(pydantic.BaseModel):

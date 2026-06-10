@@ -45,12 +45,6 @@ def run_plan_patch():
 
 
 @pytest.fixture
-def terraform_init_patch():
-    with patch("sunbeam.commands.dashboard.TerraformInitStep") as p:
-        yield p
-
-
-@pytest.fixture
 def attach_step_patch():
     with patch("sunbeam.commands.dashboard.AttachHorizonThemeStep") as p:
         yield p
@@ -91,7 +85,6 @@ def test_set_theme_runs_step_with_force_prompt(
     deployment,
     jhelper_patch,
     run_plan_patch,
-    terraform_init_patch,
     attach_step_patch,
 ):
     result = runner.invoke(set_theme, obj=deployment)
@@ -101,12 +94,11 @@ def test_set_theme_runs_step_with_force_prompt(
     run_plan_patch.assert_called_once()
 
 
-def test_clear_theme_writes_disable_answer_and_runs_step(
+def test_clear_theme_writes_empty_path_and_runs_step(
     runner,
     deployment,
     jhelper_patch,
     run_plan_patch,
-    terraform_init_patch,
     attach_step_patch,
     write_answers_patch,
 ):
@@ -115,7 +107,7 @@ def test_clear_theme_writes_disable_answer_and_runs_step(
     write_answers_patch.assert_called_once_with(
         deployment.get_client.return_value,
         THEME_CONFIG_SECTION,
-        {"enable_custom_theme": False},
+        {"theme_path": ""},
     )
     assert attach_step_patch.call_args.kwargs["prompt_mode"] == PromptMode.NEVER
 
