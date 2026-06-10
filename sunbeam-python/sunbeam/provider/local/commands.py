@@ -912,7 +912,6 @@ def bootstrap(  # noqa: C901
             AttachHorizonThemeStep(
                 client=client,
                 jhelper=jhelper,
-                tfhelper=openstack_tfhelper,
                 manifest=manifest,
                 model=OPENSTACK_MODEL,
             )

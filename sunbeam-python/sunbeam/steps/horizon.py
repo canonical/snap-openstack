@@ -2,42 +2,35 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
+import os
 import tarfile
+import tempfile
 from pathlib import Path
 
-from sunbeam.clusterd.service import ConfigItemNotFoundException
 from sunbeam.core.common import (
     BaseStep,
     PromptMode,
     Result,
     ResultType,
     StepContext,
-    read_config,
 )
 from sunbeam.core.juju import JujuException, JujuHelper
 from sunbeam.core.manifest import Manifest
 from sunbeam.core.questions import (
-    ConfirmQuestion,
     PromptQuestion,
     QuestionBank,
     load_answers,
     write_answers,
 )
-from sunbeam.core.terraform import (
-    TerraformException,
-    TerraformHelper,
-    TerraformStateLockedException,
-)
-from sunbeam.steps.openstack import CONFIG_KEY as OPENSTACK_TFVAR_CONFIG_KEY
 
 LOG = logging.getLogger(__name__)
 THEME_CONFIG_SECTION = "Horizon"
 
 
 def _validate_theme_path(path_str: str):
-    """Validate path is a non-empty .tar.gz archive and contains a valid theme."""
+    """Validate path is a .tar.gz archive, or empty to disable theming."""
     if not path_str:
-        raise ValueError("Theme path is required")
+        return
 
     p = Path(path_str)
     if not p.is_file():
@@ -47,22 +40,20 @@ def _validate_theme_path(path_str: str):
 
 
 class AttachHorizonThemeStep(BaseStep):
-    """Prompt for and configure custom theme resources for Horizon."""
+    """Prompt for and attach a custom theme resource to Horizon."""
 
     def __init__(
         self,
         client,
         jhelper: JujuHelper,
-        tfhelper: TerraformHelper,
         manifest: Manifest,
         model: str,
         accept_defaults: bool = False,
         prompt_mode: PromptMode = PromptMode.AUTO,
     ):
-        super().__init__("Configure Horizon Themes", "Configuring themes for Horizon")
+        super().__init__("Configure Horizon Theme", "Configuring theme for Horizon")
         self.client = client
         self.jhelper = jhelper
-        self.tfhelper = tfhelper
         self.manifest = manifest
         self.model = model
         self.accept_defaults = accept_defaults
@@ -73,10 +64,9 @@ class AttachHorizonThemeStep(BaseStep):
         if not self.manifest or not self.manifest.core.config.horizon:
             return {}
         base = self.manifest.core.config.horizon
-        cfg = base.dict(exclude_none=True, exclude={"resources"})
         if base.resources and base.resources.custom_theme:
-            cfg["theme_path"] = str(base.resources.custom_theme)
-        return cfg
+            return {"theme_path": str(base.resources.custom_theme)}
+        return {}
 
     def has_prompts(self) -> bool:
         """Indicate that this step requires interactive user input."""
@@ -86,10 +76,7 @@ class AttachHorizonThemeStep(BaseStep):
             return True
 
         manifest_cfg = self._get_horizon_config_from_manifest()
-        stored = load_answers(self.client, THEME_CONFIG_SECTION)
-        if "enable_custom_theme" in manifest_cfg:
-            return False
-        if "enable_custom_theme" in stored:
+        if "theme_path" in manifest_cfg:
             return False
         return True
 
@@ -99,169 +86,77 @@ class AttachHorizonThemeStep(BaseStep):
         manifest_cfg = self._get_horizon_config_from_manifest()
         self.variables.update(manifest_cfg)
 
-        enable_bank = QuestionBank(
+        bank = QuestionBank(
             questions={
-                "enable_custom_theme": ConfirmQuestion(
-                    "Customize available Horizon themes?",
-                    default_value=False,
+                "theme_path": PromptQuestion(
+                    "Custom theme archive path",
+                    default_value="",
                     description=(
-                        "Enables custom theming as well as controls built-in themes"
+                        "Local filepath to a tarball (.tar.gz) created above the "
+                        "root of your theme. f.e. `tar -czf theme.tar.gz /path/to/theme"
+                        "Leave blank to use the default theme."
                     ),
-                )
+                    validation_function=_validate_theme_path,
+                ),
             },
             console=console,
             previous_answers=self.variables,
             show_hint=show_hint,
             accept_defaults=self.accept_defaults,
         )
-        enable = enable_bank.enable_custom_theme.ask()
-        self.variables["enable_custom_theme"] = enable
-
-        if enable:
-            details_bank = QuestionBank(
-                questions={
-                    "custom_theme_name": PromptQuestion(
-                        "Custom theme name",
-                        default_value="custom",
-                        description=(
-                            "Name that will be used for the theme folder "
-                            "as well as displayed in GUI"
-                        ),
-                    ),
-                    "theme_path": PromptQuestion(
-                        "Custom theme archive path",
-                        default_value="",
-                        description=(
-                            "Local filepath to a tarball (.tar.gz) created"
-                            "at the root of your theme"
-                        ),
-                        validation_function=_validate_theme_path,
-                    ),
-                    "disable_default_themes": ConfirmQuestion(
-                        "Disable default openstack themes",
-                        default_value=False,
-                        description=(
-                            "Disables default and material themes "
-                            "included by upstream OpenStack"
-                        ),
-                    ),
-                    "disable_ubuntu_theme": ConfirmQuestion(
-                        "Disable included ubuntu theme",
-                        default_value=False,
-                        description=(
-                            "Disables included Ubuntu theme (the Sunbeam default theme)"
-                        ),
-                    ),
-                },
-                console=console,
-                previous_answers=self.variables,
-                show_hint=show_hint,
-                accept_defaults=self.accept_defaults,
-            )
-            self.variables["custom_theme_name"] = details_bank.custom_theme_name.ask()
-            self.variables["theme_path"] = details_bank.theme_path.ask()
-            self.variables["disable_default_themes"] = (
-                details_bank.disable_default_themes.ask()
-            )
-            self.variables["disable_ubuntu_theme"] = (
-                details_bank.disable_ubuntu_theme.ask()
-            )
-
-            if not self.variables["disable_ubuntu_theme"]:
-                def_theme = "ubuntu"
-            elif not self.variables["disable_default_themes"]:
-                def_theme = "default"
-            else:
-                def_theme = self.variables["custom_theme_name"]
-
-            default_theme_bank = QuestionBank(
-                questions={
-                    "default_theme": PromptQuestion(
-                        "Default theme",
-                        default_value=def_theme,
-                        description="Theme to be selected by default in the UI",
-                    )
-                },
-                console=console,
-                previous_answers=self.variables,
-                show_hint=show_hint,
-                accept_defaults=self.accept_defaults,
-            )
-            self.variables["default_theme"] = default_theme_bank.default_theme.ask()
+        self.variables["theme_path"] = bank.theme_path.ask()
 
         write_answers(self.client, THEME_CONFIG_SECTION, self.variables)
 
     def run(self, context: StepContext) -> Result:
-        """Attach the resource and push the configuration via Terraform."""
+        """Attach the custom theme resource to Horizon."""
+        self.update_status(context, "Validating custom theme path")
         if not self.variables:
             stored = load_answers(self.client, THEME_CONFIG_SECTION)
             manifest_cfg = self._get_horizon_config_from_manifest()
             self.variables = {**stored, **manifest_cfg}
 
-        if self.variables.get("enable_custom_theme"):
-            theme_path = Path(self.variables.get("theme_path", ""))
-            if not theme_path.exists() or not theme_path.is_file():
-                return Result(
-                    ResultType.FAILED, f"Theme file {theme_path} is invalid or missing."
-                )
-            try:
-                self.jhelper.attach_resource(
-                    application="horizon",
-                    model=self.model,
-                    resource="custom-theme",
-                    filepath=str(theme_path),
-                )
-            except JujuException as e:
-                LOG.exception("Failed to attach horizon theme resource")
-                return Result(
-                    ResultType.FAILED,
-                    f"failed to attach resource {str(theme_path)}: {str(e)}",
-                )
+        theme_path = self.variables.get("theme_path", "")
 
-            horizon_config = {
-                "include-default-themes": not self.variables.get(
-                    "disable_default_themes", False
-                ),
-                "include-ubuntu-theme": not self.variables.get(
-                    "disable_ubuntu_theme", False
-                ),
-                "default-theme": self.variables.get("default_theme", "ubuntu"),
-                "custom-theme-name": self.variables.get("custom_theme_name", "custom"),
-            }
-        else:
-            horizon_config = {
-                "include-default-themes": True,
-                "include-ubuntu-theme": True,
-                "default-theme": "ubuntu",
-                "custom-theme-name": None,
-            }
+        if not theme_path:
+            fd, theme_path = tempfile.mkstemp(suffix=".tar.gz")
+            os.close(fd)
 
-        try:
-            current_tfvars = read_config(self.client, OPENSTACK_TFVAR_CONFIG_KEY)
-        except ConfigItemNotFoundException:
-            current_tfvars = {}
-        except Exception as e:
-            LOG.exception("Error reading current tfvars")
-            return Result(ResultType.FAILED, f"failed to read tfvars: {str(e)}")
-
-        merged_config = {**current_tfvars.get("horizon-config", {}), **horizon_config}
-
-        override_tfvars = {
-            "horizon-config": merged_config,
-        }
-
-        try:
-            self.tfhelper.update_tfvars_and_apply_tf(
-                self.client,
-                self.manifest,
-                tfvar_config=OPENSTACK_TFVAR_CONFIG_KEY,
-                override_tfvars=override_tfvars,
-                reporter=context.reporter,
-            )
-        except (TerraformException, TerraformStateLockedException) as e:
-            LOG.exception("Failed to update tfvars")
+        if not Path(theme_path).is_file():
+            LOG.exception("Horizon theme file is invalid or missing")
             return Result(
                 ResultType.FAILED,
-                f"failed to update tfvars: {str(e)}",
+                f"Theme file {theme_path} is invalid or missing.",
             )
+
+        self.update_status(context, "Attaching file resource to horizon")
+        try:
+            self.jhelper.attach_resource(
+                application="horizon",
+                model=self.model,
+                resource="custom-theme",
+                filepath=str(theme_path),
+            )
+        except JujuException as e:
+            LOG.exception("Failed to attach horizon theme resource")
+            return Result(
+                ResultType.FAILED,
+                f"Failed to attach resource {theme_path}: {str(e)}",
+            )
+
+        self.update_status(context, "Waiting for Horizon to settle")
+        try:
+            self.jhelper.wait_application_ready(
+                name="horizon",
+                model=self.model,
+                accepted_status=["active"],
+                timeout=300,
+            )
+        except (JujuException, TimeoutError) as e:
+            LOG.exception("Horizon unit did not settle after resource upload")
+            return Result(
+                ResultType.FAILED,
+                f"Horizon did not settle after theme change: {str(e)}",
+            )
+
         return Result(ResultType.COMPLETED)

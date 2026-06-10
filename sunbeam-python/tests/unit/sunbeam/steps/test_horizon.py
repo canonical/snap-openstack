@@ -1,16 +1,15 @@
 # SPDX-FileCopyrightText: 2026 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import tarfile
 from unittest.mock import Mock, patch
 
 import pytest
 
-from sunbeam.clusterd.service import ConfigItemNotFoundException
-from sunbeam.core.common import PromptMode, ResultType
+from sunbeam.core.common import ResultType
 from sunbeam.core.juju import JujuException
-from sunbeam.core.terraform import TerraformException
-from sunbeam.steps.horizon import AttachHorizonThemeStep
+from sunbeam.steps.horizon import AttachHorizonThemeStep, _validate_theme_path
 
 
 def _make_tar(tmp_path, name="theme.tar.gz"):
@@ -34,14 +33,25 @@ def jhelper():
 
 
 @pytest.fixture
-def tfhelper():
+def step_context():
     return Mock()
 
 
 @pytest.fixture
 def manifest_empty():
+    """Manifest with no horizon config at all."""
     m = Mock()
     m.core.config.horizon = None
+    return m
+
+
+@pytest.fixture
+def manifest_no_resource():
+    """Manifest with a horizon section but no custom theme resource."""
+    horizon_cfg = Mock()
+    horizon_cfg.resources = Mock(custom_theme=None)
+    m = Mock()
+    m.core.config.horizon = horizon_cfg
     return m
 
 
@@ -49,13 +59,6 @@ def manifest_empty():
 def manifest_with_theme(tmp_path):
     theme_file = _make_tar(tmp_path)
     horizon_cfg = Mock()
-    horizon_cfg.dict.return_value = {
-        "enable_custom_theme": True,
-        "custom_theme_name": "test-theme",
-        "default_theme": "test-theme",
-        "disable_default_themes": False,
-        "disable_ubuntu_theme": False,
-    }
     horizon_cfg.resources = Mock(custom_theme=theme_file)
     m = Mock()
     m.core.config.horizon = horizon_cfg
@@ -75,58 +78,47 @@ def write_answers_patch():
         yield p
 
 
-@pytest.fixture
-def read_config_patch():
-    """Patch read_config so the merge step gets a real dict."""
-    with patch("sunbeam.steps.horizon.read_config") as p:
-        p.return_value = {}
-        yield p
-
-
-def _make_step(client, jhelper, tfhelper, manifest, prompt_mode=PromptMode.AUTO):
+def _make_step(client, jhelper, manifest):
     return AttachHorizonThemeStep(
         client=client,
         jhelper=jhelper,
-        tfhelper=tfhelper,
         manifest=manifest,
         model="openstack",
-        prompt_mode=prompt_mode,
     )
 
 
-def test_run_no_custom_theme_applies_defaults(
+def test_validate_theme_path_empty_is_ok():
+    """Empty path is valid and means "no custom theme"."""
+    assert _validate_theme_path("") is None
+
+
+def test_validate_theme_path_valid_tarball(tmp_path):
+    tar = _make_tar(tmp_path)
+    assert _validate_theme_path(str(tar)) is None
+
+
+def test_validate_theme_path_missing_file_raises():
+    with pytest.raises(ValueError, match="does not exist"):
+        _validate_theme_path("/nonexistent/theme.tar.gz")
+
+
+def test_validate_theme_path_not_a_tarball_raises(tmp_path):
+    bogus = tmp_path / "theme.tar.gz"
+    bogus.write_text("definitely not a tarball")
+    with pytest.raises(ValueError, match="not a valid tarball"):
+        _validate_theme_path(str(bogus))
+
+
+def test_run_with_manifest_theme_attaches(
     client,
     jhelper,
-    tfhelper,
-    manifest_empty,
-    load_answers_patch,
-    write_answers_patch,
-    read_config_patch,
-    step_context,
-):
-    step = _make_step(client, jhelper, tfhelper, manifest_empty)
-    result = step.run(step_context)
-
-    assert result.result_type == ResultType.COMPLETED
-    jhelper.attach_resource.assert_not_called()
-    override = tfhelper.update_tfvars_and_apply_tf.call_args.kwargs["override_tfvars"]
-    assert override["horizon-config"]["include-default-themes"] is True
-    assert override["horizon-config"]["include-ubuntu-theme"] is True
-    assert override["horizon-config"]["default-theme"] == "ubuntu"
-
-
-def test_run_with_manifest_theme_attaches_and_applies(
-    client,
-    jhelper,
-    tfhelper,
     manifest_with_theme,
     load_answers_patch,
     write_answers_patch,
-    read_config_patch,
     step_context,
 ):
     manifest, theme_file = manifest_with_theme
-    step = _make_step(client, jhelper, tfhelper, manifest)
+    step = _make_step(client, jhelper, manifest)
     result = step.run(step_context)
 
     assert result.result_type == ResultType.COMPLETED
@@ -136,193 +128,145 @@ def test_run_with_manifest_theme_attaches_and_applies(
         resource="custom-theme",
         filepath=str(theme_file),
     )
-    override = tfhelper.update_tfvars_and_apply_tf.call_args.kwargs["override_tfvars"]
-    assert override["horizon-config"]["custom-theme-name"] == "test-theme"
-    assert override["horizon-config"]["default-theme"] == "test-theme"
 
 
-def test_run_missing_theme_path_fails(
+def test_run_with_stored_theme_attaches(
     client,
     jhelper,
-    tfhelper,
     manifest_empty,
     load_answers_patch,
     write_answers_patch,
-    read_config_patch,
     step_context,
+    tmp_path,
 ):
-    load_answers_patch.return_value = {"enable_custom_theme": True}
-    step = _make_step(client, jhelper, tfhelper, manifest_empty)
+    theme_file = _make_tar(tmp_path)
+    load_answers_patch.return_value = {"theme_path": str(theme_file)}
+    step = _make_step(client, jhelper, manifest_empty)
     result = step.run(step_context)
 
-    assert result.result_type == ResultType.FAILED
-    jhelper.attach_resource.assert_not_called()
+    assert result.result_type == ResultType.COMPLETED
+    jhelper.attach_resource.assert_called_once_with(
+        application="horizon",
+        model="openstack",
+        resource="custom-theme",
+        filepath=str(theme_file),
+    )
+
+
+def test_run_no_theme_attaches_empty_sentinel(
+    client,
+    jhelper,
+    manifest_empty,
+    load_answers_patch,
+    write_answers_patch,
+    step_context,
+):
+    """No theme -> a real 0-byte tarball is attached as the sentinel."""
+    captured = {}
+
+    def _capture(**kwargs):
+        fp = kwargs["filepath"]
+        captured["exists"] = os.path.isfile(fp)
+        captured["size"] = os.path.getsize(fp)
+
+    jhelper.attach_resource.side_effect = _capture
+
+    step = _make_step(client, jhelper, manifest_empty)
+    result = step.run(step_context)
+
+    assert result.result_type == ResultType.COMPLETED
+    jhelper.attach_resource.assert_called_once()
+    kwargs = jhelper.attach_resource.call_args.kwargs
+    assert kwargs["application"] == "horizon"
+    assert kwargs["model"] == "openstack"
+    assert kwargs["resource"] == "custom-theme"
+    # The sentinel must be a real, empty file at attach time.
+    assert captured["exists"] is True
+    assert captured["size"] == 0
 
 
 def test_run_nonexistent_theme_path_fails(
     client,
     jhelper,
-    tfhelper,
     manifest_empty,
     load_answers_patch,
     write_answers_patch,
-    read_config_patch,
     step_context,
 ):
-    load_answers_patch.return_value = {
-        "enable_custom_theme": True,
-        "theme_path": "/nonexistent/theme.tar.gz",
-    }
-    step = _make_step(client, jhelper, tfhelper, manifest_empty)
+    load_answers_patch.return_value = {"theme_path": "/nonexistent/theme.tar.gz"}
+    step = _make_step(client, jhelper, manifest_empty)
     result = step.run(step_context)
 
     assert result.result_type == ResultType.FAILED
     assert "invalid or missing" in result.message
+    jhelper.attach_resource.assert_not_called()
 
 
 def test_run_attach_resource_failure(
     client,
     jhelper,
-    tfhelper,
     manifest_with_theme,
     load_answers_patch,
     write_answers_patch,
-    read_config_patch,
     step_context,
 ):
     manifest, _ = manifest_with_theme
     jhelper.attach_resource.side_effect = JujuException("juju is sad")
-    step = _make_step(client, jhelper, tfhelper, manifest)
+    step = _make_step(client, jhelper, manifest)
     result = step.run(step_context)
 
     assert result.result_type == ResultType.FAILED
-    assert "failed to attach resource" in result.message
-    tfhelper.update_tfvars_and_apply_tf.assert_not_called()
+    assert "Failed to attach resource" in result.message
 
 
-def test_run_terraform_failure(
+def test_run_manifest_overrides_stored_answers(
     client,
     jhelper,
-    tfhelper,
     manifest_with_theme,
     load_answers_patch,
     write_answers_patch,
-    read_config_patch,
     step_context,
+    tmp_path,
 ):
-    manifest, _ = manifest_with_theme
-    tfhelper.update_tfvars_and_apply_tf.side_effect = TerraformException("boom")
-    step = _make_step(client, jhelper, tfhelper, manifest)
-    result = step.run(step_context)
+    """Manifest theme path takes priority over a stored one on conflict."""
+    manifest, theme_file = manifest_with_theme
+    stale = _make_tar(tmp_path, name="stale.tar.gz")
+    load_answers_patch.return_value = {"theme_path": str(stale)}
 
-    assert result.result_type == ResultType.FAILED
-    assert "failed to update tfvars" in result.message
-
-
-def test_run_read_config_not_found_uses_empty_dict(
-    client,
-    jhelper,
-    tfhelper,
-    manifest_with_theme,
-    load_answers_patch,
-    write_answers_patch,
-    read_config_patch,
-    step_context,
-):
-    manifest, _ = manifest_with_theme
-    read_config_patch.side_effect = ConfigItemNotFoundException("none")
-    step = _make_step(client, jhelper, tfhelper, manifest)
+    step = _make_step(client, jhelper, manifest)
     result = step.run(step_context)
 
     assert result.result_type == ResultType.COMPLETED
+    assert jhelper.attach_resource.call_args.kwargs["filepath"] == str(theme_file)
 
 
-def test_run_merges_with_existing_tfvars(
-    client,
-    jhelper,
-    tfhelper,
-    manifest_with_theme,
-    load_answers_patch,
-    write_answers_patch,
-    read_config_patch,
-    step_context,
+def test_prompt_writes_theme_path(
+    client, jhelper, manifest_empty, load_answers_patch, write_answers_patch
 ):
-    """Existing horizon-config values are preserved, new ones override."""
+    with patch("sunbeam.steps.horizon.QuestionBank") as qb:
+        qb.return_value.theme_path.ask.return_value = "/some/theme.tar.gz"
+        step = _make_step(client, jhelper, manifest_empty)
+        step.prompt(console=Mock())
+
+    write_answers_patch.assert_called_once()
+    section, written = write_answers_patch.call_args.args[1:3]
+    assert section == "Horizon"
+    assert written["theme_path"] == "/some/theme.tar.gz"
+
+
+def test_has_prompts_with_manifest_theme_is_false(client, jhelper, manifest_with_theme):
     manifest, _ = manifest_with_theme
-    read_config_patch.return_value = {
-        "horizon-config": {
-            "debug": "true",
-            "custom-theme-name": "old-theme",
-        },
-    }
-    step = _make_step(client, jhelper, tfhelper, manifest)
-    result = step.run(step_context)
-
-    assert result.result_type == ResultType.COMPLETED
-    override = tfhelper.update_tfvars_and_apply_tf.call_args.kwargs["override_tfvars"]
-    # Preserved
-    assert override["horizon-config"]["debug"] == "true"
-    # Overridden
-    assert override["horizon-config"]["custom-theme-name"] == "test-theme"
+    step = _make_step(client, jhelper, manifest)
+    assert step.has_prompts() is False
 
 
-def test_has_prompts_force_mode(client, jhelper, tfhelper, manifest_empty):
-    step = _make_step(
-        client, jhelper, tfhelper, manifest_empty, prompt_mode=PromptMode.FORCE
-    )
+def test_has_prompts_no_horizon_section_is_true(client, jhelper, manifest_empty):
+    step = _make_step(client, jhelper, manifest_empty)
     assert step.has_prompts() is True
 
 
-def test_has_prompts_never_mode(client, jhelper, tfhelper, manifest_empty):
-    step = _make_step(
-        client, jhelper, tfhelper, manifest_empty, prompt_mode=PromptMode.NEVER
-    )
-    assert step.has_prompts() is False
-
-
-def test_has_prompts_auto_with_manifest(
-    client, jhelper, tfhelper, manifest_with_theme, load_answers_patch
+def test_has_prompts_horizon_without_resource_is_true(
+    client, jhelper, manifest_no_resource
 ):
-    manifest, _ = manifest_with_theme
-    step = _make_step(client, jhelper, tfhelper, manifest)
-    assert step.has_prompts() is False
-
-
-def test_has_prompts_auto_with_stored(
-    client, jhelper, tfhelper, manifest_empty, load_answers_patch
-):
-    load_answers_patch.return_value = {"enable_custom_theme": False}
-    step = _make_step(client, jhelper, tfhelper, manifest_empty)
-    assert step.has_prompts() is False
-
-
-def test_has_prompts_auto_no_data(
-    client, jhelper, tfhelper, manifest_empty, load_answers_patch
-):
-    step = _make_step(client, jhelper, tfhelper, manifest_empty)
+    step = _make_step(client, jhelper, manifest_no_resource)
     assert step.has_prompts() is True
-
-
-def test_manifest_overrides_stored_answers(
-    client,
-    jhelper,
-    tfhelper,
-    manifest_with_theme,
-    load_answers_patch,
-    write_answers_patch,
-    read_config_patch,
-    step_context,
-):
-    """Manifest values take priority over stored answers on conflict."""
-    manifest, _ = manifest_with_theme
-    load_answers_patch.return_value = {
-        "enable_custom_theme": True,
-        "custom_theme_name": "stale-theme",
-        "default_theme": "stale-theme",
-    }
-    step = _make_step(client, jhelper, tfhelper, manifest)
-    result = step.run(step_context)
-
-    assert result.result_type == ResultType.COMPLETED
-    override = tfhelper.update_tfvars_and_apply_tf.call_args.kwargs["override_tfvars"]
-    assert override["horizon-config"]["custom-theme-name"] == "test-theme"
