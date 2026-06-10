@@ -11,10 +11,12 @@ from sunbeam.storage.backends.dellpowermax.backend import DellpowermaxBackend
 from sunbeam.storage.backends.dellpowerstore.backend import DellPowerstoreBackend
 from sunbeam.storage.backends.dellpowervault.backend import DellPowerVaultBackend
 from sunbeam.storage.backends.dellsc.backend import DellSCBackend
+from sunbeam.storage.backends.dellunity.backend import DellunityBackend
 from sunbeam.storage.backends.fujitsueternusdx.backend import FujitsueternusdxBackend
 from sunbeam.storage.backends.hitachi.backend import HitachiBackend
 from sunbeam.storage.backends.hpe3par.backend import HPEthreeparBackend
 from sunbeam.storage.backends.hpexp.backend import HpexpBackend
+from sunbeam.storage.backends.huawei.backend import HuaweiBackend
 from sunbeam.storage.backends.ibmflashsystemcommon.backend import (
     IbmflashsystemcommonBackend,
 )
@@ -64,6 +66,18 @@ def purestorage_backend():
 def dellsc_backend():
     """Provide a Dell Storage Center backend instance."""
     return DellSCBackend()
+
+
+@pytest.fixture
+def dellunity_backend():
+    """Provide a Dell Unity backend instance."""
+    return DellunityBackend()
+
+
+@pytest.fixture
+def huawei_backend():
+    """Provide a Huawei OceanStor Dorado backend instance."""
+    return HuaweiBackend()
 
 
 @pytest.fixture
@@ -309,6 +323,8 @@ BACKENDS = {
     "solidfire": SolidFireBackend,
     "hpe3par": HPEthreeparBackend,
     "infinidat": InfinidatBackend,
+    "dellunity": DellunityBackend,
+    "huawei": HuaweiBackend,
 }
 
 
