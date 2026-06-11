@@ -96,8 +96,11 @@ def set_theme(ctx: click.Context, show_hints: bool) -> None:
             manifest=manifest,
             model=OPENSTACK_MODEL,
             prompt_mode=PromptMode.FORCE,
+            ignore_manifest_theme=True,
         ),
     ]
+
+    plan[0]._warn_if_manifest_overrides_theme(console)
     run_plan(plan, console, show_hints)
     console.print("Custom theme applied.")
 
@@ -121,7 +124,10 @@ def clear_theme(ctx: click.Context, show_hints: bool) -> None:
             manifest=manifest,
             model=OPENSTACK_MODEL,
             prompt_mode=PromptMode.NEVER,
+            ignore_manifest_theme=True,
         ),
     ]
+
+    plan[0]._warn_if_manifest_overrides_theme(console)
     run_plan(plan, console, show_hints)
     console.print("Custom theme cleared.")
