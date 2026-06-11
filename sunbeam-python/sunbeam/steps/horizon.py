@@ -50,6 +50,7 @@ class AttachHorizonThemeStep(BaseStep):
         model: str,
         accept_defaults: bool = False,
         prompt_mode: PromptMode = PromptMode.AUTO,
+        ignore_manifest_theme: bool = False,
     ):
         super().__init__("Configure Horizon Theme", "Configuring theme for Horizon")
         self.client = client
@@ -58,6 +59,7 @@ class AttachHorizonThemeStep(BaseStep):
         self.model = model
         self.accept_defaults = accept_defaults
         self.prompt_mode = prompt_mode
+        self.ignore_manifest_theme = ignore_manifest_theme
         self.variables: dict = {}
 
     def _get_horizon_config_from_manifest(self) -> dict:
@@ -67,6 +69,14 @@ class AttachHorizonThemeStep(BaseStep):
         if base.resources and base.resources.custom_theme:
             return {"theme_path": str(base.resources.custom_theme)}
         return {}
+
+    def _warn_if_manifest_overrides_theme(self, console) -> None:
+        manifest_cfg = self._get_horizon_config_from_manifest()
+        if manifest_cfg:
+            console.print(
+                "[yellow]Warning:[/] your manifest defines a custom theme; "
+                "this change will be reverted on the next cluster refresh."
+            )
 
     def has_prompts(self) -> bool:
         """Indicate that this step requires interactive user input."""
@@ -93,7 +103,8 @@ class AttachHorizonThemeStep(BaseStep):
                     default_value="",
                     description=(
                         "Local filepath to a tarball (.tar.gz) created above the "
-                        "root of your theme. f.e. `tar -czf theme.tar.gz /path/to/theme"
+                        "root of your theme. f.e. "
+                        "`tar -czf theme.tar.gz /path/to/theme`. "
                         "Leave blank to use the default theme."
                     ),
                     validation_function=_validate_theme_path,
@@ -114,7 +125,11 @@ class AttachHorizonThemeStep(BaseStep):
         if not self.variables:
             stored = load_answers(self.client, THEME_CONFIG_SECTION)
             manifest_cfg = self._get_horizon_config_from_manifest()
-            self.variables = {**stored, **manifest_cfg}
+
+            if self.ignore_manifest_theme:
+                self.variables = stored
+            else:
+                self.variables = {**stored, **manifest_cfg}
 
         theme_path = self.variables.get("theme_path", "")
 
