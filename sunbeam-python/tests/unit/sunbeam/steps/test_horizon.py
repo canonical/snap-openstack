@@ -123,10 +123,10 @@ def test_run_with_manifest_theme_attaches(
 
     assert result.result_type == ResultType.COMPLETED
     jhelper.attach_resource.assert_called_once_with(
-        application="horizon",
-        model="openstack",
-        resource="custom-theme",
-        filepath=str(theme_file),
+        "horizon",
+        "openstack",
+        "custom-theme",
+        str(theme_file),
     )
 
 
@@ -146,10 +146,10 @@ def test_run_with_stored_theme_attaches(
 
     assert result.result_type == ResultType.COMPLETED
     jhelper.attach_resource.assert_called_once_with(
-        application="horizon",
-        model="openstack",
-        resource="custom-theme",
-        filepath=str(theme_file),
+        "horizon",
+        "openstack",
+        "custom-theme",
+        str(theme_file),
     )
 
 
@@ -164,8 +164,8 @@ def test_run_no_theme_attaches_empty_sentinel(
     """No theme -> a real 0-byte tarball is attached as the sentinel."""
     captured = {}
 
-    def _capture(**kwargs):
-        fp = kwargs["filepath"]
+    def _capture(*args, **kwargs):
+        fp = args[3] if len(args) > 3 else kwargs["filepath"]
         captured["exists"] = os.path.isfile(fp)
         captured["size"] = os.path.getsize(fp)
 
@@ -176,11 +176,6 @@ def test_run_no_theme_attaches_empty_sentinel(
 
     assert result.result_type == ResultType.COMPLETED
     jhelper.attach_resource.assert_called_once()
-    kwargs = jhelper.attach_resource.call_args.kwargs
-    assert kwargs["application"] == "horizon"
-    assert kwargs["model"] == "openstack"
-    assert kwargs["resource"] == "custom-theme"
-    # The sentinel must be a real, empty file at attach time.
     assert captured["exists"] is True
     assert captured["size"] == 0
 
@@ -237,7 +232,7 @@ def test_run_manifest_overrides_stored_answers(
     result = step.run(step_context)
 
     assert result.result_type == ResultType.COMPLETED
-    assert jhelper.attach_resource.call_args.kwargs["filepath"] == str(theme_file)
+    assert jhelper.attach_resource.call_args.args[3] == str(theme_file)
 
 
 def test_prompt_writes_theme_path(

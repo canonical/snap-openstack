@@ -123,7 +123,7 @@ class AttachHorizonThemeStep(BaseStep):
             os.close(fd)
 
         if not Path(theme_path).is_file():
-            LOG.exception("Horizon theme file is invalid or missing")
+            LOG.warning("Horizon theme file is invalid or missing")
             return Result(
                 ResultType.FAILED,
                 f"Theme file {theme_path} is invalid or missing.",
@@ -132,10 +132,10 @@ class AttachHorizonThemeStep(BaseStep):
         self.update_status(context, "Attaching file resource to horizon")
         try:
             self.jhelper.attach_resource(
-                application="horizon",
-                model=self.model,
-                resource="custom-theme",
-                filepath=str(theme_path),
+                "horizon",
+                self.model,
+                "custom-theme",
+                str(theme_path),
             )
         except JujuException as e:
             LOG.exception("Failed to attach horizon theme resource")
