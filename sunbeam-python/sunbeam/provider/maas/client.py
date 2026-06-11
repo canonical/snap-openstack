@@ -286,6 +286,8 @@ def _convert_raw_machine(machine_raw: dict, root_disk: dict | None) -> dict:
     raw_arch = machine_raw.get("architecture", "")
     architecture = raw_arch.split("/")[0] if raw_arch else DEFAULT_ARCHITECTURE
 
+    is_dpu = bool(machine_raw.get("is_dpu", False))
+
     return {
         "system_id": machine_raw["system_id"],
         "hostname": machine_raw["hostname"],
@@ -299,6 +301,7 @@ def _convert_raw_machine(machine_raw: dict, root_disk: dict | None) -> dict:
         "cores": machine_raw["cpu_count"],
         "memory": machine_raw["memory"],
         "architecture": architecture,
+        "is_dpu": is_dpu,
     }
 
 
@@ -321,21 +324,6 @@ def get_machine(client: MaasClient, machine: str) -> dict:
         machine_raw, _find_root_devices(client, machine_raw)
     )
     LOG.debug("Retrieved machine %s: %r", machine, machine_dict)
-    return machine_dict
-
-
-def get_machine_by_system_id(client: MaasClient, system_id: str) -> dict:
-    """Get machine by MAAS system_id, return consumable dict.
-
-    Unlike get_machine() which looks up by hostname, this function
-    looks up by the unique MAAS system_id (e.g. "abc123").  This is
-    used when we only have the system_id stored in clusterd.
-    """
-    machine_raw = client._client.machines.get(system_id)._data  # type: ignore
-    machine_dict = _convert_raw_machine(
-        machine_raw, _find_root_devices(client, machine_raw)
-    )
-    LOG.debug("Retrieved machine by system_id %s: %r", system_id, machine_dict)
     return machine_dict
 
 

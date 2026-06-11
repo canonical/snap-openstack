@@ -1080,19 +1080,49 @@ class TestMaasAddMachinesToClusterdStep:
                 "hostname": "machine1",
                 "roles": [RoleTags.CONTROL.value],
                 "system_id": "1st",
+                "architecture": "amd64",
+                "is_dpu": False,
             },
             {
                 "hostname": "machine2",
                 "roles": [RoleTags.COMPUTE.value],
                 "system_id": "2nd",
+                "architecture": "arm64",
+                "is_dpu": True,
             },
         ]
         maas_add_machines_to_clusterd_step.nodes = [
-            ("machine1", [RoleTags.CONTROL.value]),
-            ("machine2", [RoleTags.COMPUTE.value]),
+            {
+                "hostname": "machine1",
+                "roles": [RoleTags.CONTROL.value],
+                "system_id": "1st",
+                "architecture": "amd64",
+                "is_dpu": False,
+            },
+            {
+                "hostname": "machine2",
+                "roles": [RoleTags.COMPUTE.value],
+                "system_id": "2nd",
+                "architecture": "arm64",
+                "is_dpu": True,
+            },
         ]
         result = maas_add_machines_to_clusterd_step.run(step_context)
         assert result.result_type == ResultType.COMPLETED
+        maas_add_machines_to_clusterd_step.client.cluster.add_node_info.assert_any_call(
+            "machine2",
+            [RoleTags.COMPUTE.value],
+            systemid="2nd",
+            arch="arm64",
+            is_dpu=True,
+        )
+        maas_add_machines_to_clusterd_step.client.cluster.update_node_info.assert_any_call(
+            "machine2",
+            [RoleTags.COMPUTE.value],
+            systemid="2nd",
+            arch="arm64",
+            is_dpu=True,
+        )
 
 
 class TestMaasDeployMachinesStep:
@@ -1107,21 +1137,19 @@ class TestMaasDeployMachinesStep:
 
     @pytest.fixture
     def step_with_arm64_manifest(self):
-        """Step configured with a manifest that sets arm64_image_id."""
+        """Step configured with a manifest that sets dpu_arm64_image_id."""
         deployment = Mock()
         deployment.resource_tag = "test-tag"
         client = Mock()
         jhelper = Mock()
         model = "test_model"
-        maas_client_mock = Mock()
         manifest = Mock()
-        manifest.core.software.juju.arm64_image_id = "bf-321-v2-ovs-hack"
+        manifest.core.software.juju.dpu_arm64_image_id = "bf-321-v2-ovs-hack"
         return MaasDeployMachinesStep(
             deployment,
             client,
             jhelper,
             model,
-            maas_client=maas_client_mock,
             manifest=manifest,
         )
 
@@ -1210,9 +1238,9 @@ class TestMaasDeployMachinesStep:
     def test_get_node_constraints_returns_default_when_image_id_is_none(
         self, maas_deploy_machines_step
     ):
-        """Manifest present but arm64_image_id not set → only tag constraint."""
+        """Manifest present but dpu_arm64_image_id not set → only tag constraint."""
         manifest = Mock()
-        manifest.core.software.juju.arm64_image_id = None
+        manifest.core.software.juju.dpu_arm64_image_id = None
         maas_deploy_machines_step.manifest = manifest
         node = {"name": "n1", "systemid": "s1"}
         constraints = maas_deploy_machines_step._get_node_constraints(node)
@@ -1221,15 +1249,11 @@ class TestMaasDeployMachinesStep:
     def test_get_node_constraints_adds_image_id_for_arm64_node(
         self, step_with_arm64_manifest
     ):
-        """arm64 node with arm64_image_id in manifest → adds image-id constraint."""
+        """arm64 node with dpu_arm64_image_id in manifest → adds image-id constraint."""
         step = step_with_arm64_manifest
-        with patch(
-            "sunbeam.provider.maas.client.get_machine_by_system_id",
-            return_value={"architecture": "arm64"},
-        ):
-            constraints = step._get_node_constraints(
-                {"name": "n4-dpu", "systemid": "arm-sys"}
-            )
+        constraints = step._get_node_constraints(
+            {"name": "n4-dpu", "systemid": "arm-sys", "arch": "arm64"}
+        )
         assert "tags=test-tag" in constraints
         assert "image-id=bf-321-v2-ovs-hack" in constraints
         assert "arch=arm64" in constraints
@@ -1237,15 +1261,11 @@ class TestMaasDeployMachinesStep:
     def test_get_node_constraints_no_image_id_for_amd64_node(
         self, step_with_arm64_manifest
     ):
-        """amd64 node with arm64_image_id in manifest → no image-id constraint."""
+        """amd64 node with dpu_arm64_image_id in manifest → no image-id constraint."""
         step = step_with_arm64_manifest
-        with patch(
-            "sunbeam.provider.maas.client.get_machine_by_system_id",
-            return_value={"architecture": "amd64"},
-        ):
-            constraints = step._get_node_constraints(
-                {"name": "n1", "systemid": "x86-sys"}
-            )
+        constraints = step._get_node_constraints(
+            {"name": "n1", "systemid": "x86-sys", "arch": "amd64"}
+        )
         assert constraints == ["tags=test-tag"]
         assert "image-id=bf-321-v2-ovs-hack" not in constraints
 
@@ -1255,23 +1275,14 @@ class TestMaasDeployMachinesStep:
         """Mixed cluster: arm64 DPU gets image-id constraint, amd64 does not."""
         step = step_with_arm64_manifest
         step.nodes_to_deploy = [
-            {"name": "n1-x86", "systemid": "x86-sys"},
-            {"name": "n4-dpu", "systemid": "arm-sys"},
+            {"name": "n1-x86", "systemid": "x86-sys", "arch": "amd64"},
+            {"name": "n4-dpu", "systemid": "arm-sys", "arch": "arm64"},
         ]
         step.nodes_to_update = []
         step.jhelper.add_machine.side_effect = ["0", "1"]
         step.jhelper.get_machines.return_value = {}
 
-        arch_map = {"x86-sys": "amd64", "arm-sys": "arm64"}
-
-        def fake_get_machine_by_system_id(client, system_id):
-            return {"architecture": arch_map[system_id]}
-
-        with patch(
-            "sunbeam.provider.maas.client.get_machine_by_system_id",
-            side_effect=fake_get_machine_by_system_id,
-        ):
-            result = step.run(step_context)
+        result = step.run(step_context)
 
         assert result.result_type == ResultType.COMPLETED
         calls = step.jhelper.add_machine.call_args_list

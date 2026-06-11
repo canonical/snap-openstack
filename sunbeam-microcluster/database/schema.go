@@ -18,6 +18,7 @@ var SchemaExtensions = []schema.Update{
 	AddSystemIDToNodes,
 	StorageBackendSchemaUpdate,
 	FeatureGatesSchemaUpdate,
+	AddArchAndIsDPUToNodes,
 }
 
 // NodesSchemaUpdate is schema for table nodes
@@ -95,6 +96,26 @@ ALTER TABLE nodes ADD COLUMN system_id TEXT default '';
   `
 
 	_, err := tx.Exec(stmt)
+
+	return err
+}
+
+// AddArchAndIsDPUToNodes is schema update for table nodes
+func AddArchAndIsDPUToNodes(_ context.Context, tx *sql.Tx) error {
+	stmt := `
+ALTER TABLE nodes ADD COLUMN arch TEXT default 'amd64';
+  `
+
+	_, err := tx.Exec(stmt)
+	if err != nil {
+		return err
+	}
+
+	stmt = `
+ALTER TABLE nodes ADD COLUMN is_dpu INTEGER default 0;
+  `
+
+	_, err = tx.Exec(stmt)
 
 	return err
 }

@@ -1419,7 +1419,7 @@ class MaasRemoveDeploymentCredentialsStep(BaseStep):
 class MaasAddMachinesToClusterdStep(BaseStep):
     """Add machines from MAAS to Clusterd."""
 
-    nodes: Sequence[tuple[str, str]] | None
+    nodes: Sequence[dict] | None
     machines: Sequence[dict] | None
 
     def __init__(self, client: Client, maas_client: maas_client.MaasClient):
@@ -1448,24 +1448,41 @@ class MaasAddMachinesToClusterdStep(BaseStep):
             for machine in filtered_machines:
                 if node["name"] == machine["hostname"]:
                     filtered_machines.remove(machine)
-                    if sorted(node["role"]) != sorted(machine["roles"]):
-                        nodes_to_update.append((machine["hostname"], machine["roles"]))
+                    if (
+                        sorted(node["role"]) != sorted(machine["roles"])
+                        or node.get("arch", DEFAULT_ARCHITECTURE)
+                        != machine.get("architecture", DEFAULT_ARCHITECTURE)
+                        or node.get("is_dpu", False) != machine.get("is_dpu", False)
+                        or node.get("systemid", "") != machine["system_id"]
+                    ):
+                        nodes_to_update.append(machine)
+                    break
         self.nodes = nodes_to_update
         self.machines = filtered_machines
         return Result(ResultType.COMPLETED)
 
     def run(self, context: StepContext) -> Result:
-        """Add machines to Juju model."""
+        """Add machines to clusterd."""
         if self.machines is None or self.nodes is None:
             # only happens if is_skip() was not called before, or if run executed
             # even if is_skip reported a failure
             return Result(ResultType.FAILED, "No machines to add / node to update.")
         for machine in self.machines:
             self.client.cluster.add_node_info(
-                machine["hostname"], machine["roles"], systemid=machine["system_id"]
+                machine["hostname"],
+                machine["roles"],
+                systemid=machine["system_id"],
+                arch=machine.get("architecture", DEFAULT_ARCHITECTURE),
+                is_dpu=machine.get("is_dpu", False),
             )
-        for node in self.nodes:
-            self.client.cluster.update_node_info(*node)  # type: ignore
+        for machine in self.nodes:
+            self.client.cluster.update_node_info(
+                machine["hostname"],
+                machine["roles"],
+                systemid=machine["system_id"],
+                arch=machine.get("architecture", DEFAULT_ARCHITECTURE),
+                is_dpu=machine.get("is_dpu", False),
+            )
         return Result(ResultType.COMPLETED)
 
 
@@ -1504,7 +1521,6 @@ class MaasDeployMachinesStep(BaseStep):
         client: Client,
         jhelper: JujuHelper,
         model: str,
-        maas_client: "maas_client.MaasClient | None" = None,
         manifest: "Manifest | None" = None,
     ):
         super().__init__("Deploy machines", "Deploying machines in Juju")
@@ -1512,7 +1528,6 @@ class MaasDeployMachinesStep(BaseStep):
         self.deployment = deployment
         self.jhelper = jhelper
         self.model = model
-        self.maas_client = maas_client
         self.manifest = manifest
 
     def is_skip(self, context: StepContext) -> Result:
@@ -1566,28 +1581,9 @@ class MaasDeployMachinesStep(BaseStep):
             return Result(ResultType.SKIPPED)
         return Result(ResultType.COMPLETED)
 
-    def _fetch_node_architecture(self, node: dict) -> str:
-        """Fetch the architecture of a node from MAAS.
-
-        Returns the architecture string (e.g. "amd64", "arm64").
-        Falls back to DEFAULT_ARCHITECTURE if the MAAS client is
-        unavailable or the lookup fails.
-        """
-        if self.maas_client is None:
-            return DEFAULT_ARCHITECTURE
-        try:
-            machine_info = maas_client.get_machine_by_system_id(
-                self.maas_client, node["systemid"]
-            )
-            return machine_info.get("architecture", DEFAULT_ARCHITECTURE)
-        except Exception:
-            LOG.debug(
-                "Could not fetch architecture for node %r, defaulting to %s",
-                node["name"],
-                DEFAULT_ARCHITECTURE,
-                exc_info=True,
-            )
-            return DEFAULT_ARCHITECTURE
+    def _get_node_architecture(self, node: dict) -> str:
+        """Return the architecture stored in clusterd for this node."""
+        return node.get("arch") or DEFAULT_ARCHITECTURE
 
     def _get_node_constraints(self, node: dict) -> list[str]:
         """Return the Juju constraints for deploying this node.
@@ -1598,23 +1594,23 @@ class MaasDeployMachinesStep(BaseStep):
         """
         constraints = ["tags=" + self.deployment.resource_tag]
 
-        arm64_image_id = (
-            self.manifest.core.software.juju.arm64_image_id
+        dpu_arm64_image_id = (
+            self.manifest.core.software.juju.dpu_arm64_image_id
             if self.manifest is not None
             else None
         )
-        if arm64_image_id is None:
+        if dpu_arm64_image_id is None:
             return constraints
 
-        architecture = self._fetch_node_architecture(node)
+        architecture = self._get_node_architecture(node)
 
         if architecture == "arm64":
             LOG.debug(
                 "Node %r is arm64 — adding image-id=%r constraint",
                 node["name"],
-                arm64_image_id,
+                dpu_arm64_image_id,
             )
-            constraints.append("image-id=" + arm64_image_id)
+            constraints.append("image-id=" + dpu_arm64_image_id)
             constraints.append("arch=arm64")
 
         return constraints
