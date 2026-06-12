@@ -13,6 +13,7 @@ from snaphelpers import Snap
 from sunbeam.clusterd.service import ManifestItemNotFoundException
 from sunbeam.core.checks import JujuLoginCheck, run_preflight_checks
 from sunbeam.core.common import (
+    PromptMode,
     ResultType,
     RiskLevel,
     get_step_message,
@@ -22,8 +23,10 @@ from sunbeam.core.common import (
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import JujuHelper
 from sunbeam.core.manifest import AddManifestStep
+from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.core.terraform import TerraformInitStep
 from sunbeam.features.interface.v1.base import is_maas_deployment
+from sunbeam.steps.horizon import AttachHorizonThemeStep
 from sunbeam.steps.k8s import DeployK8SApplicationStep
 from sunbeam.steps.k8s_upgrade import K8SCharmUpgradeStep
 from sunbeam.steps.upgrades.base import UpgradeCoordinator
@@ -185,6 +188,23 @@ def refresh(
             deployment, client, jhelper, manifest
         )
         upgrade_coordinator.run_plan(show_hints)
+
+    # Reapply out of band config
+    # (config not managed by terraform f.e. local resources)
+    run_plan(
+        [
+            AttachHorizonThemeStep(
+                client=client,
+                jhelper=jhelper,
+                manifest=manifest,
+                model=OPENSTACK_MODEL,
+                prompt_mode=PromptMode.NEVER,
+            )
+        ],
+        console,
+        show_hints,
+    )
+
     click.echo("Refresh complete.")
 
 
