@@ -11,6 +11,7 @@ grade: stable
 
 platforms:
   amd64:
+  s390x:
 
 system-usernames:
   snap_daemon: shared
