@@ -178,6 +178,7 @@ DEPLOY_OPENSTACK_TFVAR_MAP: VarMap = {
             "channel": f"{charm.removesuffix('-k8s')}-channel",
             "revision": f"{charm.removesuffix('-k8s')}-revision",
             "config": f"{charm.removesuffix('-k8s')}-config",
+            "resources": f"{charm.removesuffix('-k8s')}-resources",
         }
         for charm, channel in K8S_CHARMS.items()
     },

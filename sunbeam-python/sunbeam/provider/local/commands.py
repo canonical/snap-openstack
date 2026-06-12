@@ -26,7 +26,7 @@ from sunbeam.commands.configure import (
     UserOpenRCStep,
     retrieve_admin_credentials,
 )
-from sunbeam.commands.dashboard_url import retrieve_dashboard_url
+from sunbeam.commands.dashboard import retrieve_dashboard_url
 from sunbeam.commands.proxy import PromptForProxyStep
 from sunbeam.core import ovn
 from sunbeam.core.checks import (
@@ -117,6 +117,7 @@ from sunbeam.steps.clusterd import (
     PromptCheckNodeExistStep,
     SaveManagementCidrStep,
 )
+from sunbeam.steps.horizon import AttachHorizonThemeStep
 from sunbeam.steps.hypervisor import (
     DeployHypervisorApplicationStep,
     ReapplyHypervisorOptionalIntegrationsStep,
@@ -904,6 +905,14 @@ def bootstrap(  # noqa: C901
                 deployment.openstack_machines_model,
                 proxy_settings=proxy_settings,
                 is_region_controller=is_region_controller,
+            )
+        )
+        plan1.append(
+            AttachHorizonThemeStep(
+                client=client,
+                jhelper=jhelper,
+                manifest=manifest,
+                model=OPENSTACK_MODEL,
             )
         )
         plan1.append(
