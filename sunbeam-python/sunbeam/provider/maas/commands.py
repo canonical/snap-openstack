@@ -657,7 +657,11 @@ def deploy(
     plan.append(MaasAddMachinesToClusterdStep(client, maas_client))
     plan.append(
         MaasDeployMachinesStep(
-            deployment, client, jhelper, deployment.openstack_machines_model
+            deployment,
+            client,
+            jhelper,
+            deployment.openstack_machines_model,
+            manifest=manifest,
         )
     )
     run_plan(plan, console, show_hints)

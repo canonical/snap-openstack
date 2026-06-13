@@ -66,6 +66,15 @@ class JujuManifest(pydantic.BaseModel):
         pass initial model configuration.
         """,
     )
+    dpu_arm64_image_id: str | None = Field(
+        default=None,
+        description=(
+            "MAAS custom image name for arm64 DPU nodes."
+            " When set, any arm64 machine enrolled via MAAS will be deployed"
+            " with this image-id constraint so MAAS installs the custom image."
+            " Example: 'bf-321-v2-ovs-hack'"
+        ),
+    )
 
 
 class CharmManifest(pydantic.BaseModel):

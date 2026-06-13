@@ -12,4 +12,8 @@ type Node struct {
 	MachineID int `json:"machineid" yaml:"machineid"`
 	// SystemID is the unique identifier for the node in machine provider
 	SystemID string `json:"systemid" yaml:"systemid"`
+	// Arch is the machine architecture (e.g. "amd64", "arm64").
+	Arch string `json:"arch" yaml:"arch"`
+	// IsDPU indicates whether the node is a MAAS-enrolled DPU.
+	IsDPU *bool `json:"is_dpu,omitempty" yaml:"is_dpu,omitempty"`
 }

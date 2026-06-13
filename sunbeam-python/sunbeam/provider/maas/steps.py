@@ -92,6 +92,8 @@ Roles can be assigned to a machine by applying tags in MAAS.
 More on assigning tags: https://maas.io/docs/how-to-use-machine-tags
 """
 MACHINE_DEPLOY_TIMEOUT = 3600
+# "amd64" is the Debian/MAAS name for x86_64.
+DEFAULT_ARCHITECTURE = "amd64"
 
 
 class AddMaasDeployment(BaseStep):
@@ -1417,7 +1419,7 @@ class MaasRemoveDeploymentCredentialsStep(BaseStep):
 class MaasAddMachinesToClusterdStep(BaseStep):
     """Add machines from MAAS to Clusterd."""
 
-    nodes: Sequence[tuple[str, str]] | None
+    nodes: Sequence[dict] | None
     machines: Sequence[dict] | None
 
     def __init__(self, client: Client, maas_client: maas_client.MaasClient):
@@ -1446,24 +1448,41 @@ class MaasAddMachinesToClusterdStep(BaseStep):
             for machine in filtered_machines:
                 if node["name"] == machine["hostname"]:
                     filtered_machines.remove(machine)
-                    if sorted(node["role"]) != sorted(machine["roles"]):
-                        nodes_to_update.append((machine["hostname"], machine["roles"]))
+                    if (
+                        sorted(node["role"]) != sorted(machine["roles"])
+                        or node.get("arch", DEFAULT_ARCHITECTURE)
+                        != machine.get("architecture", DEFAULT_ARCHITECTURE)
+                        or node.get("is_dpu", False) != machine.get("is_dpu", False)
+                        or node.get("systemid", "") != machine["system_id"]
+                    ):
+                        nodes_to_update.append(machine)
+                    break
         self.nodes = nodes_to_update
         self.machines = filtered_machines
         return Result(ResultType.COMPLETED)
 
     def run(self, context: StepContext) -> Result:
-        """Add machines to Juju model."""
+        """Add machines to clusterd."""
         if self.machines is None or self.nodes is None:
             # only happens if is_skip() was not called before, or if run executed
             # even if is_skip reported a failure
             return Result(ResultType.FAILED, "No machines to add / node to update.")
         for machine in self.machines:
             self.client.cluster.add_node_info(
-                machine["hostname"], machine["roles"], systemid=machine["system_id"]
+                machine["hostname"],
+                machine["roles"],
+                systemid=machine["system_id"],
+                arch=machine.get("architecture", DEFAULT_ARCHITECTURE),
+                is_dpu=machine.get("is_dpu", False),
             )
-        for node in self.nodes:
-            self.client.cluster.update_node_info(*node)  # type: ignore
+        for machine in self.nodes:
+            self.client.cluster.update_node_info(
+                machine["hostname"],
+                machine["roles"],
+                systemid=machine["system_id"],
+                arch=machine.get("architecture", DEFAULT_ARCHITECTURE),
+                is_dpu=machine.get("is_dpu", False),
+            )
         return Result(ResultType.COMPLETED)
 
 
@@ -1502,12 +1521,14 @@ class MaasDeployMachinesStep(BaseStep):
         client: Client,
         jhelper: JujuHelper,
         model: str,
+        manifest: "Manifest | None" = None,
     ):
         super().__init__("Deploy machines", "Deploying machines in Juju")
         self.client = client
         self.deployment = deployment
         self.jhelper = jhelper
         self.model = model
+        self.manifest = manifest
 
     def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not."""
@@ -1560,15 +1581,55 @@ class MaasDeployMachinesStep(BaseStep):
             return Result(ResultType.SKIPPED)
         return Result(ResultType.COMPLETED)
 
+    def _get_node_architecture(self, node: dict) -> str:
+        """Return the architecture stored in clusterd for this node."""
+        return node.get("arch") or DEFAULT_ARCHITECTURE
+
+    def _get_node_constraints(self, node: dict) -> list[str]:
+        """Return the Juju constraints for deploying this node.
+
+        For arm64 nodes with a custom image configured in the manifest,
+        adds image-id and arch constraints so MAAS deploys the correct
+        OS image (e.g. BF DOCA on a DPU).
+        """
+        constraints = ["tags=" + self.deployment.resource_tag]
+
+        dpu_arm64_image_id = (
+            self.manifest.core.software.juju.dpu_arm64_image_id
+            if self.manifest is not None
+            else None
+        )
+        if dpu_arm64_image_id is None:
+            return constraints
+
+        architecture = self._get_node_architecture(node)
+
+        if architecture == "arm64":
+            LOG.debug(
+                "Node %r is arm64 — adding image-id=%r constraint",
+                node["name"],
+                dpu_arm64_image_id,
+            )
+            constraints.append("image-id=" + dpu_arm64_image_id)
+            constraints.append("arch=arm64")
+
+        return constraints
+
     def run(self, context: StepContext) -> Result:
         """Deploy machines in Juju."""
         for node in self.nodes_to_deploy:
             self.update_status(context, f"deploying {node['name']}")
-            LOG.debug("Adding machine %s to model %s", node["name"], self.model)
+            constraints = self._get_node_constraints(node)
+            LOG.debug(
+                "Adding machine %s to model %s with constraints %s",
+                node["name"],
+                self.model,
+                constraints,
+            )
             juju_machine = self.jhelper.add_machine(
                 "system-id=" + node["systemid"],
                 self.model,
-                constraints=["tags=" + self.deployment.resource_tag],
+                constraints=constraints,
             )
             self.client.cluster.update_node_info(
                 node["name"], machineid=int(juju_machine)
