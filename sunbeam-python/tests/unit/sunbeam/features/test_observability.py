@@ -544,6 +544,149 @@ class TestRemoveObservabilityAgentStep:
         assert result.message == "timed out"
 
 
+class TestDeployObservabilityAgentInfraStep:
+    def test_run(
+        self, deployment, tfhelper, jhelper, observabilityfeature, step_context
+    ):
+        deployment.infra_model = "openstack-infra"
+        step = observability_feature.DeployObservabilityAgentInfraStep(
+            deployment, observabilityfeature, tfhelper, jhelper
+        )
+        result = step.run(step_context)
+
+        tfhelper.update_tfvars_and_apply_tf.assert_called_once()
+        jhelper.wait_application_ready.assert_called_once()
+        assert result.result_type == ResultType.COMPLETED
+
+    def test_run_uses_sunbeam_clusterd_for_juju_info(
+        self, deployment, tfhelper, jhelper, observabilityfeature, step_context
+    ):
+        """sunbeam-clusterd is the juju-info principal, cos-agent list is empty.
+
+        Also asserts that tls_insecure_skip_verify is NOT set for the infra model.
+        """
+        deployment.infra_model = "openstack-infra"
+        step = observability_feature.DeployObservabilityAgentInfraStep(
+            deployment, observabilityfeature, tfhelper, jhelper
+        )
+        step.run(step_context)
+
+        call_kwargs = tfhelper.update_tfvars_and_apply_tf.call_args.kwargs
+        override_tfvars = call_kwargs["override_tfvars"]
+        assert override_tfvars["observability-agent-integration-apps"] == []
+        assert override_tfvars["observability-agent-integration-apps-juju-info"] == [
+            observability_feature.SUNBEAM_CLUSTERD_APP
+        ]
+        assert "opentelemetry-collector-config" not in override_tfvars
+
+    def test_run_tf_apply_failed(
+        self,
+        deployment,
+        tfhelper,
+        jhelper,
+        observabilityfeature,
+        step_context,
+    ):
+        deployment.infra_model = "openstack-infra"
+        tfhelper.update_tfvars_and_apply_tf.side_effect = TerraformException(
+            "apply failed..."
+        )
+
+        step = observability_feature.DeployObservabilityAgentInfraStep(
+            deployment, observabilityfeature, tfhelper, jhelper
+        )
+        result = step.run(step_context)
+
+        tfhelper.update_tfvars_and_apply_tf.assert_called_once()
+        jhelper.wait_application_ready.assert_not_called()
+        assert result.result_type == ResultType.FAILED
+        assert result.message == "apply failed..."
+
+    def test_run_waiting_timed_out(
+        self,
+        deployment,
+        tfhelper,
+        jhelper,
+        observabilityfeature,
+        step_context,
+    ):
+        deployment.infra_model = "openstack-infra"
+        jhelper.wait_application_ready.side_effect = TimeoutError("timed out")
+
+        step = observability_feature.DeployObservabilityAgentInfraStep(
+            deployment, observabilityfeature, tfhelper, jhelper
+        )
+        result = step.run(step_context)
+
+        tfhelper.update_tfvars_and_apply_tf.assert_called_once()
+        jhelper.wait_application_ready.assert_called_once()
+        assert result.result_type == ResultType.FAILED
+        assert result.message == "timed out"
+
+
+class TestRemoveObservabilityAgentInfraStep:
+    def test_run(
+        self,
+        deployment,
+        tfhelper,
+        jhelper,
+        observabilityfeature,
+        update_config,
+        step_context,
+    ):
+        deployment.infra_model = "openstack-infra"
+        step = observability_feature.RemoveObservabilityAgentInfraStep(
+            deployment, observabilityfeature, tfhelper, jhelper
+        )
+        result = step.run(step_context)
+
+        tfhelper.destroy.assert_called_once()
+        jhelper.wait_application_gone.assert_called_once()
+        assert result.result_type == ResultType.COMPLETED
+
+    def test_run_tf_destroy_failed(
+        self,
+        deployment,
+        tfhelper,
+        jhelper,
+        observabilityfeature,
+        step_context,
+    ):
+        deployment.infra_model = "openstack-infra"
+        tfhelper.destroy.side_effect = TerraformException("destroy failed...")
+
+        step = observability_feature.RemoveObservabilityAgentInfraStep(
+            deployment, observabilityfeature, tfhelper, jhelper
+        )
+        result = step.run(step_context)
+
+        tfhelper.destroy.assert_called_once()
+        jhelper.wait_application_gone.assert_not_called()
+        assert result.result_type == ResultType.FAILED
+        assert result.message == "destroy failed..."
+
+    def test_run_waiting_timed_out(
+        self,
+        deployment,
+        tfhelper,
+        jhelper,
+        observabilityfeature,
+        step_context,
+    ):
+        deployment.infra_model = "openstack-infra"
+        jhelper.wait_application_gone.side_effect = TimeoutError("timed out")
+
+        step = observability_feature.RemoveObservabilityAgentInfraStep(
+            deployment, observabilityfeature, tfhelper, jhelper
+        )
+        result = step.run(step_context)
+
+        tfhelper.destroy.assert_called_once()
+        jhelper.wait_application_gone.assert_called_once()
+        assert result.result_type == ResultType.FAILED
+        assert result.message == "timed out"
+
+
 class TestIntegrateRemoteCosOffersStep:
     def test_run(
         self, deployment, jhelper, observabilityfeature, snap, run, step_context
@@ -583,6 +726,63 @@ class TestIntegrateRemoteCosOffersStep:
         jhelper.wait_application_ready.assert_called()
         assert result.result_type == ResultType.FAILED
         assert result.message == "timed out"
+
+    def test_run_maas_includes_infra_model(
+        self,
+        deployment,
+        jhelper,
+        observabilityfeature,
+        snap,
+        run,
+        step_context,
+    ):
+        """For MAAS deployments, infra_model is included in the integration loop."""
+        observabilityfeature.grafana_offer_url = "remotecos:admin/grafana"
+        observabilityfeature.prometheus_offer_url = "remotecos:admin/prometheus"
+        observabilityfeature.loki_offer_url = "remotecos:admin/loki"
+        deployment.openstack_machines_model = "openstack-machines"
+        deployment.infra_model = "openstack-infra"
+
+        with patch(
+            "sunbeam.features.observability.feature.is_maas_deployment",
+            return_value=True,
+        ):
+            step = observability_feature.IntegrateRemoteCosOffersStep(
+                deployment, observabilityfeature, jhelper
+            )
+            result = step.run(step_context)
+
+        # wait_application_ready called for 3 models: openstack, machines, infra
+        assert jhelper.wait_application_ready.call_count == 3
+        assert result.result_type == ResultType.COMPLETED
+
+    def test_run_non_maas_excludes_infra_model(
+        self,
+        deployment,
+        jhelper,
+        observabilityfeature,
+        snap,
+        run,
+        step_context,
+    ):
+        """For non-MAAS deployments, only openstack and machines models are used."""
+        observabilityfeature.grafana_offer_url = "remotecos:admin/grafana"
+        observabilityfeature.prometheus_offer_url = "remotecos:admin/prometheus"
+        observabilityfeature.loki_offer_url = "remotecos:admin/loki"
+        deployment.openstack_machines_model = "openstack-machines"
+
+        with patch(
+            "sunbeam.features.observability.feature.is_maas_deployment",
+            return_value=False,
+        ):
+            step = observability_feature.IntegrateRemoteCosOffersStep(
+                deployment, observabilityfeature, jhelper
+            )
+            result = step.run(step_context)
+
+        # wait_application_ready called for 2 models only: openstack, machines
+        assert jhelper.wait_application_ready.call_count == 2
+        assert result.result_type == ResultType.COMPLETED
 
 
 class TestRemoveRemoteCosOffersStep:
@@ -671,6 +871,63 @@ class TestRemoveRemoteCosOffersStep:
         jhelper.wait_application_ready.assert_called()
         assert result.result_type == ResultType.FAILED
         assert result.message == "timed out"
+
+    def test_run_maas_includes_infra_model(
+        self,
+        deployment,
+        jhelper,
+        observabilityfeature,
+        snap,
+        run,
+        step_context,
+    ):
+        """For MAAS deployments, infra_model is included in the remove loop."""
+        deployment.openstack_machines_model = "openstack-machines"
+        deployment.infra_model = "openstack-infra"
+        # Return empty apps for all 3 models (openstack, machines, infra)
+        jhelper.get_model_status.side_effect = [
+            Mock(apps={}),
+            Mock(apps={}),
+            Mock(apps={}),
+        ]
+        with patch(
+            "sunbeam.features.observability.feature.is_maas_deployment",
+            return_value=True,
+        ):
+            step = observability_feature.RemoveRemoteCosOffersStep(
+                deployment, observabilityfeature, jhelper
+            )
+            result = step.run(step_context)
+
+        # wait_application_ready called for 3 models
+        assert jhelper.wait_application_ready.call_count == 3
+        assert result.result_type == ResultType.COMPLETED
+
+    def test_run_non_maas_excludes_infra_model(
+        self,
+        deployment,
+        jhelper,
+        observabilityfeature,
+        snap,
+        run,
+        step_context,
+    ):
+        """For non-MAAS deployments, only openstack and machines models are used."""
+        deployment.openstack_machines_model = "openstack-machines"
+        # Return empty apps for 2 models (openstack, machines)
+        jhelper.get_model_status.side_effect = [Mock(apps={}), Mock(apps={})]
+        with patch(
+            "sunbeam.features.observability.feature.is_maas_deployment",
+            return_value=False,
+        ):
+            step = observability_feature.RemoveRemoteCosOffersStep(
+                deployment, observabilityfeature, jhelper
+            )
+            result = step.run(step_context)
+
+        # wait_application_ready called for 2 models only
+        assert jhelper.wait_application_ready.call_count == 2
+        assert result.result_type == ResultType.COMPLETED
 
 
 class TestObservabilityFeatureTimeouts:
