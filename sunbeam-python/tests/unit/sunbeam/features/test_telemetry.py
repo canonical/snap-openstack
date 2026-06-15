@@ -101,7 +101,7 @@ class TestTelemetryFeatureDeduplication:
             "openstack-plan": tfhelper_openstack,
             "hypervisor-plan": tfhelper_hypervisor,
             "cinder-volume-plan": tfhelper_cinder_volume,
-            "storage-plan": tfhelper_storage,
+            "storage-backend-plan": tfhelper_storage,
         }[plan]
 
         # Create feature and run enable plans
@@ -113,6 +113,18 @@ class TestTelemetryFeatureDeduplication:
         # (once for cinder-volume-noha, once for cinder-volume)
         # NOT three times (which would be without deduplication)
         assert mock_deploy_step_class.call_count == 2
+
+        # Verify the storage-backend plan was registered before being fetched.
+        # The plan is registered dynamically by the backend instance (it is not in
+        # versions.TERRAFORM_DIR_NAMES), so register_terraform_plan must run first.
+        registering_instances = [
+            inst
+            for inst in mock_backend_instances.values()
+            if inst.register_terraform_plan.called
+        ]
+        assert len(registering_instances) >= 1
+        for inst in registering_instances:
+            inst.register_terraform_plan.assert_called_with(deployment)
 
         # Verify the principals that were processed
         principals_processed = set()
@@ -160,7 +172,7 @@ class TestTelemetryFeatureDeduplication:
             "openstack-plan": tfhelper_openstack,
             "hypervisor-plan": tfhelper_hypervisor,
             "cinder-volume-plan": tfhelper_cinder_volume,
-            "storage-plan": tfhelper_storage,
+            "storage-backend-plan": tfhelper_storage,
         }[plan]
 
         # Create feature and run disable plans
@@ -171,6 +183,16 @@ class TestTelemetryFeatureDeduplication:
         # Verify DeploySpecificCinderVolumeStep was called only twice
         # (once for cinder-volume-noha, once for cinder-volume)
         assert mock_deploy_step_class.call_count == 2
+
+        # Verify the storage-backend plan was registered before being fetched.
+        registering_instances = [
+            inst
+            for inst in mock_backend_instances.values()
+            if inst.register_terraform_plan.called
+        ]
+        assert len(registering_instances) >= 1
+        for inst in registering_instances:
+            inst.register_terraform_plan.assert_called_with(deployment)
 
         # Verify the principals that were processed
         principals_processed = set()
@@ -258,7 +280,7 @@ class TestTelemetryFeatureDeduplication:
             "openstack-plan": tfhelper_openstack,
             "hypervisor-plan": tfhelper_hypervisor,
             "cinder-volume-plan": tfhelper_cinder_volume,
-            "storage-plan": tfhelper_storage,
+            "storage-backend-plan": tfhelper_storage,
         }[plan]
 
         # Create feature and run enable plans
@@ -309,7 +331,7 @@ class TestTelemetryFeatureDeduplication:
             "openstack-plan": tfhelper_openstack,
             "hypervisor-plan": tfhelper_hypervisor,
             "cinder-volume-plan": tfhelper_cinder_volume,
-            "storage-plan": tfhelper_storage,
+            "storage-backend-plan": tfhelper_storage,
         }[plan]
 
         # Create feature and run disable plans
