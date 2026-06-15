@@ -15,7 +15,7 @@ def determine_version() -> str:
         snap = Snap()
         risk = str(snap.config.get("deployment.version"))
     except Exception:
-        risk = "2024.1"
+        risk = "2025.1"
     return risk
 
 

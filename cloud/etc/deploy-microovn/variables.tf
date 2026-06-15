@@ -21,7 +21,7 @@ variable "charm_microovn_config" {
 variable "charm_openstack_network_agents_channel" {
   description = "Operator channel for openstack-network-agents deployment"
   type        = string
-  default     = "2024.1/stable"
+  default     = "2025.1/stable"
 }
 
 variable "charm_openstack_network_agents_revision" {
@@ -66,7 +66,7 @@ variable "charm_microcluster_token_distributor_config" {
 variable "charm_sunbeam_ovn_proxy_channel" {
   description = "Operator channel for sunbeam-ovn-proxy deployment"
   type        = string
-  default     = "2024.1/stable"
+  default     = "2025.1/stable"
 }
 
 variable "charm_sunbeam_ovn_proxy_revision" {

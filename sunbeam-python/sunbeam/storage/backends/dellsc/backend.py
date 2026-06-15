@@ -162,7 +162,7 @@ class DellSCBackend(StorageBackendBase):
     @property
     def charm_channel(self) -> str:
         """Return the charm channel for this backend."""
-        return "2024.1/edge"
+        return "2025.1/edge"
 
     @property
     def charm_revision(self) -> str | None:
