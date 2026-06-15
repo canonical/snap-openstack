@@ -16,4 +16,6 @@ type Node struct {
 	Arch string `json:"arch" yaml:"arch"`
 	// IsDPU indicates whether the node is a MAAS-enrolled DPU.
 	IsDPU *bool `json:"is_dpu,omitempty" yaml:"is_dpu,omitempty"`
+	// ImageName is the MAAS boot resource name from the dpu-image-<name> tag.
+	ImageName string `json:"image_name,omitempty" yaml:"image_name,omitempty"`
 }

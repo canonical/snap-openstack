@@ -19,6 +19,7 @@ var SchemaExtensions = []schema.Update{
 	StorageBackendSchemaUpdate,
 	FeatureGatesSchemaUpdate,
 	AddArchAndIsDPUToNodes,
+	AddImageNameToNodes,
 }
 
 // NodesSchemaUpdate is schema for table nodes
@@ -116,6 +117,17 @@ ALTER TABLE nodes ADD COLUMN is_dpu INTEGER default 0;
   `
 
 	_, err = tx.Exec(stmt)
+
+	return err
+}
+
+// AddImageNameToNodes is schema update for table nodes
+func AddImageNameToNodes(_ context.Context, tx *sql.Tx) error {
+	stmt := `
+ALTER TABLE nodes ADD COLUMN image_name TEXT default '';
+  `
+
+	_, err := tx.Exec(stmt)
 
 	return err
 }

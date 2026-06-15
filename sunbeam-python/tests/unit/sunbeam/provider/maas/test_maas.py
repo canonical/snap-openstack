@@ -1082,6 +1082,7 @@ class TestMaasAddMachinesToClusterdStep:
                 "system_id": "1st",
                 "architecture": "amd64",
                 "is_dpu": False,
+                "image_name": "",
             },
             {
                 "hostname": "machine2",
@@ -1089,6 +1090,7 @@ class TestMaasAddMachinesToClusterdStep:
                 "system_id": "2nd",
                 "architecture": "arm64",
                 "is_dpu": True,
+                "image_name": "bf-3.2.1-v2-ovs-hack",
             },
         ]
         maas_add_machines_to_clusterd_step.nodes = [
@@ -1098,6 +1100,7 @@ class TestMaasAddMachinesToClusterdStep:
                 "system_id": "1st",
                 "architecture": "amd64",
                 "is_dpu": False,
+                "image_name": "",
             },
             {
                 "hostname": "machine2",
@@ -1105,8 +1108,10 @@ class TestMaasAddMachinesToClusterdStep:
                 "system_id": "2nd",
                 "architecture": "arm64",
                 "is_dpu": True,
+                "image_name": "bf-3.2.1-v2-ovs-hack",
             },
         ]
+        maas_add_machines_to_clusterd_step.maas_client.ensure_boot_resource_name_exists.return_value = None
         result = maas_add_machines_to_clusterd_step.run(step_context)
         assert result.result_type == ResultType.COMPLETED
         maas_add_machines_to_clusterd_step.client.cluster.add_node_info.assert_any_call(
@@ -1115,6 +1120,7 @@ class TestMaasAddMachinesToClusterdStep:
             systemid="2nd",
             arch="arm64",
             is_dpu=True,
+            image_name="bf-3.2.1-v2-ovs-hack",
         )
         maas_add_machines_to_clusterd_step.client.cluster.update_node_info.assert_any_call(
             "machine2",
@@ -1122,6 +1128,32 @@ class TestMaasAddMachinesToClusterdStep:
             systemid="2nd",
             arch="arm64",
             is_dpu=True,
+            image_name="bf-3.2.1-v2-ovs-hack",
+        )
+
+    def test_run_fails_when_dpu_image_tag_does_not_exist_in_maas(
+        self, maas_add_machines_to_clusterd_step, step_context
+    ):
+        maas_add_machines_to_clusterd_step.machines = [
+            {
+                "hostname": "pc8a-rb3-n4-dpu",
+                "roles": [RoleTags.NETWORK.value],
+                "system_id": "dpu-sys",
+                "architecture": "arm64",
+                "is_dpu": True,
+                "image_name": "missing-image",
+            }
+        ]
+        maas_add_machines_to_clusterd_step.nodes = []
+        maas_add_machines_to_clusterd_step.maas_client.ensure_boot_resource_name_exists.side_effect = ValueError(
+            "Image with name missing-image is missing from maas boot-resources"
+        )
+
+        result = maas_add_machines_to_clusterd_step.run(step_context)
+
+        assert result.result_type == ResultType.FAILED
+        assert result.message == (
+            "Image with name missing-image is missing from maas boot-resources"
         )
 
 
@@ -1136,22 +1168,14 @@ class TestMaasDeployMachinesStep:
         return MaasDeployMachinesStep(deployment, client, jhelper, model)
 
     @pytest.fixture
-    def step_with_arm64_manifest(self):
-        """Step configured with a manifest that sets dpu_arm64_image_id."""
+    def step_with_dpu_image_tag(self):
+        """Step configured for a clusterd node with a dpu-image tag."""
         deployment = Mock()
         deployment.resource_tag = "test-tag"
         client = Mock()
         jhelper = Mock()
         model = "test_model"
-        manifest = Mock()
-        manifest.core.software.juju.dpu_arm64_image_id = "bf-321-v2-ovs-hack"
-        return MaasDeployMachinesStep(
-            deployment,
-            client,
-            jhelper,
-            model,
-            manifest=manifest,
-        )
+        return MaasDeployMachinesStep(deployment, client, jhelper, model)
 
     def test_is_skip_with_no_clusterd_nodes(
         self, maas_deploy_machines_step, step_context
@@ -1226,57 +1250,56 @@ class TestMaasDeployMachinesStep:
             maas_deploy_machines_step.jhelper.wait_all_machines_deployed.call_count == 1
         )
 
-    def test_get_node_constraints_returns_default_when_no_manifest(
+    def test_get_node_constraints_returns_default_without_dpu_image_tag(
         self, maas_deploy_machines_step
     ):
-        """No manifest → only default tag constraint."""
-        maas_deploy_machines_step.manifest = None
-        node = {"name": "n1", "systemid": "s1"}
+        """No image_name in clusterd → only default tag constraint."""
+        node = {"name": "n1", "systemid": "s1", "arch": "arm64"}
         constraints = maas_deploy_machines_step._get_node_constraints(node)
-        assert constraints == ["tags=test-tag"]
+        assert constraints == ["tags=test-tag", "arch=arm64"]
 
-    def test_get_node_constraints_returns_default_when_image_id_is_none(
-        self, maas_deploy_machines_step
+    def test_get_node_constraints_adds_image_id_from_clusterd(
+        self, step_with_dpu_image_tag
     ):
-        """Manifest present but dpu_arm64_image_id not set → only tag constraint."""
-        manifest = Mock()
-        manifest.core.software.juju.dpu_arm64_image_id = None
-        maas_deploy_machines_step.manifest = manifest
-        node = {"name": "n1", "systemid": "s1"}
-        constraints = maas_deploy_machines_step._get_node_constraints(node)
-        assert constraints == ["tags=test-tag"]
-
-    def test_get_node_constraints_adds_image_id_for_arm64_node(
-        self, step_with_arm64_manifest
-    ):
-        """arm64 node with dpu_arm64_image_id in manifest → adds image-id constraint."""
-        step = step_with_arm64_manifest
+        """arm64 node with image_name in clusterd → adds image-id constraint."""
+        step = step_with_dpu_image_tag
         constraints = step._get_node_constraints(
-            {"name": "n4-dpu", "systemid": "arm-sys", "arch": "arm64"}
+            {
+                "name": "n4-dpu",
+                "systemid": "arm-sys",
+                "arch": "arm64",
+                "image_name": "bf-3.2.1-v2-ovs-hack",
+            }
         )
         assert "tags=test-tag" in constraints
-        assert "image-id=bf-321-v2-ovs-hack" in constraints
+        assert "image-id=bf-3.2.1-v2-ovs-hack" in constraints
         assert "arch=arm64" in constraints
 
     def test_get_node_constraints_no_image_id_for_amd64_node(
-        self, step_with_arm64_manifest
+        self, step_with_dpu_image_tag
     ):
-        """amd64 node with dpu_arm64_image_id in manifest → no image-id constraint."""
-        step = step_with_arm64_manifest
+        """amd64 node without image_name → no image-id constraint."""
+        step = step_with_dpu_image_tag
         constraints = step._get_node_constraints(
             {"name": "n1", "systemid": "x86-sys", "arch": "amd64"}
         )
         assert constraints == ["tags=test-tag"]
-        assert "image-id=bf-321-v2-ovs-hack" not in constraints
+        assert "image-id=bf-3.2.1-v2-ovs-hack" not in constraints
 
     def test_run_uses_image_id_constraint_for_arm64_and_default_for_amd64(
-        self, step_with_arm64_manifest, step_context
+        self, step_with_dpu_image_tag, step_context
     ):
         """Mixed cluster: arm64 DPU gets image-id constraint, amd64 does not."""
-        step = step_with_arm64_manifest
+        step = step_with_dpu_image_tag
         step.nodes_to_deploy = [
             {"name": "n1-x86", "systemid": "x86-sys", "arch": "amd64"},
-            {"name": "n4-dpu", "systemid": "arm-sys", "arch": "arm64"},
+            {
+                "name": "n4-dpu",
+                "systemid": "arm-sys",
+                "arch": "arm64",
+                "is_dpu": True,
+                "image_name": "bf-3.2.1-v2-ovs-hack",
+            },
         ]
         step.nodes_to_update = []
         step.jhelper.add_machine.side_effect = ["0", "1"]
@@ -1286,13 +1309,37 @@ class TestMaasDeployMachinesStep:
 
         assert result.result_type == ResultType.COMPLETED
         calls = step.jhelper.add_machine.call_args_list
-        # First call: x86 node → only tags constraint
+        # First batch (non-DPU) deploys x86 before DPU
         assert calls[0].kwargs["constraints"] == ["tags=test-tag"]
-        # Second call: arm64 DPU → tags + image-id + arch constraints
         arm_constraints = calls[1].kwargs["constraints"]
         assert "tags=test-tag" in arm_constraints
-        assert "image-id=bf-321-v2-ovs-hack" in arm_constraints
+        assert "image-id=bf-3.2.1-v2-ovs-hack" in arm_constraints
         assert "arch=arm64" in arm_constraints
+        assert step.jhelper.wait_all_machines_deployed.call_count == 2
+
+    def test_run_deploys_non_dpu_before_dpu(
+        self, maas_deploy_machines_step, step_context
+    ):
+        step = maas_deploy_machines_step
+        step.nodes_to_deploy = [
+            {
+                "name": "pc8a-rb3-n4-dpu",
+                "systemid": "dpu-sys",
+                "is_dpu": True,
+            },
+            {"name": "pc8a-rb3-n4", "systemid": "host-sys", "is_dpu": False},
+        ]
+        step.nodes_to_update = []
+        step.jhelper.add_machine.side_effect = ["9", "10"]
+        step.jhelper.get_machines.return_value = {}
+
+        result = step.run(step_context)
+
+        assert result.result_type == ResultType.COMPLETED
+        calls = step.jhelper.add_machine.call_args_list
+        assert calls[0].args[0] == "system-id=host-sys"
+        assert calls[1].args[0] == "system-id=dpu-sys"
+        assert step.jhelper.wait_all_machines_deployed.call_count == 2
 
 
 class TestMaasDeployInfraMachinesStep:
@@ -2396,3 +2443,29 @@ class TestIsMaasDeployment:
         # Create a mock non-MAAS deployment
         deployment = mocker.Mock(spec=Deployment)
         assert is_maas_deployment(deployment) is False
+
+
+class TestParseImageNameFromTags:
+    def test_extracts_image_name_from_tag(self):
+        from sunbeam.provider.maas.client import parse_image_name_from_tags
+
+        assert (
+            parse_image_name_from_tags(["network", "dpu-image-bf-3.2.1-v2-ovs-hack"])
+            == "bf-3.2.1-v2-ovs-hack"
+        )
+
+    def test_returns_none_when_tag_missing(self):
+        from sunbeam.provider.maas.client import parse_image_name_from_tags
+
+        assert parse_image_name_from_tags(["network", "dpu"]) is None
+
+    def test_returns_none_when_tag_names_missing(self):
+        from sunbeam.provider.maas.client import parse_image_name_from_tags
+
+        assert parse_image_name_from_tags(None) is None
+
+    def test_raises_when_multiple_dpu_image_tags(self):
+        from sunbeam.provider.maas.client import parse_image_name_from_tags
+
+        with pytest.raises(ValueError, match="Multiple dpu-image tags"):
+            parse_image_name_from_tags(["dpu-image-one", "dpu-image-two"])

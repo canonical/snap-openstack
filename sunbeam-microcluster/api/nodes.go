@@ -75,7 +75,7 @@ func cmdNodesPost(s state.State, r *http.Request) response.Response {
 	if req.IsDPU != nil {
 		isDPU = *req.IsDPU
 	}
-	err = sunbeam.AddNode(r.Context(), s, req.Name, req.Role, req.MachineID, req.SystemID, req.Arch, isDPU)
+	err = sunbeam.AddNode(r.Context(), s, req.Name, req.Role, req.MachineID, req.SystemID, req.Arch, isDPU, req.ImageName)
 	if err != nil {
 		return response.InternalError(err)
 	}
@@ -85,18 +85,33 @@ func cmdNodesPost(s state.State, r *http.Request) response.Response {
 
 func cmdNodesPut(s state.State, r *http.Request) response.Response {
 	req := apitypes.Node{MachineID: -1}
+	raw := map[string]json.RawMessage{}
 
 	name, err := url.PathUnescape(mux.Vars(r)["name"])
 	if err != nil {
 		return response.InternalError(err)
 	}
 
-	err = json.NewDecoder(r.Body).Decode(&req)
+	decoder := json.NewDecoder(r.Body)
+	if err := decoder.Decode(&raw); err != nil {
+		return response.InternalError(err)
+	}
+
+	payload, err := json.Marshal(raw)
 	if err != nil {
 		return response.InternalError(err)
 	}
 
-	err = sunbeam.UpdateNode(r.Context(), s, name, req.Role, req.MachineID, req.SystemID, req.Arch, req.IsDPU)
+	if err := json.Unmarshal(payload, &req); err != nil {
+		return response.InternalError(err)
+	}
+
+	var imageName *string
+	if _, ok := raw["image_name"]; ok {
+		imageName = &req.ImageName
+	}
+
+	err = sunbeam.UpdateNode(r.Context(), s, name, req.Role, req.MachineID, req.SystemID, req.Arch, req.IsDPU, imageName)
 	if err != nil {
 		return response.InternalError(err)
 	}

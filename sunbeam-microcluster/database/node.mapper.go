@@ -18,14 +18,14 @@ import (
 var _ = api.ServerEnvironment{}
 
 var nodeObjects = cluster.RegisterStmt(`
-SELECT nodes.id, core_cluster_members.name AS member, nodes.name, nodes.role, nodes.machine_id, nodes.system_id, nodes.arch, nodes.is_dpu
+SELECT nodes.id, core_cluster_members.name AS member, nodes.name, nodes.role, nodes.machine_id, nodes.system_id, nodes.arch, nodes.is_dpu, nodes.image_name
   FROM nodes
   JOIN core_cluster_members ON nodes.member_id = core_cluster_members.id
   ORDER BY nodes.name
 `)
 
 var nodeObjectsByMember = cluster.RegisterStmt(`
-SELECT nodes.id, core_cluster_members.name AS member, nodes.name, nodes.role, nodes.machine_id, nodes.system_id, nodes.arch, nodes.is_dpu
+SELECT nodes.id, core_cluster_members.name AS member, nodes.name, nodes.role, nodes.machine_id, nodes.system_id, nodes.arch, nodes.is_dpu, nodes.image_name
   FROM nodes
   JOIN core_cluster_members ON nodes.member_id = core_cluster_members.id
   WHERE ( member = ? )
@@ -33,7 +33,7 @@ SELECT nodes.id, core_cluster_members.name AS member, nodes.name, nodes.role, no
 `)
 
 var nodeObjectsByName = cluster.RegisterStmt(`
-SELECT nodes.id, core_cluster_members.name AS member, nodes.name, nodes.role, nodes.machine_id, nodes.system_id, nodes.arch, nodes.is_dpu
+SELECT nodes.id, core_cluster_members.name AS member, nodes.name, nodes.role, nodes.machine_id, nodes.system_id, nodes.arch, nodes.is_dpu, nodes.image_name
   FROM nodes
   JOIN core_cluster_members ON nodes.member_id = core_cluster_members.id
   WHERE ( nodes.name = ? )
@@ -41,7 +41,7 @@ SELECT nodes.id, core_cluster_members.name AS member, nodes.name, nodes.role, no
 `)
 
 var nodeObjectsByRole = cluster.RegisterStmt(`
-SELECT nodes.id, core_cluster_members.name AS member, nodes.name, nodes.role, nodes.machine_id, nodes.system_id, nodes.arch, nodes.is_dpu
+SELECT nodes.id, core_cluster_members.name AS member, nodes.name, nodes.role, nodes.machine_id, nodes.system_id, nodes.arch, nodes.is_dpu, nodes.image_name
   FROM nodes
   JOIN core_cluster_members ON nodes.member_id = core_cluster_members.id
   WHERE ( nodes.role = ? )
@@ -49,7 +49,7 @@ SELECT nodes.id, core_cluster_members.name AS member, nodes.name, nodes.role, no
 `)
 
 var nodeObjectsByMachineID = cluster.RegisterStmt(`
-SELECT nodes.id, core_cluster_members.name AS member, nodes.name, nodes.role, nodes.machine_id, nodes.system_id, nodes.arch, nodes.is_dpu
+SELECT nodes.id, core_cluster_members.name AS member, nodes.name, nodes.role, nodes.machine_id, nodes.system_id, nodes.arch, nodes.is_dpu, nodes.image_name
   FROM nodes
   JOIN core_cluster_members ON nodes.member_id = core_cluster_members.id
   WHERE ( nodes.machine_id = ? )
@@ -62,8 +62,8 @@ SELECT nodes.id FROM nodes
 `)
 
 var nodeCreate = cluster.RegisterStmt(`
-INSERT INTO nodes (member_id, name, role, machine_id, system_id, arch, is_dpu)
-  VALUES ((SELECT core_cluster_members.id FROM core_cluster_members WHERE core_cluster_members.name = ?), ?, ?, ?, ?, ?, ?)
+INSERT INTO nodes (member_id, name, role, machine_id, system_id, arch, is_dpu, image_name)
+  VALUES ((SELECT core_cluster_members.id FROM core_cluster_members WHERE core_cluster_members.name = ?), ?, ?, ?, ?, ?, ?, ?)
 `)
 
 var nodeDeleteByName = cluster.RegisterStmt(`
@@ -72,14 +72,14 @@ DELETE FROM nodes WHERE name = ?
 
 var nodeUpdate = cluster.RegisterStmt(`
 UPDATE nodes
-  SET member_id = (SELECT core_cluster_members.id FROM core_cluster_members WHERE core_cluster_members.name = ?), name = ?, role = ?, machine_id = ?, system_id = ?, arch = ?, is_dpu = ?
+  SET member_id = (SELECT core_cluster_members.id FROM core_cluster_members WHERE core_cluster_members.name = ?), name = ?, role = ?, machine_id = ?, system_id = ?, arch = ?, is_dpu = ?, image_name = ?
  WHERE id = ?
 `)
 
 // nodeColumns returns a string of column names to be used with a SELECT statement for the entity.
 // Use this function when building statements to retrieve database entries matching the Node entity.
 func nodeColumns() string {
-	return "nodes.id, core_cluster_members.name AS member, nodes.name, nodes.role, nodes.machine_id, nodes.system_id, nodes.arch, nodes.is_dpu"
+	return "nodes.id, core_cluster_members.name AS member, nodes.name, nodes.role, nodes.machine_id, nodes.system_id, nodes.arch, nodes.is_dpu, nodes.image_name"
 }
 
 // getNodes can be used to run handwritten sql.Stmts to return a slice of objects.
@@ -88,7 +88,7 @@ func getNodes(ctx context.Context, stmt *sql.Stmt, args ...any) ([]Node, error) 
 
 	dest := func(scan func(dest ...any) error) error {
 		n := Node{}
-		err := scan(&n.ID, &n.Member, &n.Name, &n.Role, &n.MachineID, &n.SystemID, &n.Arch, &n.IsDPU)
+		err := scan(&n.ID, &n.Member, &n.Name, &n.Role, &n.MachineID, &n.SystemID, &n.Arch, &n.IsDPU, &n.ImageName)
 		if err != nil {
 			return err
 		}
@@ -112,7 +112,7 @@ func getNodesRaw(ctx context.Context, tx *sql.Tx, sql string, args ...any) ([]No
 
 	dest := func(scan func(dest ...any) error) error {
 		n := Node{}
-		err := scan(&n.ID, &n.Member, &n.Name, &n.Role, &n.MachineID, &n.SystemID, &n.Arch, &n.IsDPU)
+		err := scan(&n.ID, &n.Member, &n.Name, &n.Role, &n.MachineID, &n.SystemID, &n.Arch, &n.IsDPU, &n.ImageName)
 		if err != nil {
 			return err
 		}
@@ -340,7 +340,7 @@ func CreateNode(ctx context.Context, tx *sql.Tx, object Node) (int64, error) {
 		return -1, api.StatusErrorf(http.StatusConflict, "This \"nodes\" entry already exists")
 	}
 
-	args := make([]any, 7)
+	args := make([]any, 8)
 
 	// Populate the statement arguments.
 	args[0] = object.Member
@@ -350,6 +350,7 @@ func CreateNode(ctx context.Context, tx *sql.Tx, object Node) (int64, error) {
 	args[4] = object.SystemID
 	args[5] = object.Arch
 	args[6] = object.IsDPU
+	args[7] = object.ImageName
 
 	// Prepared statement to use.
 	stmt, err := cluster.Stmt(tx, nodeCreate)
@@ -411,7 +412,7 @@ func UpdateNode(ctx context.Context, tx *sql.Tx, name string, object Node) error
 		return fmt.Errorf("Failed to get \"nodeUpdate\" prepared statement: %w", err)
 	}
 
-	result, err := stmt.Exec(object.Member, object.Name, object.Role, object.MachineID, object.SystemID, object.Arch, object.IsDPU, id)
+	result, err := stmt.Exec(object.Member, object.Name, object.Role, object.MachineID, object.SystemID, object.Arch, object.IsDPU, object.ImageName, id)
 	if err != nil {
 		return fmt.Errorf("Update \"nodes\" entry failed: %w", err)
 	}

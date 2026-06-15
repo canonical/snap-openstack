@@ -31,6 +31,29 @@ console = Console()
 
 # "amd64" is the Debian/MAAS name for x86_64.
 DEFAULT_ARCHITECTURE = "amd64"
+DPU_IMAGE_TAG_PREFIX = "dpu-image-"
+
+
+def parse_image_name_from_tags(tag_names: list[str] | None) -> str | None:
+    """Return the MAAS boot resource name from a dpu-image-<name> machine tag.
+
+    :param tag_names: MAAS tag names assigned to the machine.
+    :raises ValueError: if more than one dpu-image tag is present.
+    """
+    if not tag_names:
+        return None
+    matches = [
+        tag[len(DPU_IMAGE_TAG_PREFIX) :]
+        for tag in tag_names
+        if tag.startswith(DPU_IMAGE_TAG_PREFIX)
+    ]
+    if len(matches) > 1:
+        raise ValueError(
+            "Multiple dpu-image tags found on machine: "
+            + ", ".join(matches)
+            + ". Only one dpu-image-<name> tag is allowed."
+        )
+    return matches[0] if matches else None
 
 
 class MaasClient:
@@ -39,6 +62,25 @@ class MaasClient:
     def __init__(self, url: str, token: str, resource_tag: str | None = None):
         self._client = maas_client.connect(url, apikey=token)
         self.resource_tag = resource_tag
+
+    def list_boot_resource_names(self) -> set[str]:
+        """Return the names of all boot resources registered in MAAS."""
+        try:
+            resources = self._client.boot_resources.list.__self__._handler.read()  # type: ignore # noqa
+        except maas_bones.CallError as e:
+            raise ValueError(f"Failed to list MAAS boot resources: {e}") from e
+        return {resource["name"] for resource in resources}
+
+    def ensure_boot_resource_name_exists(self, name: str) -> None:
+        """Verify that a MAAS boot resource name exists.
+
+        :param name: Boot resource name from a dpu-image-<name> tag.
+        :raises ValueError: if the image is not registered in MAAS.
+        """
+        boot_resources = self.list_boot_resource_names()
+        if name in boot_resources:
+            return
+        raise ValueError(f"Image with name {name} is missing from maas boot-resources")
 
     def ensure_tag(self, tag: str):
         """Create a tag if it does not already exist."""
@@ -287,11 +329,13 @@ def _convert_raw_machine(machine_raw: dict, root_disk: dict | None) -> dict:
     architecture = raw_arch.split("/")[0] if raw_arch else DEFAULT_ARCHITECTURE
 
     is_dpu = bool(machine_raw.get("is_dpu", False))
+    tag_names = machine_raw.get("tag_names") or []
+    image_name = parse_image_name_from_tags(tag_names)
 
-    return {
+    machine = {
         "system_id": machine_raw["system_id"],
         "hostname": machine_raw["hostname"],
-        "roles": list(set(machine_raw["tag_names"]).intersection(RoleTags.values())),
+        "roles": list(set(tag_names).intersection(RoleTags.values())),
         "zone": machine_raw["zone"]["name"],
         "status": machine_raw["status_name"],
         "root_disk": root_disk,
@@ -303,6 +347,9 @@ def _convert_raw_machine(machine_raw: dict, root_disk: dict | None) -> dict:
         "architecture": architecture,
         "is_dpu": is_dpu,
     }
+    if image_name:
+        machine["image_name"] = image_name
+    return machine
 
 
 def list_machines(client: MaasClient, **extra_args) -> list[dict]:
