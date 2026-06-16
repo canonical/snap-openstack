@@ -38,7 +38,8 @@ def parse_image_name_from_tags(tag_names: list[str] | None) -> str | None:
     """Return the MAAS boot resource name from a dpu-image-<name> machine tag.
 
     :param tag_names: MAAS tag names assigned to the machine.
-    :raises ValueError: if more than one dpu-image tag is present.
+    :raises ValueError: if more than one dpu-image tag is present, or if a
+        dpu-image tag has an empty image name (e.g. ``dpu-image-``).
     """
     if not tag_names:
         return None
@@ -52,6 +53,11 @@ def parse_image_name_from_tags(tag_names: list[str] | None) -> str | None:
             "Multiple dpu-image tags found on machine: "
             + ", ".join(matches)
             + ". Only one dpu-image-<name> tag is allowed."
+        )
+    if len(matches) == 1 and not matches[0]:
+        raise ValueError(
+            "Invalid dpu-image tag: image name is empty. "
+            "Use dpu-image-<name> with a non-empty name."
         )
     return matches[0] if matches else None
 

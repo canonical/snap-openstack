@@ -1624,9 +1624,9 @@ class MaasDeployMachinesStep(BaseStep):
     def _get_node_constraints(self, node: dict) -> list[str]:
         """Return the Juju constraints for deploying this node.
 
-        For arm64 nodes with a dpu-image-<name> tag stored in clusterd,
-        adds image-id and arch constraints so MAAS deploys the correct
-        OS image (e.g. BF DOCA on a DPU).
+        Adds arch and image-id constraints from clusterd when the node has a
+        non-default architecture or a custom image name from a dpu-image-<name>
+        MAAS tag.
         """
         constraints = ["tags=" + self.deployment.resource_tag]
         architecture = self._get_node_architecture(node)
@@ -1637,7 +1637,7 @@ class MaasDeployMachinesStep(BaseStep):
 
         if image_name:
             LOG.debug(
-                "Node %r has custom DPU image — adding image-id=%r constraint",
+                "Node %r has custom image — adding image-id=%r constraint",
                 node["name"],
                 image_name,
             )

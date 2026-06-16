@@ -1,6 +1,9 @@
 // Package apitypes provides shared types and structs.
 package apitypes
 
+// DefaultArch is the default node architecture when none is specified.
+const DefaultArch = "amd64"
+
 // Nodes holds list of Node type
 type Nodes []Node
 

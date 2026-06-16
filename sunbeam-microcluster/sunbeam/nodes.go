@@ -87,7 +87,7 @@ func AddNode(ctx context.Context, s state.State, name string, role []string, mac
 	// Add node to the database.
 	err = s.Database().Transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		if arch == "" {
-			arch = "amd64"
+			arch = apitypes.DefaultArch
 		}
 		_, err := database.CreateNode(ctx, tx, database.Node{Member: s.Name(), Name: name, Role: nodeRole, MachineID: machineid, SystemID: systemid, Arch: arch, IsDPU: isDPU, ImageName: imageName})
 		if err != nil {

@@ -2469,3 +2469,9 @@ class TestParseImageNameFromTags:
 
         with pytest.raises(ValueError, match="Multiple dpu-image tags"):
             parse_image_name_from_tags(["dpu-image-one", "dpu-image-two"])
+
+    def test_raises_when_dpu_image_tag_has_empty_name(self):
+        from sunbeam.provider.maas.client import parse_image_name_from_tags
+
+        with pytest.raises(ValueError, match="image name is empty"):
+            parse_image_name_from_tags(["network", "dpu-image-"])
