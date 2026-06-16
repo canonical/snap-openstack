@@ -1011,6 +1011,8 @@ class ObservabilityFeature(OpenStackControlPlaneFeature):
                         "channel": "opentelemetry-collector-channel",
                         "revision": "opentelemetry-collector-revision",
                         "config": "opentelemetry-collector-config",
+                        "storage": "opentelemetry-collector-storage",
+                        "storage-map": "opentelemetry-collector-storage-map",
                     }
                 }
             },
