@@ -145,12 +145,6 @@ class TelemetryFeature(OpenStackControlPlaneFeature):
             storage_manager = StorageBackendManager()
 
             plan3: list[BaseStep] = []
-            # PATCH: the storage-backend plan ("storage-backend-plan") is registered
-            # dynamically by StorageBackendBase.register_terraform_plan() and is NOT
-            # present in versions.TERRAFORM_DIR_NAMES, so it is not loaded by the
-            # deployment's static _load_tfhelpers(). It must be registered before it
-            # can be fetched. Defer fetching until inside the loop where we have a
-            # backend_instance to register with; register + init exactly once.
             tfhelper_storage = None
 
             # Track principal applications to avoid duplicates
@@ -177,8 +171,10 @@ class TelemetryFeature(OpenStackControlPlaneFeature):
                         principal_app = backend_instance.principal_application
                         if principal_app in processed_principals:
                             LOG.debug(
-                                f"Skipping {backend_name}: principal application "
-                                f"{principal_app} already processed"
+                                "Skipping %s: principal application %s "
+                                "already processed",
+                                backend_name,
+                                principal_app,
                             )
                             continue
 
@@ -200,8 +196,9 @@ class TelemetryFeature(OpenStackControlPlaneFeature):
                         )
                 except Exception as e:
                     LOG.warning(
-                        f"Failed to add specific cinder-volume step for backend "
-                        f"{backend_name}: {e}"
+                        "Failed to add specific cinder-volume step for backend %s: %s",
+                        backend_name,
+                        e,
                     )
 
             if len(plan3) > 1:  # More than just TerraformInitStep
@@ -285,8 +282,10 @@ class TelemetryFeature(OpenStackControlPlaneFeature):
                         principal_app = backend_instance.principal_application
                         if principal_app in processed_principals:
                             LOG.debug(
-                                f"Skipping {backend_name}: principal application "
-                                f"{principal_app} already processed"
+                                "Skipping %s: principal application %s "
+                                "already processed",
+                                backend_name,
+                                principal_app,
                             )
                             continue
 
@@ -309,8 +308,9 @@ class TelemetryFeature(OpenStackControlPlaneFeature):
                         )
                 except Exception as e:
                     LOG.warning(
-                        f"Failed to add specific cinder-volume step for backend "
-                        f"{backend_name}: {e}"
+                        "Failed to add specific cinder-volume step for backend %s: %s",
+                        backend_name,
+                        e,
                     )
 
             if len(plan2) > 1:  # More than just TerraformInitStep
