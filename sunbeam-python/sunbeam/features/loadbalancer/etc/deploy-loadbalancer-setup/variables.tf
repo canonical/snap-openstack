@@ -78,7 +78,7 @@ variable "amphora-flavor-vcpus" {
 variable "amphora-flavor-disk" {
   description = "Disk size in GB for Amphora flavor"
   type        = number
-  default     = 2
+  default     = 8
 }
 
 # lb-mgmt-cidr is unused when auto-creating the network (IPv6 CIDR is
