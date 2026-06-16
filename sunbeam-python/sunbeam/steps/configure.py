@@ -87,7 +87,7 @@ def user_questions():
         ),
         "nameservers": sunbeam.core.questions.PromptQuestion(
             "Project network's nameservers",
-            default_function=lambda: " ".join(utils.get_nameservers()),
+            default_function=lambda: ",".join(utils.get_nameservers()),
             description=(
                 "A list of DNS server IP addresses (comma separated)"
                 " that should be used for external DNS resolution from"
@@ -443,7 +443,9 @@ class BaseUserQuestions(BaseStep):
             )
             nameservers = user_bank.nameservers.ask()
             self.variables["user"]["dns_nameservers"] = (
-                nameservers.split() if nameservers else []
+                [n.strip() for n in nameservers.split(",") if n.strip()]
+                if nameservers
+                else []
             )
             self.variables["user"]["security_group_rules"] = (
                 user_bank.security_group_rules.ask()
