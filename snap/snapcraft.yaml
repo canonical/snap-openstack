@@ -5,6 +5,7 @@ license: Apache-2.0
 description: |
   snap-openstack aims to provide a scalable, simple to deploy OpenStack solution.
 version: "2026.1"
+adopt-info: snap-version
 
 confinement: strict
 grade: stable
@@ -62,6 +63,21 @@ apps:
       PATH: $PATH:$SNAP/juju/bin
 
 parts:
+  snap-version:
+    plugin: nil
+    build-packages:
+      - git
+    override-build: |
+      set -eu
+      craftctl default
+      gitref="$(git -C "$CRAFT_PROJECT_DIR" rev-parse --short=8 HEAD)"
+      version="$(craftctl get version)-${gitref}"
+      git -C "$CRAFT_PROJECT_DIR" update-index -q --refresh
+      if ! git -C "$CRAFT_PROJECT_DIR" diff-index --quiet HEAD --; then
+        version="${version}+dirty"
+      fi
+      craftctl set version="${version}"
+
   dqlite:
     source: https://github.com/canonical/dqlite
     source-type: git
