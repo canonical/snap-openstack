@@ -923,7 +923,7 @@ class DeployAmphoraInfraStep(BaseStep, JujuStepHelper):
             self.network_attachment_name,
             cfg.lb_mgmt_network_id,
             cfg.lb_mgmt_subnet_id,
-            cfg.lb_mgmt_secgroup_ids,
+            [cfg.lb_health_secgroup_id] if cfg.lb_health_secgroup_id else [],
         )
         try:
             self.update_status(context, "deploying Multus and OpenStack Port CNI")
