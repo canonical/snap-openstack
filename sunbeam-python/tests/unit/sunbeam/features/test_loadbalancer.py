@@ -683,6 +683,28 @@ class TestDeployAmphoraInfraStepRun:
         # NAD should embed the stored network and subnet IDs
         assert "net-uuid" in override["multus-network-attachment-definitions"]
         assert "subnet-uuid" in override["multus-network-attachment-definitions"]
+        assert (
+            '"security_group_ids": "health-sg-uuid"'
+            in override["multus-network-attachment-definitions"]
+        )
+        assert (
+            '"security_group_ids": "sg-uuid"'
+            not in override["multus-network-attachment-definitions"]
+        )
+
+    def test_nad_yaml_omits_security_group_when_health_group_empty(self):
+        """Empty health secgroup should render as an empty security group list."""
+        result, tfhelper, jhelper = self._run(
+            {**ALL_VARIABLES, _HEALTH_SECGROUP_KEY: ""}
+        )
+        assert result.result_type == ResultType.COMPLETED
+        override = tfhelper.update_tfvars_and_apply_tf.call_args.kwargs[
+            "override_tfvars"
+        ]
+        assert (
+            '"security_group_ids": ""'
+            in override["multus-network-attachment-definitions"]
+        )
 
     def test_terraform_exception_returns_failed(self):
         deployment = Mock()
