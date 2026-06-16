@@ -60,6 +60,7 @@ class BaseTestUserQuestions:
 
     def configure_mocks(self, question_bank):
         user_bank_mock = Mock()
+        user_bank_mock.nameservers.ask.return_value = ""
         net_bank_mock = Mock()
         physnet_bank_mock = Mock()
         physnet_bank_mock.configure_more.ask.return_value = False
@@ -97,6 +98,28 @@ class BaseTestUserQuestions:
 
         self.check_not_demo_questions(user_bank_mock, net_bank_mock)
         self.check_remote_questions(net_bank_mock)
+
+    @pytest.mark.parametrize(
+        "nameserver_input,expected",
+        [
+            ("10.0.0.1,10.0.0.2", ["10.0.0.1", "10.0.0.2"]),
+            ("10.0.0.1, 10.0.0.2", ["10.0.0.1", "10.0.0.2"]),
+            ("10.0.0.1", ["10.0.0.1"]),
+            ("", []),
+        ],
+    )
+    def test_prompt_nameservers_comma_separated(self, nameserver_input, expected):
+        self.load_answers.return_value = {}
+        user_bank_mock, net_bank_mock = self.configure_mocks(self.question_bank)
+
+        self.setup_remote_access(user_bank_mock)
+        user_bank_mock.run_demo_setup.ask.return_value = True
+        user_bank_mock.nameservers.ask.return_value = nameserver_input
+
+        step = self.get_step()
+        step.prompt()
+
+        assert step.variables["user"]["dns_nameservers"] == expected
 
 
 class BaseTestSetHypervisorUnitsOptionsStep:
