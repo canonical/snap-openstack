@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, Mock, patch
 
 import pytest
+import yaml
 
 import sunbeam.core.deployment as deployment_mod
 import sunbeam.core.manifest as manifest_mod
@@ -65,6 +66,22 @@ core:
             tls-ca: dGVzdC1jYQ==
           traefik-rgw:
             tls-ca: dGVzdC1jYQ==
+"""
+
+test_manifest_with_observability_collector_storage = """
+features:
+  observability:
+    embedded:
+      software:
+        charms:
+          opentelemetry-collector-k8s:
+            storage:
+              persisted: 8G
+            storage-map:
+              opentelemetry-collector:
+                persisted: 8G
+              opentelemetry-collector-infra:
+                persisted: 16G
 """
 
 
@@ -786,6 +803,45 @@ class TestTerraformHelper:
             applied_tfvars = write_tfvars.call_args.args[0]
 
             assert "rabbitmq-storage" not in applied_tfvars
+
+    def test_manifest_observability_collector_storage_passed_to_tfvars(
+        self,
+        mocker,
+        snap,
+        tmp_path,
+    ):
+        """Test collector storage is passed from feature manifest to tfvars."""
+        mocker.patch.object(terraform_mod, "Snap", return_value=snap)
+        manifest = manifest_mod.Manifest.model_validate(
+            yaml.safe_load(test_manifest_with_observability_collector_storage)
+        )
+        tfhelper = TerraformHelper(
+            path=tmp_path,
+            plan="openstack-plan",
+            tfvar_map={
+                "charms": {
+                    "opentelemetry-collector-k8s": {
+                        "storage": "opentelemetry-collector-storage",
+                        "storage-map": "opentelemetry-collector-storage-map",
+                    }
+                }
+            },
+        )
+
+        with (
+            patch.object(tfhelper, "write_tfvars") as write_tfvars,
+            patch.object(tfhelper, "apply"),
+        ):
+            tfhelper.update_tfvars_and_apply_tf(Mock(), manifest)
+            applied_tfvars = write_tfvars.call_args.args[0]
+
+            assert applied_tfvars["opentelemetry-collector-storage"] == {
+                "persisted": "8G"
+            }
+            assert applied_tfvars["opentelemetry-collector-storage-map"] == {
+                "opentelemetry-collector": {"persisted": "8G"},
+                "opentelemetry-collector-infra": {"persisted": "16G"},
+            }
 
 
 class TestApplyTfvars:
