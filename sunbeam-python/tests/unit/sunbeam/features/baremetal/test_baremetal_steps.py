@@ -71,6 +71,25 @@ class TestBaremetalCommands:
             queue=ANY,
         )
 
+    def test_temp_url_secret_skipped_when_glance_s3(self, deployment, step_context):
+        deployment.get_client.return_value._cluster_config["TerraformVarsOpenstack"] = {
+            "enable-glance-s3-storage": True
+        }
+        step = steps.RunSetTempUrlSecretStep(deployment, Mock())
+
+        result = step.is_skip(step_context)
+
+        assert result.result_type == ResultType.SKIPPED
+
+    def test_temp_url_secret_not_skipped_without_glance_s3(
+        self, deployment, step_context
+    ):
+        step = steps.RunSetTempUrlSecretStep(deployment, Mock())
+
+        result = step.is_skip(step_context)
+
+        assert result.result_type == ResultType.COMPLETED
+
     def test_deploy_nova_ironic_shards_already_exists(self, deployment, step_context):
         ironic = ironic_feature.BaremetalFeature()
         ironic._manifest = Mock()
