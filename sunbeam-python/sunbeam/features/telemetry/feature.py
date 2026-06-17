@@ -1,15 +1,21 @@
 # SPDX-FileCopyrightText: 2023 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
+import enum
 import logging
 
 import click
+import pydantic
 from packaging.version import Version
 from rich.console import Console
 
-from sunbeam.core.common import BaseStep, run_plan
+from sunbeam.core.common import BaseStep, SunbeamException, run_plan
 from sunbeam.core.deployment import Deployment
-from sunbeam.core.juju import JujuHelper
+from sunbeam.core.juju import (
+    JujuHelper,
+    JujuStepHelper,
+    split_controller_from_offer_url,
+)
 from sunbeam.core.manifest import (
     AddManifestStep,
     CharmManifest,
@@ -17,6 +23,7 @@ from sunbeam.core.manifest import (
     SoftwareConfig,
 )
 from sunbeam.core.openstack import OPENSTACK_MODEL
+from sunbeam.core.questions import load_answers, write_answers
 from sunbeam.core.terraform import TerraformInitStep
 from sunbeam.features.interface.v1.openstack import (
     DisableOpenStackApplicationStep,
@@ -35,12 +42,97 @@ from sunbeam.versions import OPENSTACK_CHANNEL
 LOG = logging.getLogger(__name__)
 console = Console()
 
+TELEMETRY_METRICS_BACKEND_KEY = "TelemetryMetricsBackend"
+
+
+class MetricsBackendType(enum.Enum):
+    """Telemetry metrics storage backend types."""
+
+    LOCAL = "local"
+    S3 = "s3"
+
+
+class TelemetryFeatureConfig(FeatureConfig):
+    """Telemetry feature configuration."""
+
+    model_config = pydantic.ConfigDict(populate_by_name=True)
+
+    s3_integrator_offer_url: str | None = pydantic.Field(
+        default=None,
+        description=(
+            "Juju offer URL of an externally deployed s3-integrator application "
+            "to use for Gnocchi metrics storage."
+        ),
+        validation_alias=pydantic.AliasChoices(
+            "s3-integrator-offer-url",
+            "s3_integrator_offer_url",
+        ),
+        serialization_alias="s3-integrator-offer-url",
+    )
+
+
+class TelemetryMetricsBackendConfig(pydantic.BaseModel):
+    """Persisted metrics storage backend configuration."""
+
+    backend: MetricsBackendType | None = None
+    s3_integrator_offer_url: str | None = None
+
 
 class TelemetryFeature(OpenStackControlPlaneFeature):
     version = Version("0.0.1")
 
     name = "telemetry"
     tf_plan_location = TerraformPlanLocation.SUNBEAM_TERRAFORM_REPO
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.s3_integrator_offer_url: str | None = None
+
+    def config_type(self) -> type[TelemetryFeatureConfig]:
+        """Feature config type."""
+        return TelemetryFeatureConfig
+
+    def _load_metrics_config(
+        self, deployment: Deployment
+    ) -> TelemetryMetricsBackendConfig:
+        """Load the metrics storage backend config from cluster DB."""
+        client = deployment.get_client()
+        answers = load_answers(client, TELEMETRY_METRICS_BACKEND_KEY)
+        return TelemetryMetricsBackendConfig.model_validate(answers)
+
+    def _save_metrics_config(
+        self, deployment: Deployment, config: TelemetryMetricsBackendConfig
+    ) -> None:
+        """Save the metrics storage backend config to cluster DB."""
+        client = deployment.get_client()
+        write_answers(
+            client,
+            TELEMETRY_METRICS_BACKEND_KEY,
+            config.model_dump(mode="json", exclude_none=True),
+        )
+
+    def _config_uses_external_storage(
+        self, config: TelemetryMetricsBackendConfig
+    ) -> bool:
+        """Whether a persisted metrics backend config uses external storage."""
+        return config.backend == MetricsBackendType.S3
+
+    def _set_s3_integrator_application_from_config(self, config: FeatureConfig) -> None:
+        """Set the requested external s3-integrator offer URL from config."""
+        if isinstance(config, TelemetryFeatureConfig):
+            self.s3_integrator_offer_url = config.s3_integrator_offer_url
+
+    def _has_local_metrics_storage(self, deployment: Deployment) -> bool:
+        """Check if local metrics storage is available for Gnocchi."""
+        return bool(deployment.get_client().cluster.list_nodes_by_role("storage"))
+
+    def _has_metrics_storage(self, deployment: Deployment) -> bool:
+        """Check if metrics storage is available for Gnocchi."""
+        if self.s3_integrator_offer_url:
+            return True
+        if self._config_uses_external_storage(self._load_metrics_config(deployment)):
+            return True
+        return self._has_local_metrics_storage(deployment)
 
     def default_software_overrides(self) -> SoftwareConfig:
         """Feature software configuration."""
@@ -86,6 +178,8 @@ class TelemetryFeature(OpenStackControlPlaneFeature):
         self, deployment: Deployment, config: FeatureConfig, show_hints: bool
     ) -> None:
         """Run plans to enable feature."""
+        self._set_s3_integrator_application_from_config(config)
+
         tfhelper = deployment.get_tfhelper(self.tfplan)
         tfhelper_openstack = deployment.get_tfhelper("openstack-plan")
         tfhelper_hypervisor = deployment.get_tfhelper("hypervisor-plan")
@@ -98,11 +192,34 @@ class TelemetryFeature(OpenStackControlPlaneFeature):
             [
                 TerraformInitStep(tfhelper),
                 EnableOpenStackApplicationStep(
-                    deployment, config, tfhelper, jhelper, self
+                    deployment,
+                    config,
+                    tfhelper,
+                    jhelper,
+                    self,
+                    app_desired_status=(
+                        ["active", "blocked"]
+                        if self.s3_integrator_offer_url
+                        else ["active"]
+                    ),
                 ),
             ]
         )
         run_plan(plan1, console, show_hints)
+
+        if self.s3_integrator_offer_url:
+            self._save_metrics_config(
+                deployment,
+                TelemetryMetricsBackendConfig(
+                    backend=MetricsBackendType.S3,
+                    s3_integrator_offer_url=self.s3_integrator_offer_url,
+                ),
+            )
+        else:
+            self._save_metrics_config(
+                deployment,
+                TelemetryMetricsBackendConfig(backend=MetricsBackendType.LOCAL),
+            )
 
         openstack_tf_output = tfhelper_openstack.output()
         extra_tfvars = {
@@ -317,6 +434,7 @@ class TelemetryFeature(OpenStackControlPlaneFeature):
                 run_plan(plan2, console, show_hints)
 
         click.echo(f"OpenStack {self.display_name} application disabled.")
+        self._save_metrics_config(deployment, TelemetryMetricsBackendConfig())
 
     def set_application_names(self, deployment: Deployment) -> list:
         """Application names handled by the terraform plan."""
@@ -326,7 +444,7 @@ class TelemetryFeature(OpenStackControlPlaneFeature):
         if database_topology == "multi":
             apps.append("aodh-mysql")
 
-        if deployment.get_client().cluster.list_nodes_by_role("storage"):
+        if self._has_metrics_storage(deployment):
             apps.extend(["ceilometer", "gnocchi", "gnocchi-mysql-router"])
             if database_topology == "multi":
                 apps.append("gnocchi-mysql")
@@ -341,13 +459,46 @@ class TelemetryFeature(OpenStackControlPlaneFeature):
         self, deployment: Deployment, config: FeatureConfig
     ) -> dict:
         """Set terraform variables to enable the application."""
-        return {
+        self._set_s3_integrator_application_from_config(config)
+
+        tfvars: dict = {
             "enable-telemetry": True,
+            "enable-telemetry-s3-storage": False,
+            "telemetry-s3-integrator-offer-url": None,
+            "telemetry-s3-integrator-offering-controller": None,
         }
+        if self.s3_integrator_offer_url:
+            # Split the controller from the offer URL if it is present
+            controller, s3_url = split_controller_from_offer_url(
+                self.s3_integrator_offer_url
+            )
+            tfvars.update(
+                {
+                    "enable-telemetry-s3-storage": True,
+                    "telemetry-s3-integrator-offer-url": s3_url,
+                    "telemetry-s3-integrator-offering-controller": controller,
+                }
+            )
+            # Validate and register the offering controller
+            if controller:
+                ctrl_config = JujuStepHelper().get_controller_config(controller)
+                if not ctrl_config:
+                    raise SunbeamException(
+                        f"Telemetry S3 offering controller {controller} is not "
+                        "registered in Juju provider"
+                    )
+                tfvars.update({"remote-controllers": {controller: ctrl_config}})
+
+        return tfvars
 
     def set_tfvars_on_disable(self, deployment: Deployment) -> dict:
         """Set terraform variables to disable the application."""
-        return {"enable-telemetry": False}
+        return {
+            "enable-telemetry": False,
+            "enable-telemetry-s3-storage": False,
+            "telemetry-s3-integrator-offer-url": None,
+            "telemetry-s3-integrator-offering-controller": None,
+        }
 
     def set_tfvars_on_resize(
         self, deployment: Deployment, config: FeatureConfig
@@ -363,11 +514,29 @@ class TelemetryFeature(OpenStackControlPlaneFeature):
         }
 
     @click.command()
+    @click.option(
+        "--s3-integrator-offer-url",
+        "s3_integrator_offer_url",
+        default=None,
+        help=(
+            "Juju offer URL of an externally deployed s3-integrator application "
+            "to use for Gnocchi metrics storage.  Format: "
+            "``[<controller>:][<owner>/]<model>.<application>``"
+        ),
+    )
     @click_option_show_hints
     @pass_method_obj
-    def enable_cmd(self, deployment: Deployment, show_hints: bool) -> None:
+    def enable_cmd(
+        self,
+        deployment: Deployment,
+        s3_integrator_offer_url: str | None,
+        show_hints: bool,
+    ) -> None:
         """Enable OpenStack Telemetry applications."""
-        self.enable_feature(deployment, FeatureConfig(), show_hints)
+        config = TelemetryFeatureConfig(
+            s3_integrator_offer_url=s3_integrator_offer_url,
+        )
+        self.enable_feature(deployment, config, show_hints)
 
     @click.command()
     @click_option_show_hints
