@@ -818,6 +818,17 @@ class TestCosStorage:
 class TestObservabilityFeaturePostEnable:
     """Test the post_enable grant access logic."""
 
+    def test_manifest_tfvar_map_supports_collector_storage(self):
+        """OpenStack plan maps collector storage manifest fields to tfvars."""
+        feature = observability_feature.EmbeddedObservabilityFeature()
+
+        collector_map = feature.manifest_attributes_tfvar_map()[feature.tfplan][
+            "charms"
+        ]["opentelemetry-collector-k8s"]
+
+        assert collector_map["storage"] == "opentelemetry-collector-storage"
+        assert collector_map["storage-map"] == "opentelemetry-collector-storage-map"
+
     def test_post_enable_grants_access_to_all_nodes(
         self, deployment, update_config, run_plan_obs, juju_helper_obs
     ):
