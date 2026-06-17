@@ -140,7 +140,7 @@ class SolidFireBackend(StorageBackendBase):
     @property
     def charm_channel(self) -> str:
         """Return the default charm channel."""
-        return "2024.1/edge"
+        return "2025.1/edge"
 
     @property
     def charm_revision(self) -> str | None:

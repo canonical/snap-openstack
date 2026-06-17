@@ -4,7 +4,7 @@ summary: Dead simple OpenStack installation
 license: Apache-2.0
 description: |
   snap-openstack aims to provide a scalable, simple to deploy OpenStack solution.
-version: "2024.1"
+version: "2025.1"
 
 confinement: strict
 grade: stable
@@ -145,7 +145,7 @@ parts:
     after: [terraform]
     plugin: dump
     source: https://github.com/canonical/sunbeam-terraform
-    source-branch: stable/2024.1
+    source-branch: stable/2025.1
     source-depth: 1
     source-type: git
     organize:
@@ -193,8 +193,8 @@ parts:
       '*': etc/manifests/
     override-prime: |
       craftctl default
-      # For backward compatibility, we symlink 2024.1 manifests to the root manifests dir
-      for manifest in $CRAFT_PRIME/etc/manifests/2024.1/*yml;
+      # For backward compatibility, we symlink 2025.1 manifests to the root manifests dir
+      for manifest in $CRAFT_PRIME/etc/manifests/2025.1/*yml;
       do
         link=$CRAFT_PRIME/etc/manifests/$(basename $manifest)
         [ -e $link ] && rm $link || true
