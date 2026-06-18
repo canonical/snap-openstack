@@ -92,6 +92,26 @@ Roles can be assigned to a machine by applying tags in MAAS.
 More on assigning tags: https://maas.io/docs/how-to-use-machine-tags
 """
 MACHINE_DEPLOY_TIMEOUT = 3600
+# "amd64" is the Debian/MAAS name for x86_64.
+DEFAULT_ARCHITECTURE = "amd64"
+
+
+def _node_deploy_order_key(node: dict) -> tuple:
+    """Sort key: non-DPU nodes before DPU nodes, then by hostname."""
+    return (node.get("is_dpu", False), node.get("name", ""))
+
+
+def _partition_nodes_by_dpu(nodes: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Split nodes into non-DPU and DPU groups, each sorted for stable deploy."""
+    non_dpu = sorted(
+        (n for n in nodes if not n.get("is_dpu", False)),
+        key=lambda x: x["name"],
+    )
+    dpu = sorted(
+        (n for n in nodes if n.get("is_dpu", False)),
+        key=lambda x: x["name"],
+    )
+    return non_dpu, dpu
 
 
 class AddMaasDeployment(BaseStep):
@@ -1417,7 +1437,7 @@ class MaasRemoveDeploymentCredentialsStep(BaseStep):
 class MaasAddMachinesToClusterdStep(BaseStep):
     """Add machines from MAAS to Clusterd."""
 
-    nodes: Sequence[tuple[str, str]] | None
+    nodes: Sequence[dict] | None
     machines: Sequence[dict] | None
 
     def __init__(self, client: Client, maas_client: maas_client.MaasClient):
@@ -1446,24 +1466,59 @@ class MaasAddMachinesToClusterdStep(BaseStep):
             for machine in filtered_machines:
                 if node["name"] == machine["hostname"]:
                     filtered_machines.remove(machine)
-                    if sorted(node["role"]) != sorted(machine["roles"]):
-                        nodes_to_update.append((machine["hostname"], machine["roles"]))
+                    if (
+                        sorted(node["role"]) != sorted(machine["roles"])
+                        or node.get("arch", DEFAULT_ARCHITECTURE)
+                        != machine.get("architecture", DEFAULT_ARCHITECTURE)
+                        or node.get("is_dpu", False) != machine.get("is_dpu", False)
+                        or node.get("image_name", "") != machine.get("image_name", "")
+                        or node.get("systemid", "") != machine["system_id"]
+                    ):
+                        nodes_to_update.append(machine)
+                    break
         self.nodes = nodes_to_update
         self.machines = filtered_machines
         return Result(ResultType.COMPLETED)
 
+    def _validate_machine_image_name(self, machine: dict) -> Result | None:
+        """Return a failure result when the machine's dpu-image tag is invalid."""
+        image_name = machine.get("image_name")
+        if not image_name:
+            return None
+        try:
+            self.maas_client.ensure_boot_resource_name_exists(image_name)
+        except ValueError as e:
+            return Result(ResultType.FAILED, str(e))
+        return None
+
     def run(self, context: StepContext) -> Result:
-        """Add machines to Juju model."""
+        """Add machines to clusterd."""
         if self.machines is None or self.nodes is None:
             # only happens if is_skip() was not called before, or if run executed
             # even if is_skip reported a failure
             return Result(ResultType.FAILED, "No machines to add / node to update.")
+        for machine in list(self.machines) + list(self.nodes):
+            validation = self._validate_machine_image_name(machine)
+            if validation is not None:
+                return validation
         for machine in self.machines:
             self.client.cluster.add_node_info(
-                machine["hostname"], machine["roles"], systemid=machine["system_id"]
+                machine["hostname"],
+                machine["roles"],
+                systemid=machine["system_id"],
+                arch=machine.get("architecture", DEFAULT_ARCHITECTURE),
+                is_dpu=machine.get("is_dpu", False),
+                image_name=machine.get("image_name", ""),
             )
-        for node in self.nodes:
-            self.client.cluster.update_node_info(*node)  # type: ignore
+        for machine in self.nodes:
+            self.client.cluster.update_node_info(
+                machine["hostname"],
+                machine["roles"],
+                systemid=machine["system_id"],
+                arch=machine.get("architecture", DEFAULT_ARCHITECTURE),
+                is_dpu=machine.get("is_dpu", False),
+                image_name=machine.get("image_name", ""),
+            )
         return Result(ResultType.COMPLETED)
 
 
@@ -1502,12 +1557,14 @@ class MaasDeployMachinesStep(BaseStep):
         client: Client,
         jhelper: JujuHelper,
         model: str,
+        manifest: "Manifest | None" = None,
     ):
         super().__init__("Deploy machines", "Deploying machines in Juju")
         self.client = client
         self.deployment = deployment
         self.jhelper = jhelper
         self.model = model
+        self.manifest = manifest
 
     def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not."""
@@ -1553,27 +1610,63 @@ class MaasDeployMachinesStep(BaseStep):
                     nodes_to_deploy.remove(node)
                     break
 
-        self.nodes_to_deploy = sorted(nodes_to_deploy, key=lambda x: x["name"])
+        self.nodes_to_deploy = sorted(nodes_to_deploy, key=_node_deploy_order_key)
         self.nodes_to_update = nodes_to_update
 
         if not self.nodes_to_deploy and not self.nodes_to_update:
             return Result(ResultType.SKIPPED)
         return Result(ResultType.COMPLETED)
 
-    def run(self, context: StepContext) -> Result:
-        """Deploy machines in Juju."""
-        for node in self.nodes_to_deploy:
+    def _get_node_architecture(self, node: dict) -> str:
+        """Return the architecture stored in clusterd for this node."""
+        return node.get("arch") or DEFAULT_ARCHITECTURE
+
+    def _get_node_constraints(self, node: dict) -> list[str]:
+        """Return the Juju constraints for deploying this node.
+
+        Adds arch and image-id constraints from clusterd when the node has a
+        non-default architecture or a custom image name from a dpu-image-<name>
+        MAAS tag.
+        """
+        constraints = ["tags=" + self.deployment.resource_tag]
+        architecture = self._get_node_architecture(node)
+        image_name = node.get("image_name") or ""
+
+        if architecture == "arm64":
+            constraints.append("arch=arm64")
+
+        if image_name:
+            LOG.debug(
+                "Node %r has custom image — adding image-id=%r constraint",
+                node["name"],
+                image_name,
+            )
+            constraints.append("image-id=" + image_name)
+
+        return constraints
+
+    def _add_nodes_to_juju(self, context: StepContext, nodes: list[dict]) -> None:
+        """Register clusterd nodes as Juju machines in the model."""
+        for node in nodes:
             self.update_status(context, f"deploying {node['name']}")
-            LOG.debug("Adding machine %s to model %s", node["name"], self.model)
+            constraints = self._get_node_constraints(node)
+            LOG.debug(
+                "Adding machine %s to model %s with constraints %s",
+                node["name"],
+                self.model,
+                constraints,
+            )
             juju_machine = self.jhelper.add_machine(
                 "system-id=" + node["systemid"],
                 self.model,
-                constraints=["tags=" + self.deployment.resource_tag],
+                constraints=constraints,
             )
             self.client.cluster.update_node_info(
                 node["name"], machineid=int(juju_machine)
             )
-        self.update_status(context, "waiting for machines to deploy")
+
+    def _sync_updated_node_machine_ids(self) -> None:
+        """Update clusterd machine IDs for nodes already present in Juju."""
         machines = self.jhelper.get_machines(self.model)
         for node in self.nodes_to_update:
             LOG.debug("Updating machine %s in model %s", node["name"], self.model)
@@ -1583,11 +1676,50 @@ class MaasDeployMachinesStep(BaseStep):
                         node["name"], machineid=int(machine_id)
                     )
                     break
-        try:
-            self.jhelper.wait_all_machines_deployed(self.model, MACHINE_DEPLOY_TIMEOUT)
-        except TimeoutError:
-            LOG.debug("Timeout waiting for machines to deploy", exc_info=True)
-            return Result(ResultType.FAILED, "Timeout waiting for machines to deploy.")
+
+    def run(self, context: StepContext) -> Result:
+        """Deploy machines in Juju."""
+        non_dpu_nodes, dpu_nodes = _partition_nodes_by_dpu(self.nodes_to_deploy)
+        deploy_batches = [
+            ("non-DPU", non_dpu_nodes),
+            ("DPU", dpu_nodes),
+        ]
+
+        deployed_any = False
+        for batch_label, batch in deploy_batches:
+            if not batch:
+                continue
+            deployed_any = True
+            self._add_nodes_to_juju(context, batch)
+            self._sync_updated_node_machine_ids()
+            self.update_status(context, f"waiting for {batch_label} machines to deploy")
+            try:
+                self.jhelper.wait_all_machines_deployed(
+                    self.model, MACHINE_DEPLOY_TIMEOUT
+                )
+            except TimeoutError:
+                LOG.debug(
+                    "Timeout waiting for %s machines to deploy",
+                    batch_label,
+                    exc_info=True,
+                )
+                return Result(
+                    ResultType.FAILED,
+                    f"Timeout waiting for {batch_label} machines to deploy.",
+                )
+
+        if not deployed_any:
+            self._sync_updated_node_machine_ids()
+            try:
+                self.jhelper.wait_all_machines_deployed(
+                    self.model, MACHINE_DEPLOY_TIMEOUT
+                )
+            except TimeoutError:
+                LOG.debug("Timeout waiting for machines to deploy", exc_info=True)
+                return Result(
+                    ResultType.FAILED, "Timeout waiting for machines to deploy."
+                )
+
         return Result(ResultType.COMPLETED)
 
 

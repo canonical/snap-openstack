@@ -97,7 +97,14 @@ class ExtendedAPIService(service.BaseService):
     """Client for Sunbeam extended Cluster API."""
 
     def add_node_info(
-        self, name: str, role: list[str], machineid: int = -1, systemid: str = ""
+        self,
+        name: str,
+        role: list[str],
+        machineid: int = -1,
+        systemid: str = "",
+        arch: str = "amd64",
+        is_dpu: bool = False,
+        image_name: str = "",
     ) -> None:
         """Add Node information to cluster database."""
         data = {
@@ -105,7 +112,11 @@ class ExtendedAPIService(service.BaseService):
             "role": role,
             "machineid": machineid,
             "systemid": systemid,
+            "arch": arch,
+            "is_dpu": is_dpu,
         }
+        if image_name:
+            data["image_name"] = image_name
         self._post("/1.0/nodes", data=json.dumps(data))
 
     def list_nodes(self) -> list[dict]:
@@ -127,9 +138,18 @@ class ExtendedAPIService(service.BaseService):
         role: list[str] | None = None,
         machineid: int = -1,
         systemid: str = "",
+        arch: str | None = None,
+        is_dpu: bool | None = None,
+        image_name: str | None = None,
     ) -> None:
         """Update role and machineid for node."""
-        data = {"role": role, "machineid": machineid, "systemid": systemid}
+        data: dict = {"role": role, "machineid": machineid, "systemid": systemid}
+        if arch is not None:
+            data["arch"] = arch
+        if is_dpu is not None:
+            data["is_dpu"] = is_dpu
+        if image_name is not None:
+            data["image_name"] = image_name
         self._put(f"1.0/nodes/{name}", data=json.dumps(data))
 
     def add_juju_user(self, name: str, token: str) -> None:

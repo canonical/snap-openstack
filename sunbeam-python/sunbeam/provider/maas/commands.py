@@ -657,7 +657,11 @@ def deploy(
     plan.append(MaasAddMachinesToClusterdStep(client, maas_client))
     plan.append(
         MaasDeployMachinesStep(
-            deployment, client, jhelper, deployment.openstack_machines_model
+            deployment,
+            client,
+            jhelper,
+            deployment.openstack_machines_model,
+            manifest=manifest,
         )
     )
     run_plan(plan, console, show_hints)
@@ -1203,12 +1207,19 @@ def list_machines_cmd(ctx: click.Context, format: str) -> None:
         table.add_column("Roles")
         table.add_column("Zone")
         table.add_column("Status")
+        table.add_column("DPU image")
         for machine in machines:
             hostname = machine["hostname"]
             status = machine["status"]
             zone = machine["zone"]
             roles = ", ".join(machine["roles"])
-            table.add_row(hostname, roles, zone, status)
+            table.add_row(
+                hostname,
+                roles,
+                zone,
+                status,
+                machine.get("image_name", ""),
+            )
         console.print(table)
     elif format == FORMAT_YAML:
         console.print(yaml.dump(machines), end="")
@@ -1249,6 +1260,8 @@ def show_machine_cmd(ctx: click.Context, hostname: str, format: str) -> None:
         )
         table.add_row(header.format("Zone"), machine["zone"])
         table.add_row(header.format("Status"), machine["status"])
+        if image_name := machine.get("image_name"):
+            table.add_row(header.format("DPU image"), image_name)
         console.print(table)
     elif format == FORMAT_YAML:
         console.print(yaml.dump(machine), end="")
