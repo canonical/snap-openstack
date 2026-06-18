@@ -114,6 +114,22 @@ def _partition_nodes_by_dpu(nodes: list[dict]) -> tuple[list[dict], list[dict]]:
     return non_dpu, dpu
 
 
+def _node_matches_juju_machine(node: dict, machine) -> bool:
+    """Return True if a clusterd node corresponds to a Juju machine.
+
+    Custom DPU images may report a template hostname (e.g. packer-ubuntu)
+    while clusterd stores the MAAS hostname. Fall back to system ID and
+    Juju display name when hostnames differ.
+    """
+    if node["name"] == machine.hostname:
+        return True
+    systemid = node.get("systemid") or ""
+    if systemid and systemid == machine.instance_id:
+        return True
+    display_name = getattr(machine, "display_name", None)
+    return bool(display_name and node["name"] == display_name)
+
+
 class AddMaasDeployment(BaseStep):
     """Perform various checks and add MAAS-backed deployment."""
 
@@ -1587,25 +1603,10 @@ class MaasDeployMachinesStep(BaseStep):
                 nodes_to_deploy.remove(node)
                 continue
             for id, machine in juju_machines.items():
-                if node["name"] == machine.hostname:
+                if _node_matches_juju_machine(node, machine):
                     if int(id) != node_machine_id and node_machine_id != -1:
-                        return Result(
-                            ResultType.FAILED,
-                            f"Machine {node['name']} already exists in model"
-                            f" {self.model} with id {id},"
-                            f" expected the id {node['machineid']}.",
-                        )
-                    if (
-                        node["systemid"] != machine.instance_id
-                        and node["systemid"] != ""
-                    ):
-                        return Result(
-                            ResultType.FAILED,
-                            f"Machine {node['name']} already exists in model"
-                            f" {self.model} with systemid {machine.instance_id},"
-                            f" expected the systemid {node['systemid']}.",
-                        )
-                    if node_machine_id == -1:
+                        nodes_to_update.append(node)
+                    elif node_machine_id == -1:
                         nodes_to_update.append(node)
                     nodes_to_deploy.remove(node)
                     break
@@ -1671,7 +1672,7 @@ class MaasDeployMachinesStep(BaseStep):
         for node in self.nodes_to_update:
             LOG.debug("Updating machine %s in model %s", node["name"], self.model)
             for machine_id, machine in machines.items():
-                if machine.hostname == node["name"]:
+                if _node_matches_juju_machine(node, machine):
                     self.client.cluster.update_node_info(
                         node["name"], machineid=int(machine_id)
                     )

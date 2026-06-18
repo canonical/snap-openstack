@@ -26,6 +26,8 @@ class OvnConfig(pydantic.BaseModel):
 
 
 DEFAULT_PROVIDER = OvnProvider.OVN_K8S
+DEFAULT_ARCHITECTURE = "amd64"
+ARM64_ARCHITECTURE = "arm64"
 
 
 def load_provider_config(client: Client) -> OvnConfig:
@@ -106,21 +108,37 @@ class OvnManager:
         else:
             return nb_network > 0
 
-    def get_machines(self) -> list[str]:
-        """Get the list of machine IDs for the OVN provider.
-
-        :return: list of machine IDs as strings
-        """
+    def _list_microovn_nodes(self) -> list[dict]:
+        """Collect cluster nodes that should run MicroOVN."""
         nodes = self.client.cluster.list_nodes_by_role("network")
         if self.get_provider() == OvnProvider.MICROOVN:
             nodes += self.client.cluster.list_nodes_by_role("compute")
             nodes += self.client.cluster.list_nodes_by_role("control")
-        machine_ids = {
-            str(node.get("machineid"))
-            for node in nodes
-            if node.get("machineid") not in (-1, None)
-        }
+        return nodes
+
+    def get_machines(self, architecture: str | None = None) -> list[str]:
+        """Get machine IDs for MicroOVN, optionally filtered by architecture.
+
+        :param architecture: if set, only return machines with this arch
+        :return: list of machine IDs as strings
+        """
+        machine_ids: set[str] = set()
+        for node in self._list_microovn_nodes():
+            machineid = node.get("machineid")
+            if machineid in (-1, None):
+                continue
+            arch = node.get("arch") or DEFAULT_ARCHITECTURE
+            if architecture is None or arch == architecture:
+                machine_ids.add(str(machineid))
         return sorted(machine_ids)
+
+    def get_machines_amd64(self) -> list[str]:
+        """Get amd64 machine IDs for MicroOVN."""
+        return self.get_machines(DEFAULT_ARCHITECTURE)
+
+    def get_machines_arm64(self) -> list[str]:
+        """Get arm64 machine IDs for MicroOVN (e.g. DPU network nodes)."""
+        return self.get_machines(ARM64_ARCHITECTURE)
 
     def get_control_plane_tfvars(
         self, deployment: Deployment, jhelper: JujuHelper
