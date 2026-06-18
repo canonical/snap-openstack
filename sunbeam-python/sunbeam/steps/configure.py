@@ -443,7 +443,7 @@ class BaseUserQuestions(BaseStep):
             )
             nameservers = user_bank.nameservers.ask()
             self.variables["user"]["dns_nameservers"] = (
-                [n.strip() for n in nameservers.split(",") if n.strip()]
+                [n for n in re.split(r"[\s,]+", nameservers.strip()) if n]
                 if nameservers
                 else []
             )
