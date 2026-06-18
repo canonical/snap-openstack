@@ -189,6 +189,11 @@ from sunbeam.steps.openstack import (
     PromptRegionStep,
     ReapplyOpenStackTerraformPlanStep,
 )
+from sunbeam.steps.role_distributor import (
+    DeployRoleDistributorApplicationStep,
+    ReapplyRoleDistributorApplicationStep,
+    RemoveRoleDistributorUnitsStep,
+)
 from sunbeam.steps.sso import (
     DeployIdentityProvidersStep,
     SetKeystoneSAMLCertAndKeyStep,
@@ -834,6 +839,18 @@ def bootstrap(  # noqa: C901
     microovn_tfhelper = deployment.get_tfhelper("microovn-plan")
     microovn_necessary = ovn_manager.is_microovn_necessary(roles)
     if microovn_necessary:
+        role_distributor_tfhelper = deployment.get_tfhelper("role-distributor-plan")
+        plan1.append(TerraformInitStep(role_distributor_tfhelper))
+        plan1.append(
+            DeployRoleDistributorApplicationStep(
+                deployment,
+                client,
+                role_distributor_tfhelper,
+                jhelper,
+                manifest,
+                deployment.openstack_machines_model,
+            )
+        )
         plan1.append(TerraformInitStep(microovn_tfhelper))
         plan1.append(
             DeployMicroOVNApplicationStep(
@@ -1585,6 +1602,18 @@ def join(  # noqa: C901
     plan4.append(TerraformInitStep(cinder_volume_tfhelper))
     if microovn_necessary:
         microovn_tfhelper = deployment.get_tfhelper("microovn-plan")
+        role_distributor_tfhelper = deployment.get_tfhelper("role-distributor-plan")
+        plan4.append(TerraformInitStep(role_distributor_tfhelper))
+        plan4.append(
+            DeployRoleDistributorApplicationStep(
+                deployment,
+                client,
+                role_distributor_tfhelper,
+                jhelper,
+                manifest,
+                deployment.openstack_machines_model,
+            )
+        )
         plan4.append(TerraformInitStep(microovn_tfhelper))
         plan4.append(
             DeployMicroOVNApplicationStep(
@@ -1862,6 +1891,7 @@ def remove(ctx: click.Context, name: str, force: bool, show_hints: bool) -> None
     deployment: LocalDeployment = ctx.obj
     client = deployment.get_client()
     jhelper = JujuHelper(deployment.juju_controller)
+    microovn_machine_ids = deployment.get_ovn_manager().get_machines()
 
     preflight_checks = [DaemonGroupCheck(), JujuLoginCheck(deployment.juju_account)]
     run_preflight_checks(preflight_checks, console)
@@ -1968,6 +1998,31 @@ def remove(ctx: click.Context, name: str, force: bool, show_hints: bool) -> None
             ClusterRemoveNodeStep(client, name),
         ]
     )
+    if microovn_machine_ids:
+        manifest = deployment.get_manifest()
+        role_distributor_tfhelper = deployment.get_tfhelper("role-distributor-plan")
+        remove_k8s_unit_index = next(
+            i for i, step in enumerate(plan) if isinstance(step, CordonK8SUnitStep)
+        )
+        plan.insert(
+            remove_k8s_unit_index,
+            RemoveRoleDistributorUnitsStep(
+                client, name, jhelper, deployment.openstack_machines_model
+            ),
+        )
+        plan.extend(
+            [
+                TerraformInitStep(role_distributor_tfhelper),
+                ReapplyRoleDistributorApplicationStep(
+                    deployment,
+                    client,
+                    role_distributor_tfhelper,
+                    jhelper,
+                    manifest,
+                    deployment.openstack_machines_model,
+                ),
+            ]
+        )
 
     run_plan(plan, console, show_hints)
     click.echo(f"Removed node {name} from the cluster")
@@ -2112,7 +2167,19 @@ def configure_cmd(
             or (split_roles_enabled() and "control" in node["role"])
         )
     ):
+        role_distributor_tfhelper = deployment.get_tfhelper("role-distributor-plan")
         microovn_tfhelper = deployment.get_tfhelper("microovn-plan")
+        plan.append(TerraformInitStep(role_distributor_tfhelper))
+        plan.append(
+            DeployRoleDistributorApplicationStep(
+                deployment,
+                client,
+                role_distributor_tfhelper,
+                jhelper,
+                manifest,
+                deployment.openstack_machines_model,
+            )
+        )
         plan.append(
             LocalSetOpenStackNetworkAgentsStep(
                 client,
