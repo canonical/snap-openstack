@@ -83,6 +83,7 @@ from sunbeam.core.terraform import TerraformInitStep
 from sunbeam.feature_gates import (
     feature_gate_command,
     feature_gate_option,
+    get_feature_gate_from_cluster,
     split_roles_enabled,
 )
 from sunbeam.provider.base import ProviderBase
@@ -1386,10 +1387,6 @@ def join(  # noqa: C901
     is_network_node = any(role.is_network_node() for role in roles)
     is_region_controller = any(role.is_region_controller() for role in roles)
 
-    if is_network_node and is_compute_node and not split_roles_enabled():
-        raise click.ClickException(
-            "A node cannot be both a compute and network node at the same time."
-        )
     if is_region_controller and len(roles) > 1:
         raise click.ClickException(
             "The region controller role is mutually exclusive with all other roles."
@@ -1440,6 +1437,17 @@ def join(  # noqa: C901
 
     plan1 = [ClusterJoinNodeStep(client, token, ip, name, roles_str)]
     run_plan(plan1, console, show_hints)
+
+    if is_network_node and is_compute_node:
+        split_roles_in_cluster = get_feature_gate_from_cluster(
+            "feature.split-roles",
+            client,
+        )
+        if not split_roles_in_cluster:
+            raise click.ClickException(
+                "A node cannot be both a compute and network node at the same "
+                "time because feature.split-roles is not enabled in cluster state."
+            )
 
     try:
         deployments_from_db = read_config(client, DEPLOYMENTS_CONFIG_KEY)
