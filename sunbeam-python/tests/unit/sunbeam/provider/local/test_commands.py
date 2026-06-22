@@ -3,11 +3,12 @@
 
 from unittest.mock import Mock, patch
 
+import click
 import pytest
 from click.testing import CliRunner
 
-from sunbeam.core.common import ResultType
-from sunbeam.provider.local.commands import add
+from sunbeam.core.common import ResultType, Role
+from sunbeam.provider.local.commands import add, join
 from sunbeam.steps.juju import JujuGrantModelAccessStep
 
 
@@ -137,3 +138,77 @@ class TestAddNodeGrantModels:
         assert "openstack" in model_names
         assert "observability" in model_names
         assert "" not in model_names
+
+
+class TestJoinNodeValidation:
+    """Test join validation behavior for gated roles."""
+
+    @pytest.mark.parametrize(
+        ("split_roles_in_cluster", "expected_exception", "expected_message"),
+        [
+            (
+                False,
+                click.ClickException,
+                "feature\\.split-roles is not enabled in cluster state",
+            ),
+            (True, RuntimeError, "after-validation"),
+        ],
+    )
+    @patch("sunbeam.provider.local.commands.read_config")
+    @patch("sunbeam.provider.local.commands.DeploymentsConfig.load")
+    @patch("sunbeam.provider.local.commands.deployment_path", return_value="/tmp")
+    @patch("sunbeam.provider.local.commands.Snap")
+    @patch("sunbeam.provider.local.commands.DaemonGroupCheck")
+    @patch("sunbeam.provider.local.commands.utils.get_fqdn", return_value="node-2")
+    @patch(
+        "sunbeam.provider.local.commands._resolve_local_ip_from_cidr",
+        return_value="10.0.0.2",
+    )
+    @patch(
+        "sunbeam.provider.local.commands.utils.get_local_cidr_matching_token",
+        return_value="10.0.0.0/24",
+    )
+    @patch("sunbeam.provider.local.commands.run_plan")
+    @patch("sunbeam.provider.local.commands.run_preflight_checks")
+    @patch("sunbeam.provider.local.commands.get_feature_gate_from_cluster")
+    def test_join_validates_compute_and_network_after_cluster_join(
+        self,
+        _get_feature_gate_from_cluster,
+        run_preflight_checks,
+        run_plan,
+        _get_local_cidr_matching_token,
+        _resolve_local_ip_from_cidr,
+        _daemon_group_check,
+        _get_fqdn,
+        snap_cls,
+        _deployment_path,
+        deployments_load,
+        read_config,
+        split_roles_in_cluster,
+        expected_exception,
+        expected_message,
+    ):
+        """Join should validate compute+network against cluster split-roles state."""
+        deployment = Mock()
+        deployment.get_client.return_value = Mock()
+        deployment.juju_controller = Mock()
+        deployment.juju_account = Mock()
+        deployments_load.return_value = Mock()
+        snap_cls.return_value.paths.user_data = "/tmp"
+        _get_feature_gate_from_cluster.return_value = split_roles_in_cluster
+        if split_roles_in_cluster:
+            read_config.side_effect = RuntimeError("after-validation")
+
+        ctx = click.Context(join, obj=deployment)
+        with ctx, pytest.raises(expected_exception, match=expected_message):
+            join.callback(
+                token="token",
+                roles=[Role.COMPUTE, Role.NETWORK],
+                accept_defaults=False,
+                show_hints=False,
+                region_controller_token=None,
+            )
+
+        assert run_plan.call_count == 1
+        first_plan = run_plan.call_args_list[0][0][0]
+        assert first_plan[0].__class__.__name__ == "ClusterJoinNodeStep"
