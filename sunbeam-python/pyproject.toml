@@ -821,6 +821,7 @@ extend-ignore = ["E203"]
     "D101", # Missing docstring in public class
     "D103", # Missing docstring in public function
     "D100", # Missing docstring in public module
+    "D421", # Property docstring should not start with a verb
     "N818", # Exception should be named with an Error suffix
 ]
 
