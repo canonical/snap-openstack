@@ -42,6 +42,34 @@ CHARM_BASE = "ubuntu@24.04"
 VAULT_UPGRADE_TIMEOUT = 600
 
 
+def _get_vault_terraform_targets(
+    tfhelper: TerraformHelper,
+) -> list[str]:
+    """Get terraform targets for Vault resources.
+
+    Uses terraform state to discover vault resources that actually
+    exist, so optional integrations are only targeted when present
+    in state.
+    """
+    targets: list[str] = []
+
+    try:
+        state_resources = tfhelper.state_list()
+        for resource in state_resources:
+            if not (
+                resource.startswith("juju_application.")
+                or resource.startswith("juju_integration.")
+            ):
+                continue
+            if "vault" in resource.lower():
+                targets.append(f"-target={resource}")
+    except Exception as e:
+        LOG.warning("Error discovering vault terraform targets: %s", e)
+
+    LOG.debug("Vault terraform targets: %s", targets)
+    return targets
+
+
 class VaultCharmUpgradeStep(BaseStep, JujuStepHelper):
     """Refresh the vault-k8s charm and unseal if running in dev mode."""
 
@@ -107,6 +135,10 @@ class VaultCharmUpgradeStep(BaseStep, JujuStepHelper):
         # the charm itself is already up-to-date.
         return Result(ResultType.COMPLETED)
 
+    def _get_vault_terraform_targets(self) -> list[str]:
+        """Get terraform targets for Vault resources."""
+        return _get_vault_terraform_targets(self.tfhelper)
+
     def run(self, context: StepContext) -> Result:
         """Run vault-k8s charm upgrade steps."""
         target_channel = self._decision.effective_channel
@@ -148,11 +180,16 @@ class VaultCharmUpgradeStep(BaseStep, JujuStepHelper):
                 context, "Updating terraform plan with new vault channel"
             )
             migrate_vault_config_in_db(self.client, self.tfvar_config, target_channel)
+
+            # Build target list for vault and its integrations
+            targets = self._get_vault_terraform_targets()
+
             self.tfhelper.update_tfvars_and_apply_tf(
                 self.client,
                 self.manifest,
                 tfvar_config=self.tfvar_config,
                 override_tfvars={"vault-channel": target_channel},
+                tf_apply_extra_args=targets,
             )
         except (TerraformException, TerraformStateLockedException) as e:
             return Result(
@@ -220,3 +257,70 @@ class VaultCharmUpgradeStep(BaseStep, JujuStepHelper):
                 "Run unseal and authorize steps manually.",
             )
         return Result(ResultType.COMPLETED, "Vault upgraded and auto-unsealed.")
+
+
+class ReapplyVaultTerraformPlanStep(BaseStep, JujuStepHelper):
+    """Reapply only Vault-related components in the Terraform plan."""
+
+    _CONFIG = OPENSTACK_TERRAFORM_VARS
+
+    def __init__(
+        self,
+        deployment: Deployment,
+        client: Client,
+        tfhelper: TerraformHelper,
+        jhelper: JujuHelper,
+        manifest: Manifest,
+    ):
+        super().__init__(
+            "Applying Vault Terraform changes",
+            "Applying Vault-specific Terraform changes",
+        )
+        self.application = "vault"
+        self.deployment = deployment
+        self.client = client
+        self.tfhelper = tfhelper
+        self.jhelper = jhelper
+        self.manifest = manifest
+        self.model = OPENSTACK_MODEL
+
+    def _get_vault_terraform_targets(self) -> list[str]:
+        """Get terraform targets for Vault resources."""
+        return _get_vault_terraform_targets(self.tfhelper)
+
+    def run(self, context: StepContext) -> Result:
+        """Apply terraform with targets for Vault components only."""
+        try:
+            self.update_status(context, "updating Vault components")
+
+            # Build target list for vault and its integrations
+            targets = self._get_vault_terraform_targets()
+
+            # Apply terraform with targets
+            LOG.info("Applying terraform with %s Vault-specific targets", len(targets))
+            self.tfhelper.update_tfvars_and_apply_tf(
+                self.client,
+                self.manifest,
+                tfvar_config=self._CONFIG,
+                tf_apply_extra_args=targets,
+                reporter=context.reporter,
+            )
+
+        except (TerraformException, TerraformStateLockedException) as e:
+            LOG.warning("Error updating Vault components: %r", e)
+            return Result(ResultType.FAILED, str(e))
+
+        # Wait only for vault application
+        try:
+            self.update_status(context, "waiting for Vault to settle")
+            LOG.debug("Waiting for Vault application")
+            self.jhelper.wait_until_active(
+                model=self.model,
+                apps=[self.application],
+                timeout=600,
+            )
+        except (JujuWaitException, TimeoutError) as e:
+            LOG.warning("Error waiting for Vault application: %r", e)
+            return Result(ResultType.FAILED, str(e))
+
+        return Result(ResultType.COMPLETED)
