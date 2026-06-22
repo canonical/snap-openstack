@@ -27,6 +27,14 @@ LOG = logging.getLogger(__name__)
 console = Console()
 
 
+def _dashboard_preflight_checks(deployment: Deployment) -> None:
+    preflight_checks = [
+        VerifyBootstrappedCheck(deployment.get_client()),
+        JujuLoginCheck(deployment.juju_account),
+    ]
+    run_preflight_checks(preflight_checks, console)
+
+
 def retrieve_dashboard_url(jhelper: juju.JujuHelper) -> str:
     """Retrieve dashboard URL from Horizon service."""
     model = OPENSTACK_MODEL
@@ -55,14 +63,9 @@ def dashboard(ctx: click.Context) -> None:
 def dashboard_url(ctx: click.Context) -> None:
     """Retrieve OpenStack Dashboard URL."""
     deployment: Deployment = ctx.obj
-    preflight_checks = [
-        VerifyBootstrappedCheck(deployment.get_client()),
-        JujuLoginCheck(deployment.juju_account),
-    ]
-    run_preflight_checks(preflight_checks, console)
-
     jhelper = juju.JujuHelper(deployment.juju_controller)
 
+    _dashboard_preflight_checks(deployment)
     with console.status("Retrieving dashboard URL from Horizon service ... "):
         try:
             console.print(retrieve_dashboard_url(jhelper))
@@ -89,6 +92,7 @@ def set_theme(ctx: click.Context, show_hints: bool) -> None:
     jhelper = JujuHelper(deployment.juju_controller)
     manifest = deployment.get_manifest()
 
+    _dashboard_preflight_checks(deployment)
     plan = [
         AttachHorizonThemeStep(
             client=client,
@@ -115,8 +119,8 @@ def clear_theme(ctx: click.Context, show_hints: bool) -> None:
     jhelper = JujuHelper(deployment.juju_controller)
     manifest = deployment.get_manifest()
 
+    _dashboard_preflight_checks(deployment)
     write_answers(client, THEME_CONFIG_SECTION, {"theme_path": ""})
-
     plan = [
         AttachHorizonThemeStep(
             client=client,
