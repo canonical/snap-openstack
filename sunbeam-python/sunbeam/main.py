@@ -11,6 +11,7 @@ from snaphelpers import Snap
 from sunbeam import log
 from sunbeam.commands import configure as configure_cmds
 from sunbeam.commands import dashboard as dashboard_cmds
+from sunbeam.commands import dashboard_url as dasboard_url_cmds
 from sunbeam.commands import generate_cloud_config as generate_cloud_config_cmds
 from sunbeam.commands import juju_utils as juju_cmds
 from sunbeam.commands import launch as launch_cmds
@@ -122,6 +123,7 @@ def main():
     cli.add_command(generate_cloud_config_cmds.cloud_config)
     cli.add_command(launch_cmds.launch)
     cli.add_command(openrc_cmds.openrc)
+    cli.add_command(dasboard_url_cmds.dashboard_url)
     cli.add_command(dashboard_cmds.dashboard)
 
     # Add identity group
