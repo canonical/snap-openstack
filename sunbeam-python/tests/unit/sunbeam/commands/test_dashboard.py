@@ -33,6 +33,12 @@ def deployment():
 
 
 @pytest.fixture
+def preflight_patch():
+    with patch("sunbeam.commands.dashboard.run_preflight_checks") as p:
+        yield p
+
+
+@pytest.fixture
 def jhelper_patch():
     with patch("sunbeam.commands.dashboard.JujuHelper") as p:
         yield p
@@ -83,6 +89,7 @@ def test_retrieve_dashboard_url_action_failed():
 def test_set_theme_runs_step_with_force_prompt(
     runner,
     deployment,
+    preflight_patch,
     jhelper_patch,
     run_plan_patch,
     attach_step_patch,
@@ -97,6 +104,7 @@ def test_set_theme_runs_step_with_force_prompt(
 def test_clear_theme_writes_empty_path_and_runs_step(
     runner,
     deployment,
+    preflight_patch,
     jhelper_patch,
     run_plan_patch,
     attach_step_patch,
@@ -112,7 +120,6 @@ def test_clear_theme_writes_empty_path_and_runs_step(
     assert attach_step_patch.call_args.kwargs["prompt_mode"] == PromptMode.NEVER
 
 
-@patch("sunbeam.commands.dashboard.run_preflight_checks")
 def test_dashboard_url_prints_url(preflight_patch, runner, deployment, jhelper_patch):
     with patch(
         "sunbeam.commands.dashboard.retrieve_dashboard_url",
