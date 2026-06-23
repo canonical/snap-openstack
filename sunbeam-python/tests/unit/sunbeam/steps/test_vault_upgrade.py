@@ -39,7 +39,7 @@ def mock_auto_unseal():
 
 
 @pytest.fixture
-def step(basic_deployment, basic_client, basic_manifest, basic_jhelper, basic_tfhelper):
+def step(basic_deployment, basic_client, basic_manifest, basic_jhelper, basic_tfhelper):  # noqa: C901
     return VaultCharmUpgradeStep(
         basic_deployment, basic_client, basic_manifest, basic_jhelper, basic_tfhelper
     )
@@ -387,6 +387,53 @@ class TestVaultCharmUpgradeStep:
             step.client, step.tfvar_config, VAULT_CHANNEL
         )
 
+    def test_terraform_with_targets(
+        self,
+        step,
+        basic_jhelper,
+        basic_tfhelper,
+        step_context,
+        basic_client,
+        mock_migrate,
+        vaulthelper,
+        mock_auto_unseal,
+    ):
+        """Test that terraform is applied with vault-specific targets."""
+        # Setup check_charm_needs_refresh to proceed with upgrade
+        with patch("sunbeam.steps.vault.check_charm_needs_refresh") as mock_check:
+            mock_check.return_value = CharmRefreshDecision(
+                result=Result(ResultType.COMPLETED),
+                effective_channel="2.1/stable",
+            )
+            step.is_skip(step_context)
+
+            # Mock vault as sealed
+            vaulthelper.get_vault_status.return_value = {"sealed": True}
+
+            # Mock terraform state to return vault resources
+            basic_tfhelper.state_list.return_value = [
+                "juju_application.vault",
+                "juju_integration.vault-to-ca",
+                "juju_integration.barbican-to-vault",
+                "juju_application.certificate-authority",
+            ]
+
+            # Execute
+            result = step.run(step_context)
+
+            # Verify terraform was called with targets
+            basic_tfhelper.update_tfvars_and_apply_tf.assert_called()
+            call_args = basic_tfhelper.update_tfvars_and_apply_tf.call_args
+
+            # Check that targets were provided
+            assert "tf_apply_extra_args" in call_args.kwargs
+            targets = call_args.kwargs["tf_apply_extra_args"]
+            assert "-target=juju_application.vault" in targets
+            assert "-target=juju_integration.vault-to-ca" in targets
+            assert "-target=juju_integration.barbican-to-vault" in targets
+
+            assert result.result_type == ResultType.COMPLETED
+
     def test_run_calls_migrate_with_manifest_channel(
         self,
         step,
@@ -413,3 +460,86 @@ class TestVaultCharmUpgradeStep:
         mock_migrate.assert_called_once_with(
             step.client, step.tfvar_config, "1.19/stable"
         )
+
+
+class TestReapplyVaultTerraformPlanStep:
+    VAULT_STATE_RESOURCES = [
+        "juju_application.vault-k8s",
+        "juju_integration.vault-to-ca",
+        "juju_integration.barbican-to-vault",
+    ]
+
+    def test_get_vault_terraform_targets(
+        self, basic_deployment, basic_client, basic_jhelper, basic_manifest
+    ):
+        """Test generation of Vault-specific terraform targets."""
+        from sunbeam.steps.vault import ReapplyVaultTerraformPlanStep
+
+        tfhelper = Mock()
+        tfhelper.state_list.return_value = self.VAULT_STATE_RESOURCES
+        step = ReapplyVaultTerraformPlanStep(
+            basic_deployment, basic_client, tfhelper, basic_jhelper, basic_manifest
+        )
+
+        targets = step._get_vault_terraform_targets()
+
+        # Check that vault targets are included
+        assert "-target=juju_application.vault-k8s" in targets
+        assert "-target=juju_integration.vault-to-ca" in targets
+        assert "-target=juju_integration.barbican-to-vault" in targets
+
+    def test_run_success(
+        self, basic_deployment, basic_client, basic_jhelper, basic_manifest
+    ):
+        """Test successful Vault terraform apply with targets."""
+        from sunbeam.steps.vault import ReapplyVaultTerraformPlanStep
+
+        tfhelper = Mock()
+        tfhelper.state_list.return_value = self.VAULT_STATE_RESOURCES
+        step = ReapplyVaultTerraformPlanStep(
+            basic_deployment, basic_client, tfhelper, basic_jhelper, basic_manifest
+        )
+
+        # Mock wait_until_active
+        basic_jhelper.wait_until_active.return_value = None
+
+        context = Mock()
+        context.reporter = Mock()
+        result = step.run(context)
+
+        # Check that terraform was applied with targets
+        tfhelper.update_tfvars_and_apply_tf.assert_called_once()
+        call_args = tfhelper.update_tfvars_and_apply_tf.call_args
+        assert call_args.kwargs["tf_apply_extra_args"] is not None
+        assert len(call_args.kwargs["tf_apply_extra_args"]) >= 3  # All vault targets
+
+        # Check that we waited for vault
+        basic_jhelper.wait_until_active.assert_called_once()
+        call_args = basic_jhelper.wait_until_active.call_args
+        assert call_args.kwargs["apps"] == ["vault"]
+
+        assert result.result_type == ResultType.COMPLETED
+
+    def test_run_terraform_failure(
+        self, basic_deployment, basic_client, basic_jhelper, basic_manifest
+    ):
+        """Test Vault terraform apply failure."""
+        from sunbeam.core.terraform import TerraformException
+        from sunbeam.steps.vault import ReapplyVaultTerraformPlanStep
+
+        tfhelper = Mock()
+        step = ReapplyVaultTerraformPlanStep(
+            basic_deployment, basic_client, tfhelper, basic_jhelper, basic_manifest
+        )
+
+        # Mock terraform failure
+        tfhelper.update_tfvars_and_apply_tf.side_effect = TerraformException(
+            "Terraform apply failed"
+        )
+
+        context = Mock()
+        context.reporter = Mock()
+        result = step.run(context)
+
+        assert result.result_type == ResultType.FAILED
+        assert "Terraform apply failed" in result.message
