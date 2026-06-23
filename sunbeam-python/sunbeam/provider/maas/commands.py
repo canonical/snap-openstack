@@ -25,7 +25,7 @@ from sunbeam.commands.configure import (
     UserOpenRCStep,
     retrieve_admin_credentials,
 )
-from sunbeam.commands.dashboard_url import retrieve_dashboard_url
+from sunbeam.commands.dashboard import retrieve_dashboard_url
 from sunbeam.commands.proxy import PromptForProxyStep
 from sunbeam.core import ovn
 from sunbeam.core.checks import (
@@ -134,6 +134,7 @@ from sunbeam.steps.clusterd import (
     DeploySunbeamClusterdApplicationStep,
 )
 from sunbeam.steps.features import DisableEnabledFeatures
+from sunbeam.steps.horizon import AttachHorizonThemeStep
 from sunbeam.steps.hypervisor import (
     DeployHypervisorApplicationStep,
     DestroyHypervisorApplicationStep,
@@ -867,6 +868,14 @@ def deploy(
             deployment.openstack_machines_model,
             proxy_settings=proxy_settings,
             is_region_controller=bool(nb_region_controllers),
+        )
+    )
+    plan2.append(
+        AttachHorizonThemeStep(
+            client=client,
+            jhelper=jhelper,
+            manifest=manifest,
+            model=OPENSTACK_MODEL,
         )
     )
     if microovn_necessary:
