@@ -311,3 +311,155 @@ class TestMySQLCharmUpgradeStep:
             step.model, step.application, 2
         )
         assert step.state == MySQLUpgradeState.SCALED_BACK
+
+
+class TestReapplyMySQLTerraformPlanStep:
+    def test_get_mysql_terraform_targets(
+        self, basic_deployment, basic_client, basic_jhelper, basic_manifest
+    ):
+        """Test generation of MySQL-specific terraform targets."""
+        from sunbeam.steps.mysql import ReapplyMySQLTerraformPlanStep
+
+        tfhelper = Mock()
+        step = ReapplyMySQLTerraformPlanStep(
+            basic_deployment, basic_client, tfhelper, basic_jhelper, basic_manifest
+        )
+
+        # Mock get_application_names to return some mysql-router apps
+        basic_jhelper.get_application_names.return_value = [
+            "mysql-k8s",
+            "keystone",
+            "keystone-mysql-router",
+            "nova-api",
+            "nova-api-mysql-router",
+            "glance",
+            "glance-mysql-router",
+            "manila-data-mysql-router",
+        ]
+        tfhelper.state_list.return_value = [
+            "module.keystone[0].juju_application.mysql-router",
+            "module.keystone[0].juju_integration.mysql-router-to-mysql",
+            "module.keystone[0].juju_integration.service-to-mysql-router",
+            "module.nova[0].juju_application.nova-api-mysql-router[0]",
+            "module.nova[0].juju_integration.nova-api-to-mysql-router[0]",
+            "module.nova[0].juju_integration.nova-api-mysql-router-to-metrics-endpoint[0]",
+            "module.glance[0].juju_application.mysql-router",
+            "module.glance[0].juju_integration.mysql-router-to-mysql",
+        ]
+
+        targets = step._get_mysql_terraform_targets()
+
+        # Check that basic mysql targets are included
+        assert "-target=module.single-mysql" in targets
+        assert "-target=module.many-mysql" in targets
+
+        # Check that only mysql-router resources that exist in state are targeted.
+        assert "-target=module.keystone[0].juju_application.mysql-router" in targets
+        assert (
+            "-target=module.keystone[0].juju_integration.mysql-router-to-mysql"
+            in targets
+        )
+        assert (
+            "-target=module.nova[0].juju_application.nova-api-mysql-router[0]"
+            in targets
+        )
+        assert (
+            "-target=module.nova[0].juju_integration.nova-api-mysql-router-to-metrics-endpoint[0]"
+            in targets
+        )
+        assert (
+            "-target=module.manila-data[0].juju_application.mysql-router" not in targets
+        )
+
+    def test_run_success(
+        self, basic_deployment, basic_client, basic_jhelper, basic_manifest
+    ):
+        """Test successful MySQL terraform apply with targets."""
+        from sunbeam.steps.mysql import ReapplyMySQLTerraformPlanStep
+
+        tfhelper = Mock()
+        step = ReapplyMySQLTerraformPlanStep(
+            basic_deployment, basic_client, tfhelper, basic_jhelper, basic_manifest
+        )
+
+        # Mock get_application_names
+        basic_jhelper.get_application_names.return_value = [
+            "mysql-k8s",
+            "keystone-mysql-router",
+        ]
+        tfhelper.state_list.return_value = [
+            "module.keystone[0].juju_application.mysql-router",
+            "module.keystone[0].juju_integration.mysql-router-to-mysql",
+        ]
+
+        # Mock wait_until_active
+        basic_jhelper.wait_until_active.return_value = None
+
+        context = Mock()
+        context.reporter = Mock()
+        result = step.run(context)
+
+        # Check that terraform was applied with targets
+        tfhelper.update_tfvars_and_apply_tf.assert_called_once()
+        call_args = tfhelper.update_tfvars_and_apply_tf.call_args
+        assert call_args.kwargs["tf_apply_extra_args"] is not None
+        assert (
+            len(call_args.kwargs["tf_apply_extra_args"]) > 2
+        )  # More than just base targets
+
+        # Check that we waited for the right applications
+        basic_jhelper.wait_until_active.assert_called_once()
+        call_args = basic_jhelper.wait_until_active.call_args
+        assert call_args.kwargs["apps"] == ["mysql", "keystone-mysql-router"]
+
+        assert result.result_type == ResultType.COMPLETED
+
+    def test_run_terraform_failure(
+        self, basic_deployment, basic_client, basic_jhelper, basic_manifest
+    ):
+        """Test MySQL terraform apply failure."""
+        from sunbeam.core.terraform import TerraformException
+        from sunbeam.steps.mysql import ReapplyMySQLTerraformPlanStep
+
+        tfhelper = Mock()
+        step = ReapplyMySQLTerraformPlanStep(
+            basic_deployment, basic_client, tfhelper, basic_jhelper, basic_manifest
+        )
+
+        # Mock terraform failure
+        tfhelper.update_tfvars_and_apply_tf.side_effect = TerraformException(
+            "Terraform apply failed"
+        )
+
+        context = Mock()
+        context.reporter = Mock()
+        result = step.run(context)
+
+        assert result.result_type == ResultType.FAILED
+        assert "Terraform apply failed" in result.message
+
+    def test_run_wait_timeout(
+        self, basic_deployment, basic_client, basic_jhelper, basic_manifest
+    ):
+        """Test MySQL terraform apply with wait timeout."""
+        from sunbeam.core.juju import JujuWaitException
+        from sunbeam.steps.mysql import ReapplyMySQLTerraformPlanStep
+
+        tfhelper = Mock()
+        step = ReapplyMySQLTerraformPlanStep(
+            basic_deployment, basic_client, tfhelper, basic_jhelper, basic_manifest
+        )
+
+        # Mock successful terraform but timeout on wait
+        basic_jhelper.get_application_names.return_value = ["mysql-k8s"]
+        tfhelper.state_list.return_value = []
+        basic_jhelper.wait_until_active.side_effect = JujuWaitException(
+            "Timeout waiting"
+        )
+
+        context = Mock()
+        context.reporter = Mock()
+        result = step.run(context)
+
+        assert result.result_type == ResultType.FAILED
+        assert "Timeout waiting" in result.message
