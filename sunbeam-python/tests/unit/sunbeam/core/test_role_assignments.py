@@ -9,40 +9,7 @@ from sunbeam.core.role_assignments import (
 )
 
 
-def test_microovn_role_mapping_without_split_roles_assigns_compute_gateways():
-    client = _client_with_nodes(
-        {
-            "control": [{"machineid": "0", "role": ["control"]}],
-            "compute": [
-                {"machineid": "1", "role": ["compute"]},
-                {"machineid": "2", "role": ["compute", "network"]},
-            ],
-            "network": [{"machineid": "2", "role": ["compute", "network"]}],
-        }
-    )
-
-    mapping = build_microovn_role_mapping(
-        client,
-        model_name="openstack-machines",
-        split_roles=False,
-        machine_ids=["0", "1", "2"],
-        assign_central_roles=True,
-    )
-
-    assert mapping == {
-        "openstack-machines": {
-            "microovn": {
-                "machines": {
-                    "0": {"roles": ["chassis", "central"]},
-                    "1": {"roles": ["chassis", "gateway"]},
-                    "2": {"roles": ["chassis", "gateway"]},
-                }
-            }
-        }
-    }
-
-
-def test_microovn_role_mapping_with_split_roles_keeps_gateways_on_network_nodes():
+def test_microovn_role_mapping_keeps_gateways_on_network_nodes():
     client = _client_with_nodes(
         {
             "control": [{"machineid": "0", "role": ["control"]}],
@@ -54,7 +21,6 @@ def test_microovn_role_mapping_with_split_roles_keeps_gateways_on_network_nodes(
     mapping = build_microovn_role_mapping(
         client,
         model_name="openstack-machines",
-        split_roles=True,
         machine_ids=["0", "1", "2"],
         assign_central_roles=True,
     )
@@ -78,7 +44,6 @@ def test_microovn_role_mapping_filters_to_actual_microovn_machines():
     mapping = build_microovn_role_mapping(
         client,
         model_name="openstack-machines",
-        split_roles=False,
         machine_ids=["2"],
         assign_central_roles=True,
     )
@@ -100,7 +65,6 @@ def test_microovn_role_mapping_can_disable_central_roles():
     mapping = build_microovn_role_mapping(
         client,
         model_name="openstack-machines",
-        split_roles=True,
         machine_ids=["0"],
         assign_central_roles=False,
     )
@@ -122,7 +86,6 @@ def test_microovn_role_mapping_allows_central_and_gateway_for_provider_microovn(
     mapping = build_microovn_role_mapping(
         client,
         model_name="openstack-machines",
-        split_roles=True,
         machine_ids=["0"],
         assign_central_roles=True,
     )

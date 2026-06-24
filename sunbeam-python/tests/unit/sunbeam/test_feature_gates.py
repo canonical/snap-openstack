@@ -18,7 +18,6 @@ from sunbeam.feature_gates import (
     check_option_value,
     feature_gate_option_on_value,
     is_feature_gate_enabled,
-    split_roles_enabled,
     validate_feature_gate_config,
 )
 
@@ -730,49 +729,6 @@ class TestFeatureGatedChoice:
         assert result.lower() == "control"
 
 
-class TestSplitRolesEnabled:
-    """Test split_roles_enabled convenience function."""
-
-    def test_returns_true_when_enabled(self):
-        """Returns True when feature.split-roles is enabled via snap config."""
-        mock_snap = MagicMock()
-        mock_snap.config.get.return_value = True
-        assert split_roles_enabled(mock_snap) is True
-        mock_snap.config.get.assert_called_once_with("feature.split-roles")
-
-    def test_returns_false_when_not_set(self):
-        """Returns False when feature.split-roles is not set (UnknownConfigKey)."""
-        mock_snap = MagicMock()
-        mock_snap.config.get.side_effect = UnknownConfigKey("")
-        assert split_roles_enabled(mock_snap) is False
-
-    def test_returns_false_when_explicitly_false(self):
-        """Returns False when feature.split-roles is explicitly False."""
-        mock_snap = MagicMock()
-        mock_snap.config.get.return_value = False
-        assert split_roles_enabled(mock_snap) is False
-
-    @patch(
-        "sunbeam.feature_gates.FEATURE_GATES",
-        {
-            "feature.split-roles": {"generally_available": True},
-        },
-    )
-    def test_returns_true_when_generally_available(self):
-        """Returns True when feature.split-roles has generally_available=True."""
-        assert split_roles_enabled() is True
-
-    @patch("sunbeam.feature_gates.Snap")
-    def test_passes_snap_argument_through(self, mock_snap_cls):
-        """Passes snap argument through to is_feature_gate_enabled."""
-        mock_snap = MagicMock()
-        mock_snap.config.get.return_value = True
-        result = split_roles_enabled(mock_snap)
-        assert result is True
-        # Snap() should not be called when snap is provided
-        mock_snap_cls.assert_not_called()
-
-
 class TestValidateFeatureGateConfig:
     """Test validate_feature_gate_config dependency enforcement."""
 
@@ -791,11 +747,9 @@ class TestValidateFeatureGateConfig:
         mock_snap.config.get.side_effect = config_get
         return mock_snap
 
-    def test_valid_config_both_enabled(self):
-        """No error when split-roles and microovn-sdn are both enabled."""
-        snap = self._mock_snap_with_gates(
-            {"feature.split-roles": True, "feature.microovn-sdn": True}
-        )
+    def test_loadbalancer_amphora_no_longer_requires_microovn_sdn(self):
+        """Amphora gate does not depend on a retired gate."""
+        snap = self._mock_snap_with_gates({"feature.loadbalancer-amphora": True})
         validate_feature_gate_config(snap)
 
     def test_valid_config_no_gates_set(self):
@@ -803,59 +757,23 @@ class TestValidateFeatureGateConfig:
         snap = self._mock_snap_with_gates({})
         validate_feature_gate_config(snap)
 
-    def test_valid_config_dep_enabled_alone(self):
-        """No error when only microovn-sdn is enabled (no dependents)."""
-        snap = self._mock_snap_with_gates({"feature.microovn-sdn": True})
-        validate_feature_gate_config(snap)
-
-    def test_valid_config_both_disabled(self):
-        """No error when both gates are explicitly disabled."""
-        snap = self._mock_snap_with_gates(
-            {"feature.split-roles": False, "feature.microovn-sdn": False}
-        )
-        validate_feature_gate_config(snap)
-
-    def test_forward_dep_violation(self):
-        """Error when split-roles enabled without microovn-sdn."""
-        snap = self._mock_snap_with_gates({"feature.split-roles": True})
-        with pytest.raises(FeatureGateError, match="requires.*microovn-sdn"):
-            validate_feature_gate_config(snap)
-
-    def test_forward_dep_violation_explicit_false(self):
-        """Error when split-roles enabled but microovn-sdn explicitly False."""
-        snap = self._mock_snap_with_gates(
-            {"feature.split-roles": True, "feature.microovn-sdn": False}
-        )
-        with pytest.raises(FeatureGateError, match="requires.*microovn-sdn"):
-            validate_feature_gate_config(snap)
-
-    def test_reverse_dep_violation(self):
-        """Error when microovn-sdn disabled while split-roles still active.
-
-        This is caught as a forward violation: split-roles is enabled but
-        its dependency microovn-sdn is not.
-        """
-        snap = self._mock_snap_with_gates(
-            {"feature.split-roles": True, "feature.microovn-sdn": False}
-        )
-        with pytest.raises(FeatureGateError, match="split-roles.*requires"):
-            validate_feature_gate_config(snap)
-
-    def test_error_message_includes_both_gates(self):
-        """Error message mentions both the gate and its missing dependency."""
-        snap = self._mock_snap_with_gates({"feature.split-roles": True})
-        with pytest.raises(FeatureGateError) as exc_info:
-            validate_feature_gate_config(snap)
-        assert "feature.split-roles" in str(exc_info.value)
-        assert "feature.microovn-sdn" in str(exc_info.value)
-
     def test_is_sunbeam_exception(self):
         """FeatureGateError is a SunbeamException for CatchGroup handling."""
         from sunbeam.errors import SunbeamException
 
-        snap = self._mock_snap_with_gates({"feature.split-roles": True})
+        snap = self._mock_snap_with_gates({"feature.a": True})
         with pytest.raises(SunbeamException):
-            validate_feature_gate_config(snap)
+            with patch(
+                "sunbeam.feature_gates.FEATURE_GATES",
+                {
+                    "feature.a": {
+                        "generally_available": False,
+                        "requires": ["feature.b"],
+                    },
+                    "feature.b": {"generally_available": False},
+                },
+            ):
+                validate_feature_gate_config(snap)
 
     @patch(
         "sunbeam.feature_gates.FEATURE_GATES",

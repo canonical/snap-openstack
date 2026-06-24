@@ -18,7 +18,6 @@ RoleMapping = dict[str, dict[str, dict[str, dict[str, dict[str, list[str]]]]]]
 def build_microovn_role_mapping(
     client: Client,
     model_name: str,
-    split_roles: bool,
     machine_ids: Iterable[str],
     *,
     assign_central_roles: bool,
@@ -38,7 +37,6 @@ def build_microovn_role_mapping(
             node_roles = set(node.get("role", []))
             machine_roles[machine_id_str] = _microovn_roles_for_node(
                 node_roles,
-                split_roles,
                 assign_central_roles,
             )
 
@@ -73,7 +71,6 @@ def _build_mapping(
 
 def _microovn_roles_for_node(
     node_roles: Iterable[str],
-    split_roles: bool,
     assign_central_roles: bool,
 ) -> list[str]:
     role_set = set(node_roles)
@@ -81,7 +78,7 @@ def _microovn_roles_for_node(
 
     if assign_central_roles and "control" in role_set:
         roles.append("central")
-    if "network" in role_set or ("compute" in role_set and not split_roles):
+    if "network" in role_set:
         roles.append("gateway")
 
     return roles

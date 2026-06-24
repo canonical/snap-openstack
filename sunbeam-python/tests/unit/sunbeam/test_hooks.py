@@ -12,28 +12,13 @@ from sunbeam.hooks import (
 class TestCheckFeatureGateDependencies:
     """Tests for _check_feature_gate_dependencies."""
 
-    def test_split_roles_with_dependency_enabled(self):
-        """split-roles with microovn-sdn=True returns no missing deps."""
-        flattened = {"microovn-sdn": True}
-        result = _check_feature_gate_dependencies("feature.split-roles", flattened)
-        assert result == []
-
-    def test_split_roles_with_dependency_disabled(self):
-        """split-roles with microovn-sdn=False returns missing dep."""
-        flattened = {"microovn-sdn": False}
-        result = _check_feature_gate_dependencies("feature.split-roles", flattened)
-        assert result == ["feature.microovn-sdn"]
-
-    def test_split_roles_with_dependency_absent(self):
-        """split-roles with microovn-sdn absent returns missing dep."""
+    def test_loadbalancer_amphora_no_dependencies(self):
+        """loadbalancer-amphora has no retired dependency."""
         flattened = {}
-        result = _check_feature_gate_dependencies("feature.split-roles", flattened)
-        assert result == ["feature.microovn-sdn"]
-
-    def test_microovn_sdn_no_dependencies(self):
-        """microovn-sdn has no requires, returns empty list."""
-        flattened = {}
-        result = _check_feature_gate_dependencies("feature.microovn-sdn", flattened)
+        result = _check_feature_gate_dependencies(
+            "feature.loadbalancer-amphora",
+            flattened,
+        )
         assert result == []
 
     def test_multi_region_no_dependencies(self):
@@ -44,15 +29,9 @@ class TestCheckFeatureGateDependencies:
 
     def test_unknown_gate_key(self):
         """Unknown gate key returns empty list."""
-        flattened = {"microovn-sdn": True}
+        flattened = {"unknown": True}
         result = _check_feature_gate_dependencies("feature.nonexistent", flattened)
         assert result == []
-
-    def test_split_roles_with_dependency_none(self):
-        """split-roles with microovn-sdn=None returns missing dep (None is falsy)."""
-        flattened = {"microovn-sdn": None}
-        result = _check_feature_gate_dependencies("feature.split-roles", flattened)
-        assert result == ["feature.microovn-sdn"]
 
 
 class TestSyncFeatureGatesWithDependencies:
@@ -89,54 +68,16 @@ class TestSyncFeatureGatesWithDependencies:
         mock_snap.config.get_options.return_value = options
         return mock_snap
 
-    def test_enable_split_roles_with_microovn_enabled(self):
-        """Enabling split-roles when microovn-sdn is also enabled succeeds."""
+    def test_enable_loadbalancer_amphora_without_microovn_syncs(self):
+        """Amphora gate syncs without a retired dependency."""
         client = self._make_client()
-        snap = self._make_snap({"split-roles": True, "microovn-sdn": True})
-
-        sync_feature_gates_from_snap_to_cluster(client, snap)
-
-        # Both gates should be synced (added since they don't exist)
-        add_calls = client.cluster.add_feature_gate.call_args_list
-        added_keys = {call[0][0] for call in add_calls}
-        assert "feature.split-roles" in added_keys
-        assert "feature.microovn-sdn" in added_keys
-
-    def test_enable_split_roles_without_microovn_skipped(self):
-        """Enabling split-roles without microovn-sdn skips split-roles."""
-        client = self._make_client()
-        snap = self._make_snap({"split-roles": True, "microovn-sdn": False})
-
-        sync_feature_gates_from_snap_to_cluster(client, snap)
-
-        # split-roles should NOT be synced; microovn-sdn (False) should be synced
-        add_calls = client.cluster.add_feature_gate.call_args_list
-        added_keys = {call[0][0] for call in add_calls}
-        assert "feature.split-roles" not in added_keys
-        assert "feature.microovn-sdn" in added_keys
-
-    def test_enable_microovn_alone(self):
-        """Enabling microovn-sdn alone syncs normally (no deps)."""
-        client = self._make_client()
-        snap = self._make_snap({"microovn-sdn": True})
+        snap = self._make_snap({"loadbalancer-amphora": True})
 
         sync_feature_gates_from_snap_to_cluster(client, snap)
 
         add_calls = client.cluster.add_feature_gate.call_args_list
         assert len(add_calls) == 1
-        assert add_calls[0][0] == ("feature.microovn-sdn", True)
-
-    def test_disable_split_roles_syncs_normally(self):
-        """Disabling split-roles (False) syncs without checking deps."""
-        client = self._make_client()
-        snap = self._make_snap({"split-roles": False})
-
-        sync_feature_gates_from_snap_to_cluster(client, snap)
-
-        # Should be synced even without microovn-sdn in config
-        add_calls = client.cluster.add_feature_gate.call_args_list
-        assert len(add_calls) == 1
-        assert add_calls[0][0] == ("feature.split-roles", False)
+        assert add_calls[0][0] == ("feature.loadbalancer-amphora", True)
 
 
 class TestConfigureHookEnforcement:
@@ -163,32 +104,13 @@ class TestConfigureHookEnforcement:
         mock_snap.paths.data = MagicMock()
         return mock_snap
 
-    def test_configure_rejects_unmet_dependency(self):
-        """configure() raises when split-roles enabled without microovn-sdn."""
-        from unittest.mock import patch
-
-        import pytest
-
-        from sunbeam.feature_gates import FeatureGateError
-        from sunbeam.hooks import configure
-
-        snap = self._make_snap({"feature.split-roles": True})
-
-        with (
-            patch("sunbeam.hooks.setup_logging"),
-            pytest.raises(FeatureGateError, match="requires.*microovn-sdn"),
-        ):
-            configure(snap)
-
     def test_configure_accepts_valid_config(self):
         """configure() succeeds when dependencies are met."""
         from unittest.mock import patch
 
         from sunbeam.hooks import configure
 
-        snap = self._make_snap(
-            {"feature.split-roles": True, "feature.microovn-sdn": True}
-        )
+        snap = self._make_snap({"feature.loadbalancer-amphora": True})
 
         # Patch _sync and file operations to avoid side effects
         with (

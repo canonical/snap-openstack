@@ -13,11 +13,13 @@ from lightkube import ApiError
 from maas.client.bones import CallError
 
 import sunbeam.provider.maas.steps as maas_steps
+from sunbeam.core import ovn
 from sunbeam.core.checks import DiagnosticResultType
 from sunbeam.core.deployment import Networks
 from sunbeam.core.deployments import DeploymentsConfig
 from sunbeam.core.juju import ControllerNotFoundException
 from sunbeam.provider.maas.commands import (
+    configure_cmd,
     remove_node,
     validate_deployment_cmd,
     validate_machine_cmd,
@@ -60,6 +62,82 @@ from sunbeam.steps.role_distributor import (
     ReapplyRoleDistributorApplicationStep,
     RemoveRoleDistributorUnitsStep,
 )
+
+
+class TestMaasConfigureCommand:
+    @pytest.mark.parametrize(
+        "provider,expected_names",
+        [
+            (ovn.OvnProvider.OVN_K8S, ["net-1"]),
+            (
+                ovn.OvnProvider.MICROOVN,
+                ["net-1", "compute-1", "control-1"],
+            ),
+        ],
+    )
+    def test_network_agents_match_ovn_provider(
+        self,
+        mocker,
+        tmp_path,
+        provider,
+        expected_names,
+    ):
+        client = Mock()
+        nodes_by_role = {
+            RoleTags.NETWORK.value: [{"name": "net-1"}],
+            RoleTags.COMPUTE.value: [{"name": "compute-1"}],
+            RoleTags.CONTROL.value: [{"name": "control-1"}],
+        }
+        client.cluster.list_nodes_by_role.side_effect = nodes_by_role.__getitem__
+
+        tfhelper = Mock()
+        tfhelper.env = {}
+        tfhelper.path = tmp_path
+
+        ovn_manager = Mock()
+        ovn_manager.get_provider.return_value = provider
+
+        deployment = Mock()
+        deployment.get_client.return_value = client
+        deployment.get_manifest.return_value = Mock(core={}, features={})
+        deployment.get_tfhelper.return_value = tfhelper
+        deployment.get_ovn_manager.return_value = ovn_manager
+        deployment.juju_controller = "controller"
+        deployment.juju_account = "account"
+        deployment.openstack_machines_model = "openstack-machines"
+
+        jhelper = Mock()
+        jhelper.model_exists.return_value = True
+
+        mocker.patch("sunbeam.provider.maas.commands.run_preflight_checks")
+        mocker.patch(
+            "sunbeam.provider.maas.commands.MaasClient.from_deployment",
+            return_value=Mock(),
+        )
+        mocker.patch("sunbeam.provider.maas.commands.JujuHelper", return_value=jhelper)
+        mocker.patch(
+            "sunbeam.provider.maas.commands.retrieve_admin_credentials",
+            return_value={
+                "OS_AUTH_URL": "https://keystone.example.com",
+                "OS_AUTH_VERSION": "3",
+            },
+        )
+        run_plan = mocker.patch("sunbeam.provider.maas.commands.run_plan")
+        mocker.patch(
+            "sunbeam.provider.maas.commands.retrieve_dashboard_url",
+            return_value="https://horizon.example.com",
+        )
+
+        result = CliRunner().invoke(configure_cmd, obj=deployment)
+
+        assert result.exit_code == 0, result.output
+        plan = run_plan.call_args.args[0]
+        network_agents_step = next(
+            step
+            for step in plan
+            if isinstance(step, maas_steps.MaasSetOpenStackNetworkAgentsStep)
+        )
+        assert network_agents_step.names == expected_names
 
 
 class TestAddMaasDeployment:
@@ -430,11 +508,9 @@ class TestMachineComputeNicCheck:
         }
         check = MachineComputeNicCheck(machine)
         result = check.run()
-        assert result.passed is DiagnosticResultType.FAILURE
+        assert result.passed is DiagnosticResultType.SUCCESS
         assert result.details["machine"] == "test_machine"
-        assert result.message and "no neutron NIC found" in result.message
-        assert result.diagnostics
-        assert "https://maas.io/docs/how-to-use-network-tags" in result.diagnostics
+        assert result.message and "not required" in result.message
 
     def test_run_with_neutron_nic(self):
         machine = {
@@ -444,12 +520,12 @@ class TestMachineComputeNicCheck:
         }
         check = MachineComputeNicCheck(machine)
         result = check.run()
-        assert result.passed is DiagnosticResultType.SUCCESS
+        assert result.passed is DiagnosticResultType.WARNING
         assert result.details["machine"] == "test_machine"
-        assert result.message and "neutron NIC found" in result.message
+        assert result.message and "will be ignored" in result.message
 
     def test_run_with_different_physnet_tag(self):
-        """Any neutron:<physnet> tag should be accepted."""
+        """Any compute-only neutron:<physnet> tag should warn."""
         machine = {
             "hostname": "test_machine",
             "roles": [RoleTags.COMPUTE.value],
@@ -457,7 +533,7 @@ class TestMachineComputeNicCheck:
         }
         check = MachineComputeNicCheck(machine)
         result = check.run()
-        assert result.passed is DiagnosticResultType.SUCCESS
+        assert result.passed is DiagnosticResultType.WARNING
 
 
 class TestMachineRootDiskCheck:
@@ -2172,18 +2248,25 @@ class TestMachineComputeNicCheckNetworkNode:
         assert result.details["machine"] == "test_machine"
         assert result.message and "no neutron NIC found" in result.message
 
-    def test_run_with_compute_and_network_both_need_nic(self):
-        """Both compute and network nodes require a neutron NIC."""
-        for role in [RoleTags.COMPUTE.value, RoleTags.NETWORK.value]:
-            machine = {
-                "hostname": f"test_machine_{role}",
-                "roles": [role],
-                "nics": [{"name": "eth1", "tags": ["neutron:physnet1"]}],
-            }
-            check = MachineComputeNicCheck(machine)
-            result = check.run()
-            assert result.passed is DiagnosticResultType.SUCCESS
-            assert result.message and "neutron NIC found" in result.message
+    def test_run_with_compute_role_warns_and_network_role_passes_with_nic(self):
+        """Only network nodes require and consume a neutron NIC."""
+        compute_machine = {
+            "hostname": "test_machine_compute",
+            "roles": [RoleTags.COMPUTE.value],
+            "nics": [{"name": "eth1", "tags": ["neutron:physnet1"]}],
+        }
+        compute_result = MachineComputeNicCheck(compute_machine).run()
+        assert compute_result.passed is DiagnosticResultType.WARNING
+        assert compute_result.message and "will be ignored" in compute_result.message
+
+        network_machine = {
+            "hostname": "test_machine_network",
+            "roles": [RoleTags.NETWORK.value],
+            "nics": [{"name": "eth1", "tags": ["neutron:physnet1"]}],
+        }
+        network_result = MachineComputeNicCheck(network_machine).run()
+        assert network_result.passed is DiagnosticResultType.SUCCESS
+        assert network_result.message and "neutron NIC found" in network_result.message
 
     def test_run_with_network_node_different_physnet(self):
         """Network node with any neutron:<physnet> tag should pass."""
@@ -2197,12 +2280,11 @@ class TestMachineComputeNicCheckNetworkNode:
         assert result.passed is DiagnosticResultType.SUCCESS
 
 
-class TestMachineComputeNicCheckSplitRoles:
-    """Test MachineComputeNicCheck behavior when feature.split-roles is enabled."""
+class TestMachineComputeNicCheckDefaultRoles:
+    """Test MachineComputeNicCheck behavior with default role separation."""
 
-    @patch("sunbeam.provider.maas.steps.split_roles_enabled", return_value=True)
-    def test_split_roles_on_compute_only_no_nic_success(self, mock_split):
-        """Split-roles ON + compute-only node without NIC → SUCCESS."""
+    def test_compute_only_no_nic_success(self):
+        """Compute-only node without NIC succeeds."""
         machine = {
             "hostname": "test_machine",
             "roles": [RoleTags.COMPUTE.value],
@@ -2213,9 +2295,8 @@ class TestMachineComputeNicCheckSplitRoles:
         assert result.passed is DiagnosticResultType.SUCCESS
         assert result.message and "not required" in result.message
 
-    @patch("sunbeam.provider.maas.steps.split_roles_enabled", return_value=True)
-    def test_split_roles_on_compute_only_with_nic_warns(self, mock_split):
-        """Split-roles ON + compute-only with neutron NIC → WARNING."""
+    def test_compute_only_with_nic_warns(self):
+        """Compute-only node with neutron NIC warns."""
         machine = {
             "hostname": "test_machine",
             "roles": [RoleTags.COMPUTE.value],
@@ -2226,9 +2307,8 @@ class TestMachineComputeNicCheckSplitRoles:
         assert result.passed is DiagnosticResultType.WARNING
         assert result.message and "will be ignored" in result.message
 
-    @patch("sunbeam.provider.maas.steps.split_roles_enabled", return_value=True)
-    def test_split_roles_on_network_node_no_nic_failure(self, mock_split):
-        """Split-roles ON + network node without NIC → FAILURE."""
+    def test_network_node_no_nic_failure(self):
+        """Network node without NIC fails."""
         machine = {
             "hostname": "test_machine",
             "roles": [RoleTags.NETWORK.value],
@@ -2238,9 +2318,8 @@ class TestMachineComputeNicCheckSplitRoles:
         result = check.run()
         assert result.passed is DiagnosticResultType.FAILURE
 
-    @patch("sunbeam.provider.maas.steps.split_roles_enabled", return_value=True)
-    def test_split_roles_on_network_node_with_nic_success(self, mock_split):
-        """Split-roles ON + network node with NIC → SUCCESS."""
+    def test_network_node_with_nic_success(self):
+        """Network node with NIC succeeds."""
         machine = {
             "hostname": "test_machine",
             "roles": [RoleTags.NETWORK.value],
@@ -2250,9 +2329,8 @@ class TestMachineComputeNicCheckSplitRoles:
         result = check.run()
         assert result.passed is DiagnosticResultType.SUCCESS
 
-    @patch("sunbeam.provider.maas.steps.split_roles_enabled", return_value=True)
-    def test_split_roles_on_compute_network_with_nic_success(self, mock_split):
-        """Split-roles ON + compute+network node with NIC → SUCCESS."""
+    def test_compute_network_with_nic_success(self):
+        """Compute+network node with NIC succeeds."""
         machine = {
             "hostname": "test_machine",
             "roles": [RoleTags.COMPUTE.value, RoleTags.NETWORK.value],
@@ -2262,9 +2340,8 @@ class TestMachineComputeNicCheckSplitRoles:
         result = check.run()
         assert result.passed is DiagnosticResultType.SUCCESS
 
-    @patch("sunbeam.provider.maas.steps.split_roles_enabled", return_value=True)
-    def test_split_roles_on_compute_network_no_nic_failure(self, mock_split):
-        """Split-roles ON + compute+network node without NIC → FAILURE."""
+    def test_compute_network_no_nic_failure(self):
+        """Compute+network node without NIC fails."""
         machine = {
             "hostname": "test_machine",
             "roles": [RoleTags.COMPUTE.value, RoleTags.NETWORK.value],
@@ -2274,9 +2351,8 @@ class TestMachineComputeNicCheckSplitRoles:
         result = check.run()
         assert result.passed is DiagnosticResultType.FAILURE
 
-    @patch("sunbeam.provider.maas.steps.split_roles_enabled", return_value=True)
-    def test_split_roles_on_control_only_success(self, mock_split):
-        """Split-roles ON + control-only node → SUCCESS."""
+    def test_control_only_success(self):
+        """Control-only node succeeds."""
         machine = {
             "hostname": "test_machine",
             "roles": [RoleTags.CONTROL.value],
@@ -2286,9 +2362,8 @@ class TestMachineComputeNicCheckSplitRoles:
         result = check.run()
         assert result.passed is DiagnosticResultType.SUCCESS
 
-    @patch("sunbeam.provider.maas.steps.split_roles_enabled", return_value=True)
-    def test_split_roles_on_control_with_nic_warns(self, mock_split):
-        """Split-roles ON + control-only with neutron NIC → WARNING."""
+    def test_control_with_nic_warns(self):
+        """Control-only node with neutron NIC warns."""
         machine = {
             "hostname": "test_machine",
             "roles": [RoleTags.CONTROL.value],
@@ -2299,36 +2374,11 @@ class TestMachineComputeNicCheckSplitRoles:
         assert result.passed is DiagnosticResultType.WARNING
         assert result.message and "will be ignored" in result.message
 
-    @patch("sunbeam.provider.maas.steps.split_roles_enabled", return_value=True)
-    def test_split_roles_on_no_roles_failure(self, mock_split):
-        """Split-roles ON + no roles → FAILURE."""
+    def test_no_roles_failure(self):
+        """Machine with no roles fails."""
         machine = {
             "hostname": "test_machine",
             "roles": [],
-            "nics": [{"name": "eth0", "tags": []}],
-        }
-        check = MachineComputeNicCheck(machine)
-        result = check.run()
-        assert result.passed is DiagnosticResultType.FAILURE
-
-    @patch("sunbeam.provider.maas.steps.split_roles_enabled", return_value=False)
-    def test_split_roles_off_compute_only_no_nic_failure(self, mock_split):
-        """Split-roles OFF + compute-only without NIC → FAILURE."""
-        machine = {
-            "hostname": "test_machine",
-            "roles": [RoleTags.COMPUTE.value],
-            "nics": [{"name": "eth0", "tags": []}],
-        }
-        check = MachineComputeNicCheck(machine)
-        result = check.run()
-        assert result.passed is DiagnosticResultType.FAILURE
-
-    @patch("sunbeam.provider.maas.steps.split_roles_enabled", return_value=False)
-    def test_split_roles_off_network_only_no_nic_failure(self, mock_split):
-        """Split-roles OFF + network-only without NIC → FAILURE."""
-        machine = {
-            "hostname": "test_machine",
-            "roles": [RoleTags.NETWORK.value],
             "nics": [{"name": "eth0", "tags": []}],
         }
         check = MachineComputeNicCheck(machine)
@@ -2376,8 +2426,7 @@ class TestMachineComputeNicCheckMultiPhysnet:
         result = check.run()
         assert result.passed is DiagnosticResultType.FAILURE
 
-    @patch("sunbeam.provider.maas.steps.split_roles_enabled", return_value=True)
-    def test_split_roles_compute_with_physnet2_warns(self, mock_split):
+    def test_compute_with_physnet2_warns(self):
         """Compute-only with neutron:physnet2 warns (NIC ignored)."""
         machine = {
             "hostname": "test_machine",

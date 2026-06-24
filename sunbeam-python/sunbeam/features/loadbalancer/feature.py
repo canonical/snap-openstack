@@ -274,7 +274,7 @@ def _amphora_questions() -> dict[str, questions.Question]:
             default_value=True,
             description=(
                 "Enables the Amphora VM-based load-balancer backend for Octavia."
-                " Requires the microovn-sdn and loadbalancer-amphora feature gates."
+                " Requires the loadbalancer-amphora feature gate."
             ),
         ),
         _AMP_IMAGE_TAG_KEY: questions.PromptQuestion(
