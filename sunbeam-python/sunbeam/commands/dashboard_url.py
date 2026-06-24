@@ -48,7 +48,10 @@ def dashboard_url(ctx: click.Context) -> None:
     run_preflight_checks(preflight_checks, console)
 
     jhelper = juju.JujuHelper(deployment.juju_controller)
-
+    console.print(
+        "[yellow]Warning:[/] This command is deprecated, "
+        "please use `sunbeam dashboard url` instead."
+    )
     with console.status("Retrieving dashboard URL from Horizon service ... "):
         try:
             console.print(retrieve_dashboard_url(jhelper))

@@ -12,6 +12,7 @@ import os
 import sys
 
 from sunbeam.commands import configure as configure_cmds
+from sunbeam.commands import dashboard as dashboard_cmds
 from sunbeam.commands import dashboard_url as dashboard_url_cmds
 from sunbeam.commands import generate_cloud_config as generate_cloud_config_cmds
 from sunbeam.commands import juju_utils as juju_cmds
@@ -96,6 +97,7 @@ def register_commands():
     cli.add_command(launch_cmds.launch)
     cli.add_command(openrc_cmds.openrc)
     cli.add_command(dashboard_url_cmds.dashboard_url)
+    cli.add_command(dashboard_cmds.dashboard)
     cli.add_command(identity_group)
     identity_group.add_command(provider_group)
     identity_group.add_command(sso_cmd.set_saml_x509)
