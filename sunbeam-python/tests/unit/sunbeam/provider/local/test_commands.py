@@ -8,8 +8,13 @@ import pytest
 from click.testing import CliRunner
 
 from sunbeam.core.common import ResultType, Role
-from sunbeam.provider.local.commands import add, join
-from sunbeam.steps.juju import JujuGrantModelAccessStep
+from sunbeam.provider.local.commands import add, join, remove
+from sunbeam.steps.clusterd import ClusterRemoveNodeStep
+from sunbeam.steps.juju import JujuGrantModelAccessStep, RemoveJujuMachineStep
+from sunbeam.steps.role_distributor import (
+    ReapplyRoleDistributorApplicationStep,
+    RemoveRoleDistributorUnitsStep,
+)
 
 
 @pytest.fixture()
@@ -212,3 +217,70 @@ class TestJoinNodeValidation:
         assert run_plan.call_count == 1
         first_plan = run_plan.call_args_list[0][0][0]
         assert first_plan[0].__class__.__name__ == "ClusterJoinNodeStep"
+
+
+class TestRemoveNodeRoleDistributor:
+    def test_remove_cleans_role_distributor_before_machine_removal_and_reapplies(
+        self,
+        daemon_group_check,
+        run_preflight,
+        run_plan_cmd,
+        juju_helper_cmd,
+    ):
+        deployment = Mock()
+        deployment.openstack_machines_model = "openstack-machines"
+        deployment.get_manifest.return_value = Mock()
+        deployment.get_tfhelper.return_value = Mock()
+        deployment.get_ovn_manager.return_value.get_machines.return_value = ["1"]
+
+        runner = CliRunner()
+        result = runner.invoke(remove, ["node-1"], obj=deployment)
+
+        assert result.exit_code == 0, result.output
+
+        plan = run_plan_cmd.call_args_list[0][0][0]
+        role_remove_idx = next(
+            i
+            for i, step in enumerate(plan)
+            if isinstance(step, RemoveRoleDistributorUnitsStep)
+        )
+        juju_remove_idx = next(
+            i for i, step in enumerate(plan) if isinstance(step, RemoveJujuMachineStep)
+        )
+        cluster_remove_idx = next(
+            i for i, step in enumerate(plan) if isinstance(step, ClusterRemoveNodeStep)
+        )
+        role_reapply_idx = next(
+            i
+            for i, step in enumerate(plan)
+            if isinstance(step, ReapplyRoleDistributorApplicationStep)
+        )
+
+        assert role_remove_idx < juju_remove_idx
+        assert cluster_remove_idx < role_reapply_idx
+
+    def test_remove_skips_role_distributor_when_microovn_has_no_machines(
+        self,
+        daemon_group_check,
+        run_preflight,
+        run_plan_cmd,
+        juju_helper_cmd,
+    ):
+        deployment = Mock()
+        deployment.openstack_machines_model = "openstack-machines"
+        deployment.get_manifest.return_value = Mock()
+        deployment.get_tfhelper.return_value = Mock()
+        deployment.get_ovn_manager.return_value.get_machines.return_value = []
+
+        runner = CliRunner()
+        result = runner.invoke(remove, ["node-1"], obj=deployment)
+
+        assert result.exit_code == 0, result.output
+
+        plan = run_plan_cmd.call_args_list[0][0][0]
+        assert not any(
+            isinstance(step, RemoveRoleDistributorUnitsStep) for step in plan
+        )
+        assert not any(
+            isinstance(step, ReapplyRoleDistributorApplicationStep) for step in plan
+        )

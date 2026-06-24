@@ -43,6 +43,7 @@ from sunbeam.steps.openstack import (
     ReapplyOpenStackTerraformPlanStep,
     build_overlay_dict,
 )
+from sunbeam.steps.role_distributor import DeployRoleDistributorApplicationStep
 from sunbeam.steps.sunbeam_machine import DeploySunbeamMachineApplicationStep
 from sunbeam.steps.upgrades.base import UpgradeCoordinator, UpgradeFeatures
 
@@ -532,6 +533,22 @@ class LatestInChannelCoordinator(UpgradeCoordinator):
             )
 
         if len(network_nodes):
+            role_distributor_tfhelper = self.deployment.get_tfhelper(
+                "role-distributor-plan"
+            )
+            plan.extend(
+                [
+                    TerraformInitStep(role_distributor_tfhelper),
+                    DeployRoleDistributorApplicationStep(
+                        self.deployment,
+                        self.client,
+                        role_distributor_tfhelper,
+                        self.jhelper,
+                        self.manifest,
+                        self.deployment.openstack_machines_model,
+                    ),
+                ]
+            )
             plan.extend(
                 [
                     TerraformInitStep(self.deployment.get_tfhelper("microovn-plan")),

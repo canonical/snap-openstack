@@ -193,6 +193,11 @@ from sunbeam.steps.openstack import (
     PromptRegionStep,
     ReapplyOpenStackTerraformPlanStep,
 )
+from sunbeam.steps.role_distributor import (
+    DeployRoleDistributorApplicationStep,
+    ReapplyRoleDistributorApplicationStep,
+    RemoveRoleDistributorUnitsStep,
+)
 from sunbeam.steps.sso import (
     DeployIdentityProvidersStep,
     SetKeystoneSAMLCertAndKeyStep,
@@ -637,6 +642,7 @@ def deploy(
     tfhelper_cinder_volume = deployment.get_tfhelper("cinder-volume-plan")
     tfhelper_openstack_deploy = deployment.get_tfhelper("openstack-plan")
     tfhelper_hypervisor_deploy = deployment.get_tfhelper("hypervisor-plan")
+    tfhelper_role_distributor = deployment.get_tfhelper("role-distributor-plan")
     tfhelper_microovn = deployment.get_tfhelper("microovn-plan")
 
     ovn_manager = deployment.get_ovn_manager()
@@ -836,6 +842,17 @@ def deploy(
         nb_network, nb_compute, nb_control
     )
     if microovn_necessary:
+        plan2.append(TerraformInitStep(tfhelper_role_distributor))
+        plan2.append(
+            DeployRoleDistributorApplicationStep(
+                deployment,
+                client,
+                tfhelper_role_distributor,
+                jhelper,
+                manifest,
+                deployment.openstack_machines_model,
+            )
+        )
         plan2.append(TerraformInitStep(tfhelper_microovn))
         plan2.append(
             DeployMicroOVNApplicationStep(
@@ -1658,6 +1675,7 @@ def remove_node(ctx: click.Context, name: str, force: bool, show_hints: bool) ->
     deployment: MaasDeployment = ctx.obj
     client = deployment.get_client()
     jhelper = JujuHelper(deployment.juju_controller)
+    microovn_machine_ids = deployment.get_ovn_manager().get_machines()
 
     preflight_checks = [
         LocalShareCheck(),
@@ -1769,6 +1787,32 @@ def remove_node(ctx: click.Context, name: str, force: bool, show_hints: bool) ->
         MaasRemoveMachineFromClusterdStep(client, name),
         SetCephMgrPoolSizeStep(client, jhelper, deployment.openstack_machines_model),
     ]
+    if microovn_machine_ids:
+        manifest = deployment.get_manifest()
+        role_distributor_tfhelper = deployment.get_tfhelper("role-distributor-plan")
+        cordon_k8s_unit_index = next(
+            i for i, step in enumerate(plan) if isinstance(step, CordonK8SUnitStep)
+        )
+        plan.insert(
+            cordon_k8s_unit_index,
+            RemoveRoleDistributorUnitsStep(
+                client, name, jhelper, deployment.openstack_machines_model
+            ),
+        )
+        ceph_pool_size_index = next(
+            i for i, step in enumerate(plan) if isinstance(step, SetCephMgrPoolSizeStep)
+        )
+        plan[ceph_pool_size_index:ceph_pool_size_index] = [
+            TerraformInitStep(role_distributor_tfhelper),
+            ReapplyRoleDistributorApplicationStep(
+                deployment,
+                client,
+                role_distributor_tfhelper,
+                jhelper,
+                manifest,
+                deployment.openstack_machines_model,
+            ),
+        ]
 
     run_plan(plan, console, show_hints)
     click.echo(
