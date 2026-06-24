@@ -163,7 +163,6 @@ from sunbeam.steps.k8s import (
     EnsureK8SUnitsTaggedStep,
     EnsureL2AdvertisementByHostStep,
     MigrateK8SKubeconfigStep,
-    PatchCoreDNSStep,
     PatchServiceExternalTrafficStep,
     RemoveK8SUnitsStep,
     StoreK8SKubeConfigStep,
@@ -335,7 +334,6 @@ def get_k8s_plans(
                 fqdn,
             ),
             EnsureDefaultL2AdvertisementMutedStep(deployment, client, jhelper),
-            PatchCoreDNSStep(deployment, jhelper),
         ]
     )
 
