@@ -167,7 +167,6 @@ from sunbeam.steps.k8s import (
     EnsureK8SUnitsTaggedStep,
     EnsureL2AdvertisementByHostStep,
     MigrateK8SKubeconfigStep,
-    PatchCoreDNSStep,
     RemoveK8SUnitsStep,
     StoreK8SKubeConfigStep,
     UpdateK8SCloudStep,
@@ -793,7 +792,6 @@ def deploy(
         )
     )
     plan2.append(AddK8SCloudStep(deployment, jhelper))
-    plan2.append(PatchCoreDNSStep(deployment, jhelper))
 
     plan2.append(TerraformInitStep(tfhelper_microceph))
     plan2.append(
