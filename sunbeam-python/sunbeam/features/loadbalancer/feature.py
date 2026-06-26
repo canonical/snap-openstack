@@ -1653,8 +1653,9 @@ class LoadbalancerFeature(OpenStackControlPlaneFeature):
 
     def get_database_charm_processes(self) -> dict[str, dict[str, int]]:
         """Returns the database processes accessing this service."""
+        # API: 3, driver-agent: 2, housekeeping: 1, worker: 1, health-manager: 4
         return {
-            "octavia": {"octavia-k8s": 6},
+            "octavia": {"octavia-k8s": 10},
         }
 
     def run_enable_plans(
