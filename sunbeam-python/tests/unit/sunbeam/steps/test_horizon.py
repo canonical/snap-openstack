@@ -9,6 +9,7 @@ import pytest
 
 from sunbeam.core.common import ResultType
 from sunbeam.core.juju import JujuException
+from sunbeam.core.manifest import CoreConfig
 from sunbeam.steps.horizon import AttachHorizonThemeStep, _validate_theme_path
 
 
@@ -255,13 +256,48 @@ def test_has_prompts_with_manifest_theme_is_false(client, jhelper, manifest_with
     assert step.has_prompts() is False
 
 
-def test_has_prompts_no_horizon_section_is_true(client, jhelper, manifest_empty):
+def test_has_prompts_no_horizon_section_is_false(client, jhelper, manifest_empty):
+    """Bootstrap/refresh never prompt for theme (LP#2158268).
+
+    Theming is cosmetic and handled by the dedicated ``dashboard theme set``
+    command; manifest-driven deployments must stay non-interactive.
+    """
     step = _make_step(client, jhelper, manifest_empty)
-    assert step.has_prompts() is True
+    assert step.has_prompts() is False
 
 
-def test_has_prompts_horizon_without_resource_is_true(
+def test_has_prompts_horizon_without_resource_is_false(
     client, jhelper, manifest_no_resource
 ):
     step = _make_step(client, jhelper, manifest_no_resource)
+    assert step.has_prompts() is False
+
+
+def test_has_prompts_force_mode_is_true(client, jhelper, manifest_empty):
+    """``dashboard theme set`` forces the prompt regardless of manifest."""
+    from sunbeam.core.common import PromptMode
+
+    step = AttachHorizonThemeStep(
+        client=client,
+        jhelper=jhelper,
+        manifest=manifest_empty,
+        model="openstack",
+        prompt_mode=PromptMode.FORCE,
+    )
     assert step.has_prompts() is True
+
+
+def test_manifest_empty_string_custom_theme_coerced_to_none():
+    """Empty string in manifest custom_theme must become None, not Path('.').
+
+    Regression test for LP#2158268: an empty custom_theme in the manifest
+    was being coerced by pydantic into PosixPath('.'), which is truthy and
+    broke non-interactive manifest deployments.
+    """
+    cfg = CoreConfig.model_validate({"horizon": {"resources": {"custom_theme": ""}}})
+    assert cfg.horizon.resources.custom_theme is None
+
+
+def test_manifest_missing_custom_theme_is_none():
+    cfg = CoreConfig.model_validate({"horizon": {"resources": {}}})
+    assert cfg.horizon.resources.custom_theme is None
