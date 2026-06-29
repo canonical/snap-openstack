@@ -343,7 +343,10 @@ class TestEnsureL2AdvertisementByHostStep:
         return basic_deployment
 
     @pytest.fixture
-    def jhelper(self, basic_jhelper):
+    def jhelper(self, basic_jhelper, control_nodes):
+        basic_jhelper.get_machines.return_value = {
+            str(n["machineid"]): Mock() for n in control_nodes
+        }
         return basic_jhelper
 
     @pytest.fixture
@@ -1430,7 +1433,10 @@ class TestEnsureCiliumDeviceByHostStep:
         )
 
     @pytest.fixture
-    def jhelper(self, basic_jhelper):
+    def jhelper(self, basic_jhelper, control_nodes):
+        basic_jhelper.get_machines.return_value = {
+            str(n["machineid"]): Mock() for n in control_nodes
+        }
         return basic_jhelper
 
     @pytest.fixture
@@ -1480,6 +1486,19 @@ class TestEnsureCiliumDeviceByHostStep:
         assert result.result_type == ResultType.COMPLETED
         assert len(step.to_delete) == 1
         assert step.to_delete[0]["name"] == "departed-node"
+
+    def test_is_skip_stale_machine_skipped(self, step, jhelper, step_context):
+        """Nodes whose machines are gone from juju are skipped, not deleted.
+
+        This avoids accidentally deleting cilium configs for nodes that are
+        joining concurrently (machine not yet in juju). Stale resources are
+        cleaned up later when the node is removed from clusterd.
+        """
+        # node2's machine (id=2) is no longer in juju
+        jhelper.get_machines.return_value = {"1": Mock()}
+        step._get_outdated_resources = Mock(return_value=([], []))
+        result = step.is_skip(step_context)
+        assert result.result_type == ResultType.SKIPPED
 
     def test_is_skip_single_node_fqdn(self, deployment, client, jhelper, step_context):
         node_info = {"name": "node1", "machineid": "1", "role": ["control"]}

@@ -1323,6 +1323,19 @@ class _PerHostK8SResourceStep(BaseStep):
         else:
             self.control_nodes = self.client.cluster.list_nodes_by_role(control)
 
+        # Skip control nodes whose machines are not yet in juju. This can
+        # happen during node removal (machine removed before clusterd cleanup)
+        # or during concurrent joins (machine not yet provisioned). Skipping
+        # is safe: stale resources are cleaned up later when the node is
+        # removed from clusterd, at which point it won't appear in
+        # control_nodes and _get_outdated_resources will report it as deleted.
+        juju_machines = set(self.jhelper.get_machines(self.model).keys())
+        self.control_nodes = [
+            node
+            for node in self.control_nodes
+            if str(node.get("machineid", "")) in juju_machines
+        ]
+
         try:
             self.kube = get_kube_client(self.client, self.kube_namespace)
         except KubeClientError as e:

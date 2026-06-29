@@ -181,6 +181,7 @@ from sunbeam.steps.microceph import (
 from sunbeam.steps.microovn import (
     DeployMicroOVNApplicationStep,
     ReapplyMicroOVNOptionalIntegrationsStep,
+    RemoveMicroOVNUnitsStep,
     SetOvnProviderStep,
 )
 from sunbeam.steps.openstack import (
@@ -1709,6 +1710,9 @@ def remove_node(ctx: click.Context, name: str, force: bool, show_hints: bool) ->
         RemoveMicrocephUnitsStep(
             client, name, jhelper, deployment.openstack_machines_model
         ),
+        RemoveMicroOVNUnitsStep(
+            client, name, jhelper, deployment.openstack_machines_model
+        ),
         CordonK8SUnitStep(client, name, jhelper, deployment.openstack_machines_model),
         DrainK8SUnitStep(
             client, name, jhelper, deployment.openstack_machines_model, remove_pvc=True
@@ -1756,10 +1760,7 @@ def remove_node(ctx: click.Context, name: str, force: bool, show_hints: bool) ->
     ]
 
     run_plan(plan, console, show_hints)
-    click.echo(
-        f"Removed node {name} from the cluster."
-        " Run `sunbeam cluster resize` to scale down the cluster"
-    )
+    click.echo(f"Removed node {name} from the cluster.")
 
 
 @click.command("destroy")
