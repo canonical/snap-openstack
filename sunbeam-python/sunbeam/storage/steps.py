@@ -713,9 +713,12 @@ class DeploySpecificCinderVolumeStep(BaseStep):
             tfvars["model"] = self.jhelper.get_model(self.model)["model-uuid"]
 
         cinder_volume = self.manifest.core.software.charms[CINDER_VOLUME_CHARM]
-        charm_config = cinder_volume.config
-        if charm_config is None:
-            charm_config = {}
+        charm_config = dict(cinder_volume.config) if cinder_volume.config else {}
+        if cinder_volume.model_extra:
+            config_map = cinder_volume.model_extra.get("config-map", {})
+            charm_config.update(
+                config_map.get(self.backend_instance.principal_application, {})
+            )
         charm_config["snap-name"] = self.backend_instance.snap_name
         charm_revision = cinder_volume.revision
         charm_channel = cinder_volume.channel
