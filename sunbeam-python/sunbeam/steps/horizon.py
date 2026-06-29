@@ -79,16 +79,15 @@ class AttachHorizonThemeStep(BaseStep):
             )
 
     def has_prompts(self) -> bool:
-        """Indicate that this step requires interactive user input."""
-        if self.prompt_mode == PromptMode.NEVER:
-            return False
-        if self.prompt_mode == PromptMode.FORCE:
-            return True
+        """Indicate that this step requires interactive user input.
 
-        manifest_cfg = self._get_horizon_config_from_manifest()
-        if "theme_path" in manifest_cfg:
-            return False
-        return True
+        Theming is purely cosmetic and is managed via the dedicated
+        ``dashboard theme set`` command (PromptMode.FORCE). During bootstrap
+        and refresh the step never prompts: a manifest theme is applied if
+        present, otherwise the default (no theme) is used. This keeps
+        manifest-driven deployments non-interactive (LP#2158268).
+        """
+        return self.prompt_mode == PromptMode.FORCE
 
     def prompt(self, console=None, show_hint=False) -> None:
         """Execute the interactive prompts dynamically."""
