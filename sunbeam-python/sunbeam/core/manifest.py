@@ -265,6 +265,13 @@ class CoreConfig(pydantic.BaseModel):
         class _Resources(pydantic.BaseModel):
             custom_theme: Path | None = None
 
+            @pydantic.field_validator("custom_theme", mode="before")
+            @classmethod
+            def _validate_custom_theme(cls, v):
+                if isinstance(v, str) and not v.strip():
+                    return None
+                return v
+
         resources: _Resources | None = None
 
     class _Endpoints(pydantic.BaseModel):
