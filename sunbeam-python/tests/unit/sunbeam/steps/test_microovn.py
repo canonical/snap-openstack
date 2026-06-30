@@ -201,6 +201,7 @@ class TestReapplyMicroOVNOptionalIntegrationsStep:
             "-target=juju_integration.microovn_arm64_certs",
             "-target=juju_integration.microovn_arm64_ovsdb_cms",
             "-target=juju_integration.microovn_arm64_openstack_network_agents",
+            "-target=juju_integration.role-distributor-microovn",
         ]
         assert extra_args == expected_args
 
