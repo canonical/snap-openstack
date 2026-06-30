@@ -44,7 +44,9 @@ from sunbeam.steps.openstack import (
     compute_os_api_scale,
     get_database_default_storage_dict,
     get_database_storage_dict,
+    get_glance_s3_offer,
     get_rabbitmq_storage_tfvars,
+    is_glance_s3_storage_enabled,
     remove_blocked_apps_from_features,
     remove_blocked_apps_from_ovn_provider,
     remove_blocked_apps_from_role,
@@ -52,6 +54,7 @@ from sunbeam.steps.openstack import (
 
 TOPOLOGY = "single"
 MODEL = "test-model"
+GLANCE_S3_OFFER_URL = "admin/my-model.my-s3-integrator"
 
 
 # Additional fixtures specific to openstack tests
@@ -163,6 +166,111 @@ class TestDeployControlPlaneStep:
 
         basic_tfhelper.update_tfvars_and_apply_tf.assert_called_once()
         assert result.result_type == ResultType.COMPLETED
+
+    def test_get_glance_storage_tfvars_default(
+        self,
+        deployment_with_client,
+        basic_tfhelper,
+        basic_jhelper,
+        snap_patch,
+        snap_mock,
+    ):
+        snap_mock().config.get.return_value = "k8s"
+        manifest = Manifest(**{"core": {"software": {"charms": {"glance-k8s": {}}}}})
+        step = DeployControlPlaneStep(
+            deployment_with_client,
+            basic_tfhelper,
+            basic_jhelper,
+            manifest,
+            TOPOLOGY,
+            MODEL,
+        )
+        assert step.get_glance_storage_tfvars() == {
+            "enable-glance-s3-storage": False,
+            "glance-s3-integrator-offer-url": None,
+            "glance-s3-integrator-offering-controller": None,
+        }
+
+    def test_get_remote_controllers_tfvars_with_s3(
+        self,
+        deployment_with_client,
+        basic_tfhelper,
+        basic_jhelper,
+        snap_patch,
+        snap_mock,
+    ):
+        """Offer URL with controller prefix -> remote_controllers populated."""
+        snap_mock().config.get.return_value = "k8s"
+        manifest = Manifest(
+            **{
+                "core": {
+                    "software": {
+                        "charms": {
+                            "glance-k8s": {
+                                "s3-integrator-offer-url": (
+                                    "myctrl:admin/my-model.my-s3"
+                                ),
+                                "storage": {"local-repository": "5G"},
+                            }
+                        }
+                    }
+                }
+            }
+        )
+        step = DeployControlPlaneStep(
+            deployment_with_client,
+            basic_tfhelper,
+            basic_jhelper,
+            manifest,
+            TOPOLOGY,
+            MODEL,
+        )
+
+        with patch.object(
+            step,
+            "get_controller_config",
+            return_value={
+                "controller_addresses": "10.0.0.1:17070",
+                "username": "admin",
+                "password": "s3cret",
+                "ca_certificate": "FAKE-CERT",
+            },
+        ):
+            tfvars = step.get_glance_storage_tfvars()
+
+        assert tfvars["glance-s3-integrator-offering-controller"] == "myctrl"
+        assert tfvars["remote-controllers"] == {
+            "myctrl": {
+                "controller_addresses": "10.0.0.1:17070",
+                "username": "admin",
+                "password": "s3cret",
+                "ca_certificate": "FAKE-CERT",
+            }
+        }
+
+    def test_get_remote_controllers_tfvars_empty(
+        self,
+        deployment_with_client,
+        basic_tfhelper,
+        basic_jhelper,
+        snap_patch,
+        snap_mock,
+    ):
+        """No controller prefix in offer URL -> empty remote_controllers."""
+        snap_mock().config.get.return_value = "k8s"
+        manifest = Manifest(**{"core": {"software": {"charms": {"glance-k8s": {}}}}})
+        step = DeployControlPlaneStep(
+            deployment_with_client,
+            basic_tfhelper,
+            basic_jhelper,
+            manifest,
+            TOPOLOGY,
+            MODEL,
+        )
+        tfvars = step.get_glance_storage_tfvars()
+        assert tfvars["glance-s3-integrator-offering-controller"] is None
+
+        assert "remote-controllers" not in tfvars
 
     def test_run_tf_apply_failed(
         self,
@@ -362,6 +470,61 @@ class TestDeployControlPlaneStep:
 
         assert result.result_type == ResultType.FAILED
         assert "rabbitmq-storage" in result.message
+
+
+def _glance_manifest(
+    s3_offer_url: str | None = None,
+    storage: dict | None = None,
+) -> Manifest:
+    """Build a Manifest with optional s3-integrator-offer-url and/or storage."""
+    charm: dict = {}
+    if s3_offer_url is not None:
+        charm["s3-integrator-offer-url"] = s3_offer_url
+    if storage is not None:
+        charm["storage"] = storage
+    return Manifest(
+        **{
+            "core": {
+                "software": {
+                    "charms": {"glance-k8s": charm},
+                }
+            }
+        }
+    )
+
+
+class TestGetGlanceS3OfferUrl:
+    def test_returns_url_when_declared(self):
+        manifest = _glance_manifest(s3_offer_url=GLANCE_S3_OFFER_URL)
+        assert get_glance_s3_offer(manifest) == GLANCE_S3_OFFER_URL
+
+    def test_returns_none_when_not_set(self):
+        assert get_glance_s3_offer(_glance_manifest()) is None
+
+    def test_returns_none_when_empty(self):
+        manifest = _glance_manifest(s3_offer_url="")
+        assert get_glance_s3_offer(manifest) is None
+
+    def test_returns_none_when_charm_absent(self):
+        manifest = Manifest(**{"core": {"software": {"charms": {}}}})
+        assert get_glance_s3_offer(manifest) is None
+
+
+class TestIsGlanceS3StorageEnabledUnit:
+    def test_true_when_tfvar_set(self):
+        client = Mock()
+        client.cluster.get_config.return_value = '{"enable-glance-s3-storage": true}'
+        assert is_glance_s3_storage_enabled(client) is True
+
+    def test_false_when_tfvar_absent(self):
+        client = Mock()
+        client.cluster.get_config.return_value = '{"foo": "bar"}'
+        assert is_glance_s3_storage_enabled(client) is False
+
+    def test_false_when_config_missing(self):
+        client = Mock()
+        client.cluster.get_config.side_effect = ConfigItemNotFoundException
+        assert is_glance_s3_storage_enabled(client) is False
 
 
 @pytest.fixture

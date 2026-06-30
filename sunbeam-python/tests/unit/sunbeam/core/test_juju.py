@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import os
 from unittest.mock import MagicMock, Mock, patch
 
 import jubilant
@@ -1400,3 +1401,106 @@ def test_snapshot_workload_status_mixed_present_and_absent(jhelper, status):
     status.apps["present"] = app_mock
     result = jhelper.snapshot_workload_status("test-model", ["present", "absent"])
     assert result == {"present": "active"}
+
+
+# ---------------------------------------------------------------------------
+# split_controller_from_offer_url
+# ---------------------------------------------------------------------------
+
+
+class TestSplitControllerFromOfferUrl:
+    def test_url_with_controller(self):
+        ctrl, url = jujulib.split_controller_from_offer_url(
+            "localhost-localhost:admin/s3-storage.s3-integrator"
+        )
+        assert ctrl == "localhost-localhost"
+        assert url == "admin/s3-storage.s3-integrator"
+
+    def test_url_without_controller(self):
+        ctrl, url = jujulib.split_controller_from_offer_url(
+            "admin/s3-storage.s3-integrator"
+        )
+        assert ctrl is None
+        assert url == "admin/s3-storage.s3-integrator"
+
+    def test_url_with_endpoint(self):
+        ctrl, url = jujulib.split_controller_from_offer_url("admin/model.app:endpoint")
+        assert ctrl is None
+        assert url == "admin/model.app:endpoint"
+
+    def test_bare_controller_model(self):
+        ctrl, url = jujulib.split_controller_from_offer_url("my-ctrl:admin/model.app")
+        assert ctrl == "my-ctrl"
+        assert url == "admin/model.app"
+
+    def test_no_colon(self):
+        ctrl, url = jujulib.split_controller_from_offer_url(
+            "admin/controller.microceph"
+        )
+        assert ctrl is None
+        assert url == "admin/controller.microceph"
+
+
+# ---------------------------------------------------------------------------
+# get_controller_config
+# ---------------------------------------------------------------------------
+
+
+class TestGetControllerConfig:
+    def test_returns_config_when_registered(self, tmp_path):
+        accounts = {"controllers": {"myctrl": {"user": "admin", "password": "s3cret"}}}
+        juju_dir = tmp_path / ".local" / "share" / "juju"
+        juju_dir.mkdir(parents=True)
+        (juju_dir / "accounts.yaml").write_text(yaml.dump(accounts))
+
+        jsh = jujulib.JujuStepHelper()
+        jsh.jhelper = Mock()
+        jsh.get_external_controllers = Mock(return_value=["myctrl"])
+        jsh.get_controller = Mock(
+            return_value={
+                "details": {
+                    "api-endpoints": ["10.0.0.1:17070"],
+                    "ca-cert": "FAKE-CERT",
+                }
+            }
+        )
+
+        with patch.dict(os.environ, {"JUJU_DATA": str(juju_dir)}):
+            result = jsh.get_controller_config("myctrl")
+
+        assert result == {
+            "controller_addresses": "10.0.0.1:17070",
+            "username": "admin",
+            "password": "s3cret",
+            "ca_certificate": "FAKE-CERT",
+        }
+
+    def test_returns_none_when_not_registered(self):
+        jsh = jujulib.JujuStepHelper()
+        jsh.jhelper = Mock()
+        jsh.get_controller = Mock(side_effect=jujulib.ControllerNotFoundException)
+
+        result = jsh.get_controller_config("unknown")
+        assert result is None
+
+    def test_returns_none_when_accounts_missing(self, tmp_path):
+        jsh = jujulib.JujuStepHelper()
+        jsh.jhelper = Mock()
+        jsh.get_external_controllers = Mock(return_value=["myctrl"])
+        jsh.get_controller = Mock(
+            return_value={
+                "details": {
+                    "api-endpoints": ["10.0.0.1:17070"],
+                    "ca-cert": "FAKE-CERT",
+                }
+            }
+        )
+
+        juju_dir = tmp_path / ".local" / "share" / "juju"
+        juju_dir.mkdir(parents=True)
+        # No accounts.yaml created — should return None
+
+        with patch.dict(os.environ, {"JUJU_DATA": str(juju_dir)}):
+            result = jsh.get_controller_config("myctrl")
+
+        assert result is None

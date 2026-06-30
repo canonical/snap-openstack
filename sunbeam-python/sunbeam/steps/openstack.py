@@ -38,6 +38,7 @@ from sunbeam.core.juju import (
     JujuStepHelper,
     JujuWaitException,
     build_pre_status_overlay,
+    split_controller_from_offer_url,
 )
 from sunbeam.core.k8s import CREDENTIAL_SUFFIX, K8SHelper
 from sunbeam.core.manifest import Manifest, check_storage_modifications_in_manifest
@@ -78,6 +79,15 @@ DATABASE_MEMORY_KEY = "DatabaseMemory"
 DATABASE_STORAGE_KEY = "DatabaseStorage"
 DEFAULT_DATABASE_TOPOLOGY = "single"
 
+# Manifest key (glance-k8s model_extra) for the s3-integrator offer URL.
+# Format: ``[<controller>:][<owner>/]<model>.<application>``.
+GLANCE_S3_OFFER_URL_KEY = "s3-integrator-offer-url"
+
+# TF variables that select and wire the external S3 image backend.
+ENABLE_GLANCE_S3_TFVAR = "enable-glance-s3-storage"
+GLANCE_S3_OFFER_URL_TFVAR = "glance-s3-integrator-offer-url"
+GLANCE_S3_OFFERING_CONTROLLER_TFVAR = "glance-s3-integrator-offering-controller"
+
 DATABASE_MAX_POOL_SIZE = 2
 DATABASE_ADDITIONAL_BUFFER_SIZE = 600
 DATABASE_OVERSIZE_FACTOR = 1.2
@@ -90,6 +100,39 @@ MULTI_MYSQL_CORE_THRESHOLD = 16
 # List of all the apps that will be blocked when corresponding
 # feature is enabled.
 APPS_BLOCKED_WHEN_FEATURE_ENABLED = ["barbican", "vault"]
+
+
+def _glance_charm_extra(manifest: Manifest) -> dict | None:
+    """Return the model_extra dict for glance-k8s from the manifest."""
+    charm_manifest = manifest.core.software.charms.get("glance-k8s")
+    if not charm_manifest or not charm_manifest.model_extra:
+        return None
+    if not isinstance(charm_manifest.model_extra, dict):
+        return None
+    return charm_manifest.model_extra
+
+
+def get_glance_s3_offer(manifest: Manifest) -> str | None:
+    """Return the external s3-integrator offer from the manifest.
+
+    Reads ``core.software.charms.glance-k8s.s3-integrator-offer-url``.
+    """
+    extra = _glance_charm_extra(manifest)
+    if extra is None:
+        return None
+    url = extra.get(GLANCE_S3_OFFER_URL_KEY)
+    if not isinstance(url, str) or not url:
+        return None
+    return url
+
+
+def is_glance_s3_storage_enabled(client: Client) -> bool:
+    """Whether the deployed control plane uses external S3 for Glance images."""
+    try:
+        tfvars = read_config(client, CONFIG_KEY)
+    except ConfigItemNotFoundException:
+        return False
+    return bool(tfvars.get(ENABLE_GLANCE_S3_TFVAR, False))
 
 
 def remove_blocked_apps_from_features(jhelper: JujuHelper, model: str) -> list[str]:
@@ -606,6 +649,45 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
 
         return tfvars
 
+    def get_glance_storage_tfvars(self) -> dict:
+        """Create terraform variables related to the Glance image storage backend.
+
+        When ``s3-integrator-offer-url`` is empty, the Glance image backend will be
+        configured to use the local storage.
+        """
+        tfvars: dict = {}
+        full_offer_url = get_glance_s3_offer(self.manifest)
+
+        LOG.debug("Glance S3 offer URL from manifest: %s", full_offer_url)
+
+        # Split the controller from the offer URL if it is present.
+        if full_offer_url:
+            controller, offer_url = split_controller_from_offer_url(full_offer_url)
+        else:
+            controller = None
+            offer_url = None
+
+        tfvars.update(
+            {
+                ENABLE_GLANCE_S3_TFVAR: offer_url is not None,
+                GLANCE_S3_OFFER_URL_TFVAR: offer_url,
+                GLANCE_S3_OFFERING_CONTROLLER_TFVAR: controller,
+            }
+        )
+
+        # Check if the offering controller has been registered in Juju provider
+        if controller:
+            controller_config = self.get_controller_config(controller)
+            if not controller_config:
+                raise SunbeamException(
+                    f"Glance S3 offering controller {controller} is not registered "
+                    "in Juju provider"
+                )
+
+            tfvars.update({"remote-controllers": {controller: controller_config}})
+
+        return tfvars
+
     def get_network_tfvars(self) -> dict:
         """Create terraform variables related to network."""
         return self.ovn_manager.get_control_plane_tfvars(self.deployment, self.jhelper)
@@ -766,6 +848,7 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
         extra_tfvars = self.get_storage_tfvars(storage_nodes)
         extra_tfvars.update(self.get_network_tfvars())
         extra_tfvars.update(self.get_region_tfvars())
+        extra_tfvars.update(self.get_glance_storage_tfvars())
 
         # This is used to calculate the "experimental-max-connections" mysql setting.
         extra_tfvars.update(

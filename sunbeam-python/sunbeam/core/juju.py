@@ -2076,6 +2076,61 @@ class JujuStepHelper:
 
         return external_controllers
 
+    def get_controller_config(self, controller_name: str) -> dict | None:
+        """Return connection details for a registered controller.
+
+        Uses ``get_controller`` for the API endpoint and CA certificate,
+        and ``~/.local/share/juju/accounts.yaml`` for credentials.
+        Only returns a result if the controller is registered locally.
+
+        :return: A dict with keys ``controller_addresses``, ``username``,
+            ``password``, ``ca_certificate``, or ``None``.
+        """
+        try:
+            ctrl = self.get_controller(controller_name)
+        except ControllerNotFoundException:
+            LOG.warning(
+                "Controller %r is not registered as Juju controller. "
+                "Register it with `juju register` first.",
+                controller_name,
+            )
+            return None
+
+        details = ctrl.get("details", {})
+        api_endpoints = details.get("api-endpoints")
+        ca_cert = details.get("ca-cert")
+        if not api_endpoints or not ca_cert:
+            return None
+
+        try:
+            juju_data_dir = Path(
+                os.environ.get(
+                    "JUJU_DATA", f"{os.environ.get('SNAP_REAL_HOME')}/.local/share/juju"
+                )
+            )
+            accounts_data = yaml.safe_load(
+                (juju_data_dir / "accounts.yaml").read_text()
+            )
+        except (FileNotFoundError, yaml.YAMLError):
+            LOG.debug("No local accounts.yaml found for %r", controller_name)
+            return None
+
+        acct = accounts_data.get("controllers", {}).get(controller_name)
+        if not acct:
+            return None
+
+        user = acct.get("user")
+        password = acct.get("password")
+        if not user or not password:
+            return None
+
+        return {
+            "controller_addresses": api_endpoints[0],
+            "username": user,
+            "password": password,
+            "ca_certificate": ca_cert,
+        }
+
     def get_controller(self, controller: str) -> dict:
         """Get controller definition."""
         try:
@@ -2375,3 +2430,24 @@ class JujuActionHelper:
         except ActionFailedException as e:
             LOG.debug("Action %r failed on node %r: %r", action_name, node, e)
             raise e
+
+
+def split_controller_from_offer_url(url: str) -> tuple[str | None, str]:
+    """Split the controller prefix from an offer URL.
+
+    Juju offer URLs have the form:
+      ``[<controller>:][<owner>/]<model>.<application>[:<endpoint>]``
+
+    Returns a tuple of ``(controller, offer_url_without_controller)``.
+    The controller is ``None`` if the URL does not include a controller prefix.
+
+    :param url: The offer URL to split.
+    :return: A tuple of (controller, offer_url_without_controller).
+    :raises ValueError: If the URL is not a valid offer URL.
+    """
+    parts = url.split(":", 1)
+    if len(parts) == 2 and "." in parts[0]:
+        return None, url
+    if len(parts) == 2:
+        return parts[0], parts[1]
+    return None, url

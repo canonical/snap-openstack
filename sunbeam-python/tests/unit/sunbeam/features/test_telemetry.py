@@ -1,10 +1,15 @@
 # SPDX-FileCopyrightText: 2025 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
+import copy
+import json
 from unittest.mock import Mock, patch
 
 import pytest
+from click.testing import CliRunner
 
+from sunbeam.clusterd.service import ConfigItemNotFoundException
+from sunbeam.features.interface.v1.base import ClickInstantiator
 from sunbeam.features.telemetry import feature as telemetry_feature
 
 
@@ -16,6 +21,7 @@ def deployment():
 
     client = deploy.get_client.return_value
     client.cluster.list_nodes_by_role.return_value = [{"name": "node1", "machineid": 1}]
+    client.cluster.get_config.side_effect = ConfigItemNotFoundException()
 
     return deploy
 
@@ -343,3 +349,183 @@ class TestTelemetryFeatureDeduplication:
         for call in mock_deploy_step_class.call_args_list:
             extra_tfvars = call[1]["extra_tfvars"]
             assert extra_tfvars == {"enable-telemetry-notifications": False}
+
+
+class TestTelemetryMetricsStorage:
+    """Test metrics storage backend handling for Gnocchi."""
+
+    def test_set_tfvars_on_enable_local(self, deployment):
+        """No S3 integrator -> local metrics storage is used."""
+        feature = telemetry_feature.TelemetryFeature()
+
+        assert feature.set_tfvars_on_enable(
+            deployment, telemetry_feature.TelemetryFeatureConfig()
+        ) == {
+            "enable-telemetry": True,
+            "enable-telemetry-s3-storage": False,
+            "telemetry-s3-integrator-offer-url": None,
+            "telemetry-s3-integrator-offering-controller": None,
+        }
+
+    def test_set_tfvars_on_enable_with_external_s3_offer_url(self, deployment):
+        """External S3 integrator -> pass offer URL to terraform."""
+        feature = telemetry_feature.TelemetryFeature()
+
+        assert feature.set_tfvars_on_enable(
+            deployment,
+            telemetry_feature.TelemetryFeatureConfig(
+                s3_integrator_offer_url="admin/storage.gnocchi-s3"
+            ),
+        ) == {
+            "enable-telemetry": True,
+            "enable-telemetry-s3-storage": True,
+            "telemetry-s3-integrator-offer-url": "admin/storage.gnocchi-s3",
+            "telemetry-s3-integrator-offering-controller": None,
+        }
+
+    def test_set_tfvars_on_disable_clears_s3(self, deployment):
+        """Disable clears telemetry and S3 storage variables."""
+        feature = telemetry_feature.TelemetryFeature()
+
+        assert feature.set_tfvars_on_disable(deployment) == {
+            "enable-telemetry": False,
+            "enable-telemetry-s3-storage": False,
+            "telemetry-s3-integrator-offer-url": None,
+            "telemetry-s3-integrator-offering-controller": None,
+        }
+
+    def test_set_application_names_uses_persisted_external_backend(self, deployment):
+        """Persisted S3 backend makes Gnocchi expected without storage nodes."""
+        client = deployment.get_client.return_value
+        client.cluster.list_nodes_by_role.return_value = []
+        client.cluster.get_config.side_effect = None
+        client.cluster.get_config.return_value = json.dumps(
+            {
+                "backend": "s3",
+                "s3_integrator_offer_url": "admin/storage.gnocchi-s3",
+            }
+        )
+
+        feature = telemetry_feature.TelemetryFeature()
+        feature.get_database_topology = Mock(return_value="single")
+
+        assert feature.set_application_names(deployment) == [
+            "aodh",
+            "aodh-mysql-router",
+            "openstack-exporter",
+            "ceilometer",
+            "gnocchi",
+            "gnocchi-mysql-router",
+        ]
+
+    @patch("sunbeam.features.telemetry.feature.JujuHelper")
+    @patch("sunbeam.features.telemetry.feature.StorageBackendManager")
+    @patch("sunbeam.features.telemetry.feature.run_plan")
+    def test_run_enable_plans_with_external_s3_integrator(
+        self,
+        mock_run_plan,
+        mock_storage_manager_class,
+        mock_jhelper_class,
+        deployment,
+    ):
+        """External S3 persists the offer URL."""
+        client = deployment.get_client.return_value
+        client.cluster.list_nodes_by_role.return_value = []
+        storage_backends_root = Mock()
+        storage_backends_root.root = []
+        client.cluster.get_storage_backends.return_value = storage_backends_root
+
+        tfhelper = Mock()
+        tfhelper_openstack = Mock()
+        tfhelper_openstack.output.return_value = {"ceilometer-offer-url": "url"}
+        tfhelper_hypervisor = Mock()
+        tfhelper_cinder_volume = Mock()
+
+        deployment.get_tfhelper.side_effect = lambda plan: {
+            "telemetry-plan": tfhelper,
+            "openstack-plan": tfhelper_openstack,
+            "hypervisor-plan": tfhelper_hypervisor,
+            "cinder-volume-plan": tfhelper_cinder_volume,
+        }[plan]
+
+        feature = telemetry_feature.TelemetryFeature()
+        feature._manifest = Mock()
+        feature.run_enable_plans(
+            deployment,
+            telemetry_feature.TelemetryFeatureConfig(
+                s3_integrator_offer_url="admin/storage.gnocchi-s3"
+            ),
+            False,
+        )
+
+        first_plan = mock_run_plan.call_args_list[0][0][0]
+        assert first_plan[1].app_desired_status == ["active", "blocked"]
+
+        saved = json.loads(client.cluster.update_config.call_args[0][1])
+        assert saved == {
+            "backend": "s3",
+            "s3_integrator_offer_url": "admin/storage.gnocchi-s3",
+        }
+
+    @patch("sunbeam.features.telemetry.feature.JujuHelper")
+    @patch("sunbeam.features.telemetry.feature.run_plan")
+    def test_run_enable_plans_without_storage_or_s3(
+        self,
+        mock_run_plan,
+        mock_jhelper_class,
+        deployment,
+    ):
+        """Without storage or S3, telemetry enables but skips ceilometer/gnocchi."""
+        client = deployment.get_client.return_value
+        client.cluster.list_nodes_by_role.return_value = []
+        storage_backends_root = Mock()
+        storage_backends_root.root = []
+        client.cluster.get_storage_backends.return_value = storage_backends_root
+
+        tfhelper = Mock()
+        tfhelper_openstack = Mock()
+        tfhelper_openstack.output.return_value = {"ceilometer-offer-url": "url"}
+        tfhelper_hypervisor = Mock()
+        tfhelper_cinder_volume = Mock()
+
+        deployment.get_tfhelper.side_effect = lambda plan: {
+            "telemetry-plan": tfhelper,
+            "openstack-plan": tfhelper_openstack,
+            "hypervisor-plan": tfhelper_hypervisor,
+            "cinder-volume-plan": tfhelper_cinder_volume,
+        }[plan]
+
+        feature = telemetry_feature.TelemetryFeature()
+        feature._manifest = Mock()
+        feature.run_enable_plans(
+            deployment, telemetry_feature.TelemetryFeatureConfig(), False
+        )
+
+        # Verify the plan ran without error
+        assert mock_run_plan.called
+
+
+class TestTelemetryEnableCli:
+    """Test the `enable telemetry` command options."""
+
+    def test_enable_command_accepts_s3_offer_url(self, deployment):
+        feature = telemetry_feature.TelemetryFeature()
+        command = copy.copy(feature.enable_cmd)
+        if not isinstance(command.callback, ClickInstantiator):
+            command.callback = ClickInstantiator(command.callback, feature)
+
+        with patch.object(feature, "enable_feature") as mock_enable:
+            result = CliRunner().invoke(
+                command,
+                [
+                    "--s3-integrator-offer-url",
+                    "admin/storage.gnocchi-s3",
+                ],
+                obj=deployment,
+            )
+
+        assert result.exit_code == 0, result.output
+        assert mock_enable.called
+        config = mock_enable.call_args[0][1]
+        assert isinstance(config, telemetry_feature.TelemetryFeatureConfig)
+        assert config.s3_integrator_offer_url == "admin/storage.gnocchi-s3"
