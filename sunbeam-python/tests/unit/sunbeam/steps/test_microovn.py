@@ -60,28 +60,56 @@ class TestDeployMicroOVNApplicationStep:
         assert timeout == 1200
 
     def test_extra_tfvars(
-        self,
-        deploy_microovn_step,
-        basic_deployment,
-        basic_client,
-        basic_jhelper,
-        ovn_manager,
+        self, deploy_microovn_step, basic_deployment, basic_client, ovn_manager
     ):
         openstack_tfhelper = Mock()
         openstack_tfhelper.output.return_value = {
             "ca-offer-url": "provider:admin/default.ca",
         }
         basic_deployment.get_tfhelper.return_value = openstack_tfhelper
-        ovn_manager.get_machines.return_value = ["1", "2"]
-        basic_jhelper.get_application.return_value = Mock()
+        ovn_manager.get_machines_amd64.return_value = ["1", "2"]
+        ovn_manager.get_machines_arm64.return_value = []
 
         extra_tfvars = deploy_microovn_step.extra_tfvars()
 
         assert "ca-offer-url" in extra_tfvars
         assert "microovn_machine_ids" in extra_tfvars
-        assert set(extra_tfvars["microovn_machine_ids"]) == {"1", "2"}
+        assert extra_tfvars["microovn_machine_ids"] == ["1", "2"]
+        assert extra_tfvars["microovn_arm64_machine_ids"] == []
         assert extra_tfvars["token_distributor_machine_ids"] == ["1"]
-        assert extra_tfvars["role_distributor_application_name"] == "role-distributor"
+
+    def test_extra_tfvars_arm64_dpu(
+        self, deploy_microovn_step, basic_deployment, basic_client, ovn_manager
+    ):
+        openstack_tfhelper = Mock()
+        openstack_tfhelper.output.return_value = {}
+        basic_deployment.get_tfhelper.return_value = openstack_tfhelper
+        ovn_manager.get_machines_amd64.return_value = ["1", "2"]
+        ovn_manager.get_machines_arm64.return_value = ["52"]
+
+        extra_tfvars = deploy_microovn_step.extra_tfvars()
+
+        assert extra_tfvars["microovn_machine_ids"] == ["1", "2"]
+        assert extra_tfvars["microovn_arm64_machine_ids"] == ["52"]
+        assert extra_tfvars["token_distributor_machine_ids"] == ["1"]
+
+    def test_extra_tfvars_arm64_only(
+        self, deploy_microovn_step, basic_deployment, ovn_manager
+    ):
+        openstack_tfhelper = Mock()
+        openstack_tfhelper.output.return_value = {}
+        basic_deployment.get_tfhelper.return_value = openstack_tfhelper
+        ovn_manager.get_machines_amd64.return_value = []
+        ovn_manager.get_machines_arm64.return_value = ["52"]
+
+        extra_tfvars = deploy_microovn_step.extra_tfvars()
+
+        assert (
+            "microovn_machine_ids" not in extra_tfvars
+            or extra_tfvars.get("microovn_machine_ids") == []
+        )
+        assert extra_tfvars["microovn_arm64_machine_ids"] == ["52"]
+        assert extra_tfvars["token_distributor_machine_ids"] == ["52"]
 
     def test_extra_tfvars_no_network_nodes(
         self, deploy_microovn_step, basic_deployment, basic_client, ovn_manager
@@ -91,32 +119,17 @@ class TestDeployMicroOVNApplicationStep:
             "ca-offer-url": "provider:admin/default.ca",
         }
         basic_deployment.get_tfhelper.return_value = openstack_tfhelper
-        ovn_manager.get_machines.return_value = []
+        ovn_manager.get_machines_amd64.return_value = []
+        ovn_manager.get_machines_arm64.return_value = []
 
         extra_tfvars = deploy_microovn_step.extra_tfvars()
 
         assert "ca-offer-url" in extra_tfvars
         assert "endpoint_bindings" in extra_tfvars
         assert extra_tfvars["ca-offer-url"] == "provider:admin/default.ca"
-
-    def test_extra_tfvars_disables_role_distributor_when_missing(
-        self,
-        deploy_microovn_step,
-        basic_deployment,
-        basic_jhelper,
-        ovn_manager,
-    ):
-        openstack_tfhelper = Mock()
-        openstack_tfhelper.output.return_value = {}
-        basic_deployment.get_tfhelper.return_value = openstack_tfhelper
-        ovn_manager.get_machines.return_value = ["1"]
-        basic_jhelper.get_application.side_effect = ApplicationNotFoundException(
-            "Application missing from model: 'test-model'"
-        )
-
-        extra_tfvars = deploy_microovn_step.extra_tfvars()
-
-        assert extra_tfvars["role_distributor_application_name"] is None
+        assert extra_tfvars["microovn_machine_ids"] == []
+        assert extra_tfvars["microovn_arm64_machine_ids"] == []
+        assert "token_distributor_machine_ids" not in extra_tfvars
 
     def test_extra_tfvars_network_agents_endpoint_bindings(
         self, deploy_microovn_step, basic_deployment, ovn_manager
@@ -125,13 +138,31 @@ class TestDeployMicroOVNApplicationStep:
         openstack_tfhelper.output.return_value = {}
         basic_deployment.get_tfhelper.return_value = openstack_tfhelper
         basic_deployment.get_space.side_effect = lambda n: f"space-{n.value}"
-        ovn_manager.get_machines.return_value = []
+        ovn_manager.get_machines_amd64.return_value = []
+        ovn_manager.get_machines_arm64.return_value = []
 
         extra_tfvars = deploy_microovn_step.extra_tfvars()
 
         bindings = extra_tfvars["openstack_network_agents_endpoint_bindings"]
         assert {"space": "space-management"} in bindings
         assert {"endpoint": "data", "space": "space-data"} in bindings
+
+    def test_applications_to_wait_arm64_only(self, deploy_microovn_step, ovn_manager):
+        ovn_manager.get_machines_amd64.return_value = []
+        ovn_manager.get_machines_arm64.return_value = ["54"]
+
+        assert deploy_microovn_step._applications_to_wait() == ["microovn-arm64"]
+
+    def test_applications_to_wait_amd64_and_arm64(
+        self, deploy_microovn_step, ovn_manager
+    ):
+        ovn_manager.get_machines_amd64.return_value = ["1", "2"]
+        ovn_manager.get_machines_arm64.return_value = ["54"]
+
+        assert deploy_microovn_step._applications_to_wait() == [
+            "microovn",
+            "microovn-arm64",
+        ]
 
 
 class TestReapplyMicroOVNOptionalIntegrationsStep:
@@ -159,7 +190,6 @@ class TestReapplyMicroOVNOptionalIntegrationsStep:
 
     def test_tf_apply_extra_args(self, reapply_microovn_step):
         reapply_microovn_step.tfhelper.output.return_value = {}
-        reapply_microovn_step.jhelper.get_application.return_value = Mock()
         extra_args = reapply_microovn_step.tf_apply_extra_args()
 
         expected_args = [
@@ -167,26 +197,13 @@ class TestReapplyMicroOVNOptionalIntegrationsStep:
             "-target=juju_integration.microovn-certs",
             "-target=juju_integration.microovn-ovsdb-cms",
             "-target=juju_integration.microovn-openstack-network-agents",
+            "-target=juju_integration.microovn_arm64_microcluster_token_distributor",
+            "-target=juju_integration.microovn_arm64_certs",
+            "-target=juju_integration.microovn_arm64_ovsdb_cms",
+            "-target=juju_integration.microovn_arm64_openstack_network_agents",
             "-target=juju_integration.role-distributor-microovn",
         ]
         assert extra_args == expected_args
-
-    def test_tf_apply_extra_args_omits_role_distributor_when_missing(
-        self, reapply_microovn_step
-    ):
-        reapply_microovn_step.tfhelper.output.return_value = {}
-        reapply_microovn_step.jhelper.get_application.side_effect = (
-            ApplicationNotFoundException("Application missing from model: 'test-model'")
-        )
-
-        extra_args = reapply_microovn_step.tf_apply_extra_args()
-
-        assert extra_args == [
-            "-target=juju_integration.microovn-microcluster-token-distributor",
-            "-target=juju_integration.microovn-certs",
-            "-target=juju_integration.microovn-ovsdb-cms",
-            "-target=juju_integration.microovn-openstack-network-agents",
-        ]
 
 
 class TestEnableMicroOVNStep:
@@ -222,6 +239,42 @@ class TestEnableMicroOVNStep:
 
         assert result.result_type == ResultType.SKIPPED
         assert result.message == "microovn application has not been deployed yet"
+
+    def test_is_skip_arm64_application_not_found(
+        self,
+        basic_client,
+        basic_jhelper,
+        enable_microovn_step,
+        step_context,
+    ):
+        basic_client.cluster.get_node_info.return_value = {
+            "machineid": "52",
+            "arch": "arm64",
+        }
+        basic_jhelper.get_application.side_effect = ApplicationNotFoundException(
+            "Application not found"
+        )
+
+        result = enable_microovn_step.is_skip(step_context)
+
+        assert result.result_type == ResultType.SKIPPED
+        assert result.message == "microovn-arm64 application has not been deployed yet"
+
+    def test_is_skip_success_arm64(
+        self, basic_client, basic_jhelper, enable_microovn_step, step_context
+    ):
+        basic_client.cluster.get_node_info.return_value = {
+            "machineid": "52",
+            "arch": "arm64",
+        }
+        basic_jhelper.get_application.return_value = Mock(
+            units={"microovn-arm64/0": Mock(machine="52")}
+        )
+
+        result = enable_microovn_step.is_skip(step_context)
+
+        assert result.result_type == ResultType.COMPLETED
+        assert enable_microovn_step.unit == "microovn-arm64/0"
 
     def test_is_skip_unit_not_on_machine(
         self,
@@ -280,6 +333,7 @@ class TestReapplyMicroOVNTerraformPlanStep:
     ):
         manager = Mock()
         manager.get_roles_for_microovn.return_value = {ovn.Role.NETWORK}
+        manager.get_machines_arm64.return_value = []
         return ReapplyMicroOVNTerraformPlanStep(
             basic_client,
             basic_tfhelper,

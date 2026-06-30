@@ -56,13 +56,37 @@ resource "juju_application" "microovn" {
   name       = "microovn"
   model_uuid = data.juju_model.machine_model.uuid
   machines   = length(var.microovn_machine_ids) == 0 ? null : toset(var.microovn_machine_ids)
-  units      = length(var.microovn_machine_ids) == 0 ? 1 : null
+  units = (
+    length(var.microovn_machine_ids) == 0
+    && length(var.microovn_arm64_machine_ids) == 0
+  ) ? 1 : (
+    length(var.microovn_machine_ids) == 0 ? 0 : null
+  )
 
   charm {
     name     = "microovn"
     channel  = var.charm_microovn_channel
     base     = "ubuntu@24.04"
     revision = var.charm_microovn_revision
+  }
+
+  config = var.charm_microovn_config
+
+  endpoint_bindings = var.endpoint_bindings
+}
+
+resource "juju_application" "microovn_arm64" {
+  count       = length(var.microovn_arm64_machine_ids) > 0 ? 1 : 0
+  name        = "microovn-arm64"
+  model_uuid  = data.juju_model.machine_model.uuid
+  machines    = toset(var.microovn_arm64_machine_ids)
+  constraints = "arch=arm64"
+
+  charm {
+    name    = "microovn"
+    channel = var.charm_microovn_channel
+    base    = "ubuntu@24.04"
+    # Arm64 publishes a different revision than amd64 on the same channel.
   }
 
   config = var.charm_microovn_config
@@ -145,18 +169,79 @@ resource "juju_integration" "microovn-openstack-network-agents" {
   }
 }
 
-resource "juju_integration" "role-distributor-microovn" {
-  count      = var.role_distributor_application_name != null ? 1 : 0
+resource "juju_integration" "microovn_arm64_microcluster_token_distributor" {
+  count      = length(var.microovn_arm64_machine_ids) > 0 ? 1 : 0
   model_uuid = data.juju_model.machine_model.uuid
 
   application {
-    name     = var.role_distributor_application_name
-    endpoint = "role-assignment"
+    name     = juju_application.microovn_arm64[0].name
+    endpoint = "cluster"
   }
 
   application {
-    name     = juju_application.microovn.name
-    endpoint = "role-assignment"
+    name     = juju_application.microcluster-token-distributor.name
+    endpoint = "microcluster-cluster"
+  }
+}
+
+resource "juju_integration" "microovn_arm64_certs" {
+  count      = (var.ca-offer-url != null && length(var.microovn_arm64_machine_ids) > 0) ? 1 : 0
+  model_uuid = data.juju_model.machine_model.uuid
+
+  application {
+    name     = juju_application.microovn_arm64[0].name
+    endpoint = "certificates"
+  }
+
+  application {
+    offer_url = var.ca-offer-url
+  }
+}
+
+resource "juju_integration" "microovn_arm64_ovsdb_cms" {
+  count      = (var.ovn-relay-offer-url != null && length(var.microovn_arm64_machine_ids) > 0) ? 1 : 0
+  model_uuid = data.juju_model.machine_model.uuid
+
+  application {
+    name     = juju_application.microovn_arm64[0].name
+    endpoint = "ovsdb-external"
+  }
+
+  application {
+    offer_url = var.ovn-relay-offer-url
+  }
+}
+
+resource "juju_integration" "microovn_arm64_openstack_network_agents" {
+  count      = length(var.microovn_arm64_machine_ids) > 0 ? 1 : 0
+  model_uuid = data.juju_model.machine_model.uuid
+
+  application {
+    name     = juju_application.microovn_arm64[0].name
+    endpoint = "juju-info"
+  }
+
+  application {
+    name     = juju_application.openstack-network-agents.name
+    endpoint = "juju-info"
+  }
+}
+
+resource "juju_integration" "microovn_arm64_to_ovn_proxy" {
+  count = (
+    length(var.microovn_arm64_machine_ids) > 0
+    && length(juju_application.sunbeam-ovn-proxy.*.name) > 0
+  ) ? 1 : 0
+  model_uuid = data.juju_model.machine_model.uuid
+
+  application {
+    name     = juju_application.microovn_arm64[0].name
+    endpoint = "ovsdb"
+  }
+
+  application {
+    name     = juju_application.sunbeam-ovn-proxy[0].name
+    endpoint = "ovsdb"
   }
 }
 
@@ -184,6 +269,10 @@ resource "juju_offer" "ovsdb-cms" {
 
 output "microovn-application-name" {
   value = juju_application.microovn.name
+}
+
+output "microovn-arm64-application-name" {
+  value = try(juju_application.microovn_arm64[0].name, null)
 }
 
 output "ovsdb-cms-offer" {

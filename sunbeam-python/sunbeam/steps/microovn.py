@@ -40,6 +40,7 @@ LOG = logging.getLogger(__name__)
 CONFIG_KEY = "TerraformVarsMicroovnPlan"
 CONFIG_DISKS_KEY = "TerraformVarsMicroovn"
 APPLICATION = "microovn"
+ARM64_APPLICATION = "microovn-arm64"
 MICROOVN_APP_TIMEOUT = 1200
 MICROOVN_UNIT_TIMEOUT = 1200
 AGENT_APP = "openstack-network-agents"
@@ -100,10 +101,14 @@ class DeployMicroOVNApplicationStep(DeployMachineApplicationStep):
             offer: openstack_tf_output.get(offer) for offer in juju_offers
         }
 
-        machine_ids = self.ovn_manager.get_machines()
-        if machine_ids:
-            extra_tfvars["microovn_machine_ids"] = machine_ids
-            extra_tfvars["token_distributor_machine_ids"] = machine_ids[:1]
+        machine_ids = self.ovn_manager.get_machines_amd64()
+        arm64_machine_ids = self.ovn_manager.get_machines_arm64()
+        # Always set both keys so stale clusterd tfvars are cleared on re-apply.
+        extra_tfvars["microovn_machine_ids"] = machine_ids
+        extra_tfvars["microovn_arm64_machine_ids"] = arm64_machine_ids
+        distributor_ids = machine_ids or arm64_machine_ids
+        if distributor_ids:
+            extra_tfvars["token_distributor_machine_ids"] = distributor_ids[:1]
 
         extra_tfvars.update(
             {
@@ -152,6 +157,57 @@ class DeployMicroOVNApplicationStep(DeployMachineApplicationStep):
 
         return extra_tfvars
 
+    def _applications_to_wait(self) -> list[str]:
+        """Return Juju application names that should be ready after deploy."""
+        apps: list[str] = []
+        if self.ovn_manager.get_machines_amd64():
+            apps.append(APPLICATION)
+        if self.ovn_manager.get_machines_arm64():
+            apps.append(ARM64_APPLICATION)
+        return apps
+
+    @tenacity.retry(
+        wait=tenacity.wait_fixed(60),
+        stop=tenacity.stop_after_delay(300),
+        retry=tenacity.retry_if_exception_type(TerraformStateLockedException),
+        retry_error_callback=convert_retry_failure_as_result,
+    )
+    def run(self, context: StepContext) -> Result:
+        """Apply terraform and wait for amd64 and arm64 MicroOVN applications."""
+        try:
+            extra_tfvars = self.extra_tfvars()
+            extra_tfvars["machine_model_uuid"] = self.jhelper.get_model_uuid(self.model)
+
+            self.tfhelper.update_tfvars_and_apply_tf(
+                self.client,
+                self.manifest,
+                tfvar_config=self.config,
+                override_tfvars=extra_tfvars,
+                tf_apply_extra_args=self.tf_apply_extra_args(),
+                reporter=context.reporter,
+            )
+        except TerraformException as e:
+            return Result(ResultType.FAILED, str(e))
+
+        if not self.wait_for_readiness:
+            return Result(ResultType.COMPLETED)
+
+        accepted_status = self.get_accepted_application_status()
+        timeout = self.get_application_timeout()
+        for application in self._applications_to_wait():
+            try:
+                self.jhelper.wait_application_ready(
+                    application,
+                    self.model,
+                    accepted_status=accepted_status,
+                    timeout=timeout,
+                )
+            except TimeoutError as e:
+                LOG.warning("Application %r is not ready: %r", application, e)
+                return Result(ResultType.FAILED, str(e))
+
+        return Result(ResultType.COMPLETED)
+
 
 class ReapplyMicroOVNOptionalIntegrationsStep(DeployMicroOVNApplicationStep):
     """Reapply MicroOVN optional integrations using Terraform."""
@@ -163,6 +219,10 @@ class ReapplyMicroOVNOptionalIntegrationsStep(DeployMicroOVNApplicationStep):
             "-target=juju_integration.microovn-certs",
             "-target=juju_integration.microovn-ovsdb-cms",
             "-target=juju_integration.microovn-openstack-network-agents",
+            "-target=juju_integration.microovn_arm64_microcluster_token_distributor",
+            "-target=juju_integration.microovn_arm64_certs",
+            "-target=juju_integration.microovn_arm64_ovsdb_cms",
+            "-target=juju_integration.microovn_arm64_openstack_network_agents",
         ]
         if _role_distributor_application_name(self.jhelper, self.model):
             extra_args.append("-target=juju_integration.role-distributor-microovn")
@@ -241,13 +301,20 @@ class ReapplyMicroOVNTerraformPlanStep(BaseStep):
             )
         except TerraformException as e:
             return Result(ResultType.FAILED, str(e))
+
+        apps_to_wait: list[str] = []
+        if self.ovn_manager.get_machines_amd64():
+            apps_to_wait.append(APPLICATION)
+        if self.ovn_manager.get_machines_arm64():
+            apps_to_wait.append(ARM64_APPLICATION)
         try:
-            self.jhelper.wait_application_ready(
-                APPLICATION,
-                self.model,
-                accepted_status=statuses,
-                timeout=MICROOVN_UNIT_TIMEOUT,
-            )
+            for application in apps_to_wait:
+                self.jhelper.wait_application_ready(
+                    application,
+                    self.model,
+                    accepted_status=statuses,
+                    timeout=MICROOVN_UNIT_TIMEOUT,
+                )
         except TimeoutError as e:
             LOG.warning("Timed out waiting for reapplying MicroOVN: %r", e)
             return Result(ResultType.FAILED, str(e))
@@ -271,10 +338,70 @@ class RemoveMicroOVNUnitsStep(RemoveMachineUnitsStep):
             "Remove MicroOVN unit",
             "Removing MicroOVN unit from machine",
         )
+        self.units_to_remove_by_app: dict[str, set[str]] = {}
 
     def get_unit_timeout(self) -> int:
         """Return unit timeout in seconds."""
         return MICROOVN_UNIT_TIMEOUT
+
+    def is_skip(self, context: StepContext) -> Result:
+        """Find MicroOVN units to remove across amd64 and arm64 applications."""
+        if len(self.names) == 0:
+            return Result(ResultType.SKIPPED)
+
+        nodes: list[dict] = self.client.cluster.list_nodes()
+        filtered_nodes = list(filter(lambda node: node["name"] in self.names, nodes))
+        if len(filtered_nodes) != len(self.names):
+            filtered_node_names = [node["name"] for node in filtered_nodes]
+            missing_nodes = set(self.names) - set(filtered_node_names)
+            LOG.debug(
+                "Nodes do not exist in cluster database: %s", ",".join(missing_nodes)
+            )
+
+        to_remove_node_ids = {str(node["machineid"]) for node in filtered_nodes}
+        self.units_to_remove_by_app = {}
+
+        for application in (APPLICATION, ARM64_APPLICATION):
+            try:
+                app = self.jhelper.get_application(application, self.model)
+            except ApplicationNotFoundException:
+                LOG.debug("Application %r has not been deployed yet", application)
+                continue
+
+            for unit_name, unit in app.units.items():
+                if unit.machine in to_remove_node_ids:
+                    self.units_to_remove_by_app.setdefault(application, set()).add(
+                        unit_name
+                    )
+
+        if not self.units_to_remove_by_app:
+            return Result(ResultType.SKIPPED)
+
+        return Result(ResultType.COMPLETED)
+
+    def run(self, context: StepContext) -> Result:
+        """Remove MicroOVN units from amd64 and arm64 applications."""
+        try:
+            self.update_status(context, "Removing units")
+            for application, units in self.units_to_remove_by_app.items():
+                for unit in units:
+                    LOG.debug("Removing unit %s from application %s", unit, application)
+                    self.jhelper.remove_unit(application, unit, self.model)
+                self.update_status(context, "Waiting for units to be removed")
+                self.jhelper.wait_units_gone(
+                    list(units), self.model, self.get_unit_timeout()
+                )
+                self.jhelper.wait_application_ready(
+                    application,
+                    self.model,
+                    accepted_status=["active", "unknown"],
+                    timeout=self.get_unit_timeout(),
+                )
+        except (ApplicationNotFoundException, TimeoutError) as e:
+            LOG.warning("Failed to remove MicroOVN units: %r", e)
+            return Result(ResultType.FAILED, str(e))
+
+        return Result(ResultType.COMPLETED)
 
 
 class EnableMicroOVNStep(BaseStep, JujuStepHelper):
@@ -307,19 +434,24 @@ class EnableMicroOVNStep(BaseStep, JujuStepHelper):
         try:
             node = self.client.cluster.get_node_info(self.node)
             self.machine_id = str(node.get("machineid"))
+            arch = node.get("arch") or ovn.DEFAULT_ARCHITECTURE
+            application = (
+                ARM64_APPLICATION if arch == ovn.ARM64_ARCHITECTURE else APPLICATION
+            )
         except NodeNotExistInClusterException:
             LOG.debug("Machine %s does not exist, skipping", self.node)
             return Result(ResultType.SKIPPED)
 
         try:
-            application = self.jhelper.get_application(APPLICATION, self.model)
+            app = self.jhelper.get_application(application, self.model)
         except ApplicationNotFoundException as e:
             LOG.debug("MicroOVN application is not found: %r", e)
             return Result(
-                ResultType.SKIPPED, "microovn application has not been deployed yet"
+                ResultType.SKIPPED,
+                f"{application} application has not been deployed yet",
             )
 
-        for unit_name, unit in application.units.items():
+        for unit_name, unit in app.units.items():
             if unit.machine == self.machine_id:
                 LOG.debug(
                     "Unit %s is deployed on machine: %s", unit_name, self.machine_id

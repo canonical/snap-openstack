@@ -82,7 +82,13 @@ variable "charm_sunbeam_ovn_proxy_config" {
 }
 
 variable "microovn_machine_ids" {
-  description = "List of machine ids to include"
+  description = "List of amd64 machine ids to include"
+  type        = list(string)
+  default     = []
+}
+
+variable "microovn_arm64_machine_ids" {
+  description = "List of arm64 machine ids to include (e.g. DPU network nodes)"
   type        = list(string)
   default     = []
 }

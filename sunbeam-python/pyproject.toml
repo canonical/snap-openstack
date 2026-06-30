@@ -791,6 +791,7 @@ ignore = [
     "S606", # same as above
     "S605", # process with a shell - possible security issue; this should be investigated by the project for possible exploitation
     "S607", #start process with a partial path - this should be a project level decision
+    "D421", # property docstrings commonly use verb-style wording in this codebase
 ]
 extend-ignore = ["E203"]
 

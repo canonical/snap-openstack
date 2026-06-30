@@ -1212,18 +1212,38 @@ class TestMaasDeployMachinesStep:
         self, maas_deploy_machines_step, step_context
     ):
         maas_deploy_machines_step.client.cluster.list_nodes.return_value = [
-            {"name": "test_node", "machineid": 1}
+            {"name": "test_node", "machineid": 1, "systemid": "abc"}
         ]
         maas_deploy_machines_step.jhelper.get_machines.return_value = {
-            "2": Mock(hostname="test_node")
+            "2": Mock(hostname="test_node", instance_id="abc")
         }
         result = maas_deploy_machines_step.is_skip(step_context)
-        assert result.result_type == ResultType.FAILED
-        msg = (
-            "Machine test_node already exists in model test_model with id 2,"
-            " expected the id 1."
-        )
-        assert result.message == msg
+        assert result.result_type == ResultType.COMPLETED
+        assert maas_deploy_machines_step.nodes_to_deploy == []
+        assert len(maas_deploy_machines_step.nodes_to_update) == 1
+
+    def test_is_skip_matches_dpu_by_system_id_when_hostname_differs(
+        self, maas_deploy_machines_step, step_context
+    ):
+        maas_deploy_machines_step.client.cluster.list_nodes.return_value = [
+            {
+                "name": "pc8a-rb3-n4-dpu",
+                "machineid": 55,
+                "systemid": "8fhqbs",
+                "is_dpu": True,
+            }
+        ]
+        maas_deploy_machines_step.jhelper.get_machines.return_value = {
+            "54": Mock(
+                hostname="packer-ubuntu",
+                instance_id="8fhqbs",
+                display_name="pc8a-rb3-n4-dpu",
+            )
+        }
+        result = maas_deploy_machines_step.is_skip(step_context)
+        assert result.result_type == ResultType.COMPLETED
+        assert maas_deploy_machines_step.nodes_to_deploy == []
+        assert len(maas_deploy_machines_step.nodes_to_update) == 1
 
     def test_is_skip_with_nodes_to_deploy(
         self, maas_deploy_machines_step, step_context
