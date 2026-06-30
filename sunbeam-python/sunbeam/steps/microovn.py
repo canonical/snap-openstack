@@ -44,6 +44,16 @@ ARM64_APPLICATION = "microovn-arm64"
 MICROOVN_APP_TIMEOUT = 1200
 MICROOVN_UNIT_TIMEOUT = 1200
 AGENT_APP = "openstack-network-agents"
+ROLE_DISTRIBUTOR_APP = "role-distributor"
+
+
+def _role_distributor_application_name(jhelper: JujuHelper, model: str) -> str | None:
+    """Return role-distributor application name when deployed."""
+    try:
+        jhelper.get_application(ROLE_DISTRIBUTOR_APP, model)
+    except ApplicationNotFoundException:
+        return None
+    return ROLE_DISTRIBUTOR_APP
 
 
 class DeployMicroOVNApplicationStep(DeployMachineApplicationStep):
@@ -124,6 +134,9 @@ class DeployMicroOVNApplicationStep(DeployMachineApplicationStep):
                 "charm_openstack_network_agents_config": {
                     "snap-channel": versions.OPENSTACK_CHANNEL
                 },
+                "role_distributor_application_name": (
+                    _role_distributor_application_name(self.jhelper, self.model)
+                ),
                 "openstack_network_agents_endpoint_bindings": [
                     {"space": self.deployment.get_space(Networks.MANAGEMENT)},
                     {
@@ -201,7 +214,7 @@ class ReapplyMicroOVNOptionalIntegrationsStep(DeployMicroOVNApplicationStep):
 
     def tf_apply_extra_args(self) -> list[str]:
         """Extra args for terraform apply to reapply only optional CMR integrations."""
-        return [
+        extra_args = [
             "-target=juju_integration.microovn-microcluster-token-distributor",
             "-target=juju_integration.microovn-certs",
             "-target=juju_integration.microovn-ovsdb-cms",
@@ -211,6 +224,9 @@ class ReapplyMicroOVNOptionalIntegrationsStep(DeployMicroOVNApplicationStep):
             "-target=juju_integration.microovn_arm64_ovsdb_cms",
             "-target=juju_integration.microovn_arm64_openstack_network_agents",
         ]
+        if _role_distributor_application_name(self.jhelper, self.model):
+            extra_args.append("-target=juju_integration.role-distributor-microovn")
+        return extra_args
 
 
 class ReapplyMicroOVNTerraformPlanStep(BaseStep):

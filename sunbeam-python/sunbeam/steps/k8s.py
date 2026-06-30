@@ -1,9 +1,7 @@
 # SPDX-FileCopyrightText: 2024 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
-import copy
 import ipaddress
-import json
 import logging
 import subprocess
 import time
@@ -107,37 +105,6 @@ K8SD_SNAP_SOCKET = "/var/snap/k8s/common/var/lib/k8sd/state/control.socket"
 # Toleration seconds for node failure recovery k8s default of 5 min to 1 min
 DEFAULT_NOT_READY_TOLERATION_SECONDS = 60
 DEFAULT_UNREACHABLE_TOLERATION_SECONDS = 60
-
-COREDNS_HPA = {
-    "enabled": True,
-    "minReplicas": 1,
-    "maxReplicas": 100,
-    "metrics": [
-        {
-            "type": "Resource",
-            "resource": {
-                "name": "cpu",
-                "target": {"type": "Utilization", "averageUtilization": 80},
-            },
-        },
-        {
-            "type": "Resource",
-            "resource": {
-                "name": "memory",
-                "target": {"type": "Utilization", "averageUtilization": 70},
-            },
-        },
-    ],
-}
-
-COREDNS_PDB = {
-    "minAvailable": 1,
-}
-
-COREDNS_RESOURCES = {
-    "limits": {"cpu": "500m", "memory": "128Mi"},
-    "requests": {"cpu": "500m", "memory": "128Mi"},
-}
 
 
 def validate_cidrs(ip_ranges: str, separator: str = ","):
@@ -1356,6 +1323,19 @@ class _PerHostK8SResourceStep(BaseStep):
         else:
             self.control_nodes = self.client.cluster.list_nodes_by_role(control)
 
+        # Skip control nodes whose machines are not yet in juju. This can
+        # happen during node removal (machine removed before clusterd cleanup)
+        # or during concurrent joins (machine not yet provisioned). Skipping
+        # is safe: stale resources are cleaned up later when the node is
+        # removed from clusterd, at which point it won't appear in
+        # control_nodes and _get_outdated_resources will report it as deleted.
+        juju_machines = set(self.jhelper.get_machines(self.model).keys())
+        self.control_nodes = [
+            node
+            for node in self.control_nodes
+            if str(node.get("machineid", "")) in juju_machines
+        ]
+
         try:
             self.kube = get_kube_client(self.client, self.kube_namespace)
         except KubeClientError as e:
@@ -2048,193 +2028,6 @@ class EnsureDefaultL2AdvertisementMutedStep(BaseStep):
             )
 
         return Result(ResultType.COMPLETED)
-
-
-class PatchCoreDNSStep(BaseStep):
-    """Ensure HA for Coredns.
-
-    This is a workaround for https://github.com/canonical/k8s-operator/issues/504
-    Resources and HPA settings are updated for coredns
-    There is a fix in k8s snap but not backported. Here is the bug link
-    https://github.com/canonical/k8s-snap/issues/2456
-    TODO: Remove this class once #2456 is fixed and available in k8s 1.32/stable
-    """
-
-    def __init__(
-        self,
-        deployment: Deployment,
-        jhelper: JujuHelper,
-    ):
-        super().__init__(
-            "Patch Coredns resources and horizontal pod autoscaling",
-            "Patching Coredns resources and horizontal pod autoscaling",
-        )
-        self.deployment = deployment
-        self.client = deployment.get_client()
-        self.jhelper = jhelper
-        self.juju_app_name = "k8s"
-        self.coredns_namespace = "kube-system"
-        self.coredns_hpa = "ck-dns-coredns"
-        self.coredns_deployment = "coredns"
-        self.timeout = 180  # 3 minutes for helm upgrade
-        self.replica_count = 1
-
-    _COREDNS_POLL_INTERVAL = 10
-
-    def compute_coredns_replica_count(self, control_nodes: int) -> int:
-        """Determine replica count for coredns."""
-        return 1 if control_nodes < 3 else 3
-
-    def is_skip(self, context: StepContext) -> Result:
-        """Determines if the step should be skipped or not.
-
-        :return: ResultType.SKIPPED if the Step should be skipped,
-                 ResultType.COMPLETED or ResultType.FAILED otherwise
-        """
-        try:
-            self.kube = get_kube_client(
-                self.client,
-                self.coredns_namespace,
-            )
-        except KubeClientError as e:
-            LOG.debug("Failed to create k8s client", exc_info=True)
-            return Result(ResultType.FAILED, str(e))
-
-        control_nodes = self.client.cluster.list_nodes_by_role("control")
-        self.replica_count = self.compute_coredns_replica_count(len(control_nodes))
-
-        try:
-            coredns_hpa = self.kube.get(
-                autoscaling_v2.HorizontalPodAutoscaler, name=self.coredns_hpa
-            )
-            LOG.debug("Existing coredns hpa: %s", coredns_hpa)
-            coredns_hpa_spec = coredns_hpa.spec
-            if coredns_hpa_spec is None:
-                LOG.debug("Coredns HPA has no spec")
-                return Result(ResultType.COMPLETED)
-
-            if self.replica_count == coredns_hpa_spec.minReplicas:
-                return Result(ResultType.SKIPPED)
-        except l_exceptions.ApiError as e:
-            if "not found" not in str(e):
-                LOG.debug("Failed to get coredns hpa", exc_info=True)
-                return Result(ResultType.FAILED, str(e))
-            else:
-                LOG.debug("No hpa found for coredns: %r", e)
-
-        return Result(ResultType.COMPLETED)
-
-    def run(self, context: StepContext) -> Result:
-        """Run the step to completion.
-
-        Invoked when the step is run and returns a ResultType to indicate
-
-        :return:
-        """
-        try:
-            leader = self.jhelper.get_leader_unit(
-                self.juju_app_name, self.deployment.openstack_machines_model
-            )
-        except JujuException as e:
-            LOG.debug("Failed to get %s leader", self.juju_app_name, exc_info=True)
-            return Result(ResultType.FAILED, str(e))
-
-        hpa_dict = copy.deepcopy(COREDNS_HPA)
-        hpa_dict["minReplicas"] = self.replica_count
-        hpa = json.dumps(hpa_dict)
-        resources = json.dumps(COREDNS_RESOURCES)
-        pdb = json.dumps(COREDNS_PDB)
-        # Note: Applying coredns hpa with modified minReplica will take time
-        # to see the scale in, scale out based on policy defined in COREDNS_HPA
-        try:
-            set_json = (
-                f"hpa='{hpa}',resources='{resources}',podDisruptionBudget='{pdb}'"
-            )
-            cmd_str = (
-                f"k8s helm upgrade -n {self.coredns_namespace} ck-dns "
-                "/snap/k8s/current/k8s/manifests/charts/coredns-*.tgz"
-                f" --reuse-values --set-json {set_json}"
-            )
-            LOG.debug("Running cmd in unit %s: %s", leader, cmd_str)
-
-            result = self.jhelper.run_cmd_on_machine_unit_payload(
-                leader,
-                self.deployment.openstack_machines_model,
-                cmd_str,
-                self.timeout,
-            )
-            LOG.debug("Result for patching coredns for %s: %s", leader, result)
-
-            if result.return_code != 0:
-                return Result(
-                    ResultType.FAILED,
-                    f"Error in setting coredns hpa: {result.stderr}",
-                )
-        except JujuException as e:
-            LOG.info(
-                "Failed to run helm upgrade on coredns",
-                exc_info=True,
-            )
-            return Result(ResultType.FAILED, str(e))
-
-        # Wait for CoreDNS pods to be ready rather than relying on the k8s
-        # charm status, which may not reflect external changes (helm upgrade)
-        # until the next update-status hook fires.
-        try:
-            self._wait_for_coredns_ready()
-        except (TimeoutError, K8SError) as e:
-            LOG.warning("CoreDNS readiness check failed: %s", e)
-            return Result(ResultType.FAILED, str(e))
-
-        return Result(ResultType.COMPLETED)
-
-    def _wait_for_coredns_ready(self) -> None:
-        """Wait until CoreDNS deployment has at least replica_count available replicas.
-
-        Directly polls the CoreDNS Deployment status rather than relying on the
-        k8s charm status, which may not reflect external changes (e.g. a helm
-        upgrade) until the next update-status hook runs.
-        """
-        deadline = time.monotonic() + K8S_APP_TIMEOUT
-        while time.monotonic() < deadline:
-            try:
-                deployment = self.kube.get(
-                    apps_v1.Deployment, name=self.coredns_deployment
-                )
-            except l_exceptions.ApiError as e:
-                status = getattr(e, "status", None)
-                status_code = getattr(status, "code", None)
-                if status_code == 404:
-                    raise K8SError(
-                        f"CoreDNS deployment '{self.coredns_deployment}' not found"
-                    ) from e
-                if status_code is not None and 500 <= status_code < 600:
-                    LOG.debug("Transient error while getting coredns deployment: %s", e)
-                    time.sleep(self._COREDNS_POLL_INTERVAL)
-                    continue
-                raise
-            available_replicas = (
-                deployment.status.availableReplicas
-                if deployment.status and deployment.status.availableReplicas is not None
-                else 0
-            )
-            if available_replicas >= self.replica_count:
-                LOG.debug(
-                    "CoreDNS deployment ready: %d/%d replicas available",
-                    available_replicas,
-                    self.replica_count,
-                )
-                return
-            LOG.debug(
-                "Waiting for CoreDNS availableReplicas >= %d (current: %d)",
-                self.replica_count,
-                available_replicas,
-            )
-            time.sleep(self._COREDNS_POLL_INTERVAL)
-        raise TimeoutError(
-            f"CoreDNS deployment did not reach {self.replica_count} available"
-            f" replicas within {K8S_APP_TIMEOUT}s"
-        )
 
 
 class PatchServiceExternalTrafficStep(BaseStep):

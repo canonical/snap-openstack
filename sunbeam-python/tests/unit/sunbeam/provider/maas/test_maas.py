@@ -18,6 +18,7 @@ from sunbeam.core.deployment import Networks
 from sunbeam.core.deployments import DeploymentsConfig
 from sunbeam.core.juju import ControllerNotFoundException
 from sunbeam.provider.maas.commands import (
+    remove_node,
     validate_deployment_cmd,
     validate_machine_cmd,
 )
@@ -40,6 +41,7 @@ from sunbeam.provider.maas.steps import (
     MaasDeployInfraMachinesStep,
     MaasDeployK8SApplicationStep,
     MaasDeployMachinesStep,
+    MaasRemoveMachineFromClusterdStep,
     MaasScaleJujuStep,
     MachineComputeNicCheck,
     MachineNetworkCheck,
@@ -52,6 +54,11 @@ from sunbeam.provider.maas.steps import (
     UnitNotFoundException,
     ZoneBalanceCheck,
     ZonesCheck,
+)
+from sunbeam.steps.juju import RemoveJujuMachineStep
+from sunbeam.steps.role_distributor import (
+    ReapplyRoleDistributorApplicationStep,
+    RemoveRoleDistributorUnitsStep,
 )
 
 
@@ -2439,6 +2446,79 @@ class TestMaasDeploymentProperties:
             )
             assert deployment.storage_ippool_label == expected_label
             assert deployment.storage_ip_pool == expected_label
+
+
+class TestRemoveNodeRoleDistributor:
+    @patch("sunbeam.provider.maas.commands.JujuHelper")
+    @patch("sunbeam.provider.maas.commands.run_preflight_checks")
+    @patch("sunbeam.provider.maas.commands.run_plan")
+    def test_remove_cleans_role_distributor_before_machine_removal_and_reapplies(
+        self,
+        run_plan_cmd,
+        run_preflight,
+        juju_helper,
+    ):
+        deployment = Mock()
+        deployment.openstack_machines_model = "openstack-machines"
+        deployment.get_manifest.return_value = Mock()
+        deployment.get_tfhelper.return_value = Mock()
+        deployment.get_ovn_manager.return_value.get_machines.return_value = ["1"]
+
+        runner = CliRunner()
+        result = runner.invoke(remove_node, ["node-1"], obj=deployment)
+
+        assert result.exit_code == 0, result.output
+
+        plan = run_plan_cmd.call_args_list[1][0][0]
+        role_remove_idx = next(
+            i
+            for i, step in enumerate(plan)
+            if isinstance(step, RemoveRoleDistributorUnitsStep)
+        )
+        juju_remove_idx = next(
+            i for i, step in enumerate(plan) if isinstance(step, RemoveJujuMachineStep)
+        )
+        clusterd_remove_idx = next(
+            i
+            for i, step in enumerate(plan)
+            if isinstance(step, MaasRemoveMachineFromClusterdStep)
+        )
+        role_reapply_idx = next(
+            i
+            for i, step in enumerate(plan)
+            if isinstance(step, ReapplyRoleDistributorApplicationStep)
+        )
+
+        assert role_remove_idx < juju_remove_idx
+        assert clusterd_remove_idx < role_reapply_idx
+
+    @patch("sunbeam.provider.maas.commands.JujuHelper")
+    @patch("sunbeam.provider.maas.commands.run_preflight_checks")
+    @patch("sunbeam.provider.maas.commands.run_plan")
+    def test_remove_skips_role_distributor_when_microovn_has_no_machines(
+        self,
+        run_plan_cmd,
+        run_preflight,
+        juju_helper,
+    ):
+        deployment = Mock()
+        deployment.openstack_machines_model = "openstack-machines"
+        deployment.get_manifest.return_value = Mock()
+        deployment.get_tfhelper.return_value = Mock()
+        deployment.get_ovn_manager.return_value.get_machines.return_value = []
+
+        runner = CliRunner()
+        result = runner.invoke(remove_node, ["node-1"], obj=deployment)
+
+        assert result.exit_code == 0, result.output
+
+        plan = run_plan_cmd.call_args_list[1][0][0]
+        assert not any(
+            isinstance(step, RemoveRoleDistributorUnitsStep) for step in plan
+        )
+        assert not any(
+            isinstance(step, ReapplyRoleDistributorApplicationStep) for step in plan
+        )
 
 
 class TestIsMaasDeployment:

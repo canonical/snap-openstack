@@ -26,7 +26,7 @@ from sunbeam.commands.configure import (
     UserOpenRCStep,
     retrieve_admin_credentials,
 )
-from sunbeam.commands.dashboard_url import retrieve_dashboard_url
+from sunbeam.commands.dashboard import retrieve_dashboard_url
 from sunbeam.commands.proxy import PromptForProxyStep
 from sunbeam.core import ovn
 from sunbeam.core.checks import (
@@ -83,6 +83,7 @@ from sunbeam.core.terraform import TerraformInitStep
 from sunbeam.feature_gates import (
     feature_gate_command,
     feature_gate_option,
+    get_feature_gate_from_cluster,
     split_roles_enabled,
 )
 from sunbeam.provider.base import ProviderBase
@@ -117,6 +118,7 @@ from sunbeam.steps.clusterd import (
     PromptCheckNodeExistStep,
     SaveManagementCidrStep,
 )
+from sunbeam.steps.horizon import AttachHorizonThemeStep
 from sunbeam.steps.hypervisor import (
     DeployHypervisorApplicationStep,
     ReapplyHypervisorOptionalIntegrationsStep,
@@ -161,7 +163,6 @@ from sunbeam.steps.k8s import (
     EnsureK8SUnitsTaggedStep,
     EnsureL2AdvertisementByHostStep,
     MigrateK8SKubeconfigStep,
-    PatchCoreDNSStep,
     PatchServiceExternalTrafficStep,
     RemoveK8SUnitsStep,
     StoreK8SKubeConfigStep,
@@ -186,6 +187,11 @@ from sunbeam.steps.openstack import (
     PromptDatabaseTopologyStep,
     PromptRegionStep,
     ReapplyOpenStackTerraformPlanStep,
+)
+from sunbeam.steps.role_distributor import (
+    DeployRoleDistributorApplicationStep,
+    ReapplyRoleDistributorApplicationStep,
+    RemoveRoleDistributorUnitsStep,
 )
 from sunbeam.steps.sso import (
     DeployIdentityProvidersStep,
@@ -328,7 +334,6 @@ def get_k8s_plans(
                 fqdn,
             ),
             EnsureDefaultL2AdvertisementMutedStep(deployment, client, jhelper),
-            PatchCoreDNSStep(deployment, jhelper),
         ]
     )
 
@@ -832,6 +837,18 @@ def bootstrap(  # noqa: C901
     microovn_tfhelper = deployment.get_tfhelper("microovn-plan")
     microovn_necessary = ovn_manager.is_microovn_necessary(roles)
     if microovn_necessary:
+        role_distributor_tfhelper = deployment.get_tfhelper("role-distributor-plan")
+        plan1.append(TerraformInitStep(role_distributor_tfhelper))
+        plan1.append(
+            DeployRoleDistributorApplicationStep(
+                deployment,
+                client,
+                role_distributor_tfhelper,
+                jhelper,
+                manifest,
+                deployment.openstack_machines_model,
+            )
+        )
         plan1.append(TerraformInitStep(microovn_tfhelper))
         plan1.append(
             DeployMicroOVNApplicationStep(
@@ -904,6 +921,14 @@ def bootstrap(  # noqa: C901
                 deployment.openstack_machines_model,
                 proxy_settings=proxy_settings,
                 is_region_controller=is_region_controller,
+            )
+        )
+        plan1.append(
+            AttachHorizonThemeStep(
+                client=client,
+                jhelper=jhelper,
+                manifest=manifest,
+                model=OPENSTACK_MODEL,
             )
         )
         plan1.append(
@@ -1386,10 +1411,6 @@ def join(  # noqa: C901
     is_network_node = any(role.is_network_node() for role in roles)
     is_region_controller = any(role.is_region_controller() for role in roles)
 
-    if is_network_node and is_compute_node and not split_roles_enabled():
-        raise click.ClickException(
-            "A node cannot be both a compute and network node at the same time."
-        )
     if is_region_controller and len(roles) > 1:
         raise click.ClickException(
             "The region controller role is mutually exclusive with all other roles."
@@ -1440,6 +1461,17 @@ def join(  # noqa: C901
 
     plan1 = [ClusterJoinNodeStep(client, token, ip, name, roles_str)]
     run_plan(plan1, console, show_hints)
+
+    if is_network_node and is_compute_node:
+        split_roles_in_cluster = get_feature_gate_from_cluster(
+            "feature.split-roles",
+            client,
+        )
+        if not split_roles_in_cluster:
+            raise click.ClickException(
+                "A node cannot be both a compute and network node at the same "
+                "time because feature.split-roles is not enabled in cluster state."
+            )
 
     try:
         deployments_from_db = read_config(client, DEPLOYMENTS_CONFIG_KEY)
@@ -1568,6 +1600,18 @@ def join(  # noqa: C901
     plan4.append(TerraformInitStep(cinder_volume_tfhelper))
     if microovn_necessary:
         microovn_tfhelper = deployment.get_tfhelper("microovn-plan")
+        role_distributor_tfhelper = deployment.get_tfhelper("role-distributor-plan")
+        plan4.append(TerraformInitStep(role_distributor_tfhelper))
+        plan4.append(
+            DeployRoleDistributorApplicationStep(
+                deployment,
+                client,
+                role_distributor_tfhelper,
+                jhelper,
+                manifest,
+                deployment.openstack_machines_model,
+            )
+        )
         plan4.append(TerraformInitStep(microovn_tfhelper))
         plan4.append(
             DeployMicroOVNApplicationStep(
@@ -1845,6 +1889,7 @@ def remove(ctx: click.Context, name: str, force: bool, show_hints: bool) -> None
     deployment: LocalDeployment = ctx.obj
     client = deployment.get_client()
     jhelper = JujuHelper(deployment.juju_controller)
+    microovn_machine_ids = deployment.get_ovn_manager().get_machines()
 
     preflight_checks = [DaemonGroupCheck(), JujuLoginCheck(deployment.juju_account)]
     run_preflight_checks(preflight_checks, console)
@@ -1951,6 +1996,31 @@ def remove(ctx: click.Context, name: str, force: bool, show_hints: bool) -> None
             ClusterRemoveNodeStep(client, name),
         ]
     )
+    if microovn_machine_ids:
+        manifest = deployment.get_manifest()
+        role_distributor_tfhelper = deployment.get_tfhelper("role-distributor-plan")
+        remove_k8s_unit_index = next(
+            i for i, step in enumerate(plan) if isinstance(step, CordonK8SUnitStep)
+        )
+        plan.insert(
+            remove_k8s_unit_index,
+            RemoveRoleDistributorUnitsStep(
+                client, name, jhelper, deployment.openstack_machines_model
+            ),
+        )
+        plan.extend(
+            [
+                TerraformInitStep(role_distributor_tfhelper),
+                ReapplyRoleDistributorApplicationStep(
+                    deployment,
+                    client,
+                    role_distributor_tfhelper,
+                    jhelper,
+                    manifest,
+                    deployment.openstack_machines_model,
+                ),
+            ]
+        )
 
     run_plan(plan, console, show_hints)
     click.echo(f"Removed node {name} from the cluster")
@@ -2095,7 +2165,19 @@ def configure_cmd(
             or (split_roles_enabled() and "control" in node["role"])
         )
     ):
+        role_distributor_tfhelper = deployment.get_tfhelper("role-distributor-plan")
         microovn_tfhelper = deployment.get_tfhelper("microovn-plan")
+        plan.append(TerraformInitStep(role_distributor_tfhelper))
+        plan.append(
+            DeployRoleDistributorApplicationStep(
+                deployment,
+                client,
+                role_distributor_tfhelper,
+                jhelper,
+                manifest,
+                deployment.openstack_machines_model,
+            )
+        )
         plan.append(
             LocalSetOpenStackNetworkAgentsStep(
                 client,

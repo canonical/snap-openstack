@@ -25,7 +25,7 @@ from sunbeam.commands.configure import (
     UserOpenRCStep,
     retrieve_admin_credentials,
 )
-from sunbeam.commands.dashboard_url import retrieve_dashboard_url
+from sunbeam.commands.dashboard import retrieve_dashboard_url
 from sunbeam.commands.proxy import PromptForProxyStep
 from sunbeam.core import ovn
 from sunbeam.core.checks import (
@@ -134,6 +134,7 @@ from sunbeam.steps.clusterd import (
     DeploySunbeamClusterdApplicationStep,
 )
 from sunbeam.steps.features import DisableEnabledFeatures
+from sunbeam.steps.horizon import AttachHorizonThemeStep
 from sunbeam.steps.hypervisor import (
     DeployHypervisorApplicationStep,
     DestroyHypervisorApplicationStep,
@@ -166,7 +167,6 @@ from sunbeam.steps.k8s import (
     EnsureK8SUnitsTaggedStep,
     EnsureL2AdvertisementByHostStep,
     MigrateK8SKubeconfigStep,
-    PatchCoreDNSStep,
     RemoveK8SUnitsStep,
     StoreK8SKubeConfigStep,
     UpdateK8SCloudStep,
@@ -181,6 +181,7 @@ from sunbeam.steps.microceph import (
 from sunbeam.steps.microovn import (
     DeployMicroOVNApplicationStep,
     ReapplyMicroOVNOptionalIntegrationsStep,
+    RemoveMicroOVNUnitsStep,
     SetOvnProviderStep,
 )
 from sunbeam.steps.openstack import (
@@ -191,6 +192,11 @@ from sunbeam.steps.openstack import (
     PromptDatabaseTopologyStep,
     PromptRegionStep,
     ReapplyOpenStackTerraformPlanStep,
+)
+from sunbeam.steps.role_distributor import (
+    DeployRoleDistributorApplicationStep,
+    ReapplyRoleDistributorApplicationStep,
+    RemoveRoleDistributorUnitsStep,
 )
 from sunbeam.steps.sso import (
     DeployIdentityProvidersStep,
@@ -636,6 +642,7 @@ def deploy(
     tfhelper_cinder_volume = deployment.get_tfhelper("cinder-volume-plan")
     tfhelper_openstack_deploy = deployment.get_tfhelper("openstack-plan")
     tfhelper_hypervisor_deploy = deployment.get_tfhelper("hypervisor-plan")
+    tfhelper_role_distributor = deployment.get_tfhelper("role-distributor-plan")
     tfhelper_microovn = deployment.get_tfhelper("microovn-plan")
 
     ovn_manager = deployment.get_ovn_manager()
@@ -796,7 +803,6 @@ def deploy(
         )
     )
     plan2.append(AddK8SCloudStep(deployment, jhelper))
-    plan2.append(PatchCoreDNSStep(deployment, jhelper))
 
     plan2.append(TerraformInitStep(tfhelper_microceph))
     plan2.append(
@@ -835,6 +841,17 @@ def deploy(
         nb_network, nb_compute, nb_control
     )
     if microovn_necessary:
+        plan2.append(TerraformInitStep(tfhelper_role_distributor))
+        plan2.append(
+            DeployRoleDistributorApplicationStep(
+                deployment,
+                client,
+                tfhelper_role_distributor,
+                jhelper,
+                manifest,
+                deployment.openstack_machines_model,
+            )
+        )
         plan2.append(TerraformInitStep(tfhelper_microovn))
         plan2.append(
             DeployMicroOVNApplicationStep(
@@ -867,6 +884,14 @@ def deploy(
             deployment.openstack_machines_model,
             proxy_settings=proxy_settings,
             is_region_controller=bool(nb_region_controllers),
+        )
+    )
+    plan2.append(
+        AttachHorizonThemeStep(
+            client=client,
+            jhelper=jhelper,
+            manifest=manifest,
+            model=OPENSTACK_MODEL,
         )
     )
     if microovn_necessary:
@@ -1649,6 +1674,7 @@ def remove_node(ctx: click.Context, name: str, force: bool, show_hints: bool) ->
     deployment: MaasDeployment = ctx.obj
     client = deployment.get_client()
     jhelper = JujuHelper(deployment.juju_controller)
+    microovn_machine_ids = deployment.get_ovn_manager().get_machines()
 
     preflight_checks = [
         LocalShareCheck(),
@@ -1715,6 +1741,9 @@ def remove_node(ctx: click.Context, name: str, force: bool, show_hints: bool) ->
         RemoveMicrocephUnitsStep(
             client, name, jhelper, deployment.openstack_machines_model
         ),
+        RemoveMicroOVNUnitsStep(
+            client, name, jhelper, deployment.openstack_machines_model
+        ),
         CordonK8SUnitStep(client, name, jhelper, deployment.openstack_machines_model),
         DrainK8SUnitStep(
             client, name, jhelper, deployment.openstack_machines_model, remove_pvc=True
@@ -1760,12 +1789,35 @@ def remove_node(ctx: click.Context, name: str, force: bool, show_hints: bool) ->
         MaasRemoveMachineFromClusterdStep(client, name),
         SetCephMgrPoolSizeStep(client, jhelper, deployment.openstack_machines_model),
     ]
+    if microovn_machine_ids:
+        manifest = deployment.get_manifest()
+        role_distributor_tfhelper = deployment.get_tfhelper("role-distributor-plan")
+        cordon_k8s_unit_index = next(
+            i for i, step in enumerate(plan) if isinstance(step, CordonK8SUnitStep)
+        )
+        plan.insert(
+            cordon_k8s_unit_index,
+            RemoveRoleDistributorUnitsStep(
+                client, name, jhelper, deployment.openstack_machines_model
+            ),
+        )
+        ceph_pool_size_index = next(
+            i for i, step in enumerate(plan) if isinstance(step, SetCephMgrPoolSizeStep)
+        )
+        plan[ceph_pool_size_index:ceph_pool_size_index] = [
+            TerraformInitStep(role_distributor_tfhelper),
+            ReapplyRoleDistributorApplicationStep(
+                deployment,
+                client,
+                role_distributor_tfhelper,
+                jhelper,
+                manifest,
+                deployment.openstack_machines_model,
+            ),
+        ]
 
     run_plan(plan, console, show_hints)
-    click.echo(
-        f"Removed node {name} from the cluster."
-        " Run `sunbeam cluster resize` to scale down the cluster"
-    )
+    click.echo(f"Removed node {name} from the cluster.")
 
 
 @click.command("destroy")

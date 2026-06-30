@@ -4,19 +4,22 @@
 import sys
 from unittest.mock import Mock, call, patch
 
-from sunbeam.core.common import Result, ResultType
+from sunbeam.core.common import Result, ResultType, Role
 from sunbeam.core.juju import (
     ActionFailedException,
     ApplicationNotFoundException,
     JujuWaitException,
 )
 from sunbeam.core.openstack import OPENSTACK_MODEL
+from sunbeam.core.terraform import TerraformInitStep
 from sunbeam.steps.k8s import (
     EnsureCiliumDeviceByHostStep,
     EnsureDefaultL2AdvertisementMutedStep,
     EnsureL2AdvertisementByHostStep,
 )
+from sunbeam.steps.microovn import DeployMicroOVNApplicationStep
 from sunbeam.steps.openstack import OpenStackPatchLoadBalancerServicesIPPoolStep
+from sunbeam.steps.role_distributor import DeployRoleDistributorApplicationStep
 from sunbeam.steps.upgrades.base import UpgradeFeatures
 from sunbeam.steps.upgrades.intra_channel import (
     SNAP_APPS_INFRA_MODEL,
@@ -961,6 +964,62 @@ class TestLatestInChannelCoordinator:
         assert EnsureCiliumDeviceByHostStep in step_types
         assert ReapplyInfraModelConfigStep in step_types
         assert UpgradeFeatures in step_types
+
+    @patch(f"{_INTRA_CHANNEL}.is_maas_deployment")
+    def test_get_plan_deploys_role_distributor_before_microovn(self, mock_is_maas):
+        """MicroOVN upgrade path must create role-distributor first."""
+        mock_is_maas.return_value = False
+        role_distributor_tfhelper = Mock()
+        microovn_tfhelper = Mock()
+
+        def get_tfhelper(plan_name):
+            if plan_name == "role-distributor-plan":
+                return role_distributor_tfhelper
+            if plan_name == "microovn-plan":
+                return microovn_tfhelper
+            return Mock()
+
+        self.deployment.get_tfhelper.side_effect = get_tfhelper
+        ovn_manager = self.deployment.get_ovn_manager()
+        ovn_manager.get_roles_for_microovn.return_value = {Role.NETWORK}
+        self.client.cluster.list_nodes_by_role.return_value = [
+            {"machineid": "0", "role": ["network"]}
+        ]
+
+        coordinator = LatestInChannelCoordinator(
+            self.deployment, self.client, self.jhelper, self.manifest
+        )
+        plan = coordinator.get_plan()
+
+        role_distributor_init_index = next(
+            i
+            for i, step in enumerate(plan)
+            if isinstance(step, TerraformInitStep)
+            and step.tfhelper is role_distributor_tfhelper
+        )
+        role_distributor_deploy_index = next(
+            i
+            for i, step in enumerate(plan)
+            if isinstance(step, DeployRoleDistributorApplicationStep)
+        )
+        microovn_init_index = next(
+            i
+            for i, step in enumerate(plan)
+            if isinstance(step, TerraformInitStep)
+            and step.tfhelper is microovn_tfhelper
+        )
+        microovn_deploy_index = next(
+            i
+            for i, step in enumerate(plan)
+            if isinstance(step, DeployMicroOVNApplicationStep)
+        )
+
+        assert (
+            role_distributor_init_index
+            < role_distributor_deploy_index
+            < microovn_init_index
+            < microovn_deploy_index
+        )
 
 
 class TestReapplyInfraModelConfigStep:

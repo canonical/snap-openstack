@@ -99,6 +99,12 @@ variable "token_distributor_machine_ids" {
   default     = []
 }
 
+variable "role_distributor_application_name" {
+  description = "Role distributor application name"
+  type        = string
+  default     = null
+}
+
 variable "machine_model_uuid" {
   description = "UUID of Juju model to use for deployment"
   type        = string

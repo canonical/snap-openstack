@@ -19,7 +19,6 @@ from sunbeam.core.deployment import Networks
 from sunbeam.core.juju import (
     ActionFailedException,
     ApplicationNotFoundException,
-    JujuException,
     LeaderNotFoundException,
     MachineNotFoundException,
 )
@@ -36,7 +35,6 @@ from sunbeam.steps.k8s import (
     EnsureK8SUnitsTaggedStep,
     EnsureL2AdvertisementByHostStep,
     KubeClientError,
-    PatchCoreDNSStep,
     PatchServiceExternalTrafficStep,
     StoreK8SKubeConfigStep,
     _get_machines_space_ips,
@@ -345,7 +343,10 @@ class TestEnsureL2AdvertisementByHostStep:
         return basic_deployment
 
     @pytest.fixture
-    def jhelper(self, basic_jhelper):
+    def jhelper(self, basic_jhelper, control_nodes):
+        basic_jhelper.get_machines.return_value = {
+            str(n["machineid"]): Mock() for n in control_nodes
+        }
         return basic_jhelper
 
     @pytest.fixture
@@ -1299,315 +1300,6 @@ def test_get_machines_space_ips(interfaces, space, networks, expected):
     assert result == expected
 
 
-class TestPatchCoreDNSStep:
-    @pytest.fixture
-    def deployment(self, basic_deployment):
-        return basic_deployment
-
-    @pytest.fixture
-    def client(self, basic_client):
-        return basic_client
-
-    @pytest.fixture
-    def jhelper(self, basic_jhelper):
-        return basic_jhelper
-
-    @pytest.fixture
-    def step(self, deployment, jhelper):
-        return PatchCoreDNSStep(deployment, jhelper)
-
-    @pytest.fixture
-    def kube(self, basic_kube):
-        return basic_kube
-
-    def test_is_skip(self, step, kube, step_context):
-        api_error = ApiError(
-            Mock(),
-            httpx.Response(
-                status_code=404,
-                content=json.dumps(
-                    {
-                        "code": 404,
-                        "message": "horizontal podautoscaler not found",
-                    }
-                ),
-            ),
-        )
-        kube.get = Mock(side_effect=api_error)
-
-        with patch("sunbeam.steps.k8s.get_kube_client", return_value=kube):
-            result = step.is_skip(step_context)
-        assert result.result_type == ResultType.COMPLETED
-
-    def test_is_skip_no_hpa_computes_replica_count(self, step, kube, step_context):
-        """Replica count must be derived from control-node count even without HPA.
-
-        Previously replica_count defaulted to 1 because the computation was inside
-        the try-block that raised on 404.
-        """
-        control_nodes = [
-            {"name": "node1", "machineid": "1"},
-            {"name": "node2", "machineid": "2"},
-            {"name": "node3", "machineid": "3"},
-        ]
-        step.client.cluster.list_nodes_by_role.return_value = control_nodes
-        api_error = ApiError(
-            Mock(),
-            httpx.Response(
-                status_code=404,
-                content=json.dumps(
-                    {
-                        "code": 404,
-                        "message": "horizontalpodautoscalers.autoscaling"
-                        ' "ck-dns-coredns" not found',
-                    }
-                ),
-            ),
-        )
-        kube.get = Mock(side_effect=api_error)
-
-        with patch("sunbeam.steps.k8s.get_kube_client", return_value=kube):
-            result = step.is_skip(step_context)
-
-        assert result.result_type == ResultType.COMPLETED
-        # 3 control nodes → replica_count must be 3, not the default 1
-        assert step.replica_count == 3
-
-    def test_is_skip_kube_get_error(self, step, kube, step_context):
-        api_error = ApiError(
-            Mock(),
-            httpx.Response(
-                status_code=500,
-                content=json.dumps(
-                    {
-                        "code": 500,
-                        "message": "Unknown error",
-                    }
-                ),
-            ),
-        )
-        kube.get = Mock(side_effect=api_error)
-
-        with patch("sunbeam.steps.k8s.get_kube_client", return_value=kube):
-            result = step.is_skip(step_context)
-        assert result.result_type == ResultType.FAILED
-
-    def test_is_skip_hpa_already_exists(self, step, kube, step_context):
-        control_nodes = [
-            {"name": "node1", "machineid": "1"},
-            {"name": "node2", "machineid": "2"},
-        ]
-        step.client.cluster.list_nodes_by_role.return_value = control_nodes
-        hpa = Mock()
-        hpa.spec = Mock()
-        hpa.spec.minReplicas = 1
-
-        with patch("sunbeam.steps.k8s.get_kube_client", return_value=kube):
-            kube.get = Mock(return_value=hpa)
-            result = step.is_skip(step_context)
-        assert result.result_type == ResultType.SKIPPED
-
-    def test_is_skip_new_control_nodes_added(self, step, kube, step_context):
-        control_nodes = [
-            {"name": "node1", "machineid": "1"},
-            {"name": "node2", "machineid": "2"},
-            {"name": "node3", "machineid": "3"},
-        ]
-        step.client.cluster.list_nodes_by_role.return_value = control_nodes
-        hpa = Mock()
-        hpa.spec = Mock()
-        hpa.spec.minReplicas = 1
-
-        with patch("sunbeam.steps.k8s.get_kube_client", return_value=kube):
-            kube.get = Mock(return_value=hpa)
-            result = step.is_skip(step_context)
-        assert result.result_type == ResultType.COMPLETED
-        assert step.replica_count == 3
-
-    def test_is_skip_control_nodes_removed(self, step, kube, step_context):
-        control_nodes = [
-            {"name": "node1", "machineid": "1"},
-            {"name": "node2", "machineid": "2"},
-        ]
-        step.client.cluster.list_nodes_by_role.return_value = control_nodes
-        hpa = Mock()
-        hpa.spec = Mock()
-        hpa.spec.minReplicas = 3
-
-        with patch("sunbeam.steps.k8s.get_kube_client", return_value=kube):
-            kube.get = Mock(return_value=hpa)
-            result = step.is_skip(step_context)
-        assert result.result_type == ResultType.COMPLETED
-        assert step.replica_count == 1
-
-    def test_run(self, step, jhelper):
-        jhelper.run_cmd_on_machine_unit_payload.return_value = Mock(return_code=0)
-        with patch.object(step, "_wait_for_coredns_ready"):
-            result = step.run(None)
-        assert result.result_type == ResultType.COMPLETED
-        jhelper.get_leader_unit.assert_called_once()
-        jhelper.run_cmd_on_machine_unit_payload.assert_called_once()
-
-    def test_run_helm_upgrade_failed(self, step, jhelper):
-        jhelper.run_cmd_on_machine_unit_payload.return_value = Mock(return_code=1)
-        with patch.object(step, "_wait_for_coredns_ready") as mock_wait:
-            result = step.run(None)
-        assert result.result_type == ResultType.FAILED
-        jhelper.get_leader_unit.assert_called_once()
-        jhelper.run_cmd_on_machine_unit_payload.assert_called_once()
-        mock_wait.assert_not_called()
-
-    def test_run_failed_on_juju_run_on_machine_unit(self, step, jhelper):
-        jhelper.run_cmd_on_machine_unit_payload.side_effect = JujuException(
-            "Not able to run command"
-        )
-        with patch.object(step, "_wait_for_coredns_ready") as mock_wait:
-            result = step.run(None)
-        assert result.result_type == ResultType.FAILED
-        jhelper.get_leader_unit.assert_called_once()
-        jhelper.run_cmd_on_machine_unit_payload.assert_called_once()
-        mock_wait.assert_not_called()
-
-    def test_run_leader_not_found(self, step, jhelper):
-        jhelper.get_leader_unit.side_effect = LeaderNotFoundException(
-            "Leader missing..."
-        )
-        with patch.object(step, "_wait_for_coredns_ready") as mock_wait:
-            result = step.run(None)
-        assert result.result_type == ResultType.FAILED
-        jhelper.get_leader_unit.assert_called_once()
-        jhelper.run_cmd_on_machine_unit_payload.assert_not_called()
-        mock_wait.assert_not_called()
-
-    def test_run_waits_for_coredns_ready(self, step, jhelper):
-        """_wait_for_coredns_ready must be called after a successful helm upgrade.
-
-        Ensures DNS is available before subsequent OpenStack deployment steps.
-        """
-        jhelper.run_cmd_on_machine_unit_payload.return_value = Mock(return_code=0)
-        with patch.object(step, "_wait_for_coredns_ready") as mock_wait:
-            result = step.run(None)
-        assert result.result_type == ResultType.COMPLETED
-        mock_wait.assert_called_once()
-
-    def test_run_coredns_ready_timeout(self, step, jhelper):
-        """A TimeoutError from _wait_for_coredns_ready must propagate as FAILED.
-
-        Ensures the deployment does not silently proceed with DNS unavailable.
-        """
-        jhelper.run_cmd_on_machine_unit_payload.return_value = Mock(return_code=0)
-        with patch.object(
-            step,
-            "_wait_for_coredns_ready",
-            side_effect=TimeoutError("timed out"),
-        ):
-            result = step.run(None)
-        assert result.result_type == ResultType.FAILED
-
-    def test_run_coredns_deployment_not_found(self, step, jhelper):
-        """A K8SError from _wait_for_coredns_ready must propagate as FAILED."""
-        jhelper.run_cmd_on_machine_unit_payload.return_value = Mock(return_code=0)
-        with patch.object(
-            step,
-            "_wait_for_coredns_ready",
-            side_effect=K8SError("CoreDNS deployment 'ck-dns-coredns' not found"),
-        ):
-            result = step.run(None)
-        assert result.result_type == ResultType.FAILED
-
-    def test_wait_for_coredns_ready_when_already_ready(self, step, kube):
-        """Returns immediately when availableReplicas >= replica_count."""
-        step.kube = kube
-        step.replica_count = 2
-        deployment = Mock()
-        deployment.status = Mock()
-        deployment.status.availableReplicas = 2
-        kube.get = Mock(return_value=deployment)
-        step._wait_for_coredns_ready()  # must not raise
-        kube.get.assert_called_once()
-
-    def test_wait_for_coredns_ready_polls_until_ready(self, step, kube):
-        """Polls until availableReplicas reaches replica_count."""
-        step.kube = kube
-        step.replica_count = 1
-        not_ready = Mock()
-        not_ready.status = Mock()
-        not_ready.status.availableReplicas = 0
-        ready = Mock()
-        ready.status = Mock()
-        ready.status.availableReplicas = 1
-        kube.get = Mock(side_effect=[not_ready, ready])
-        with patch("sunbeam.steps.k8s.time.sleep"):
-            step._wait_for_coredns_ready()
-        assert kube.get.call_count == 2
-
-    def test_wait_for_coredns_ready_retries_on_5xx_api_error(self, step, kube):
-        """Retries only on transient 5xx errors."""
-        step.kube = kube
-        step.replica_count = 1
-        api_error = ApiError(
-            Mock(),
-            httpx.Response(
-                status_code=503,
-                content=json.dumps({"code": 503, "message": "service unavailable"}),
-            ),
-        )
-        ready = Mock()
-        ready.status = Mock()
-        ready.status.availableReplicas = 1
-        kube.get = Mock(side_effect=[api_error, ready])
-        with patch("sunbeam.steps.k8s.time.sleep"):
-            step._wait_for_coredns_ready()
-        assert kube.get.call_count == 2
-
-    def test_wait_for_coredns_ready_fails_fast_on_404(self, step, kube):
-        """Raises K8SError immediately when deployment is not found (404)."""
-        step.kube = kube
-        step.replica_count = 1
-        api_error = ApiError(
-            Mock(),
-            httpx.Response(
-                status_code=404,
-                content=json.dumps({"code": 404, "message": "not found"}),
-            ),
-        )
-        kube.get = Mock(side_effect=api_error)
-        with pytest.raises(K8SError, match="not found"):
-            step._wait_for_coredns_ready()
-        kube.get.assert_called_once()
-
-    def test_wait_for_coredns_ready_reraises_non_transient_api_error(self, step, kube):
-        """Re-raises ApiError for non-404, non-5xx status codes."""
-        step.kube = kube
-        step.replica_count = 1
-        api_error = ApiError(
-            Mock(),
-            httpx.Response(
-                status_code=403,
-                content=json.dumps({"code": 403, "message": "forbidden"}),
-            ),
-        )
-        kube.get = Mock(side_effect=api_error)
-        with pytest.raises(ApiError):
-            step._wait_for_coredns_ready()
-        kube.get.assert_called_once()
-
-    def test_wait_for_coredns_ready_timeout(self, step, kube):
-        """Raises TimeoutError when pods do not become ready in time."""
-        step.kube = kube
-        step.replica_count = 3
-        deployment = Mock()
-        deployment.status = Mock()
-        deployment.status.availableReplicas = 0
-        kube.get = Mock(return_value=deployment)
-        with (
-            patch("sunbeam.steps.k8s.K8S_APP_TIMEOUT", 0),
-            patch("sunbeam.steps.k8s.time.sleep"),
-        ):
-            with pytest.raises(TimeoutError):
-                step._wait_for_coredns_ready()
-
-
 class TestPatchServiceExternalTrafficStep:
     @pytest.fixture
     def deployment(self, basic_deployment):
@@ -1741,7 +1433,10 @@ class TestEnsureCiliumDeviceByHostStep:
         )
 
     @pytest.fixture
-    def jhelper(self, basic_jhelper):
+    def jhelper(self, basic_jhelper, control_nodes):
+        basic_jhelper.get_machines.return_value = {
+            str(n["machineid"]): Mock() for n in control_nodes
+        }
         return basic_jhelper
 
     @pytest.fixture
@@ -1791,6 +1486,19 @@ class TestEnsureCiliumDeviceByHostStep:
         assert result.result_type == ResultType.COMPLETED
         assert len(step.to_delete) == 1
         assert step.to_delete[0]["name"] == "departed-node"
+
+    def test_is_skip_stale_machine_skipped(self, step, jhelper, step_context):
+        """Nodes whose machines are gone from juju are skipped, not deleted.
+
+        This avoids accidentally deleting cilium configs for nodes that are
+        joining concurrently (machine not yet in juju). Stale resources are
+        cleaned up later when the node is removed from clusterd.
+        """
+        # node2's machine (id=2) is no longer in juju
+        jhelper.get_machines.return_value = {"1": Mock()}
+        step._get_outdated_resources = Mock(return_value=([], []))
+        result = step.is_skip(step_context)
+        assert result.result_type == ResultType.SKIPPED
 
     def test_is_skip_single_node_fqdn(self, deployment, client, jhelper, step_context):
         node_info = {"name": "node1", "machineid": "1", "role": ["control"]}

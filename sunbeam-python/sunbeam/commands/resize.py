@@ -14,7 +14,6 @@ from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import JujuHelper
 from sunbeam.core.terraform import TerraformInitStep
 from sunbeam.steps.cinder_volume import DeployCinderVolumeApplicationStep
-from sunbeam.steps.k8s import PatchCoreDNSStep
 from sunbeam.steps.microceph import (
     DeployMicrocephApplicationStep,
     SetCephMgrPoolSizeStep,
@@ -86,7 +85,6 @@ def resize(
 
     plan.extend(
         [
-            PatchCoreDNSStep(deployment, jhelper),
             TerraformInitStep(openstack_tfhelper),
             DeployControlPlaneStep(
                 deployment,

@@ -28,6 +28,7 @@ RABBITMQ_CHANNEL = "3.12/stable"
 TRAEFIK_CHANNEL = "latest/stable"
 MICROCEPH_CHANNEL = "squid/stable"
 MICROOVN_CHANNEL = "25.03/stable"
+ROLE_DISTRIBUTOR_CHANNEL = "latest/stable"
 MYSQL_CHANNEL = "8.0/stable"
 CERT_AUTH_CHANNEL = "1/stable"
 MANUAL_TLS_CERTIFICATES_CHANNEL = "1/stable"
@@ -74,6 +75,7 @@ MISC_CHARMS_K8S = {
 MACHINE_CHARMS = {
     "microceph": MICROCEPH_CHANNEL,
     "microovn": MICROOVN_CHANNEL,
+    "role-distributor": ROLE_DISTRIBUTOR_CHANNEL,
     "openstack-network-agents": OPENSTACK_CHANNEL,
     # TODO: ensure correct channel for the distributor
     "microcluster-token-distributor": "latest/edge",
@@ -105,6 +107,7 @@ TERRAFORM_DIR_NAMES = {
     "sunbeam-machine-plan": "deploy-sunbeam-machine",
     "k8s-plan": "deploy-k8s",
     "microceph-plan": "deploy-microceph",
+    "role-distributor-plan": "deploy-role-distributor",
     "microovn-plan": "deploy-microovn",
     "cinder-volume-plan": "deploy-cinder-volume",
     "openstack-plan": "deploy-openstack",
@@ -178,6 +181,7 @@ DEPLOY_OPENSTACK_TFVAR_MAP: VarMap = {
             "channel": f"{charm.removesuffix('-k8s')}-channel",
             "revision": f"{charm.removesuffix('-k8s')}-revision",
             "config": f"{charm.removesuffix('-k8s')}-config",
+            "resources": f"{charm.removesuffix('-k8s')}-resources",
         }
         for charm, channel in K8S_CHARMS.items()
     },
@@ -234,6 +238,14 @@ DEPLOY_MICROCEPH_TFVAR_MAP: VarMap = {
             "channel": "charm_microceph_channel",
             "revision": "charm_microceph_revision",
             "config": "charm_microceph_config",
+        }
+    }
+}
+DEPLOY_ROLE_DISTRIBUTOR_TFVAR_MAP: VarMap = {
+    "charms": {
+        "role-distributor": {
+            "channel": "charm_role_distributor_channel",
+            "revision": "charm_role_distributor_revision",
         }
     }
 }
@@ -304,6 +316,7 @@ MANIFEST_ATTRIBUTES_TFVAR_MAP: dict[str, VarMap] = {
     "sunbeam-machine-plan": DEPLOY_SUNBEAM_MACHINE_TFVAR_MAP,
     "k8s-plan": DEPLOY_K8S_TFVAR_MAP,
     "microceph-plan": DEPLOY_MICROCEPH_TFVAR_MAP,
+    "role-distributor-plan": DEPLOY_ROLE_DISTRIBUTOR_TFVAR_MAP,
     "microovn-plan": DEPLOY_MICROOVN_TFVAR_MAP,
     "openstack-plan": DEPLOY_OPENSTACK_TFVAR_MAP,
     "hypervisor-plan": DEPLOY_OPENSTACK_HYPERVISOR_TFVAR_MAP,

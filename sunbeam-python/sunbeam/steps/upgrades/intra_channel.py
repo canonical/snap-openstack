@@ -36,13 +36,14 @@ from sunbeam.steps.k8s import (
 )
 from sunbeam.steps.microceph import DeployMicrocephApplicationStep
 from sunbeam.steps.microovn import DeployMicroOVNApplicationStep
-from sunbeam.steps.mysql import MySQLCharmUpgradeStep
+from sunbeam.steps.mysql import MySQLCharmUpgradeStep, ReapplyMySQLTerraformPlanStep
 from sunbeam.steps.openstack import (
     OpenStackPatchLoadBalancerServicesIPPoolStep,
     OpenStackPatchLoadBalancerServicesIPStep,
     ReapplyOpenStackTerraformPlanStep,
     build_overlay_dict,
 )
+from sunbeam.steps.role_distributor import DeployRoleDistributorApplicationStep
 from sunbeam.steps.sunbeam_machine import DeploySunbeamMachineApplicationStep
 from sunbeam.steps.upgrades.base import UpgradeCoordinator, UpgradeFeatures
 
@@ -532,6 +533,22 @@ class LatestInChannelCoordinator(UpgradeCoordinator):
             )
 
         if len(network_nodes):
+            role_distributor_tfhelper = self.deployment.get_tfhelper(
+                "role-distributor-plan"
+            )
+            plan.extend(
+                [
+                    TerraformInitStep(role_distributor_tfhelper),
+                    DeployRoleDistributorApplicationStep(
+                        self.deployment,
+                        self.client,
+                        role_distributor_tfhelper,
+                        self.jhelper,
+                        self.manifest,
+                        self.deployment.openstack_machines_model,
+                    ),
+                ]
+            )
             plan.extend(
                 [
                     TerraformInitStep(self.deployment.get_tfhelper("microovn-plan")),
@@ -607,13 +624,12 @@ class MySQLInChannelUpgradeCoordinator(UpgradeCoordinator):
                 self.reset_mysql_upgrade_state,
             ),
             TerraformInitStep(self.deployment.get_tfhelper("openstack-plan")),
-            ReapplyOpenStackTerraformPlanStep(
+            ReapplyMySQLTerraformPlanStep(
                 self.deployment,
                 self.client,
                 self.deployment.get_tfhelper("openstack-plan"),
                 self.jhelper,
                 self.manifest,
-                self.deployment.openstack_machines_model,
             ),
         ]
         return plan

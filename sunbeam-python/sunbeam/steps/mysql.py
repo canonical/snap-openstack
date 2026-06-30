@@ -26,6 +26,11 @@ from sunbeam.core.juju import (
 )
 from sunbeam.core.manifest import Manifest
 from sunbeam.core.openstack import OPENSTACK_MODEL
+from sunbeam.core.terraform import (
+    TerraformException,
+    TerraformHelper,
+    TerraformStateLockedException,
+)
 
 LOG = logging.getLogger(__name__)
 
@@ -33,6 +38,7 @@ UPGRADE_ALL_UNITS_TIMEOUT = 3600
 UPGRADE_HIGHEST_UNIT_TIMEOUT = 900
 MYSQL_UPGRADE_CONFIG_KEY = "mysql_k8s_upgrade_state"
 MYSQL_CHARM = "mysql-k8s"
+MYSQL_APP = "mysql"
 
 
 class MySQLUpgradeState(StrEnum):
@@ -561,3 +567,105 @@ class MySQLCharmUpgradeStep(BaseStep, JujuStepHelper):
             )
         except SunbeamException as exc:
             return Result(ResultType.FAILED, str(exc))
+
+
+class ReapplyMySQLTerraformPlanStep(BaseStep, JujuStepHelper):
+    """Reapply only MySQL-related components in the Terraform plan."""
+
+    _CONFIG = "TerraformVarsOpenstack"
+
+    def __init__(
+        self,
+        deployment: Deployment,
+        client: Client,
+        tfhelper: TerraformHelper,
+        jhelper: JujuHelper,
+        manifest: Manifest,
+    ):
+        super().__init__(
+            "Applying MySQL Terraform changes",
+            "Applying MySQL-specific Terraform changes",
+        )
+        self.deployment = deployment
+        self.client = client
+        self.tfhelper = tfhelper
+        self.jhelper = jhelper
+        self.manifest = manifest
+        self.model = OPENSTACK_MODEL
+
+    def _get_mysql_terraform_targets(self) -> list[str]:
+        """Get terraform targets for MySQL and mysql-router resources in state."""
+        targets = [
+            # MySQL module targets
+            "-target=module.single-mysql",
+            "-target=module.many-mysql",
+        ]
+
+        try:
+            # Use terraform state to target only resources that are part of the
+            # openstack plan and currently exist for this deployment.
+            state_resources = self.tfhelper.state_list()
+            LOG.debug("Found %s openstack-plan resources", len(state_resources))
+
+            for resource in state_resources:
+                if "mysql-router" not in resource:
+                    continue
+                if not (
+                    resource.startswith("juju_application.")
+                    or resource.startswith("juju_integration.")
+                    or ".juju_application." in resource
+                    or ".juju_integration." in resource
+                ):
+                    continue
+                targets.append(f"-target={resource}")
+        except Exception as e:
+            LOG.warning("Error getting applications for mysql-router targets: %s", e)
+            # Continue with basic targets even if we can't get all mysql-router apps
+
+        LOG.debug("MySQL terraform targets: %s", targets)
+        return targets
+
+    def run(self, context: StepContext) -> Result:
+        """Apply terraform with targets for MySQL components only."""
+        try:
+            self.update_status(context, "updating MySQL components")
+
+            # Build target list for mysql and all mysql-router instances
+            targets = self._get_mysql_terraform_targets()
+
+            # Apply terraform with targets
+            LOG.info("Applying terraform with %s MySQL-specific targets", len(targets))
+            self.tfhelper.update_tfvars_and_apply_tf(
+                self.client,
+                self.manifest,
+                tfvar_config=self._CONFIG,
+                tf_apply_extra_args=targets,
+                reporter=context.reporter,
+            )
+
+        except (TerraformException, TerraformStateLockedException) as e:
+            LOG.warning("Error updating MySQL components: %r", e)
+            return Result(ResultType.FAILED, str(e))
+
+        # Get mysql-related apps to wait for
+        mysql_apps = [MYSQL_APP]
+        try:
+            apps = self.jhelper.get_application_names(self.model)
+            mysql_apps.extend([app for app in apps if app.endswith("-mysql-router")])
+        except Exception as e:
+            LOG.warning("Error getting mysql-router apps to wait for: %s", e)
+
+        # Wait only for mysql and mysql-router applications
+        try:
+            self.update_status(context, "waiting for MySQL services to settle")
+            LOG.debug("Waiting for MySQL applications: %s", mysql_apps)
+            self.jhelper.wait_until_active(
+                model=self.model,
+                apps=mysql_apps,
+                timeout=1200,
+            )
+        except (JujuWaitException, TimeoutError) as e:
+            LOG.warning("Error waiting for MySQL applications: %r", e)
+            return Result(ResultType.FAILED, str(e))
+
+        return Result(ResultType.COMPLETED)

@@ -76,11 +76,11 @@ resource "juju_application" "microovn" {
 }
 
 resource "juju_application" "microovn_arm64" {
-  count        = length(var.microovn_arm64_machine_ids) > 0 ? 1 : 0
-  name         = "microovn-arm64"
-  model_uuid   = data.juju_model.machine_model.uuid
-  machines     = toset(var.microovn_arm64_machine_ids)
-  constraints  = "arch=arm64"
+  count       = length(var.microovn_arm64_machine_ids) > 0 ? 1 : 0
+  name        = "microovn-arm64"
+  model_uuid  = data.juju_model.machine_model.uuid
+  machines    = toset(var.microovn_arm64_machine_ids)
+  constraints = "arch=arm64"
 
   charm {
     name    = "microovn"
