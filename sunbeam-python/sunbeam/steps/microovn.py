@@ -54,6 +54,14 @@ def _role_distributor_application_name(jhelper: JujuHelper, model: str) -> str |
     return ROLE_DISTRIBUTOR_APP
 
 
+def _microovn_accepted_statuses(ovn_manager: ovn.OvnManager) -> list[str]:
+    """Return statuses accepted while waiting for MicroOVN."""
+    statuses = ["active", "unknown"]
+    if ovn_manager.get_provider() == ovn.OvnProvider.OVN_K8S:
+        statuses.append("blocked")
+    return statuses
+
+
 class DeployMicroOVNApplicationStep(DeployMachineApplicationStep):
     """Deploy MicroOVN application using Terraform."""
 
@@ -85,6 +93,10 @@ class DeployMicroOVNApplicationStep(DeployMachineApplicationStep):
     def get_application_timeout(self) -> int:
         """Return application timeout in seconds."""
         return MICROOVN_APP_TIMEOUT
+
+    def get_accepted_application_status(self) -> list[str]:
+        """Accepted status to pass wait_application_ready function."""
+        return _microovn_accepted_statuses(self.ovn_manager)
 
     def extra_tfvars(self) -> dict:
         """Extra terraform vars to pass to terraform apply."""
@@ -229,7 +241,7 @@ class ReapplyMicroOVNTerraformPlanStep(BaseStep):
                 network_configs
             )
 
-        statuses = ["active", "unknown"]
+        statuses = _microovn_accepted_statuses(self.ovn_manager)
         try:
             self.tfhelper.update_tfvars_and_apply_tf(
                 self.client,

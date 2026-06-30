@@ -59,6 +59,24 @@ class TestDeployMicroOVNApplicationStep:
         timeout = deploy_microovn_step.get_application_timeout()
         assert timeout == 1200
 
+    def test_get_accepted_application_status_allows_blocked_for_ovn_k8s(
+        self, deploy_microovn_step, ovn_manager
+    ):
+        ovn_manager.get_provider.return_value = ovn.OvnProvider.OVN_K8S
+
+        statuses = deploy_microovn_step.get_accepted_application_status()
+
+        assert statuses == ["active", "unknown", "blocked"]
+
+    def test_get_accepted_application_status_excludes_blocked_for_microovn_provider(
+        self, deploy_microovn_step, ovn_manager
+    ):
+        ovn_manager.get_provider.return_value = ovn.OvnProvider.MICROOVN
+
+        statuses = deploy_microovn_step.get_accepted_application_status()
+
+        assert statuses == ["active", "unknown"]
+
     def test_extra_tfvars(
         self,
         deploy_microovn_step,
@@ -335,6 +353,52 @@ class TestReapplyMicroOVNTerraformPlanStep:
                 "charm_openstack_network_agents_config"
             ]["external-bridge-address"]
             == "10.0.0.1/24"
+        )
+
+    def test_run_allows_blocked_status_for_ovn_k8s(
+        self,
+        reapply_microovn_terraform_step,
+        basic_jhelper,
+        step_context,
+    ):
+        reapply_microovn_terraform_step.ovn_manager.get_provider.return_value = (
+            ovn.OvnProvider.OVN_K8S
+        )
+
+        with patch(
+            "sunbeam.steps.microovn.get_external_network_configs", return_value={}
+        ):
+            result = reapply_microovn_terraform_step.run(step_context)
+
+        assert result.result_type == ResultType.COMPLETED
+        basic_jhelper.wait_application_ready.assert_called_once_with(
+            "microovn",
+            "test-model",
+            accepted_status=["active", "unknown", "blocked"],
+            timeout=1200,
+        )
+
+    def test_run_excludes_blocked_status_for_microovn_provider(
+        self,
+        reapply_microovn_terraform_step,
+        basic_jhelper,
+        step_context,
+    ):
+        reapply_microovn_terraform_step.ovn_manager.get_provider.return_value = (
+            ovn.OvnProvider.MICROOVN
+        )
+
+        with patch(
+            "sunbeam.steps.microovn.get_external_network_configs", return_value={}
+        ):
+            result = reapply_microovn_terraform_step.run(step_context)
+
+        assert result.result_type == ResultType.COMPLETED
+        basic_jhelper.wait_application_ready.assert_called_once_with(
+            "microovn",
+            "test-model",
+            accepted_status=["active", "unknown"],
+            timeout=1200,
         )
 
 
