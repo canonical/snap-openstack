@@ -49,7 +49,7 @@ console = Console()
 # Based on Juju's naming rules: must start with letter, contain only
 # letters, numbers, hyphens. Cannot end with hyphen, cannot have
 # consecutive hyphens, cannot end with a purely numeric segment
-JUJU_APP_NAME_PATTERN = re.compile(r"^[a-z]([a-z0-9]*(-[a-z0-9]*)*)?$")
+JUJU_APP_NAME_PATTERN = re.compile(r"^(?:[a-z][a-z0-9]*(?:-[a-z0-9]*[a-z][a-z0-9]*)*)$")
 
 # Regex pattern for validating FQDN (Fully Qualified Domain Name)
 FQDN_PATTERN = (
