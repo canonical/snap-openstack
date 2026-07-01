@@ -75,8 +75,7 @@ MACHINE_CHARMS = {
     "microceph": MICROCEPH_CHANNEL,
     "microovn": MICROOVN_CHANNEL,
     "openstack-network-agents": OPENSTACK_CHANNEL,
-    # TODO: ensure correct channel for the distributor
-    "microcluster-token-distributor": "latest/edge",
+    "microcluster-token-distributor": "v1/stable",
     "sunbeam-ovn-proxy": OPENSTACK_CHANNEL,
     "k8s": K8S_CHANNEL,
     "openstack-hypervisor": OPENSTACK_CHANNEL,
