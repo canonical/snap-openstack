@@ -150,6 +150,30 @@ class ClusterStatusStep(abc.ABC, BaseStep):
             status[node] = _status.get("status")
         return status
 
+    def _get_node_roles_by_machine(self) -> dict[str, set[str]]:
+        """Return mapping of machine_id to set of assigned roles from clusterd.
+
+        Used to filter application-to-column mapping so that applications
+        deployed to multiple roles (e.g. microovn) only show in the column
+        corresponding to the node's actual assigned role.
+        """
+        client = self.deployment.get_client()
+        try:
+            nodes = client.cluster.list_nodes()
+        except ClusterServiceUnavailableException:
+            LOG.debug("Failed to fetch node roles", exc_info=True)
+            return {}
+        roles_by_machine: dict[str, set[str]] = {}
+        for node in nodes:
+            machine_id = node.get("machineid")
+            if machine_id in (-1, None):
+                continue
+            roles = node.get("role", [])
+            if isinstance(roles, str):
+                roles = [roles]
+            roles_by_machine[str(machine_id)] = {r.lower() for r in roles}
+        return roles_by_machine
+
     def _get_application_status_per_machine(self, model: str) -> dict:
         """Return status of every units of applications in a given model.
 
@@ -191,7 +215,19 @@ class ClusterStatusStep(abc.ABC, BaseStep):
             }
         return machines_status
 
-    def _to_status(self, status: dict, application_column_mapping: dict) -> dict:
+    # Applications that are deployed to nodes regardless of their assigned role.
+    # Mapping: application -> the column it represents.
+    # The column will only be shown if the node actually has that role assigned.
+    _role_restricted_applications: dict[str, str] = {
+        microovn.APPLICATION: "network",
+    }
+
+    def _to_status(
+        self,
+        status: dict,
+        application_column_mapping: dict,
+        roles_by_machine: dict[str, set[str]] | None = None,
+    ) -> dict:
         """Return dict to the correct status format.
 
         Return format:
@@ -215,6 +251,16 @@ class ClusterStatusStep(abc.ABC, BaseStep):
                         column = application_column_mapping.get(app)
                         if column is None:
                             continue
+                        # For role-restricted applications, only show the column
+                        # if the node actually has the corresponding role assigned.
+                        if (
+                            roles_by_machine
+                            and app in self._role_restricted_applications
+                        ):
+                            required_role = self._role_restricted_applications[app]
+                            machine_roles = roles_by_machine.get(machine, set())
+                            if required_role not in machine_roles:
+                                continue
                         _status[column] = self.map_application_status(
                             app, app_status["status"]
                         )
@@ -244,7 +290,8 @@ class ClusterStatusStep(abc.ABC, BaseStep):
                 self._get_application_status_per_machine(model),
             )
         self._update_microcluster_status(status, self._get_microcluster_status())
-        return self._to_status(status, self.applications_to_columns())
+        roles_by_machine = self._get_node_roles_by_machine()
+        return self._to_status(status, self.applications_to_columns(), roles_by_machine)
 
     def run(self, context: StepContext) -> Result:
         """Run the step to completion."""
