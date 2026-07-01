@@ -330,6 +330,24 @@ class TestLocalSetHypervisorUnitsOptionsStep(BaseTestSetHypervisorUnitsOptionsSt
         machine_name = self.get_machine_name()
         assert step.bridge_mappings[machine_name] == "br-physnet1:physnet1:ens1f0"
 
+    def test_network_agents_prompt_skips_compute_only_host(self):
+        self.load_answers.return_value = {"user": {"remote_access_location": "remote"}}
+        self.cclient.cluster.get_node_info.return_value = {
+            "role": ["compute"],
+        }
+        step = local_steps.LocalSetOpenStackNetworkAgentsStep(
+            self.cclient,
+            "maas0.local",
+            self.jhelper,
+            "test-model",
+        )
+
+        with patch.object(nic_utils, "fetch_nics_from_subordinate") as fetch_nics:
+            step.prompt()
+
+        assert step.bridge_mappings["maas0.local"] is None
+        fetch_nics.assert_not_called()
+
 
 class TestLocalClusterStatusStep:
     def test_run(self, deployment, jhelper, step_context):

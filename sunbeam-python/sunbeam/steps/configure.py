@@ -499,6 +499,7 @@ class SetExternalNetworkUnitsOptionsStep(BaseStep, UnitGetterMixin):
     APP: str
     DISPLAY_NAME: str
     ACTION: str
+    SUPPORTS_CHASSIS_AS_GW: bool = False
 
     def __init__(
         self,
@@ -546,10 +547,6 @@ class SetExternalNetworkUnitsOptionsStep(BaseStep, UnitGetterMixin):
 
     def run(self, context: StepContext) -> Result:
         """Apply individual unit settings."""
-        from sunbeam.feature_gates import split_roles_enabled
-
-        split_roles = split_roles_enabled()
-
         for name in self.names:
             self.update_status(context, f"setting configuration for {name}")
             bridge_mapping = self.bridge_mappings.get(name)
@@ -557,13 +554,8 @@ class SetExternalNetworkUnitsOptionsStep(BaseStep, UnitGetterMixin):
             node_roles = node.get("role", [])
             is_network_node = "network" in node_roles
 
-            if bridge_mapping is None and not split_roles:
-                LOG.debug("No NIC found for %s, skipping", name)
-                continue
-
-            # When split-roles is active, only network nodes get
-            # bridge mappings; other nodes only need enable-chassis-as-gw.
-            if split_roles and not is_network_node:
+            # Only network nodes get bridge mappings.
+            if not is_network_node:
                 bridge_mapping = None
 
             self.machine_id = str(node.get("machineid"))
@@ -572,7 +564,7 @@ class SetExternalNetworkUnitsOptionsStep(BaseStep, UnitGetterMixin):
             action_params: dict[str, str | bool] = {}
             if bridge_mapping is not None:
                 action_params["bridge-mapping"] = bridge_mapping
-            if split_roles:
+            if self.SUPPORTS_CHASSIS_AS_GW:
                 action_params["enable-chassis-as-gw"] = is_network_node
 
             try:
