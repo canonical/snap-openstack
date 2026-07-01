@@ -50,7 +50,7 @@ core:
         config:
           snap-channel: 2024.1/beta
       microcluster-token-distributor:
-        channel: latest/edge
+        channel: v1/stable
       sunbeam-ovn-proxy:
         channel: 2024.1/beta
 features:

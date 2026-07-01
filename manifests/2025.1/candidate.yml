@@ -46,7 +46,7 @@ core:
         config:
           snap-channel: 2025.1/candidate
       microcluster-token-distributor:
-        channel: latest/edge
+        channel: v1/stable
       sunbeam-ovn-proxy:
         channel: 2025.1/candidate
 features:
