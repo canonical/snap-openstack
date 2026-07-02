@@ -30,7 +30,6 @@ from sunbeam.core.terraform import (
     TerraformHelper,
     TerraformStateLockedException,
 )
-from sunbeam.feature_gates import split_roles_enabled
 
 CONFIG_KEY = "TerraformVarsRoleDistributorPlan"
 APPLICATION = "role-distributor"
@@ -67,7 +66,6 @@ def _role_distributor_extra_tfvars(
     role_mapping = build_microovn_role_mapping(
         client,
         model,
-        split_roles_enabled(),
         microovn_machine_ids,
         assign_central_roles=(
             deployment.get_ovn_manager().get_provider() == OvnProvider.MICROOVN

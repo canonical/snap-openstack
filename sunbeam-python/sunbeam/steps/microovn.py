@@ -33,7 +33,6 @@ from sunbeam.core.terraform import (
     TerraformHelper,
     TerraformStateLockedException,
 )
-from sunbeam.feature_gates import is_feature_gate_enabled
 from sunbeam.steps.configure import get_external_network_configs
 
 LOG = logging.getLogger(__name__)
@@ -53,6 +52,14 @@ def _role_distributor_application_name(jhelper: JujuHelper, model: str) -> str |
     except ApplicationNotFoundException:
         return None
     return ROLE_DISTRIBUTOR_APP
+
+
+def _microovn_accepted_statuses(ovn_manager: ovn.OvnManager) -> list[str]:
+    """Return statuses accepted while waiting for MicroOVN."""
+    statuses = ["active", "unknown"]
+    if ovn_manager.get_provider() == ovn.OvnProvider.OVN_K8S:
+        statuses.append("blocked")
+    return statuses
 
 
 class DeployMicroOVNApplicationStep(DeployMachineApplicationStep):
@@ -86,6 +93,10 @@ class DeployMicroOVNApplicationStep(DeployMachineApplicationStep):
     def get_application_timeout(self) -> int:
         """Return application timeout in seconds."""
         return MICROOVN_APP_TIMEOUT
+
+    def get_accepted_application_status(self) -> list[str]:
+        """Accepted status to pass wait_application_ready function."""
+        return _microovn_accepted_statuses(self.ovn_manager)
 
     def extra_tfvars(self) -> dict:
         """Extra terraform vars to pass to terraform apply."""
@@ -230,7 +241,7 @@ class ReapplyMicroOVNTerraformPlanStep(BaseStep):
                 network_configs
             )
 
-        statuses = ["active", "unknown"]
+        statuses = _microovn_accepted_statuses(self.ovn_manager)
         try:
             self.tfhelper.update_tfvars_and_apply_tf(
                 self.client,
@@ -354,18 +365,12 @@ class SetOvnProviderStep(BaseStep):
     def get_config_from_snap(self, snap: Snap) -> ovn.OvnProvider:
         """Get OVN provider from snap configuration.
 
-        Returns MICROOVN only if both conditions are met:
-        1. The feature gate 'feature.microovn-sdn' is enabled
-        2. The provider config 'ovn.provider' is set to 'microovn'
+        Returns MICROOVN only when the provider config 'ovn.provider' is set
+        to 'microovn'.
 
         :param snap: the snap instance
         :return: the OVN provider
         """
-        # Check if MicroOVN feature gate is enabled
-        if not is_feature_gate_enabled("feature.microovn-sdn", snap):
-            return ovn.DEFAULT_PROVIDER
-
-        # Check if provider is explicitly set to microovn
         try:
             provider_value = snap.config.get(ovn.SNAP_PROVIDER_CONFIG_KEY)
             if provider_value:

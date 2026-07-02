@@ -223,23 +223,14 @@ class FeatureGateMixin:
 # Example gates:
 # - feature.multi-region: Gates multi-region deployment options and
 #                         region_controller role
-# - feature.microovn-sdn: Gates MicroOVN SDN provider option
 # - feature.experimental: Gates experimental features
 #
 FEATURE_GATES: dict[str, dict[str, bool | list[str]]] = {
     "feature.multi-region": {
         "generally_available": False,  # TODO: Set to True when multi-region is GA
     },
-    "feature.microovn-sdn": {
-        "generally_available": False,  # TODO: Set to True when MicroOVN is GA
-    },
-    "feature.split-roles": {
-        "generally_available": False,  # TODO: Set to True when split-roles is GA
-        "requires": ["feature.microovn-sdn"],
-    },
     "feature.loadbalancer-amphora": {
         "generally_available": False,  # TODO: Set to True when Amphora support is GA
-        "requires": ["feature.microovn-sdn"],
     },
 }
 
@@ -282,16 +273,6 @@ def is_feature_gate_enabled(
         return bool(snap.config.get(gate_key))
     except (UnknownConfigKey, SnapCtlError):
         return False
-
-
-def split_roles_enabled(snap: Optional[Snap] = None) -> bool:
-    """Check if the split-roles feature gate is enabled.
-
-    When enabled, compute and network roles become independent:
-    - Compute + network can co-locate on the same node
-    - Compute-only nodes do not act as OVN gateways
-    """
-    return is_feature_gate_enabled("feature.split-roles", snap)
 
 
 def _get_feature_gate_states(snap: Snap) -> dict[str, bool]:
