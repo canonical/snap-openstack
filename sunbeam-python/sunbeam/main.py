@@ -20,6 +20,7 @@ from sunbeam.commands import openrc as openrc_cmds
 from sunbeam.commands import plans as plans_cmd
 from sunbeam.commands import prepare_node as prepare_node_cmds
 from sunbeam.commands import proxy as proxy_cmds
+from sunbeam.commands import restore as restore_cmds
 from sunbeam.commands import sso as sso_cmd
 from sunbeam.commands import utils as utils_cmds
 from sunbeam.core import deployments as deployments_jobs
