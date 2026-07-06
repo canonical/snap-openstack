@@ -9,6 +9,7 @@ import click
 from snaphelpers import Snap
 
 from sunbeam import log
+from sunbeam.commands import backup as backup_cmds
 from sunbeam.commands import configure as configure_cmds
 from sunbeam.commands import dashboard as dashboard_cmds
 from sunbeam.commands import generate_cloud_config as generate_cloud_config_cmds
@@ -123,6 +124,8 @@ def main():
     cli.add_command(launch_cmds.launch)
     cli.add_command(openrc_cmds.openrc)
     cli.add_command(dashboard_cmds.dashboard)
+    cli.add_command(backup_cmds.backup)
+    cli.add_command(restore_cmds.restore)
 
     # Add identity group
     cli.add_command(identity_group)
