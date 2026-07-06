@@ -48,7 +48,7 @@ variable "openstack_network_agents_endpoint_bindings" {
 variable "charm_microcluster_token_distributor_channel" {
   description = "Operator channel for microcluster-token-distributor deployment"
   type        = string
-  default     = "latest/edge"
+  default     = "v1/stable"
 }
 
 variable "charm_microcluster_token_distributor_revision" {

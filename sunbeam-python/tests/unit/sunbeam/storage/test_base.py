@@ -34,6 +34,9 @@ class TestJujuApplicationNameValidation:
             "a1",
             "app123",
             "my-storage",
+            "my-hpe3par",
+            "cinder-vol3",
+            "backend-v2storage",
         ]
         for name in valid_names:
             assert validate_juju_application_name(name), f"{name} should be valid"
@@ -48,7 +51,8 @@ class TestJujuApplicationNameValidation:
             "-myapp",  # Starts with hyphen
             "myapp-",  # Ends with hyphen
             "my--app",  # Consecutive hyphens
-            "my-app-1",  # Number after final hyphen
+            "my-app-1",  # Purely numeric segment after final hyphen
+            "my-app-123",  # Purely numeric segment after final hyphen
         ]
         for name in invalid_names:
             assert not validate_juju_application_name(name), f"{name} should be invalid"

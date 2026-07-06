@@ -83,8 +83,6 @@ from sunbeam.core.terraform import TerraformInitStep
 from sunbeam.feature_gates import (
     feature_gate_command,
     feature_gate_option,
-    get_feature_gate_from_cluster,
-    split_roles_enabled,
 )
 from sunbeam.provider.base import ProviderBase
 from sunbeam.provider.common.multiregion import connect_to_region_controller
@@ -608,7 +606,7 @@ def deploy_and_migrate_juju_controller(
     "--role",
     "roles",
     multiple=True,
-    default=["control", "compute"],
+    default=["control", "compute", "network"],
     callback=validate_roles,
     help="Specify additional roles for the bootstrap node. "
     "Possible values: compute, storage, network, region_controller. "
@@ -674,13 +672,8 @@ def bootstrap(  # noqa: C901
     is_control_node = any(role.is_control_node() for role in roles)
     is_compute_node = any(role.is_compute_node() for role in roles)
     is_storage_node = any(role.is_storage_node() for role in roles)
-    is_network_node = any(role.is_network_node() for role in roles)
     is_region_controller = any(role.is_region_controller() for role in roles)
 
-    if is_network_node and is_compute_node and not split_roles_enabled():
-        raise click.ClickException(
-            "A node cannot be both a compute and network node at the same time."
-        )
     if is_region_controller and len(roles) > 1:
         raise click.ClickException(
             "The region controller role is mutually exclusive with all other roles."
@@ -1408,7 +1401,6 @@ def join(  # noqa: C901
     is_control_node = any(role.is_control_node() for role in roles)
     is_compute_node = any(role.is_compute_node() for role in roles)
     is_storage_node = any(role.is_storage_node() for role in roles)
-    is_network_node = any(role.is_network_node() for role in roles)
     is_region_controller = any(role.is_region_controller() for role in roles)
 
     if is_region_controller and len(roles) > 1:
@@ -1461,17 +1453,6 @@ def join(  # noqa: C901
 
     plan1 = [ClusterJoinNodeStep(client, token, ip, name, roles_str)]
     run_plan(plan1, console, show_hints)
-
-    if is_network_node and is_compute_node:
-        split_roles_in_cluster = get_feature_gate_from_cluster(
-            "feature.split-roles",
-            client,
-        )
-        if not split_roles_in_cluster:
-            raise click.ClickException(
-                "A node cannot be both a compute and network node at the same "
-                "time because feature.split-roles is not enabled in cluster state."
-            )
 
     try:
         deployments_from_db = read_config(client, DEPLOYMENTS_CONFIG_KEY)
@@ -1645,9 +1626,7 @@ def join(  # noqa: C901
                 deployment.get_ovn_manager(),
             )
         )
-        if ovn_manager.is_network_agent_dataplane_node(roles) or (
-            split_roles_enabled() and microovn_necessary
-        ):
+        if ovn_manager.is_network_agent_dataplane_node(roles) or microovn_necessary:
             plan4.append(
                 LocalSetOpenStackNetworkAgentsStep(
                     client,
@@ -2160,10 +2139,7 @@ def configure_cmd(
 
     if "network" in node["role"] or (
         is_microovn_deployment
-        and (
-            "compute" in node["role"]
-            or (split_roles_enabled() and "control" in node["role"])
-        )
+        and ("compute" in node["role"] or "control" in node["role"])
     ):
         role_distributor_tfhelper = deployment.get_tfhelper("role-distributor-plan")
         microovn_tfhelper = deployment.get_tfhelper("microovn-plan")

@@ -56,7 +56,6 @@ from sunbeam.core.juju import (
 from sunbeam.core.manifest import Manifest
 from sunbeam.core.steps import CreateLoadBalancerIPPoolsStep
 from sunbeam.core.terraform import TerraformHelper
-from sunbeam.feature_gates import split_roles_enabled
 from sunbeam.lazy import LazyImport
 from sunbeam.provider.common import nic_utils
 from sunbeam.steps import clusterd
@@ -471,14 +470,11 @@ class MachineComputeNicCheck(DiagnosticsCheck):
             )
 
         is_network_node = maas_deployment.RoleTags.NETWORK.value in assigned_roles
-        is_compute_node = maas_deployment.RoleTags.COMPUTE.value in assigned_roles
-        needs_neutron_nic = is_network_node or (
-            is_compute_node and not split_roles_enabled()
-        )
+        needs_neutron_nic = is_network_node
 
         has_nic = self._has_neutron_nic()
 
-        if not needs_neutron_nic and has_nic and split_roles_enabled():
+        if not needs_neutron_nic and has_nic:
             return DiagnosticsResult.warn(
                 self.name,
                 "machine has a neutron-tagged NIC but does not have"
@@ -500,7 +496,6 @@ class MachineComputeNicCheck(DiagnosticsCheck):
                 machine=self.machine["hostname"],
             )
 
-        role_hint = "network" if split_roles_enabled() else "compute/network"
         return DiagnosticsResult.fail(
             self.name,
             "no neutron NIC found",
@@ -510,7 +505,7 @@ class MachineComputeNicCheck(DiagnosticsCheck):
                 '{self.NEUTRON_TAG_PREFIX}<physnet>' """
                 f"""(e.g. {self.NEUTRON_TAG_PREFIX}physnet1)
                 to be a part of an openstack deployment. Either add a
-                neutron-tagged NIC to the machine or remove the {role_hint} role.
+                neutron-tagged NIC to the machine or remove the network role.
                 More on assigning tags: https://maas.io/docs/how-to-use-network-tags
                 """
             ),
@@ -2209,21 +2204,14 @@ class MaasSetExternalNetworkUnitsOptionsStep(SetExternalNetworkUnitsOptionsStep)
 
         for machine, nic in bridge_mappings.items():
             if nic is None:
-                if split_roles_enabled():
-                    node = self.client.cluster.get_node_info(machine)
-                    node_roles = node.get("role", [])
-                    if "network" in node_roles:
-                        return Result(
-                            ResultType.FAILED,
-                            f"Machine {machine} does not have any"
-                            " neutron:* nic defined.",
-                        )
-                else:
+                node = self.client.cluster.get_node_info(machine)
+                node_roles = node.get("role", [])
+                if "network" in node_roles:
                     return Result(
                         ResultType.FAILED,
                         f"Machine {machine} does not have any neutron:* nic defined.",
                     )
-            elif split_roles_enabled():
+            else:
                 node = self.client.cluster.get_node_info(machine)
                 node_roles = node.get("role", [])
                 if "network" not in node_roles:
@@ -2255,6 +2243,7 @@ class MaasSetOpenStackNetworkAgentsStep(
     APP = "openstack-network-agents"
     DISPLAY_NAME = "network agents"
     ACTION = "set-network-agents-local-settings"
+    SUPPORTS_CHASSIS_AS_GW = True
 
 
 class MaasUserQuestions(BaseUserQuestions):

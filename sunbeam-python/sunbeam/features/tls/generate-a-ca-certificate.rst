@@ -29,6 +29,16 @@ Create the following configuration file to define the CA settings. Save it as `c
    ::
 
         cat <<EOF > ca.conf
+        [ req ]
+        prompt = yes
+        distinguished_name = req_distinguished_name
+
+        [ req_distinguished_name ]
+        countryName = Country Name (2 letter code)
+        stateOrProvinceName = State or Province Name
+        organizationName = Organization Name
+        commonName = Common Name
+
         [ ca ]
         default_ca = CA_default
 
@@ -44,10 +54,15 @@ Create the following configuration file to define the CA settings. Save it as `c
         default_crl_days  =  30
         default_md        = sha256
         policy = policy_anything
-        x509_extensions = v3_ca
+        x509_extensions = v3_intermediate_ca
 
-        [ v3_ca ]
-        basicConstraints = critical,CA:true
+        [ v3_root_ca ]
+        basicConstraints = critical,CA:true,pathlen:2
+        keyUsage = critical, keyCertSign, cRLSign
+
+        [ v3_intermediate_ca ]
+        basicConstraints = critical,CA:true,pathlen:1
+        keyUsage = critical, keyCertSign, cRLSign
 
         [ policy_anything ]
         countryName = optional
@@ -56,23 +71,23 @@ Create the following configuration file to define the CA settings. Save it as `c
         organizationalUnitName = optional
         commonName = supplied
 
-        [alt_names]
-        DNS.1 = <commonName>
-
         EOF
 
 .. note::
-    Replace `<commonName>` in the `alt_names` section with the common name you want to use for the root CA certificate.
+    Use a descriptive common name for the root CA certificate, such as
+    `root.sunbeam.example`.
 
 Generate the root CA private key and certificate:
 
    ::
 
         openssl genrsa -out rootca.key 8192
-        openssl req -sha256 -new -x509 -days 3650 -key rootca.key -out rootca.crt
+        openssl req -sha256 -new -x509 -days 3650 -key rootca.key \
+            -config ca.conf -extensions v3_root_ca -out rootca.crt
 
 .. note::
-   During the certificate generation, you will be prompted to enter information such as country, state, organization, and common name. Ensure that the common name matches the one specified in the `alt_names` section of the configuration file.
+   During the certificate generation, you will be prompted to enter information
+   such as country, state, organization, and common name.
 
 Generate the Intermediate CA Certificate
 ----------------------------------------
@@ -87,7 +102,8 @@ Create the intermediate CA CSR:
 
    ::
 
-        openssl req -sha256 -new -key interca1.key -out interca1.csr
+        openssl req -sha256 -new -key interca1.key -config ca.conf \
+            -out interca1.csr
 
 .. note::
    During the CSR generation, you will be prompted to enter information similar to the root CA certificate. Skip challenge password and optional company name
@@ -96,13 +112,24 @@ Sign the intermediate CSR using the root CA:
 
    ::
 
-        openssl ca -batch -config ca.conf -notext -in interca1.csr -out interca1.crt
+        openssl ca -batch -config ca.conf -extensions v3_intermediate_ca \
+            -notext -in interca1.csr -out interca1.crt
 
 Generate the CA chain file:
 
    ::
 
         cat interca1.crt rootca.crt > ca-chain.pem
+
+Verify that the intermediate certificate is a valid signing CA:
+
+   ::
+
+        openssl verify -CAfile rootca.crt interca1.crt
+        openssl x509 -in interca1.crt -noout -ext basicConstraints -ext keyUsage
+
+The verification command should return `interca1.crt: OK`, and the key usage
+should include `Certificate Sign, CRL Sign`.
 
 
 Generate the CA required for Vault
@@ -128,10 +155,11 @@ To generate the CA required for Vault, a new CA configuration file is needed. Cr
         default_crl_days  =  30
         default_md        = sha256
         policy = policy_anything
-        x509_extensions = v3_ca
+        x509_extensions = v3_vault_ca
 
-        [ v3_ca ]
-        basicConstraints = critical,CA:true
+        [ v3_vault_ca ]
+        basicConstraints = critical,CA:true,pathlen:0
+        keyUsage = critical, keyCertSign, cRLSign
 
         [ policy_anything ]
         countryName = optional
@@ -140,13 +168,11 @@ To generate the CA required for Vault, a new CA configuration file is needed. Cr
         organizationalUnitName = optional
         commonName = supplied
 
-        [alt_names]
-        DNS.1 = <commonName>
-
         EOF
 
 .. note::
-    Replace `<commonName>` in the `alt_names` section with the common name defined in Vault' config as `common_name`.
+    When generating the Vault CA CSR, use the common name defined in Vault's
+    config as `pki_ca_common_name`.
 
 Sign the Vault CA CSR using the intermediate CA:
 
@@ -155,7 +181,18 @@ Sign the Vault CA CSR using the intermediate CA:
 
    ::
 
-        openssl ca -batch -config vault-ca.conf -notext -in vault.csr -out vault.crt
+        openssl ca -batch -config vault-ca.conf -extensions v3_vault_ca \
+            -notext -in vault.csr -out vault.crt
+
+Verify that the Vault CA certificate can be used as an issuer:
+
+   ::
+
+        openssl verify -CAfile ca-chain.pem vault.crt
+        openssl x509 -in vault.crt -noout -ext basicConstraints -ext keyUsage
+
+The verification command should return `vault.crt: OK`, and the key usage should
+include `Certificate Sign, CRL Sign`.
 
 .. note::
     The `vault.crt` file is the CA certificate that Vault will use to issue TLS certificates, and it should be provided via the `sunbeam tls vault unit_certs` command.

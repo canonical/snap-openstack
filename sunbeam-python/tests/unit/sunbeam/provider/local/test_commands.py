@@ -146,19 +146,8 @@ class TestAddNodeGrantModels:
 
 
 class TestJoinNodeValidation:
-    """Test join validation behavior for gated roles."""
+    """Test join validation behavior for role combinations."""
 
-    @pytest.mark.parametrize(
-        ("split_roles_in_cluster", "expected_exception", "expected_message"),
-        [
-            (
-                False,
-                click.ClickException,
-                "feature\\.split-roles is not enabled in cluster state",
-            ),
-            (True, RuntimeError, "after-validation"),
-        ],
-    )
     @patch("sunbeam.provider.local.commands.read_config")
     @patch("sunbeam.provider.local.commands.DeploymentsConfig.load")
     @patch("sunbeam.provider.local.commands.deployment_path", return_value="/tmp")
@@ -175,10 +164,8 @@ class TestJoinNodeValidation:
     )
     @patch("sunbeam.provider.local.commands.run_plan")
     @patch("sunbeam.provider.local.commands.run_preflight_checks")
-    @patch("sunbeam.provider.local.commands.get_feature_gate_from_cluster")
     def test_join_validates_compute_and_network_after_cluster_join(
         self,
-        _get_feature_gate_from_cluster,
         run_preflight_checks,
         run_plan,
         _get_local_cidr_matching_token,
@@ -189,23 +176,18 @@ class TestJoinNodeValidation:
         _deployment_path,
         deployments_load,
         read_config,
-        split_roles_in_cluster,
-        expected_exception,
-        expected_message,
     ):
-        """Join should validate compute+network against cluster split-roles state."""
+        """Join should allow compute+network roles."""
         deployment = Mock()
         deployment.get_client.return_value = Mock()
         deployment.juju_controller = Mock()
         deployment.juju_account = Mock()
         deployments_load.return_value = Mock()
         snap_cls.return_value.paths.user_data = "/tmp"
-        _get_feature_gate_from_cluster.return_value = split_roles_in_cluster
-        if split_roles_in_cluster:
-            read_config.side_effect = RuntimeError("after-validation")
+        read_config.side_effect = RuntimeError("after-validation")
 
         ctx = click.Context(join, obj=deployment)
-        with ctx, pytest.raises(expected_exception, match=expected_message):
+        with ctx, pytest.raises(RuntimeError, match="after-validation"):
             join.callback(
                 token="token",
                 roles=[Role.COMPUTE, Role.NETWORK],

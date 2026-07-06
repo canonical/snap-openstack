@@ -69,7 +69,7 @@ from sunbeam.core.juju import (
 from sunbeam.core.manifest import AddManifestStep
 from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.core.terraform import TerraformInitStep
-from sunbeam.feature_gates import feature_gate_option, split_roles_enabled
+from sunbeam.feature_gates import feature_gate_option
 from sunbeam.provider.base import ProviderBase
 from sunbeam.provider.common.multiregion import connect_to_region_controller
 from sunbeam.provider.maas.client import (
@@ -1075,10 +1075,11 @@ def configure_cmd(
         map(_name_mapper, client.cluster.list_nodes_by_role(RoleTags.NETWORK.value))
     )
     ovn_manager = deployment.get_ovn_manager()
-    # When split-roles is active, all nodes with microovn + network-agents
-    # need the action called. Only network nodes get enable-chassis-as-gw=true;
-    # compute-only and control-only get enable-chassis-as-gw=false.
-    if split_roles_enabled():
+    network_agents_names = network
+    if ovn_manager.get_provider() == ovn.OvnProvider.MICROOVN:
+        # All nodes with MicroOVN network agents need the action called. Only
+        # network nodes get enable-chassis-as-gw=true; compute-only and
+        # control-only nodes get enable-chassis-as-gw=false.
         control = list(
             map(
                 _name_mapper,
@@ -1086,8 +1087,6 @@ def configure_cmd(
             )
         )
         network_agents_names = list(dict.fromkeys(network + compute + control))
-    else:
-        network_agents_names = network
     plan = [
         AddManifestStep(client, manifest_path),
         JujuLoginStep(deployment.juju_account),

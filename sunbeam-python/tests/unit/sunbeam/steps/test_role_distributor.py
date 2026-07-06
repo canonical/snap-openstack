@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
 import yaml
 
@@ -24,10 +24,8 @@ def test_role_distributor_config_is_not_generic_manifest_tfvar():
 
 
 class TestDeployRoleDistributorApplicationStep:
-    @patch("sunbeam.steps.role_distributor.split_roles_enabled", return_value=True)
     def test_extra_tfvars_emits_role_mapping_config(
         self,
-        split_roles_enabled,
         basic_deployment,
         basic_client,
         basic_tfhelper,
@@ -64,12 +62,9 @@ class TestDeployRoleDistributorApplicationStep:
             "2": {"roles": ["chassis", "gateway"]},
         }
         assert extra_tfvars["role_distributor_machine_ids"] == ["0"]
-        split_roles_enabled.assert_called_once()
 
-    @patch("sunbeam.steps.role_distributor.split_roles_enabled", return_value=True)
     def test_extra_tfvars_does_not_assign_central_for_ovn_k8s(
         self,
-        split_roles_enabled,
         basic_deployment,
         basic_client,
         basic_tfhelper,
@@ -104,7 +99,6 @@ class TestDeployRoleDistributorApplicationStep:
         assert role_mapping["openstack-machines"]["microovn"]["machines"] == {
             "0": {"roles": ["chassis", "gateway"]},
         }
-        split_roles_enabled.assert_called_once()
 
     def test_get_accepted_application_status_allows_waiting(
         self,
@@ -229,10 +223,8 @@ class TestReapplyRoleDistributorApplicationStep:
             "openstack-machines",
         )
 
-    @patch("sunbeam.steps.role_distributor.split_roles_enabled", return_value=False)
     def test_run_skips_tf_apply_when_no_targets(
         self,
-        split_roles_enabled,
         basic_deployment,
         basic_client,
         basic_tfhelper,
@@ -255,12 +247,9 @@ class TestReapplyRoleDistributorApplicationStep:
         assert result.result_type == ResultType.SKIPPED
         basic_tfhelper.update_tfvars_and_apply_tf.assert_not_called()
         basic_jhelper.wait_application_ready.assert_not_called()
-        split_roles_enabled.assert_not_called()
 
-    @patch("sunbeam.steps.role_distributor.split_roles_enabled", return_value=False)
     def test_run_waits_for_role_distributor_when_targets_remain(
         self,
-        split_roles_enabled,
         basic_deployment,
         basic_client,
         basic_tfhelper,
@@ -300,16 +289,13 @@ class TestReapplyRoleDistributorApplicationStep:
             kwargs["override_tfvars"]["charm_role_distributor_config"]["role-mapping"]
         )
         assert role_mapping["openstack-machines"]["microovn"]["machines"] == {
-            "1": {"roles": ["chassis", "gateway"]},
+            "1": {"roles": ["chassis"]},
             "2": {"roles": ["chassis", "gateway"]},
         }
         assert kwargs["override_tfvars"]["role_distributor_machine_ids"] == ["0"]
-        split_roles_enabled.assert_called_once()
 
-    @patch("sunbeam.steps.role_distributor.split_roles_enabled", return_value=False)
     def test_run_relocates_to_remaining_control_machine(
         self,
-        split_roles_enabled,
         basic_deployment,
         basic_client,
         basic_tfhelper,
@@ -339,12 +325,9 @@ class TestReapplyRoleDistributorApplicationStep:
         assert result.result_type == ResultType.COMPLETED
         _, _, kwargs = basic_tfhelper.update_tfvars_and_apply_tf.mock_calls[0]
         assert kwargs["override_tfvars"]["role_distributor_machine_ids"] == ["2"]
-        split_roles_enabled.assert_called_once()
 
-    @patch("sunbeam.steps.role_distributor.split_roles_enabled", return_value=False)
     def test_run_fails_when_targets_exist_without_control_machine(
         self,
-        split_roles_enabled,
         basic_deployment,
         basic_client,
         basic_tfhelper,
@@ -372,7 +355,6 @@ class TestReapplyRoleDistributorApplicationStep:
         assert "control" in result.message
         basic_tfhelper.update_tfvars_and_apply_tf.assert_not_called()
         basic_jhelper.wait_application_ready.assert_not_called()
-        split_roles_enabled.assert_not_called()
 
 
 class TestRemoveRoleDistributorUnitsStep:
