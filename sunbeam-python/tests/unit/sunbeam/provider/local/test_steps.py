@@ -355,6 +355,7 @@ class TestLocalClusterStatusStep:
         deployment.get_client().cluster.get_status.return_value = {
             "node-1": {"status": "ONLINE", "address": "10.0.0.1"}
         }
+        deployment.get_client().cluster.list_nodes.return_value = []
 
         step = local_steps.LocalClusterStatusStep(deployment, jhelper)
         result = step.run(step_context)
@@ -368,6 +369,9 @@ class TestLocalClusterStatusStep:
         deployment.get_client().cluster.get_status.return_value = {
             hostname: {"status": "ONLINE", "address": f"{host_ip}:7000"}
         }
+        deployment.get_client().cluster.list_nodes.return_value = [
+            {"name": hostname, "role": ["control"], "machineid": 0}
+        ]
         deployment.openstack_machines_model = model
         jhelper.get_model_status.return_value = Mock(
             machines={
@@ -416,6 +420,9 @@ class TestLocalClusterStatusStep:
         deployment.get_client().cluster.get_status.return_value = {
             hostname: {"status": "ONLINE", "address": f"{host_ip}:7000"}
         }
+        deployment.get_client().cluster.list_nodes.return_value = [
+            {"name": hostname, "role": ["control"], "machineid": 0}
+        ]
         deployment.openstack_machines_model = model
         # missing hostname attribute in model status
         jhelper.get_model_status.return_value = Mock(
@@ -455,6 +462,199 @@ class TestLocalClusterStatusStep:
         actual_status = step._compute_status()
 
         assert expected_status == actual_status
+
+    def test_compute_status_microovn_with_network_role(self, deployment, jhelper):
+        """MicroOVN on a node WITH network role should show 'network' column."""
+        model = "test-model"
+        hostname = "node-1"
+        host_ip = "10.0.0.1"
+
+        deployment.get_client().cluster.get_status.return_value = {
+            hostname: {"status": "ONLINE", "address": f"{host_ip}:7000"}
+        }
+        deployment.get_client().cluster.list_nodes.return_value = [
+            {
+                "name": hostname,
+                "role": ["control", "compute", "network"],
+                "machineid": 0,
+            }
+        ]
+        deployment.openstack_machines_model = model
+        jhelper.get_model_status.return_value = Mock(
+            machines={
+                "0": Mock(
+                    hostname=hostname,
+                    dns_name=host_ip,
+                    machine_status=Mock(current="running"),
+                )
+            },
+            apps={
+                "k8s": Mock(
+                    units={
+                        "k8s/0": Mock(
+                            machine="0",
+                            workload_status=Mock(current="active"),
+                        )
+                    }
+                ),
+                "microovn": Mock(
+                    units={
+                        "microovn/0": Mock(
+                            machine="0",
+                            workload_status=Mock(current="active"),
+                        )
+                    }
+                ),
+            },
+        )
+        expected_status = {
+            model: {
+                "0": {
+                    "hostname": hostname,
+                    "status": {
+                        "cluster": "ONLINE",
+                        "machine": "running",
+                        "control": "active",
+                        "network": "active",
+                    },
+                }
+            }
+        }
+
+        step = local_steps.LocalClusterStatusStep(deployment, jhelper)
+        actual_status = step._compute_status()
+
+        assert expected_status == actual_status
+
+    def test_compute_status_microovn_without_network_role(self, deployment, jhelper):
+        """MicroOVN on a node WITHOUT network role should NOT show 'network' column."""
+        model = "test-model"
+        hostname = "node-1"
+        host_ip = "10.0.0.1"
+
+        deployment.get_client().cluster.get_status.return_value = {
+            hostname: {"status": "ONLINE", "address": f"{host_ip}:7000"}
+        }
+        deployment.get_client().cluster.list_nodes.return_value = [
+            {"name": hostname, "role": ["control", "compute"], "machineid": 0}
+        ]
+        deployment.openstack_machines_model = model
+        jhelper.get_model_status.return_value = Mock(
+            machines={
+                "0": Mock(
+                    hostname=hostname,
+                    dns_name=host_ip,
+                    machine_status=Mock(current="running"),
+                )
+            },
+            apps={
+                "k8s": Mock(
+                    units={
+                        "k8s/0": Mock(
+                            machine="0",
+                            workload_status=Mock(current="active"),
+                        )
+                    }
+                ),
+                "microovn": Mock(
+                    units={
+                        "microovn/0": Mock(
+                            machine="0",
+                            workload_status=Mock(current="active"),
+                        )
+                    }
+                ),
+            },
+        )
+        expected_status = {
+            model: {
+                "0": {
+                    "hostname": hostname,
+                    "status": {
+                        "cluster": "ONLINE",
+                        "machine": "running",
+                        "control": "active",
+                        # "network" should NOT appear here
+                    },
+                }
+            }
+        }
+
+        step = local_steps.LocalClusterStatusStep(deployment, jhelper)
+        actual_status = step._compute_status()
+
+        assert expected_status == actual_status
+        assert "network" not in actual_status[model]["0"]["status"]
+
+    def test_compute_status_microovn_role_filtering_multi_node(
+        self, deployment, jhelper
+    ):
+        """In multi-node, only nodes with network role should show 'network'."""
+        model = "test-model"
+
+        deployment.get_client().cluster.get_status.return_value = {
+            "node-1": {"status": "ONLINE", "address": "10.0.0.1:7000"},
+            "node-2": {"status": "ONLINE", "address": "10.0.0.2:7000"},
+        }
+        deployment.get_client().cluster.list_nodes.return_value = [
+            {
+                "name": "node-1",
+                "role": ["control", "compute", "network"],
+                "machineid": 0,
+            },
+            {"name": "node-2", "role": ["control", "compute"], "machineid": 1},
+        ]
+        deployment.openstack_machines_model = model
+        jhelper.get_model_status.return_value = Mock(
+            machines={
+                "0": Mock(
+                    hostname="node-1",
+                    dns_name="10.0.0.1",
+                    machine_status=Mock(current="running"),
+                ),
+                "1": Mock(
+                    hostname="node-2",
+                    dns_name="10.0.0.2",
+                    machine_status=Mock(current="running"),
+                ),
+            },
+            apps={
+                "k8s": Mock(
+                    units={
+                        "k8s/0": Mock(
+                            machine="0",
+                            workload_status=Mock(current="active"),
+                        ),
+                        "k8s/1": Mock(
+                            machine="1",
+                            workload_status=Mock(current="active"),
+                        ),
+                    }
+                ),
+                "microovn": Mock(
+                    units={
+                        "microovn/0": Mock(
+                            machine="0",
+                            workload_status=Mock(current="active"),
+                        ),
+                        "microovn/1": Mock(
+                            machine="1",
+                            workload_status=Mock(current="active"),
+                        ),
+                    }
+                ),
+            },
+        )
+
+        step = local_steps.LocalClusterStatusStep(deployment, jhelper)
+        actual_status = step._compute_status()
+
+        # node-1 has network role -> should show "network"
+        assert "network" in actual_status[model]["0"]["status"]
+        assert actual_status[model]["0"]["status"]["network"] == "active"
+
+        # node-2 does NOT have network role -> should NOT show "network"
+        assert "network" not in actual_status[model]["1"]["status"]
 
 
 class TestLocalConfigSRIOVStep:
