@@ -1687,7 +1687,12 @@ class MaasDeployMachinesStep(BaseStep):
             deployed_any = True
             self._add_nodes_to_juju(context, batch)
             self._sync_updated_node_machine_ids()
-            self.update_status(context, f"waiting for {batch_label} machines to deploy")
+            wait_message = "waiting for machines to deploy"
+            timeout_message = "Timeout waiting for machines to deploy."
+            if batch_label == "DPU":
+                wait_message = "waiting for DPU machines to deploy"
+                timeout_message = "Timeout waiting for DPU machines to deploy."
+            self.update_status(context, wait_message)
             try:
                 self.jhelper.wait_all_machines_deployed(
                     self.model, MACHINE_DEPLOY_TIMEOUT
@@ -1700,7 +1705,7 @@ class MaasDeployMachinesStep(BaseStep):
                 )
                 return Result(
                     ResultType.FAILED,
-                    f"Timeout waiting for {batch_label} machines to deploy.",
+                    timeout_message,
                 )
 
         if not deployed_any:
