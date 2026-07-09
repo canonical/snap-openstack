@@ -73,10 +73,10 @@ class TestVaultCharmUpgradeStep:
     def test_no_skip_when_manifest_channel_and_revision_match_deployment(
         self, step, basic_jhelper, basic_manifest, step_context
     ):
-        app = Mock(charm_rev=200, charm_channel="1.19/stable", base=None)
+        app = Mock(charm_rev=200, charm_channel=VAULT_CHANNEL, base=None)
         basic_jhelper.get_application.return_value = app
         basic_manifest.find_charm.return_value = Mock(
-            channel="1.19/stable", revision=200
+            channel=VAULT_CHANNEL, revision=200
         )
 
         result = step.is_skip(step_context)
@@ -116,7 +116,7 @@ class TestVaultCharmUpgradeStep:
         app = Mock(charm_rev=100, charm_channel="1.18/stable", base=None)
         basic_jhelper.get_application.return_value = app
         basic_manifest.find_charm.return_value = Mock(
-            channel="1.19/stable", revision=None
+            channel=VAULT_CHANNEL, revision=None
         )
 
         result = step.is_skip(step_context)
