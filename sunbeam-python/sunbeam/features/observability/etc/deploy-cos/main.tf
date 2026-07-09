@@ -36,7 +36,7 @@ resource "juju_application" "traefik" {
     name     = "traefik-k8s"
     channel  = var.traefik-channel == null ? var.cos-channel : var.traefik-channel
     revision = var.traefik-revision
-    base     = "ubuntu@20.04"
+    base     = "ubuntu@26.04"
   }
 
   config = var.traefik-config
