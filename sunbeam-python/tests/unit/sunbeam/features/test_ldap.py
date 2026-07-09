@@ -9,6 +9,7 @@ from sunbeam.core.common import ResultType
 from sunbeam.core.terraform import TerraformException
 from sunbeam.features.interface.v1.openstack import TerraformPlanLocation
 from sunbeam.features.ldap.feature import (
+    LDAP_APPLY_TARGETS,
     AddLDAPDomainStep,
     DisableLDAPDomainStep,
     LDAPFeature,
@@ -71,7 +72,9 @@ class TestAddLDAPDomainStep:
                 "ldap-apps": {"dom1": {"domain-name": "dom1"}},
             }
         )
-        step.tfhelper.apply.assert_called_once_with(reporter=step_context.reporter)
+        step.tfhelper.apply.assert_called_once_with(
+            LDAP_APPLY_TARGETS, reporter=step_context.reporter
+        )
         assert result.result_type == ResultType.COMPLETED
 
     def test_enable_second_domain(self, read_config, update_config, snap, step_context):
@@ -90,7 +93,9 @@ class TestAddLDAPDomainStep:
                 },
             }
         )
-        step.tfhelper.apply.assert_called_once_with(reporter=step_context.reporter)
+        step.tfhelper.apply.assert_called_once_with(
+            LDAP_APPLY_TARGETS, reporter=step_context.reporter
+        )
         assert result.result_type == ResultType.COMPLETED
 
     def test_enable_tf_apply_failed(
@@ -120,7 +125,9 @@ class TestAddLDAPDomainStep:
                 "ldap-apps": {"dom1": {"domain-name": "dom1"}},
             }
         )
-        step.tfhelper.apply.assert_called_once_with(reporter=step_context.reporter)
+        step.tfhelper.apply.assert_called_once_with(
+            LDAP_APPLY_TARGETS, reporter=step_context.reporter
+        )
         assert result.result_type == ResultType.FAILED
         assert result.message == "timed out"
 
@@ -150,7 +157,9 @@ class TestDisableLDAPDomainStep:
         step.tfhelper.write_tfvars.assert_called_with(
             {"ldap-channel": "2023.2/edge", "ldap-apps": {}}
         )
-        step.tfhelper.apply.assert_called_once_with(reporter=step_context.reporter)
+        step.tfhelper.apply.assert_called_once_with(
+            LDAP_APPLY_TARGETS, reporter=step_context.reporter
+        )
 
     def test_disable_tf_apply_failed(
         self, read_config, update_config, snap, step_context
@@ -165,7 +174,9 @@ class TestDisableLDAPDomainStep:
         step.tfhelper.write_tfvars.assert_called_with(
             {"ldap-channel": "2023.2/edge", "ldap-apps": {}}
         )
-        step.tfhelper.apply.assert_called_once_with(reporter=step_context.reporter)
+        step.tfhelper.apply.assert_called_once_with(
+            LDAP_APPLY_TARGETS, reporter=step_context.reporter
+        )
         assert result.result_type == ResultType.FAILED
         assert result.message == "apply failed..."
 
@@ -214,7 +225,9 @@ class TestUpdateLDAPDomainStep:
                 "ldap-apps": {"dom1": {"domain-name": "dom1"}},
             }
         )
-        step.tfhelper.apply.assert_called_once_with(reporter=step_context.reporter)
+        step.tfhelper.apply.assert_called_once_with(
+            LDAP_APPLY_TARGETS, reporter=step_context.reporter
+        )
         assert result.result_type == ResultType.COMPLETED
 
     def test_update_wrong_domain(self, read_config, update_config, snap, step_context):
@@ -239,7 +252,9 @@ class TestUpdateLDAPDomainStep:
         )
         step.tfhelper.apply.side_effect = TerraformException("apply failed...")
         result = step.run(step_context)
-        step.tfhelper.apply.assert_called_once_with(reporter=step_context.reporter)
+        step.tfhelper.apply.assert_called_once_with(
+            LDAP_APPLY_TARGETS, reporter=step_context.reporter
+        )
         assert result.result_type == ResultType.FAILED
         assert result.message == "apply failed..."
 
@@ -256,6 +271,8 @@ class TestUpdateLDAPDomainStep:
         self.jhelper.wait_until_active.side_effect = TimeoutError("timed out")
         step.tfhelper.apply.side_effect = TerraformException("apply failed...")
         result = step.run(step_context)
-        step.tfhelper.apply.assert_called_once_with(reporter=step_context.reporter)
+        step.tfhelper.apply.assert_called_once_with(
+            LDAP_APPLY_TARGETS, reporter=step_context.reporter
+        )
         assert result.result_type == ResultType.FAILED
         assert result.message == "apply failed..."

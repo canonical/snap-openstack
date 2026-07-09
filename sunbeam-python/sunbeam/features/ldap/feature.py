@@ -47,6 +47,16 @@ console = Console()
 APPLICATION_DEPLOY_TIMEOUT = 900  # 15 minutes
 APPLICATION_REMOVE_TIMEOUT = 300  # 5 minutes
 
+# The LDAP steps reapply the whole OpenStack plan, which reverts any
+# out-of-band charm config (e.g. Traefik TLS set with juju config) as
+# drift. Restrict the apply to the LDAP domain resources only.
+# See LP#2159042.
+LDAP_APPLY_TARGETS = [
+    "-target=juju_application.ldap-apps",
+    "-target=juju_integration.ldap-apps-to-logging",
+    "-target=juju_integration.ldap-to-keystone",
+]
+
 
 class DisableLDAPDomainStep(BaseStep, JujuStepHelper):
     """Generic step to enable OpenStack application using Terraform."""
@@ -95,7 +105,7 @@ class DisableLDAPDomainStep(BaseStep, JujuStepHelper):
         update_config(self.client, config_key, tfvars)
 
         try:
-            self.tfhelper.apply(reporter=context.reporter)
+            self.tfhelper.apply(LDAP_APPLY_TARGETS, reporter=context.reporter)
         except TerraformException as e:
             return Result(ResultType.FAILED, str(e))
 
@@ -163,7 +173,7 @@ class UpdateLDAPDomainStep(BaseStep, JujuStepHelper):
         update_config(self.client, config_key, tfvars)
 
         try:
-            self.tfhelper.apply(reporter=context.reporter)
+            self.tfhelper.apply(LDAP_APPLY_TARGETS, reporter=context.reporter)
         except TerraformException as e:
             return Result(ResultType.FAILED, str(e))
         charm_name = "keystone-ldap-{}".format(self.charm_config["domain-name"])
@@ -233,7 +243,7 @@ class AddLDAPDomainStep(BaseStep, JujuStepHelper):
         update_config(self.client, config_key, tfvars)
 
         try:
-            self.tfhelper.apply(reporter=context.reporter)
+            self.tfhelper.apply(LDAP_APPLY_TARGETS, reporter=context.reporter)
         except TerraformException as e:
             return Result(ResultType.FAILED, str(e))
         charm_name = "keystone-ldap-{}".format(self.charm_config["domain-name"])
