@@ -26,6 +26,7 @@ from sunbeam.core.manifest import AddManifestStep
 from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.core.terraform import TerraformInitStep
 from sunbeam.features.interface.v1.base import is_maas_deployment
+from sunbeam.features.tls.ca import CaTlsFeature
 from sunbeam.steps.horizon import AttachHorizonThemeStep
 from sunbeam.steps.k8s import DeployK8SApplicationStep
 from sunbeam.steps.k8s_upgrade import K8SCharmUpgradeStep
@@ -71,6 +72,22 @@ def _stored_manifest_risk(client) -> str | None:
         return None
     # Return the risk that appears most often across charm channels.
     return risk_counts.most_common(1)[0][0]
+
+
+def _fix_tls_certs(deployment: Deployment, show_hints: bool) -> None:
+    """Re-provide stored tls.ca certificates for any outstanding CSRs.
+
+    No-op when tls.ca is not the active TLS provider.
+    """
+    feature = deployment.get_feature_manager().resolve_feature(CaTlsFeature.name)
+    if not isinstance(feature, CaTlsFeature) or not feature.is_enabled(
+        deployment.get_client()
+    ):
+        LOG.debug("tls.ca is not enabled; skipping TLS certificate re-provision.")
+        return
+
+    feature.reapply_certificates(deployment, show_hints)
+    click.echo("TLS certificate re-provision complete.")
 
 
 @click.group("refresh", invoke_without_command=True)
@@ -204,6 +221,12 @@ def refresh(
         console,
         show_hints,
     )
+
+    if not upgrade_release:
+        # Recover deployments affected by the traefik certificate bug by
+        # re-providing stored tls.ca certificates for any outstanding CSRs.
+        # No-op unless tls.ca is enabled and there are outstanding requests.
+        _fix_tls_certs(deployment, show_hints)
 
     click.echo("Refresh complete.")
 
@@ -419,3 +442,21 @@ def refresh_k8s(
     if message:
         click.echo(message)
     click.echo("k8s refresh complete.")
+
+
+@refresh.command("certificates")
+@click_option_show_hints
+@click.pass_context
+def refresh_certificates(
+    ctx: click.Context,
+    show_hints: bool = False,
+) -> None:
+    """Re-provide stored tls.ca certificates for outstanding CSRs.
+
+    This is the same as the last step of `sunbeam cluster refresh`
+    and it is a no-op unless tls.ca is enabled and there are outstanding csrs to be
+    reprovisioned.
+    """
+    deployment: Deployment = ctx.obj
+    run_preflight_checks([JujuLoginCheck(deployment.juju_account)], console)
+    _fix_tls_certs(deployment, show_hints)

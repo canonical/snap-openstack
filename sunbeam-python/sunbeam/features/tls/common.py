@@ -713,3 +713,110 @@ class ConfigureTLSCertificatesStep(BaseStep):
                 )
 
         return Result(ResultType.COMPLETED)
+
+
+class ReapplyTLSCertificatesStep(ConfigureTLSCertificatesStep):
+    """Re-provide previously signed certificates for outstanding CSRs.
+
+    Recovers a deployment after a charm refresh (e.g. the traefik charm
+    crossing revision 308) leaves applications with outstanding certificate
+    requests. It re-runs the ``provide-certificate`` action using the
+    certificates already stored in clusterd, matched to each outstanding CSR
+    by its subject.
+
+    Unlike :class:`ConfigureTLSCertificatesStep`, this step is non-interactive:
+    it never prompts. Outstanding CSRs without a matching stored certificate
+    (e.g. a genuinely new CSR) are skipped with a warning so that a stale
+    certificate is never provided for an unknown request.
+    """
+
+    def has_prompts(self) -> bool:
+        """This step never prompts the user."""
+        return False
+
+    def is_skip(self, context: StepContext) -> Result:
+        """Collect outstanding CSRs and match them to stored certificates.
+
+        Populates ``self.process_certs`` from the certificates stored in
+        clusterd so the inherited ``run()`` re-provides them.
+
+        :return: SKIPPED when there is nothing to re-provide, FAILED on error,
+                 COMPLETED when at least one CSR was matched to a stored cert.
+        """
+        try:
+            action_result = get_outstanding_certificate_requests(
+                self.app, self.model, self.jhelper
+            )
+        except (LeaderNotFoundException, ActionFailedException) as e:
+            LOG.debug("Failed to get CSRs for %s: %s", self.app, e)
+            return Result(ResultType.FAILED, str(e))
+
+        if action_result.get("return-code", 0) > 1:
+            return Result(
+                ResultType.FAILED,
+                "Unable to get outstanding certificate requests from CA",
+            )
+
+        certs_to_process = json.loads(action_result.get("result", "[]"))
+        if not certs_to_process:
+            return Result(ResultType.SKIPPED, "No outstanding certificate requests")
+
+        stored_certs = questions.load_answers(self.client, self._CONFIG).get(
+            "certificates", {}
+        )
+        if not stored_certs:
+            return Result(ResultType.SKIPPED, "No stored certificates to re-provide")
+
+        try:
+            relation_map = self.jhelper.get_relation_map(
+                self.app, self.interface, self.model
+            )
+        except JujuException as e:
+            return Result(ResultType.FAILED, f"Unable to get relation map: {e}")
+
+        processed_records: set = set()
+        for record in certs_to_process:
+            # Multiple units of the same application may share a CSR/relation_id.
+            hashable_record = tuple(sorted(record.items()))
+            if hashable_record in processed_records:
+                continue
+            processed_records.add(hashable_record)
+
+            unit_name = record.get("unit_name")
+            csr = record.get("csr")
+            app = record.get("application_name")
+            relation_id = record.get("relation_id")
+            if relation_id:
+                app = relation_map.get(f"{self.interface}:{relation_id}")
+            elif unit_name:
+                app = unit_name.split("/")[0]
+
+            subject = get_subject_from_csr(csr)
+            if not subject:
+                LOG.warning("Skipping invalid CSR for unit %s", unit_name)
+                continue
+
+            stored_cert = stored_certs.get(subject, {}).get("certificate")
+            if not stored_cert:
+                LOG.warning(
+                    "No stored certificate for outstanding CSR (app=%s, subject=%s); "
+                    "skipping. Sign it with `sunbeam tls ca unit_certs`.",
+                    app,
+                    subject,
+                )
+                continue
+
+            self.process_certs[subject] = {
+                "app": app,
+                "unit": unit_name,
+                "relation_id": relation_id,
+                "csr": csr,
+                "certificate": stored_cert,
+            }
+
+        if not self.process_certs:
+            return Result(
+                ResultType.SKIPPED,
+                "No outstanding CSRs matched a stored certificate",
+            )
+        return Result(ResultType.COMPLETED)

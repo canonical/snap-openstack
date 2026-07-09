@@ -546,6 +546,125 @@ class TestConfigureTLSCertificatesStep:
         assert result.result_type == ResultType.COMPLETED
 
 
+class TestReapplyTLSCertificatesStep:
+    def _outstanding(self, jhelper, certs):
+        jhelper.run_action.return_value = {
+            "return-code": 0,
+            "result": json.dumps(certs),
+        }
+
+    def test_has_no_prompts(self, cclient, jhelper):
+        step = tls.ReapplyTLSCertificatesStep(cclient, jhelper, "fake-cert")
+        assert step.has_prompts() is False
+
+    def test_is_skip_when_no_outstanding_requests(
+        self, cclient, jhelper, step_context, load_answers
+    ):
+        self._outstanding(jhelper, [])
+        step = tls.ReapplyTLSCertificatesStep(cclient, jhelper, "fake-cert")
+
+        result = step.is_skip(step_context)
+
+        assert result.result_type == ResultType.SKIPPED
+        load_answers.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "stored,csr_subject",
+        [
+            pytest.param({}, None, id="no_stored_certificates"),
+            pytest.param(
+                {"certificates": {"subject-old": {"certificate": "stored-cert"}}},
+                "subject-new",
+                id="subject_mismatch",
+            ),
+        ],
+    )
+    def test_is_skip_when_no_cert_can_be_matched(
+        self,
+        cclient,
+        jhelper,
+        step_context,
+        load_answers,
+        get_subject_from_csr,
+        stored,
+        csr_subject,
+    ):
+        self._outstanding(
+            jhelper, [{"unit_name": "traefik/0", "csr": "csr", "relation_id": 1}]
+        )
+        load_answers.return_value = stored
+        get_subject_from_csr.return_value = csr_subject
+        jhelper.get_relation_map.return_value = {"certificates:1": "traefik"}
+        step = tls.ReapplyTLSCertificatesStep(cclient, jhelper, "fake-cert")
+
+        result = step.is_skip(step_context)
+
+        assert result.result_type == ResultType.SKIPPED
+        assert step.process_certs == {}
+
+    def test_is_skip_matches_stored_certificate(
+        self, cclient, jhelper, step_context, load_answers, get_subject_from_csr
+    ):
+        self._outstanding(
+            jhelper, [{"unit_name": "traefik/0", "csr": "csr", "relation_id": 1}]
+        )
+        get_subject_from_csr.return_value = "subject1"
+        load_answers.return_value = {
+            "certificates": {"subject1": {"certificate": "stored-cert"}}
+        }
+        jhelper.get_relation_map.return_value = {"certificates:1": "traefik"}
+        step = tls.ReapplyTLSCertificatesStep(cclient, jhelper, "fake-cert")
+
+        result = step.is_skip(step_context)
+
+        assert result.result_type == ResultType.COMPLETED
+        assert step.process_certs == {
+            "subject1": {
+                "app": "traefik",
+                "unit": "traefik/0",
+                "relation_id": 1,
+                "csr": "csr",
+                "certificate": "stored-cert",
+            }
+        }
+
+    def test_is_skip_when_action_returns_failed_return_code(
+        self, cclient, jhelper, step_context, load_answers
+    ):
+        jhelper.run_action.return_value = {"return-code": 2}
+        step = tls.ReapplyTLSCertificatesStep(cclient, jhelper, "fake-cert")
+
+        result = step.is_skip(step_context)
+
+        assert result.result_type == ResultType.FAILED
+        load_answers.assert_not_called()
+
+    def test_run_reprovides_matched_certificate(
+        self, cclient, jhelper, step_context, load_answers, get_subject_from_csr
+    ):
+        self._outstanding(
+            jhelper, [{"unit_name": "traefik/0", "csr": "csr", "relation_id": 1}]
+        )
+        get_subject_from_csr.return_value = "subject1"
+        load_answers.return_value = {
+            "certificates": {"subject1": {"certificate": "stored-cert"}}
+        }
+        jhelper.get_relation_map.return_value = {"certificates:1": "traefik"}
+        step = tls.ReapplyTLSCertificatesStep(cclient, jhelper, "fake-cert")
+
+        assert step.is_skip(step_context).result_type == ResultType.COMPLETED
+
+        jhelper.run_action.return_value = {"return-code": 0}
+        result = step.run(step_context)
+
+        assert result.result_type == ResultType.COMPLETED
+        action_name = jhelper.run_action.call_args.args[2]
+        action_params = jhelper.run_action.call_args.args[3]
+        assert action_name == "provide-certificate"
+        assert action_params["certificate"] == "stored-cert"
+        assert action_params["relation-id"] == 1
+
+
 class FakeUnit:
     def __init__(self, status, message):
         class WorkloadStatus:
