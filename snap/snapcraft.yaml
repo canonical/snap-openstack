@@ -131,7 +131,7 @@ parts:
     source: https://github.com/hashicorp/terraform
     source-depth: 1
     source-type: git
-    source-tag: "v1.5.7"
+    source-tag: "v1.15.8"
     build-snaps: [go]
     build-environment:
       - CGO_ENABLED: "0"
