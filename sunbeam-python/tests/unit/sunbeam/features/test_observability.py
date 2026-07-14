@@ -794,7 +794,7 @@ class TestRemoveRemoteCosOffersStep:
             Mock(
                 apps={
                     "opentelemetry-collector": Mock(
-                        relations={"logging-consumer": "loki:loki_push_api"}
+                        relations={"send-loki-logs": "loki:loki_push_api"}
                     )
                 }
             ),
@@ -849,7 +849,7 @@ class TestRemoveRemoteCosOffersStep:
             Mock(
                 apps={
                     "opentelemetry-collector": Mock(
-                        relations={"logging-consumer": "loki:loki_push_api"}
+                        relations={"send-loki-logs": "loki:loki_push_api"}
                     )
                 }
             ),
