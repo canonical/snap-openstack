@@ -1715,6 +1715,7 @@ class ExternalObservabilityFeature(ObservabilityFeature):
                     self,
                     tfhelper_observability_agent_infra,
                     jhelper,
+                    accepted_app_status=["active", "blocked"],
                 ),
             ]
             run_plan(infra_agent_plan, console, show_hints)
