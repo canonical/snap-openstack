@@ -21,7 +21,7 @@ variable "charm_microovn_config" {
 variable "charm_openstack_network_agents_channel" {
   description = "Operator channel for openstack-network-agents deployment"
   type        = string
-  default     = null
+  default     = "2026.1/stable"
 }
 
 variable "charm_openstack_network_agents_revision" {
