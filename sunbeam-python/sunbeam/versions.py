@@ -270,7 +270,11 @@ DEPLOY_MICROOVN_TFVAR_MAP: VarMap = {
             "revision": "charm_sunbeam_ovn_proxy_revision",
             "config": "charm_sunbeam_ovn_proxy_config",
         },
-    }
+    },
+    # resolved arm64 revision.
+    "preserve": [
+        "charm_openstack_network_agents_arm64_revision",
+    ],
 }
 DEPLOY_OPENSTACK_HYPERVISOR_TFVAR_MAP: VarMap = {
     "charms": {

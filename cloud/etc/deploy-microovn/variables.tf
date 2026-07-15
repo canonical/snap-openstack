@@ -21,11 +21,17 @@ variable "charm_microovn_config" {
 variable "charm_openstack_network_agents_channel" {
   description = "Operator channel for openstack-network-agents deployment"
   type        = string
-  default     = "2026.1/stable"
+  default     = null
 }
 
 variable "charm_openstack_network_agents_revision" {
   description = "Operator channel revision for openstack-network-agents deployment"
+  type        = number
+  default     = null
+}
+
+variable "charm_openstack_network_agents_arm64_revision" {
+  description = "Operator channel revision for arm64 openstack-network-agents deployment"
   type        = number
   default     = null
 }
@@ -91,6 +97,12 @@ variable "microovn_arm64_machine_ids" {
   description = "List of arm64 machine ids to include (e.g. DPU network nodes)"
   type        = list(string)
   default     = []
+}
+
+variable "microovn_machine_ids_by_architecture" {
+  description = "MicroOVN machine ids grouped by architecture"
+  type        = map(list(string))
+  default     = {}
 }
 
 variable "token_distributor_machine_ids" {

@@ -116,6 +116,29 @@ class OvnManager:
             nodes += self.client.cluster.list_nodes_by_role("control")
         return nodes
 
+    def get_token_distributor_machines(
+        self, provider: OvnProvider | None = None
+    ) -> list[str]:
+        """Get machine IDs for MicroOVN helper applications."""
+        provider = provider or self.get_provider()
+        roles = [Role.NETWORK]
+        if provider == OvnProvider.MICROOVN:
+            roles = [Role.CONTROL, Role.COMPUTE, Role.NETWORK]
+
+        for role in roles:
+            machine_ids: set[str] = set()
+            for node in self.client.cluster.list_nodes_by_role(role.name.lower()):
+                machineid = node.get("machineid")
+                if machineid in (-1, None):
+                    continue
+                arch = node.get("arch") or DEFAULT_ARCHITECTURE
+                if arch == DEFAULT_ARCHITECTURE:
+                    machine_ids.add(str(machineid))
+            if machine_ids:
+                return sorted(machine_ids)
+
+        return []
+
     def get_machines(self, architecture: str | None = None) -> list[str]:
         """Get machine IDs for MicroOVN, optionally filtered by architecture.
 
@@ -132,13 +155,19 @@ class OvnManager:
                 machine_ids.add(str(machineid))
         return sorted(machine_ids)
 
-    def get_machines_amd64(self) -> list[str]:
-        """Get amd64 machine IDs for MicroOVN."""
-        return self.get_machines(DEFAULT_ARCHITECTURE)
-
-    def get_machines_arm64(self) -> list[str]:
-        """Get arm64 machine IDs for MicroOVN (e.g. DPU network nodes)."""
-        return self.get_machines(ARM64_ARCHITECTURE)
+    def get_machines_by_architecture(self) -> dict[str, list[str]]:
+        """Get MicroOVN machine IDs grouped by architecture."""
+        machine_ids_by_arch: dict[str, set[str]] = {}
+        for node in self._list_microovn_nodes():
+            machineid = node.get("machineid")
+            if machineid in (-1, None):
+                continue
+            arch = node.get("arch") or DEFAULT_ARCHITECTURE
+            machine_ids_by_arch.setdefault(arch, set()).add(str(machineid))
+        return {
+            arch: sorted(machine_ids)
+            for arch, machine_ids in machine_ids_by_arch.items()
+        }
 
     def get_control_plane_tfvars(
         self, deployment: Deployment, jhelper: JujuHelper

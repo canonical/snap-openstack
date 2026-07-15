@@ -46,6 +46,32 @@ AGENT_APP = "openstack-network-agents"
 ROLE_DISTRIBUTOR_APP = "role-distributor"
 
 
+def _microovn_application_name(architecture: str) -> str:
+    """Return the MicroOVN application name for an architecture."""
+    if architecture == ovn.DEFAULT_ARCHITECTURE:
+        return APPLICATION
+    return f"{APPLICATION}-{architecture}"
+
+
+def _microovn_architecture_sort_key(architecture: str) -> tuple[bool, str]:
+    """Prefer the default architecture, then keep remaining apps deterministic."""
+    return architecture != ovn.DEFAULT_ARCHITECTURE, architecture
+
+
+def _microovn_applications_to_wait(
+    machines_by_architecture: dict[str, list[str]],
+) -> list[str]:
+    """Return MicroOVN application names with machines assigned."""
+    return [
+        _microovn_application_name(architecture)
+        for architecture in sorted(
+            machines_by_architecture,
+            key=_microovn_architecture_sort_key,
+        )
+        if machines_by_architecture[architecture]
+    ]
+
+
 def _role_distributor_application_name(jhelper: JujuHelper, model: str) -> str | None:
     """Return role-distributor application name when deployed."""
     try:
@@ -61,6 +87,35 @@ def _microovn_accepted_statuses(ovn_manager: ovn.OvnManager) -> list[str]:
     if ovn_manager.get_provider() == ovn.OvnProvider.OVN_K8S:
         statuses.append("blocked")
     return statuses
+
+
+def _openstack_network_agents_tfvars(
+    deployment: Deployment,
+    manifest: Manifest,
+) -> dict[str, Any]:
+    """Return common openstack-network-agents Terraform variables."""
+    tfvars: dict[str, Any] = {
+        "charm_openstack_network_agents_config": {
+            "snap-channel": versions.OPENSTACK_CHANNEL
+        },
+        "openstack_network_agents_endpoint_bindings": [
+            {"space": deployment.get_space(Networks.MANAGEMENT)},
+            {
+                "endpoint": "data",
+                "space": deployment.get_space(Networks.DATA),
+            },
+        ],
+    }
+
+    agent_charm_manifest: CharmManifest | None = manifest.core.software.charms.get(
+        AGENT_APP
+    )
+    if agent_charm_manifest and agent_charm_manifest.config:
+        tfvars["charm_openstack_network_agents_config"].update(
+            agent_charm_manifest.config
+        )
+
+    return tfvars
 
 
 class DeployMicroOVNApplicationStep(DeployMachineApplicationStep):
@@ -112,14 +167,28 @@ class DeployMicroOVNApplicationStep(DeployMachineApplicationStep):
             offer: openstack_tf_output.get(offer) for offer in juju_offers
         }
 
-        machine_ids = self.ovn_manager.get_machines_amd64()
-        arm64_machine_ids = self.ovn_manager.get_machines_arm64()
-        # Always set both keys so stale clusterd tfvars are cleared on re-apply.
-        extra_tfvars["microovn_machine_ids"] = machine_ids
-        extra_tfvars["microovn_arm64_machine_ids"] = arm64_machine_ids
-        distributor_ids = machine_ids or arm64_machine_ids
-        if distributor_ids:
-            extra_tfvars["token_distributor_machine_ids"] = distributor_ids[:1]
+        machines_by_arch = self.ovn_manager.get_machines_by_architecture()
+        extra_tfvars["microovn_machine_ids_by_architecture"] = machines_by_arch
+        distributor_ids = self.ovn_manager.get_token_distributor_machines(
+            ovn.OvnProvider.MICROOVN
+        )
+        extra_tfvars["token_distributor_machine_ids"] = distributor_ids[:1]
+
+        # Juju does not resolve per-arch revisions for subordinates, so pin the
+        # arm64 revision explicitly from the manifest-configured channel.
+        if machines_by_arch.get(ovn.ARM64_ARCHITECTURE):
+            agent_charm_manifest = self.manifest.core.software.charms.get(AGENT_APP)
+            channel = (
+                agent_charm_manifest.channel
+                if agent_charm_manifest and agent_charm_manifest.channel
+                else versions.OPENSTACK_CHANNEL
+            )
+            revisions = self.jhelper.get_available_charm_revisions(AGENT_APP, channel)
+            arm64_revision = revisions.get(ovn.ARM64_ARCHITECTURE)
+            if arm64_revision is not None:
+                extra_tfvars["charm_openstack_network_agents_arm64_revision"] = (
+                    arm64_revision
+                )
 
         extra_tfvars.update(
             {
@@ -142,40 +211,21 @@ class DeployMicroOVNApplicationStep(DeployMachineApplicationStep):
                         "space": self.deployment.get_space(Networks.INTERNAL),
                     },
                 ],
-                "charm_openstack_network_agents_config": {
-                    "snap-channel": versions.OPENSTACK_CHANNEL
-                },
                 "role_distributor_application_name": (
                     _role_distributor_application_name(self.jhelper, self.model)
                 ),
-                "openstack_network_agents_endpoint_bindings": [
-                    {"space": self.deployment.get_space(Networks.MANAGEMENT)},
-                    {
-                        "endpoint": "data",
-                        "space": self.deployment.get_space(Networks.DATA),
-                    },
-                ],
             }
         )
-
-        agent_charm_manifest: CharmManifest | None = (
-            self.manifest.core.software.charms.get(AGENT_APP)
+        extra_tfvars.update(
+            _openstack_network_agents_tfvars(self.deployment, self.manifest)
         )
-        if agent_charm_manifest and agent_charm_manifest.config:
-            extra_tfvars["charm_openstack_network_agents_config"].update(
-                agent_charm_manifest.config
-            )
 
         return extra_tfvars
 
     def _applications_to_wait(self) -> list[str]:
         """Return Juju application names that should be ready after deploy."""
-        apps: list[str] = []
-        if self.ovn_manager.get_machines_amd64():
-            apps.append(APPLICATION)
-        if self.ovn_manager.get_machines_arm64():
-            apps.append(ARM64_APPLICATION)
-        return apps
+        machines_by_arch = self.ovn_manager.get_machines_by_architecture()
+        return _microovn_applications_to_wait(machines_by_arch)
 
     @tenacity.retry(
         wait=tenacity.wait_fixed(60),
@@ -184,7 +234,7 @@ class DeployMicroOVNApplicationStep(DeployMachineApplicationStep):
         retry_error_callback=convert_retry_failure_as_result,
     )
     def run(self, context: StepContext) -> Result:
-        """Apply terraform and wait for amd64 and arm64 MicroOVN applications."""
+        """Apply terraform and wait for MicroOVN applications."""
         try:
             extra_tfvars = self.extra_tfvars()
             extra_tfvars["machine_model_uuid"] = self.jhelper.get_model_uuid(self.model)
@@ -233,7 +283,6 @@ class ReapplyMicroOVNOptionalIntegrationsStep(DeployMicroOVNApplicationStep):
             "-target=juju_integration.microovn_arm64_microcluster_token_distributor",
             "-target=juju_integration.microovn_arm64_certs",
             "-target=juju_integration.microovn_arm64_ovsdb_cms",
-            "-target=juju_integration.microovn_arm64_openstack_network_agents",
         ]
         if _role_distributor_application_name(self.jhelper, self.model):
             extra_args.append("-target=juju_integration.role-distributor-microovn")
@@ -313,11 +362,8 @@ class ReapplyMicroOVNTerraformPlanStep(BaseStep):
         except TerraformException as e:
             return Result(ResultType.FAILED, str(e))
 
-        apps_to_wait: list[str] = []
-        if self.ovn_manager.get_machines_amd64():
-            apps_to_wait.append(APPLICATION)
-        if self.ovn_manager.get_machines_arm64():
-            apps_to_wait.append(ARM64_APPLICATION)
+        machines_by_arch = self.ovn_manager.get_machines_by_architecture()
+        apps_to_wait = _microovn_applications_to_wait(machines_by_arch)
         try:
             for application in apps_to_wait:
                 self.jhelper.wait_application_ready(
@@ -356,7 +402,7 @@ class RemoveMicroOVNUnitsStep(RemoveMachineUnitsStep):
         return MICROOVN_UNIT_TIMEOUT
 
     def is_skip(self, context: StepContext) -> Result:
-        """Find MicroOVN units to remove across amd64 and arm64 applications."""
+        """Find MicroOVN units to remove across architecture-specific applications."""
         if len(self.names) == 0:
             return Result(ResultType.SKIPPED)
 
@@ -372,7 +418,13 @@ class RemoveMicroOVNUnitsStep(RemoveMachineUnitsStep):
         to_remove_node_ids = {str(node["machineid"]) for node in filtered_nodes}
         self.units_to_remove_by_app = {}
 
-        for application in (APPLICATION, ARM64_APPLICATION):
+        applications = {
+            _microovn_application_name(node.get("arch") or ovn.DEFAULT_ARCHITECTURE)
+            for node in filtered_nodes
+        }
+        applications.update((APPLICATION, ARM64_APPLICATION))
+
+        for application in sorted(applications):
             try:
                 app = self.jhelper.get_application(application, self.model)
             except ApplicationNotFoundException:
@@ -391,7 +443,7 @@ class RemoveMicroOVNUnitsStep(RemoveMachineUnitsStep):
         return Result(ResultType.COMPLETED)
 
     def run(self, context: StepContext) -> Result:
-        """Remove MicroOVN units from amd64 and arm64 applications."""
+        """Remove MicroOVN units from architecture-specific applications."""
         try:
             self.update_status(context, "Removing units")
             for application, units in self.units_to_remove_by_app.items():
@@ -446,23 +498,21 @@ class EnableMicroOVNStep(BaseStep, JujuStepHelper):
             node = self.client.cluster.get_node_info(self.node)
             self.machine_id = str(node.get("machineid"))
             arch = node.get("arch") or ovn.DEFAULT_ARCHITECTURE
-            application = (
-                ARM64_APPLICATION if arch == ovn.ARM64_ARCHITECTURE else APPLICATION
-            )
+            app_name = _microovn_application_name(arch)
         except NodeNotExistInClusterException:
             LOG.debug("Machine %s does not exist, skipping", self.node)
             return Result(ResultType.SKIPPED)
 
         try:
-            app = self.jhelper.get_application(application, self.model)
+            application = self.jhelper.get_application(app_name, self.model)
         except ApplicationNotFoundException as e:
             LOG.debug("MicroOVN application is not found: %r", e)
             return Result(
                 ResultType.SKIPPED,
-                f"{application} application has not been deployed yet",
+                f"{app_name} application has not been deployed yet",
             )
 
-        for unit_name, unit in app.units.items():
+        for unit_name, unit in application.units.items():
             if unit.machine == self.machine_id:
                 LOG.debug(
                     "Unit %s is deployed on machine: %s", unit_name, self.machine_id

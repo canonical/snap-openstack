@@ -35,7 +35,9 @@ from sunbeam.steps.k8s import (
     EnsureL2AdvertisementByHostStep,
 )
 from sunbeam.steps.microceph import DeployMicrocephApplicationStep
-from sunbeam.steps.microovn import DeployMicroOVNApplicationStep
+from sunbeam.steps.microovn import (
+    DeployMicroOVNApplicationStep,
+)
 from sunbeam.steps.mysql import MySQLCharmUpgradeStep, ReapplyMySQLTerraformPlanStep
 from sunbeam.steps.openstack import (
     OpenStackPatchLoadBalancerServicesIPPoolStep,
