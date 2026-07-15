@@ -10,24 +10,35 @@ from sunbeam.core.juju import (
     LeaderNotFoundException,
     ModelNotFoundException,
 )
-from sunbeam.steps.backup import (
+from sunbeam.steps.backup_restore import (
     BACKUP_COMPONENTS,
+    LIST_BACKUPS_ACTION,
+    MYSQL_S3_RELATION,
+    S3_INTERFACE,
     BackupComponent,
+    BackupInventory,
     BackupResult,
     BackupTarget,
+    CheckS3RelationsStep,
     DiscoverBackupApplicationsStep,
+    ListBackupsStep,
     ResolveBackupTargetsStep,
     RunBackupsStep,
+    WriteBackupInventoryManifestStep,
     WriteBackupManifestStep,
+    _parse_mysql_backup_ids,
+    _parse_vault_backup_ids,
     _resolve_mysql_target,
     _resolve_vault_target,
 )
 
 
-def _app_status(charm_name, units=None):
+def _app_status(charm_name, units=None, relations=None):
     app = Mock()
     app.charm_name = charm_name
     app.units = units or {}
+    app.relations = relations or {}
+    app.app_status.current = "active"
     return app
 
 
@@ -202,6 +213,23 @@ class TestDiscoverBackupApplicationsStep:
 
         assert result.result_type == ResultType.FAILED
 
+    def test_fails_when_target_app_is_not_active(self, step_context):
+        jhelper = Mock()
+        mysql = _app_status("mysql-k8s")
+        mysql.app_status.current = "blocked"
+        jhelper.get_model_status.return_value = _model_status(
+            {
+                "keystone-mysql": mysql,
+                "vault": _app_status("vault-k8s"),
+            }
+        )
+
+        result = DiscoverBackupApplicationsStep(jhelper).run(step_context)
+
+        assert result.result_type == ResultType.FAILED
+        assert "keystone-mysql" in result.message
+        assert "blocked" in result.message
+
 
 class TestResolveBackupTargetsStep:
     def test_flattens_targets_and_skips_unresolvable(self, step_context):
@@ -226,11 +254,52 @@ class TestResolveBackupTargetsStep:
         assert apps == {"keystone-mysql", "vault"}
 
 
-class TestRunBackupsStep:
-    def test_skips_when_no_targets(self, step_context):
-        step = RunBackupsStep(Mock(), [])
-        assert step.is_skip(step_context).result_type == ResultType.SKIPPED
+class TestCheckS3RelationsStep:
+    def test_partitions_apps_by_endpoint_and_s3_interface(self, step_context):
+        jhelper = Mock()
+        s3_relation = Mock()
+        s3_relation.interface = S3_INTERFACE
+        non_s3_relation = Mock()
+        non_s3_relation.interface = "other"
+        jhelper.get_model_status.return_value = _model_status(
+            {
+                "keystone-mysql": _app_status(
+                    "mysql-k8s", relations={MYSQL_S3_RELATION: [s3_relation]}
+                ),
+                "nova-mysql": _app_status(
+                    "mysql-k8s", relations={MYSQL_S3_RELATION: [non_s3_relation]}
+                ),
+            }
+        )
 
+        result = CheckS3RelationsStep(
+            jhelper,
+            ["keystone-mysql", "nova-mysql"],
+            endpoint_name=MYSQL_S3_RELATION,
+        ).run(step_context)
+
+        assert result.result_type == ResultType.COMPLETED
+        assert result.message == {
+            "related": ["keystone-mysql"],
+            "unrelated": ["nova-mysql"],
+        }
+
+    def test_missing_app_is_treated_as_unrelated(self, step_context):
+        jhelper = Mock()
+        jhelper.get_model_status.return_value = _model_status({})
+
+        result = CheckS3RelationsStep(
+            jhelper, ["keystone-mysql"], endpoint_name=MYSQL_S3_RELATION
+        ).run(step_context)
+
+        assert result.result_type == ResultType.COMPLETED
+        assert result.message == {
+            "related": [],
+            "unrelated": ["keystone-mysql"],
+        }
+
+
+class TestRunBackupsStep:
     def test_aggregates_mixed_results(self, step_context):
         jhelper = Mock()
 
@@ -277,6 +346,92 @@ class TestRunBackupsStep:
         assert params_by_unit["vault/0"] is None
 
 
+class TestListBackupsParsing:
+    def test_parse_mysql_backup_ids_filters_finished_entries(self):
+        action_result = {
+            "backups": (
+                "backup-id             | backup-type | backup-status\n"
+                "--------------------------------------------------\n"
+                "2026-07-15T00:00:00Z  | physical    | finished\n"
+                "2026-07-14T00:00:00Z  | physical    | failed"
+            )
+        }
+
+        backup_ids = _parse_mysql_backup_ids(action_result)
+
+        assert backup_ids == ["2026-07-15T00:00:00Z"]
+
+    def test_parse_vault_backup_ids_json_array(self):
+        action_result = {
+            "backup-ids": json.dumps(
+                [
+                    "vault-backup-openstack-2026-07-15-00-03-28",
+                    "vault-backup-openstack-2026-07-14-00-03-28",
+                ]
+            )
+        }
+
+        backup_ids = _parse_vault_backup_ids(action_result)
+
+        assert backup_ids == [
+            "vault-backup-openstack-2026-07-15-00-03-28",
+            "vault-backup-openstack-2026-07-14-00-03-28",
+        ]
+
+
+class TestListBackupsStep:
+    def test_collects_backup_ids_by_target(self, step_context):
+        jhelper = Mock()
+
+        def _run_action(unit, model, action, params=None, timeout=None):
+            assert action == LIST_BACKUPS_ACTION
+            if unit == "keystone-mysql/1":
+                return {
+                    "backups": (
+                        "backup-id | backup-type | backup-status\n"
+                        "---------------------------------------\n"
+                        "2026-07-15T00:00:00Z | physical | finished"
+                    )
+                }
+            return {
+                "backup-ids": json.dumps(["vault-backup-openstack-2026-07-15-00-03-28"])
+            }
+
+        jhelper.run_action.side_effect = _run_action
+        targets = [
+            BackupTarget(
+                "keystone-mysql", "keystone-mysql/1", "mysql", "create-backup", 2
+            ),
+            BackupTarget("vault", "vault/0", "vault", "create-backup", 1),
+        ]
+
+        result = ListBackupsStep(jhelper, targets).run(step_context)
+
+        assert result.result_type == ResultType.COMPLETED
+        by_app = {r.app: r for r in result.message}
+        assert by_app["keystone-mysql"].success is True
+        assert by_app["keystone-mysql"].backup_ids == ["2026-07-15T00:00:00Z"]
+        assert by_app["vault"].success is True
+        assert by_app["vault"].backup_ids == [
+            "vault-backup-openstack-2026-07-15-00-03-28"
+        ]
+
+    def test_collects_errors_without_raising(self, step_context):
+        jhelper = Mock()
+        jhelper.run_action.side_effect = Exception("boom")
+        targets = [
+            BackupTarget(
+                "keystone-mysql", "keystone-mysql/1", "mysql", "create-backup", 2
+            )
+        ]
+
+        result = ListBackupsStep(jhelper, targets).run(step_context)
+
+        assert result.result_type == ResultType.COMPLETED
+        assert result.message[0].success is False
+        assert result.message[0].error == "boom"
+
+
 class TestWriteBackupManifestStep:
     def test_writes_manifest(self, step_context, tmp_path):
         results = [
@@ -303,6 +458,35 @@ class TestWriteBackupManifestStep:
         }
 
 
+class TestWriteBackupInventoryManifestStep:
+    def test_writes_inventory_manifest(self, step_context, tmp_path):
+        results = [
+            BackupInventory(
+                app="keystone-mysql",
+                unit="keystone-mysql/1",
+                component="mysql",
+                success=True,
+                backup_ids=["2026-07-15T00:00:00Z"],
+            ),
+            BackupInventory(
+                app="vault",
+                unit="vault/0",
+                component="vault",
+                success=False,
+                error="failed",
+            ),
+        ]
+        step = WriteBackupInventoryManifestStep(
+            results, "2026-07-15T00:04:28+00:00", manifest_dir=tmp_path
+        )
+
+        result = step.run(step_context)
+
+        assert result.result_type == ResultType.COMPLETED
+        written = list(tmp_path.glob("backup-inventory-*.yaml"))
+        assert len(written) == 1
+
+
 class TestExtensibility:
     """Adding a component is a registration change, not a code change (FR-021)."""
 
@@ -319,7 +503,9 @@ class TestExtensibility:
             resolve_target=_resolve_fake,
         )
         components = BACKUP_COMPONENTS + [fake]
-        monkeypatch.setattr("sunbeam.steps.backup.BACKUP_COMPONENTS", components)
+        monkeypatch.setattr(
+            "sunbeam.steps.backup_restore.BACKUP_COMPONENTS", components
+        )
 
         jhelper = Mock()
         jhelper.get_model_status.return_value = _model_status(

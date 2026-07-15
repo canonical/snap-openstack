@@ -9,7 +9,7 @@ import click
 from snaphelpers import Snap
 
 from sunbeam import log
-from sunbeam.commands import backup as backup_cmds
+from sunbeam.commands import backup_restore as backup_restore_cmds
 from sunbeam.commands import configure as configure_cmds
 from sunbeam.commands import dashboard as dashboard_cmds
 from sunbeam.commands import generate_cloud_config as generate_cloud_config_cmds
@@ -20,7 +20,6 @@ from sunbeam.commands import openrc as openrc_cmds
 from sunbeam.commands import plans as plans_cmd
 from sunbeam.commands import prepare_node as prepare_node_cmds
 from sunbeam.commands import proxy as proxy_cmds
-from sunbeam.commands import restore as restore_cmds
 from sunbeam.commands import sso as sso_cmd
 from sunbeam.commands import utils as utils_cmds
 from sunbeam.core import deployments as deployments_jobs
@@ -125,8 +124,9 @@ def main():
     cli.add_command(launch_cmds.launch)
     cli.add_command(openrc_cmds.openrc)
     cli.add_command(dashboard_cmds.dashboard)
-    cli.add_command(backup_cmds.backup)
-    cli.add_command(restore_cmds.restore)
+    cli.add_command(backup_restore_cmds.backup)
+    cli.add_command(backup_restore_cmds.list_backups)
+    cli.add_command(backup_restore_cmds.restore)
 
     # Add identity group
     cli.add_command(identity_group)
