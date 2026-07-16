@@ -937,7 +937,7 @@ class RemoveRemoteCosOffersStep(BaseStep, JujuStepHelper):
         self.endpoints = [
             "opentelemetry-collector:grafana-dashboards-provider",
             "opentelemetry-collector:send-remote-write",
-            "opentelemetry-collector:logging-consumer",
+            "opentelemetry-collector:send-loki-logs",
         ]
 
     def _get_relations(self, model: str, endpoints: list[str]) -> list[tuple]:
@@ -1715,6 +1715,7 @@ class ExternalObservabilityFeature(ObservabilityFeature):
                     self,
                     tfhelper_observability_agent_infra,
                     jhelper,
+                    accepted_app_status=["active", "blocked"],
                 ),
             ]
             run_plan(infra_agent_plan, console, show_hints)
