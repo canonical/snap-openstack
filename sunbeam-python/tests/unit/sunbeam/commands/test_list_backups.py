@@ -80,13 +80,11 @@ class TestListBackupsCommand:
         def _run_action(unit, model, action, params=None, timeout=None):
             if action == "get-cluster-status":
                 return {
-                    "status": json.dumps(
-                        {
-                            "defaultreplicaset": {
-                                "topology": {"mysql-0": {"memberrole": "PRIMARY"}}
-                            }
+                    "status": {
+                        "defaultreplicaset": {
+                            "topology": {"mysql-0": {"memberrole": "PRIMARY"}}
                         }
-                    )
+                    }
                 }
             if unit == "keystone-mysql/0":
                 return {
@@ -142,13 +140,11 @@ class TestListBackupsCommand:
         def _run_action(unit, model, action, params=None, timeout=None):
             if action == "get-cluster-status":
                 return {
-                    "status": json.dumps(
-                        {
-                            "defaultreplicaset": {
-                                "topology": {"mysql-0": {"memberrole": "PRIMARY"}}
-                            }
+                    "status": {
+                        "defaultreplicaset": {
+                            "topology": {"mysql-0": {"memberrole": "PRIMARY"}}
                         }
-                    )
+                    }
                 }
             if action == "list-backups":
                 raise Exception("list failed")
