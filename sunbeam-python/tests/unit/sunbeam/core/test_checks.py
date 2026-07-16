@@ -8,6 +8,7 @@ import os
 from unittest.mock import Mock
 
 from sunbeam.core import checks
+from sunbeam.core.common import Result, ResultType
 
 
 class TestSshKeysConnectedCheck:
@@ -69,6 +70,55 @@ class TestDaemonGroupCheck:
 
         assert result is False
         assert "Clusterd service is not active" in check.message
+
+
+class TestJujuLoginCheck:
+    def test_run_skipped(self, mocker):
+        step = Mock(status="Authenticating with Juju controller: current ... ")
+        step.is_skip.return_value = Result(ResultType.SKIPPED)
+        mocker.patch.object(checks, "JujuLoginStep", return_value=step)
+
+        check = checks.JujuLoginCheck(Mock())
+        result = check.run(check_status=Mock())
+
+        assert result is True
+        step.run.assert_not_called()
+
+    def test_run_completed(self, mocker):
+        step = Mock(status="Authenticating with Juju controller: current ... ")
+        step.is_skip.return_value = Result(ResultType.COMPLETED)
+        step.run.return_value = Result(ResultType.COMPLETED)
+        mocker.patch.object(checks, "JujuLoginStep", return_value=step)
+
+        check = checks.JujuLoginCheck(Mock())
+        result = check.run(check_status=Mock())
+
+        assert result is True
+        step.run.assert_called_once()
+
+    def test_run_skip_failed(self, mocker):
+        step = Mock(status="Authenticating with Juju controller: current ... ")
+        step.is_skip.return_value = Result(ResultType.FAILED, "failed to check login")
+        mocker.patch.object(checks, "JujuLoginStep", return_value=step)
+
+        check = checks.JujuLoginCheck(Mock())
+        result = check.run(check_status=Mock())
+
+        assert result is False
+        assert check.message == "failed to check login"
+        step.run.assert_not_called()
+
+    def test_run_failed(self, mocker):
+        step = Mock(status="Authenticating with Juju controller: current ... ")
+        step.is_skip.return_value = Result(ResultType.COMPLETED)
+        step.run.return_value = Result(ResultType.FAILED, "failed to login")
+        mocker.patch.object(checks, "JujuLoginStep", return_value=step)
+
+        check = checks.JujuLoginCheck(Mock())
+        result = check.run(check_status=Mock())
+
+        assert result is False
+        assert check.message == "failed to login"
 
 
 class TestLocalShareCheck:

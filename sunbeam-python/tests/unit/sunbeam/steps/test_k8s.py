@@ -11,13 +11,14 @@ import lightkube.core.exceptions
 import pytest
 import tenacity
 from lightkube import ApiError
+from lightkube.types import PatchType
 
 from sunbeam.clusterd.service import ConfigItemNotFoundException
 from sunbeam.core.common import ResultType
+from sunbeam.core.deployment import Networks
 from sunbeam.core.juju import (
     ActionFailedException,
     ApplicationNotFoundException,
-    JujuException,
     LeaderNotFoundException,
     MachineNotFoundException,
 )
@@ -28,12 +29,12 @@ from sunbeam.steps.k8s import (
     K8S_CLOUD_SUFFIX,
     AddK8SCloudStep,
     AddK8SCredentialStep,
+    DeployK8SApplicationStep,
     EnsureCiliumDeviceByHostStep,
     EnsureDefaultL2AdvertisementMutedStep,
     EnsureK8SUnitsTaggedStep,
     EnsureL2AdvertisementByHostStep,
     KubeClientError,
-    PatchCoreDNSStep,
     PatchServiceExternalTrafficStep,
     StoreK8SKubeConfigStep,
     _get_machines_space_ips,
@@ -63,7 +64,13 @@ def deployment_with_space():
     """Deployment mock with space configuration."""
     deployment = Mock()
     deployment.name = "test-deployment"
-    deployment.get_space.return_value = "management"
+
+    def get_space(network):
+        if network == Networks.INTERNAL:
+            return "internal"
+        return "management"
+
+    deployment.get_space.side_effect = get_space
     return deployment
 
 
@@ -336,7 +343,10 @@ class TestEnsureL2AdvertisementByHostStep:
         return basic_deployment
 
     @pytest.fixture
-    def jhelper(self, basic_jhelper):
+    def jhelper(self, basic_jhelper, control_nodes):
+        basic_jhelper.get_machines.return_value = {
+            str(n["machineid"]): Mock() for n in control_nodes
+        }
         return basic_jhelper
 
     @pytest.fixture
@@ -407,6 +417,24 @@ class TestEnsureL2AdvertisementByHostStep:
         result = step.is_skip(step_context)
         assert result.result_type == ResultType.COMPLETED
         assert len(step.to_delete) == 1
+
+    def test_is_skip_optional_pool_missing(self, step, step_context):
+        api_error = ApiError.__new__(ApiError)
+        api_error.status = Mock(code=404)
+        step.optional_if_pool_missing = True
+        step.to_update = [{"name": "stale-node", "machineid": "99"}]
+        step.to_delete = [{"name": "stale-deleted"}]
+        step._get_outdated_resources = Mock()
+        with patch(
+            "sunbeam.steps.k8s.get_kube_client", return_value=Mock()
+        ) as kube_mock:
+            kube_mock.return_value.get.side_effect = api_error
+            result = step.is_skip(step_context)
+
+        assert result.result_type == ResultType.SKIPPED
+        assert step.to_update == []
+        assert step.to_delete == []
+        step._get_outdated_resources.assert_not_called()
 
     def test_is_skip_single_node_fqdn_preserves_other_resources(
         self, deployment, client, jhelper, step_context
@@ -927,12 +955,12 @@ class TestEnsureK8SUnitsTaggedStep:
         jhelper.get_machines.return_value = {
             "1": Mock(
                 network_interfaces={
-                    "eth0": Mock(space="management", ip_addresses=["10.0.0.1"])
+                    "eth0": Mock(space="internal", ip_addresses=["10.0.0.1"])
                 }
             ),
             "2": Mock(
                 network_interfaces={
-                    "eth0": Mock(space="management", ip_addresses=["10.0.0.2"])
+                    "eth0": Mock(space="internal", ip_addresses=["10.0.0.2"])
                 }
             ),
         }
@@ -959,12 +987,12 @@ class TestEnsureK8SUnitsTaggedStep:
         jhelper.get_machines.return_value = {
             "1": Mock(
                 network_interfaces={
-                    "eth0": Mock(space="management", ip_addresses=["10.0.0.1"])
+                    "eth0": Mock(space="internal", ip_addresses=["10.0.0.1"])
                 }
             ),
             "2": Mock(
                 network_interfaces={
-                    "eth0": Mock(space="management", ip_addresses=["10.0.0.2"])
+                    "eth0": Mock(space="internal", ip_addresses=["10.0.0.2"])
                 }
             ),
         }
@@ -994,12 +1022,12 @@ class TestEnsureK8SUnitsTaggedStep:
         jhelper.get_machines.return_value = {
             "1": Mock(
                 network_interfaces={
-                    "eth0": Mock(space="management", ip_addresses=["10.0.0.1"])
+                    "eth0": Mock(space="internal", ip_addresses=["10.0.0.1"])
                 }
             ),
             "2": Mock(
                 network_interfaces={
-                    "eth0": Mock(space="management", ip_addresses=["10.0.0.2"])
+                    "eth0": Mock(space="internal", ip_addresses=["10.0.0.2"])
                 }
             ),
         }
@@ -1023,12 +1051,12 @@ class TestEnsureK8SUnitsTaggedStep:
         jhelper.get_machines.return_value = {
             "1": Mock(
                 network_interfaces={
-                    "eth0": Mock(space="management", ip_addresses=["10.0.0.1"])
+                    "eth0": Mock(space="internal", ip_addresses=["10.0.0.1"])
                 }
             ),
             "2": Mock(
                 network_interfaces={
-                    "eth0": Mock(space="management", ip_addresses=["10.0.0.2"])
+                    "eth0": Mock(space="internal", ip_addresses=["10.0.0.2"])
                 }
             ),
         }
@@ -1083,6 +1111,57 @@ class TestEnsureK8SUnitsTaggedStep:
             result = step.run(None)
         step.kube.apply.assert_called_once()
         assert result.result_type == ResultType.FAILED
+
+
+class TestDeployK8SApplicationStep:
+    @pytest.fixture
+    def deployment(self, deployment_with_space):
+        deployment_with_space.openstack_machines_model = "test-model"
+        return deployment_with_space
+
+    @pytest.fixture
+    def manifest(self, basic_manifest):
+        basic_manifest.core.software.charms.get.return_value = None
+        return basic_manifest
+
+    @pytest.fixture
+    def step(self, deployment, basic_client, basic_tfhelper, basic_jhelper, manifest):
+        basic_client.cluster.get_config.return_value = "{}"
+        return DeployK8SApplicationStep(
+            deployment,
+            basic_client,
+            basic_tfhelper,
+            basic_jhelper,
+            manifest,
+            "test-model",
+        )
+
+    def test_extra_tfvars_binds_cluster_endpoint_to_internal_space(self, step):
+        assert step.extra_tfvars()["endpoint_bindings"] == [
+            {"space": "management"},
+            {"endpoint": "cluster", "space": "internal"},
+        ]
+
+    def test_get_k8s_config_tfvars_does_not_manage_cluster_annotations(self, step):
+        assert "cluster-annotations" not in step._get_k8s_config_tfvars()
+
+    def test_get_k8s_config_tfvars_sets_default_toleration_seconds(self, step):
+        config = step._get_k8s_config_tfvars()
+        apiserver_args = config.get("kube-apiserver-extra-args", "")
+        assert "default-not-ready-toleration-seconds=60" in apiserver_args
+        assert "default-unreachable-toleration-seconds=60" in apiserver_args
+
+    def test_get_k8s_config_tfvars_merges_toleration_seconds_with_existing_args(
+        self, step, manifest
+    ):
+        charm_mock = Mock()
+        charm_mock.config = {"kube-apiserver-extra-args": "xyz-flag=true"}
+        manifest.core.software.charms.get.return_value = charm_mock
+        config = step._get_k8s_config_tfvars()
+        apiserver_args = config.get("kube-apiserver-extra-args", "")
+        assert "xyz-flag=true" in apiserver_args
+        assert "default-not-ready-toleration-seconds=60" in apiserver_args
+        assert "default-unreachable-toleration-seconds=60" in apiserver_args
 
 
 class TestGetKubeClient:
@@ -1221,146 +1300,6 @@ def test_get_machines_space_ips(interfaces, space, networks, expected):
     assert result == expected
 
 
-class TestPatchCoreDNSStep:
-    @pytest.fixture
-    def deployment(self, basic_deployment):
-        return basic_deployment
-
-    @pytest.fixture
-    def client(self, basic_client):
-        return basic_client
-
-    @pytest.fixture
-    def jhelper(self, basic_jhelper):
-        return basic_jhelper
-
-    @pytest.fixture
-    def step(self, deployment, jhelper):
-        return PatchCoreDNSStep(deployment, jhelper)
-
-    @pytest.fixture
-    def kube(self, basic_kube):
-        return basic_kube
-
-    def test_is_skip(self, step, kube, step_context):
-        api_error = ApiError(
-            Mock(),
-            httpx.Response(
-                status_code=404,
-                content=json.dumps(
-                    {
-                        "code": 404,
-                        "message": "horizontal podautoscaler not found",
-                    }
-                ),
-            ),
-        )
-        kube.get = Mock(side_effect=api_error)
-
-        with patch("sunbeam.steps.k8s.get_kube_client", return_value=kube):
-            result = step.is_skip(step_context)
-        assert result.result_type == ResultType.COMPLETED
-
-    def test_is_skip_kube_get_error(self, step, kube, step_context):
-        api_error = ApiError(
-            Mock(),
-            httpx.Response(
-                status_code=500,
-                content=json.dumps(
-                    {
-                        "code": 500,
-                        "message": "Unknown error",
-                    }
-                ),
-            ),
-        )
-        kube.get = Mock(side_effect=api_error)
-
-        with patch("sunbeam.steps.k8s.get_kube_client", return_value=kube):
-            result = step.is_skip(step_context)
-        assert result.result_type == ResultType.FAILED
-
-    def test_is_skip_hpa_already_exists(self, step, kube, step_context):
-        control_nodes = [
-            {"name": "node1", "machineid": "1"},
-            {"name": "node2", "machineid": "2"},
-        ]
-        step.client.cluster.list_nodes_by_role.return_value = control_nodes
-        hpa = Mock()
-        hpa.spec = Mock()
-        hpa.spec.minReplicas = 1
-
-        with patch("sunbeam.steps.k8s.get_kube_client", return_value=kube):
-            kube.get = Mock(return_value=hpa)
-            result = step.is_skip(step_context)
-        assert result.result_type == ResultType.SKIPPED
-
-    def test_is_skip_new_control_nodes_added(self, step, kube, step_context):
-        control_nodes = [
-            {"name": "node1", "machineid": "1"},
-            {"name": "node2", "machineid": "2"},
-            {"name": "node3", "machineid": "3"},
-        ]
-        step.client.cluster.list_nodes_by_role.return_value = control_nodes
-        hpa = Mock()
-        hpa.spec = Mock()
-        hpa.spec.minReplicas = 1
-
-        with patch("sunbeam.steps.k8s.get_kube_client", return_value=kube):
-            kube.get = Mock(return_value=hpa)
-            result = step.is_skip(step_context)
-        assert result.result_type == ResultType.COMPLETED
-        assert step.replica_count == 3
-
-    def test_is_skip_control_nodes_removed(self, step, kube, step_context):
-        control_nodes = [
-            {"name": "node1", "machineid": "1"},
-            {"name": "node2", "machineid": "2"},
-        ]
-        step.client.cluster.list_nodes_by_role.return_value = control_nodes
-        hpa = Mock()
-        hpa.spec = Mock()
-        hpa.spec.minReplicas = 3
-
-        with patch("sunbeam.steps.k8s.get_kube_client", return_value=kube):
-            kube.get = Mock(return_value=hpa)
-            result = step.is_skip(step_context)
-        assert result.result_type == ResultType.COMPLETED
-        assert step.replica_count == 1
-
-    def test_run(self, step, jhelper):
-        jhelper.run_cmd_on_machine_unit_payload.return_value = Mock(return_code=0)
-        result = step.run(None)
-        assert result.result_type == ResultType.COMPLETED
-        jhelper.get_leader_unit.assert_called_once()
-        jhelper.run_cmd_on_machine_unit_payload.assert_called_once()
-
-    def test_run_helm_upgrade_failed(self, step, jhelper):
-        jhelper.run_cmd_on_machine_unit_payload.return_value = Mock(return_code=1)
-        result = step.run(None)
-        assert result.result_type == ResultType.FAILED
-        jhelper.get_leader_unit.assert_called_once()
-        jhelper.run_cmd_on_machine_unit_payload.assert_called_once()
-
-    def test_run_failed_on_juju_run_on_machine_unit(self, step, jhelper):
-        jhelper.run_cmd_on_machine_unit_payload.side_effect = JujuException(
-            "Not able to run command"
-        )
-        result = step.run(None)
-        assert result.result_type == ResultType.FAILED
-        jhelper.get_leader_unit.assert_called_once()
-        jhelper.run_cmd_on_machine_unit_payload.assert_called_once()
-
-    def test_run_leader_not_found(self, step, jhelper):
-        jhelper.get_leader_unit.side_effect = LeaderNotFoundException(
-            "Leader missing..."
-        )
-        result = step.run(None)
-        assert result.result_type == ResultType.FAILED
-        jhelper.get_leader_unit.assert_called_once()
-        jhelper.run_cmd_on_machine_unit_payload.assert_not_called()
-
-
 class TestPatchServiceExternalTrafficStep:
     @pytest.fixture
     def deployment(self, basic_deployment):
@@ -1494,7 +1433,10 @@ class TestEnsureCiliumDeviceByHostStep:
         )
 
     @pytest.fixture
-    def jhelper(self, basic_jhelper):
+    def jhelper(self, basic_jhelper, control_nodes):
+        basic_jhelper.get_machines.return_value = {
+            str(n["machineid"]): Mock() for n in control_nodes
+        }
         return basic_jhelper
 
     @pytest.fixture
@@ -1544,6 +1486,19 @@ class TestEnsureCiliumDeviceByHostStep:
         assert result.result_type == ResultType.COMPLETED
         assert len(step.to_delete) == 1
         assert step.to_delete[0]["name"] == "departed-node"
+
+    def test_is_skip_stale_machine_skipped(self, step, jhelper, step_context):
+        """Nodes whose machines are gone from juju are skipped, not deleted.
+
+        This avoids accidentally deleting cilium configs for nodes that are
+        joining concurrently (machine not yet in juju). Stale resources are
+        cleaned up later when the node is removed from clusterd.
+        """
+        # node2's machine (id=2) is no longer in juju
+        jhelper.get_machines.return_value = {"1": Mock()}
+        step._get_outdated_resources = Mock(return_value=([], []))
+        result = step.is_skip(step_context)
+        assert result.result_type == ResultType.SKIPPED
 
     def test_is_skip_single_node_fqdn(self, deployment, client, jhelper, step_context):
         node_info = {"name": "node1", "machineid": "1", "role": ["control"]}
@@ -1635,7 +1590,19 @@ class TestEnsureCiliumDeviceByHostStep:
         result = step.run(None)
 
         step.kube.apply.assert_called_once()
-        step.kube.patch.assert_called_once()  # clears restart-pending
+        step.kube.patch.assert_called_once_with(
+            step.cilium_node_config_resource,
+            "cilium-devices-node1",
+            {
+                "metadata": {
+                    "annotations": {
+                        "sunbeam/restart-pending": "false",
+                    }
+                }
+            },
+            namespace="kube-system",
+            patch_type=PatchType.MERGE,
+        )
         assert result.result_type == ResultType.COMPLETED
 
     def test_run_updates_config(self, step):

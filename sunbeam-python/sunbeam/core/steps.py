@@ -72,6 +72,7 @@ class DeployMachineApplicationStep(BaseStep):
         roles: list[Role] | list[list[Role]] | None = None,
         banner: str = "",
         description: str = "",
+        wait_for_readiness: bool = True,
     ):
         super().__init__(banner, description)
         self.deployment = deployment
@@ -83,6 +84,7 @@ class DeployMachineApplicationStep(BaseStep):
         self.application = application
         self.model = model
         self.roles = roles or []
+        self.wait_for_readiness = wait_for_readiness
 
     def extra_tfvars(self) -> dict:
         """Extra terraform vars to pass to terraform apply."""
@@ -147,16 +149,17 @@ class DeployMachineApplicationStep(BaseStep):
 
         # Note(gboutry): application is in state unknown when it's deployed
         # without units
-        try:
-            self.jhelper.wait_application_ready(
-                self.application,
-                self.model,
-                accepted_status=self.get_accepted_application_status(),
-                timeout=self.get_application_timeout(),
-            )
-        except TimeoutError as e:
-            LOG.warning(str(e))
-            return Result(ResultType.FAILED, str(e))
+        if self.wait_for_readiness:
+            try:
+                self.jhelper.wait_application_ready(
+                    self.application,
+                    self.model,
+                    accepted_status=self.get_accepted_application_status(),
+                    timeout=self.get_application_timeout(),
+                )
+            except TimeoutError as e:
+                LOG.warning("Application %r is not ready: %r", self.application, e)
+                return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.COMPLETED)
 
@@ -209,7 +212,7 @@ class RemoveMachineUnitsStep(BaseStep):
             filtered_node_names = [node["name"] for node in filtered_nodes]
             missing_nodes = set(self.names) - set(filtered_node_names)
             LOG.debug(
-                f"Nodes '{','.join(missing_nodes)}' do not exist in cluster database"
+                "Nodes do not exist in cluster database: %s", ",".join(missing_nodes)
             )
 
         try:
@@ -225,7 +228,7 @@ class RemoveMachineUnitsStep(BaseStep):
 
         for name, unit in app.units.items():
             if unit.machine in to_remove_node_ids:
-                LOG.debug(f"Unit {name} is deployed on machine: {self.machine_id}")
+                LOG.debug("Unit %s is deployed on machine: %s", name, self.machine_id)
                 self.units_to_remove.add(name)
 
         if len(self.units_to_remove) == 0:
@@ -238,7 +241,9 @@ class RemoveMachineUnitsStep(BaseStep):
         try:
             self.update_status(context, "Removing units")
             for unit in self.units_to_remove:
-                LOG.debug(f"Removing unit {unit} from application {self.application}")
+                LOG.debug(
+                    "Removing unit %s from application %s", unit, self.application
+                )
                 self.jhelper.remove_unit(self.application, unit, self.model)
             self.update_status(context, "Waiting for units to be removed")
             self.jhelper.wait_units_gone(
@@ -251,7 +256,7 @@ class RemoveMachineUnitsStep(BaseStep):
                 timeout=self.get_unit_timeout(),
             )
         except (ApplicationNotFoundException, TimeoutError) as e:
-            LOG.warning(str(e))
+            LOG.warning("Failed to remove application %s: %r", self.application, e)
             return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.COMPLETED)
@@ -410,7 +415,7 @@ class PatchLoadBalancerServicesIPStep(BaseStep, abc.ABC):
             pools = kube_client.list(lbpool_resource, namespace=lbpool_model)
             pool_names = [pool.metadata.name for pool in pools if pool.metadata]
             if self.pool_name not in pool_names:
-                LOG.debug(f"IPAddresspool {self.pool_name} does not exist, skipping")
+                LOG.debug("IPAddresspool %s does not exist, skipping", self.pool_name)
                 return Result(ResultType.SKIPPED)
         except l_exceptions.ApiError as e:
             LOG.debug("Error listing load balancer pools", exc_info=True)
@@ -669,7 +674,7 @@ class PatchLoadBalancerServicesIPPoolStep(BaseStep, abc.ABC):
             pools = kube_client.list(lbpool_resource, namespace=lbpool_model)
             pool_names = [pool.metadata.name for pool in pools if pool.metadata]
             if self.pool_name not in pool_names:
-                LOG.debug(f"IPAddresspool {self.pool_name} does not exist, skipping")
+                LOG.debug("IPAddresspool %s does not exist, skipping", self.pool_name)
                 return Result(ResultType.SKIPPED)
         except l_exceptions.ApiError as e:
             LOG.debug("Error listing load balancer pools", exc_info=True)
@@ -735,7 +740,7 @@ class PatchLoadBalancerServicesIPPoolStep(BaseStep, abc.ABC):
         Raises ApiError from lightkube if not connected to k8s
         """
         service = self._get_service(service_name, find_lb=False)
-        LOG.debug(f"Waiting for service {service} annotations to get updated")
+        LOG.debug("Waiting for service %s annotations to get updated", service)
 
         if not service.metadata:
             raise ValueError(f"Service {service_name} has no metadata")
@@ -833,19 +838,23 @@ class PatchLoadBalancerServicesIPPoolStep(BaseStep, abc.ABC):
                 service_annotations[self.lb_pool_annotation] = self.pool_name
                 if self.lb_ip_annotation in service_annotations:
                     LOG.debug(
-                        f"Removing {self.lb_ip_annotation!r} for service "
-                        f"{service_name!r}"
+                        "Removing %r for service %r",
+                        self.lb_ip_annotation,
+                        service_name,
                     )
                     service_annotations.pop(self.lb_ip_annotation)
                 if self.lb_allocated_pool_annotation in service_annotations:
                     LOG.debug(
-                        f"Removing {self.lb_allocated_pool_annotation!r} for service"
-                        f" {service_name!r}"
+                        "Removing %r for service %r",
+                        self.lb_allocated_pool_annotation,
+                        service_name,
                     )
                     service_annotations.pop(self.lb_allocated_pool_annotation)
                 LOG.debug(
-                    f"Updating {service_name!r} to use annotation "
-                    f"{self.lb_pool_annotation!r} with value {self.pool_name!r}"
+                    "Updating %r to use annotation %r with value %r",
+                    service_name,
+                    self.lb_pool_annotation,
+                    self.pool_name,
                 )
                 # Some services like consul have Nodeport for protocol TCP and UDP
                 # defined with same port number and so kubernetes cannot patch the
@@ -903,11 +912,15 @@ class CreateLoadBalancerIPPoolsStep(BaseStep, abc.ABC):
         # Pool already exists in k8s, replace the pool if addresses vary
         if pool:
             if pool.spec["addresses"] != addresses:
-                LOG.debug(f"Update IP Address pool {name} addresses with {addresses}")
+                LOG.debug(
+                    "Update IP Address pool %s addresses with %s", name, addresses
+                )
                 pool.spec["addresses"] = addresses
                 self.kube.replace(pool)
         else:
-            LOG.debug(f"Create new IP Address Pool {name} with addresses {addresses}")
+            LOG.debug(
+                "Create new IP Address Pool %s with addresses %s", name, addresses
+            )
             new_ippool = self.lbpool_resource(
                 metadata=meta_v1.ObjectMeta(name=name),
                 spec={"addresses": addresses, "autoAssign": False},

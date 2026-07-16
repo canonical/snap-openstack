@@ -54,6 +54,21 @@ resource "juju_integration" "observability-agent-integrations" {
   }
 }
 
+resource "juju_integration" "observability-agent-integrations-juju-info" {
+  for_each   = toset(var.observability-agent-integration-apps-juju-info)
+  model_uuid = data.juju_model.principal_application_model.uuid
+
+  application {
+    name     = juju_application.observability-agent.name
+    endpoint = "juju-info"
+  }
+
+  application {
+    name     = each.value
+    endpoint = "juju-info"
+  }
+}
+
 resource "juju_integration" "observability-agent-to-cos-prometheus" {
   count      = var.receive-remote-write-offer-url != null ? 1 : 0
   model_uuid = data.juju_model.principal_application_model.uuid

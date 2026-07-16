@@ -145,6 +145,21 @@ resource "juju_integration" "microovn-openstack-network-agents" {
   }
 }
 
+resource "juju_integration" "role-distributor-microovn" {
+  count      = var.role_distributor_application_name != null ? 1 : 0
+  model_uuid = data.juju_model.machine_model.uuid
+
+  application {
+    name     = var.role_distributor_application_name
+    endpoint = "role-assignment"
+  }
+
+  application {
+    name     = juju_application.microovn.name
+    endpoint = "role-assignment"
+  }
+}
+
 resource "juju_integration" "microovn-to-ovn-proxy" {
   count      = length(juju_application.sunbeam-ovn-proxy.*.name) > 0 ? 1 : 0
   model_uuid = data.juju_model.machine_model.uuid

@@ -26,6 +26,11 @@ from sunbeam.core.juju import (
 )
 from sunbeam.core.manifest import Manifest
 from sunbeam.core.openstack import OPENSTACK_MODEL
+from sunbeam.core.terraform import (
+    TerraformException,
+    TerraformHelper,
+    TerraformStateLockedException,
+)
 
 LOG = logging.getLogger(__name__)
 
@@ -33,6 +38,7 @@ UPGRADE_ALL_UNITS_TIMEOUT = 3600
 UPGRADE_HIGHEST_UNIT_TIMEOUT = 900
 MYSQL_UPGRADE_CONFIG_KEY = "mysql_k8s_upgrade_state"
 MYSQL_CHARM = "mysql-k8s"
+MYSQL_APP = "mysql"
 
 
 class MySQLUpgradeState(StrEnum):
@@ -81,9 +87,9 @@ def load_upgrade_state(client: Client) -> dict:
     try:
         state = json.loads(client.cluster.get_config(MYSQL_UPGRADE_CONFIG_KEY))
     except ConfigItemNotFoundException as e:
-        LOG.debug(f"{MYSQL_UPGRADE_CONFIG_KEY} not found: " + str(e))
+        LOG.debug("Config item for %s not found: %r", MYSQL_UPGRADE_CONFIG_KEY, e)
     except (json.JSONDecodeError, TypeError) as e:
-        LOG.warning(f"Found malformed mysql upgrade state from clusterd: {str(e)}. ")
+        LOG.warning("Found malformed MySQL upgrade state from clusterd: %r", e)
     return state
 
 
@@ -132,7 +138,7 @@ class MySQLCharmUpgradeStep(BaseStep, JujuStepHelper):
         self.original_revision: int | None = None
         self.original_scale: int | None = None
         if reset_mysql_upgrade_state:
-            LOG.debug("Resetting mysql upgrade state.")
+            LOG.debug("Resetting MySQL upgrade state")
             self._reset_state()
 
     def _get_upgrade_stack(self, unit_data: dict) -> list[str]:
@@ -145,7 +151,7 @@ class MySQLCharmUpgradeStep(BaseStep, JujuStepHelper):
                 try:
                     return json.loads(raw)
                 except json.JSONDecodeError:
-                    LOG.warning(f"Failed to parse upgrade stack: {raw}")
+                    LOG.warning("Failed to parse upgrade stack: %s", raw)
 
         return []
 
@@ -164,17 +170,17 @@ class MySQLCharmUpgradeStep(BaseStep, JujuStepHelper):
                 "original_scale": self.original_scale,
             },
         )
-        LOG.debug("mysql upgrade state %s", state.name)
+        LOG.debug("MySQL upgrade state %s", state.name)
 
     def _reset_state(self):
-        LOG.debug("mysql resetting upgrade state")
+        LOG.debug("Resetting MySQL upgrade state")
         self.original_revision = None
         self.original_scale = None
         self.state = MySQLUpgradeState.INIT
         try:
             self.client.cluster.delete_config(MYSQL_UPGRADE_CONFIG_KEY)
         except ConfigItemNotFoundException as e:
-            LOG.warning("mysql-k8s upgrade state not found in clusterd: %s", e)
+            LOG.warning("MySQL upgrade state not found in clusterd: %r", e)
 
     def _target_scale_for_upgrade(self, original_scale: int) -> int:
         """Calculate target scale for upgrading mysql-k8s.
@@ -199,8 +205,9 @@ class MySQLCharmUpgradeStep(BaseStep, JujuStepHelper):
         self.original_revision = app.charm_rev
         self.original_scale = app.scale
         LOG.debug(
-            f"Recorded original mysql-k8s revision: {self.original_revision}, "
-            f"scale: {self.original_scale}"
+            "Recorded original mysql-k8s revision: %d, scale: %d",
+            self.original_revision,
+            self.original_scale,
         )
         self._set_state(MySQLUpgradeState.ORIGINAL_STATE_RECORDED)
 
@@ -421,10 +428,11 @@ class MySQLCharmUpgradeStep(BaseStep, JujuStepHelper):
             )
             self.jhelper.wait_until_active(self.model, apps=[self.application])
             self._set_state(MySQLUpgradeState.SCALED_BACK)
-        except (JujuException, JujuWaitException, TimeoutError) as exc:
+        except (JujuException, JujuWaitException, TimeoutError) as e:
             LOG.warning(
-                f"Upgrade completed but scale-back to original scale: "
-                f"{self.original_scale} failed: {str(exc)}",
+                "Upgrade completed but scale-back to original scale of %d failed: %r",
+                self.original_scale,
+                e,
             )
 
     def is_skip(self, context: StepContext) -> Result:
@@ -477,20 +485,29 @@ class MySQLCharmUpgradeStep(BaseStep, JujuStepHelper):
             return Result(ResultType.SKIPPED, msg)
 
         deployed = app.charm_rev
+        # Branch channels (track/risk/branch) are not listed in the Charmhub
+        # channel map, so revision lookups will fail. Proceed with refresh
+        # anyway so juju picks up any new revision published to the branch.
+        if len(deployed_channel.split("/")) > 2:
+            LOG.debug(
+                "%s is on a branch channel %r, refreshing to pick up latest revision",
+                MYSQL_CHARM,
+                deployed_channel,
+            )
+            return Result(ResultType.COMPLETED)
+
         if app.base:
             base = f"{app.base.name}@{app.base.channel}"
-            latest = self.jhelper.get_available_charm_revision(
+            latest_revs = self.jhelper.get_available_charm_revisions(
                 MYSQL_CHARM,
                 deployed_channel,
                 base,
-                arch="amd64",
             )
         else:
-            LOG.debug("Could not determine base for mysql-k8s.")
-            latest = self.jhelper.get_available_charm_revision(
+            LOG.debug("Could not determine base for mysql-k8s")
+            latest_revs = self.jhelper.get_available_charm_revisions(
                 MYSQL_CHARM,
                 deployed_channel,
-                arch="amd64",
             )
         try:
             leader = self.jhelper.get_leader_unit(self.application, self.model)
@@ -502,7 +519,7 @@ class MySQLCharmUpgradeStep(BaseStep, JujuStepHelper):
         unit_data = self.jhelper.show_unit(self.model, leader)
         stack_empty = not self._get_upgrade_stack(unit_data)
         # charm is already at the latest revision and no upgrade in progress
-        if deployed == latest and stack_empty:
+        if deployed in latest_revs.values() and stack_empty:
             msg = f"mysql-k8s already at latest revision {deployed}"
             LOG.debug(msg)
             return Result(ResultType.SKIPPED, msg)
@@ -527,11 +544,11 @@ class MySQLCharmUpgradeStep(BaseStep, JujuStepHelper):
         try:
             self.state = MySQLUpgradeState[state_name]
         except KeyError:
-            LOG.warning(f"Invalid mysql-k8s upgrade state: {state_name}")
+            LOG.warning("Invalid MySQL upgrade state: %s", state_name)
             self.state = MySQLUpgradeState.INIT
         self.original_revision = persisted.get("original_revision")
         self.original_scale = persisted.get("original_scale")
-        LOG.debug("Starting from mysql upgrade state: %s", self.state.name)
+        LOG.debug("Starting from MySQL upgrade state: %s", self.state.name)
 
         try:
             self.record_original_state(context)
@@ -550,3 +567,105 @@ class MySQLCharmUpgradeStep(BaseStep, JujuStepHelper):
             )
         except SunbeamException as exc:
             return Result(ResultType.FAILED, str(exc))
+
+
+class ReapplyMySQLTerraformPlanStep(BaseStep, JujuStepHelper):
+    """Reapply only MySQL-related components in the Terraform plan."""
+
+    _CONFIG = "TerraformVarsOpenstack"
+
+    def __init__(
+        self,
+        deployment: Deployment,
+        client: Client,
+        tfhelper: TerraformHelper,
+        jhelper: JujuHelper,
+        manifest: Manifest,
+    ):
+        super().__init__(
+            "Applying MySQL Terraform changes",
+            "Applying MySQL-specific Terraform changes",
+        )
+        self.deployment = deployment
+        self.client = client
+        self.tfhelper = tfhelper
+        self.jhelper = jhelper
+        self.manifest = manifest
+        self.model = OPENSTACK_MODEL
+
+    def _get_mysql_terraform_targets(self) -> list[str]:
+        """Get terraform targets for MySQL and mysql-router resources in state."""
+        targets = [
+            # MySQL module targets
+            "-target=module.single-mysql",
+            "-target=module.many-mysql",
+        ]
+
+        try:
+            # Use terraform state to target only resources that are part of the
+            # openstack plan and currently exist for this deployment.
+            state_resources = self.tfhelper.state_list()
+            LOG.debug("Found %s openstack-plan resources", len(state_resources))
+
+            for resource in state_resources:
+                if "mysql-router" not in resource:
+                    continue
+                if not (
+                    resource.startswith("juju_application.")
+                    or resource.startswith("juju_integration.")
+                    or ".juju_application." in resource
+                    or ".juju_integration." in resource
+                ):
+                    continue
+                targets.append(f"-target={resource}")
+        except Exception as e:
+            LOG.warning("Error getting applications for mysql-router targets: %s", e)
+            # Continue with basic targets even if we can't get all mysql-router apps
+
+        LOG.debug("MySQL terraform targets: %s", targets)
+        return targets
+
+    def run(self, context: StepContext) -> Result:
+        """Apply terraform with targets for MySQL components only."""
+        try:
+            self.update_status(context, "updating MySQL components")
+
+            # Build target list for mysql and all mysql-router instances
+            targets = self._get_mysql_terraform_targets()
+
+            # Apply terraform with targets
+            LOG.info("Applying terraform with %s MySQL-specific targets", len(targets))
+            self.tfhelper.update_tfvars_and_apply_tf(
+                self.client,
+                self.manifest,
+                tfvar_config=self._CONFIG,
+                tf_apply_extra_args=targets,
+                reporter=context.reporter,
+            )
+
+        except (TerraformException, TerraformStateLockedException) as e:
+            LOG.warning("Error updating MySQL components: %r", e)
+            return Result(ResultType.FAILED, str(e))
+
+        # Get mysql-related apps to wait for
+        mysql_apps = [MYSQL_APP]
+        try:
+            apps = self.jhelper.get_application_names(self.model)
+            mysql_apps.extend([app for app in apps if app.endswith("-mysql-router")])
+        except Exception as e:
+            LOG.warning("Error getting mysql-router apps to wait for: %s", e)
+
+        # Wait only for mysql and mysql-router applications
+        try:
+            self.update_status(context, "waiting for MySQL services to settle")
+            LOG.debug("Waiting for MySQL applications: %s", mysql_apps)
+            self.jhelper.wait_until_active(
+                model=self.model,
+                apps=mysql_apps,
+                timeout=1200,
+            )
+        except (JujuWaitException, TimeoutError) as e:
+            LOG.warning("Error waiting for MySQL applications: %r", e)
+            return Result(ResultType.FAILED, str(e))
+
+        return Result(ResultType.COMPLETED)

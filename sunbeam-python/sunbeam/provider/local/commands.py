@@ -26,13 +26,14 @@ from sunbeam.commands.configure import (
     UserOpenRCStep,
     retrieve_admin_credentials,
 )
-from sunbeam.commands.dashboard_url import retrieve_dashboard_url
+from sunbeam.commands.dashboard import retrieve_dashboard_url
 from sunbeam.commands.proxy import PromptForProxyStep
 from sunbeam.core import ovn
 from sunbeam.core.checks import (
     Check,
     DaemonGroupCheck,
     JujuControllerRegistrationCheck,
+    JujuLoginCheck,
     JujuSnapCheck,
     LocalShareCheck,
     LxdGroupCheck,
@@ -82,7 +83,6 @@ from sunbeam.core.terraform import TerraformInitStep
 from sunbeam.feature_gates import (
     feature_gate_command,
     feature_gate_option,
-    split_roles_enabled,
 )
 from sunbeam.provider.base import ProviderBase
 from sunbeam.provider.common.multiregion import connect_to_region_controller
@@ -116,6 +116,7 @@ from sunbeam.steps.clusterd import (
     PromptCheckNodeExistStep,
     SaveManagementCidrStep,
 )
+from sunbeam.steps.horizon import AttachHorizonThemeStep
 from sunbeam.steps.hypervisor import (
     DeployHypervisorApplicationStep,
     ReapplyHypervisorOptionalIntegrationsStep,
@@ -160,7 +161,6 @@ from sunbeam.steps.k8s import (
     EnsureK8SUnitsTaggedStep,
     EnsureL2AdvertisementByHostStep,
     MigrateK8SKubeconfigStep,
-    PatchCoreDNSStep,
     PatchServiceExternalTrafficStep,
     RemoveK8SUnitsStep,
     StoreK8SKubeConfigStep,
@@ -185,6 +185,11 @@ from sunbeam.steps.openstack import (
     PromptDatabaseTopologyStep,
     PromptRegionStep,
     ReapplyOpenStackTerraformPlanStep,
+)
+from sunbeam.steps.role_distributor import (
+    DeployRoleDistributorApplicationStep,
+    ReapplyRoleDistributorApplicationStep,
+    RemoveRoleDistributorUnitsStep,
 )
 from sunbeam.steps.sso import (
     DeployIdentityProvidersStep,
@@ -327,7 +332,6 @@ def get_k8s_plans(
                 fqdn,
             ),
             EnsureDefaultL2AdvertisementMutedStep(deployment, client, jhelper),
-            PatchCoreDNSStep(deployment, jhelper),
         ]
     )
 
@@ -602,7 +606,7 @@ def deploy_and_migrate_juju_controller(
     "--role",
     "roles",
     multiple=True,
-    default=["control", "compute"],
+    default=["control", "compute", "network"],
     callback=validate_roles,
     help="Specify additional roles for the bootstrap node. "
     "Possible values: compute, storage, network, region_controller. "
@@ -657,8 +661,8 @@ def bootstrap(  # noqa: C901
             "The database topology can also be set via manifest."
         )
 
-    LOG.debug(f"Manifest used for deployment - core: {manifest.core}")
-    LOG.debug(f"Manifest used for deployment - features: {manifest.features}")
+    LOG.debug("Manifest used for deployment - core: %s", manifest.core)
+    LOG.debug("Manifest used for deployment - features: %s", manifest.features)
 
     # Bootstrap node must always have the control role or region controller
     # role.
@@ -668,13 +672,8 @@ def bootstrap(  # noqa: C901
     is_control_node = any(role.is_control_node() for role in roles)
     is_compute_node = any(role.is_compute_node() for role in roles)
     is_storage_node = any(role.is_storage_node() for role in roles)
-    is_network_node = any(role.is_network_node() for role in roles)
     is_region_controller = any(role.is_region_controller() for role in roles)
 
-    if is_network_node and is_compute_node and not split_roles_enabled():
-        raise click.ClickException(
-            "A node cannot be both a compute and network node at the same time."
-        )
     if is_region_controller and len(roles) > 1:
         raise click.ClickException(
             "The region controller role is mutually exclusive with all other roles."
@@ -684,7 +683,7 @@ def bootstrap(  # noqa: C901
 
     roles_str = ",".join(role.name for role in roles)
     pretty_roles = ", ".join(role.name.lower() for role in roles)
-    LOG.debug(f"Bootstrap node: roles {roles_str}")
+    LOG.debug("Bootstrap node: roles %s", roles_str)
 
     data_location = snap.paths.user_data
 
@@ -725,7 +724,7 @@ def bootstrap(  # noqa: C901
     try:
         local_management_ip = _resolve_local_ip_from_cidr(management_cidr)
     except ValueError as e:
-        LOG.error(f"Error resolving local management ip from cidr: {e}")
+        LOG.exception("Error resolving local management ip from cidr")
         raise click.ClickException("Cannot resolve local management ip") from e
 
     plan: list[BaseStep] = []
@@ -777,7 +776,7 @@ def bootstrap(  # noqa: C901
     # Store deployment type for feature gate sync behavior
     client.cluster.update_config(DEPLOYMENT_TYPE_CONFIG_KEY, deployment.type)
     proxy_settings = deployment.get_proxy_settings()
-    LOG.debug(f"Proxy settings: {proxy_settings}")
+    LOG.debug("Proxy settings: %s", proxy_settings)
 
     if juju_controller:
         plan11: list[BaseStep] = []
@@ -831,6 +830,18 @@ def bootstrap(  # noqa: C901
     microovn_tfhelper = deployment.get_tfhelper("microovn-plan")
     microovn_necessary = ovn_manager.is_microovn_necessary(roles)
     if microovn_necessary:
+        role_distributor_tfhelper = deployment.get_tfhelper("role-distributor-plan")
+        plan1.append(TerraformInitStep(role_distributor_tfhelper))
+        plan1.append(
+            DeployRoleDistributorApplicationStep(
+                deployment,
+                client,
+                role_distributor_tfhelper,
+                jhelper,
+                manifest,
+                deployment.openstack_machines_model,
+            )
+        )
         plan1.append(TerraformInitStep(microovn_tfhelper))
         plan1.append(
             DeployMicroOVNApplicationStep(
@@ -903,6 +914,14 @@ def bootstrap(  # noqa: C901
                 deployment.openstack_machines_model,
                 proxy_settings=proxy_settings,
                 is_region_controller=is_region_controller,
+            )
+        )
+        plan1.append(
+            AttachHorizonThemeStep(
+                client=client,
+                jhelper=jhelper,
+                manifest=manifest,
+                model=OPENSTACK_MODEL,
             )
         )
         plan1.append(
@@ -1021,10 +1040,14 @@ def configure_sriov(
     node = client.cluster.get_node_info(fqdn)
 
     if "compute" not in node["role"]:
-        LOG.info("SR-IOV can only be configured on compute nodes.")
+        LOG.info("SR-IOV can only be configured on compute nodes")
         return
 
     manifest = deployment.get_manifest(manifest_path)
+
+    # Login to the Juju controller
+    run_preflight_checks([JujuLoginCheck(deployment.juju_account)], console)
+
     jhelper = deployment.get_juju_helper()
     jhelper_keystone = deployment.get_juju_helper(keystone=True)
 
@@ -1094,10 +1117,14 @@ def configure_dpdk(
     node = client.cluster.get_node_info(fqdn)
 
     if "compute" not in node["role"]:
-        LOG.info("DPDK can only be configured on compute nodes.")
+        LOG.info("DPDK can only be configured on compute nodes")
         return
 
     manifest = deployment.get_manifest(manifest_path)
+
+    # Login to the Juju controller
+    run_preflight_checks([JujuLoginCheck(deployment.juju_account)], console)
+
     jhelper = deployment.get_juju_helper()
     jhelper_keystone = deployment.get_juju_helper(keystone=True)
 
@@ -1196,10 +1223,18 @@ def add(
         JujuLoginStep(deployment.juju_account),
         ClusterAddNodeStep(client, name),
         CreateJujuUserStep(name),
-        JujuGrantModelAccessStep(jhelper, name, deployment.openstack_machines_model),
-        JujuGrantModelAccessStep(jhelper, name, OPENSTACK_MODEL),
     ]
+
     plan1_results = run_plan(plan1, console, show_hints)
+
+    # Grant the new node access to all Juju models
+    plan_access = [
+        JujuGrantModelAccessStep(jhelper, name, model["short-name"])
+        for model in jhelper.models()
+        if model["short-name"]
+    ]
+    if plan_access:
+        run_plan(plan_access, console, show_hints)
 
     add_node_step_result = get_step_result(plan1_results, ClusterAddNodeStep)
     create_juju_user_step_result = get_step_result(plan1_results, CreateJujuUserStep)
@@ -1366,13 +1401,8 @@ def join(  # noqa: C901
     is_control_node = any(role.is_control_node() for role in roles)
     is_compute_node = any(role.is_compute_node() for role in roles)
     is_storage_node = any(role.is_storage_node() for role in roles)
-    is_network_node = any(role.is_network_node() for role in roles)
     is_region_controller = any(role.is_region_controller() for role in roles)
 
-    if is_network_node and is_compute_node and not split_roles_enabled():
-        raise click.ClickException(
-            "A node cannot be both a compute and network node at the same time."
-        )
     if is_region_controller and len(roles) > 1:
         raise click.ClickException(
             "The region controller role is mutually exclusive with all other roles."
@@ -1383,7 +1413,7 @@ def join(  # noqa: C901
 
     roles_str = roles_to_str_list(roles)
     pretty_roles = ", ".join(role_.name.lower() for role_ in roles)
-    LOG.debug(f"Node joining the cluster with roles: {pretty_roles}")
+    LOG.debug("Node joining the cluster with roles: %s", pretty_roles)
 
     preflight_checks: list[Check] = []
     preflight_checks.append(SystemRequirementsCheck())
@@ -1551,6 +1581,18 @@ def join(  # noqa: C901
     plan4.append(TerraformInitStep(cinder_volume_tfhelper))
     if microovn_necessary:
         microovn_tfhelper = deployment.get_tfhelper("microovn-plan")
+        role_distributor_tfhelper = deployment.get_tfhelper("role-distributor-plan")
+        plan4.append(TerraformInitStep(role_distributor_tfhelper))
+        plan4.append(
+            DeployRoleDistributorApplicationStep(
+                deployment,
+                client,
+                role_distributor_tfhelper,
+                jhelper,
+                manifest,
+                deployment.openstack_machines_model,
+            )
+        )
         plan4.append(TerraformInitStep(microovn_tfhelper))
         plan4.append(
             DeployMicroOVNApplicationStep(
@@ -1584,9 +1626,7 @@ def join(  # noqa: C901
                 deployment.get_ovn_manager(),
             )
         )
-        if ovn_manager.is_network_agent_dataplane_node(roles) or (
-            split_roles_enabled() and microovn_necessary
-        ):
+        if ovn_manager.is_network_agent_dataplane_node(roles) or microovn_necessary:
             plan4.append(
                 LocalSetOpenStackNetworkAgentsStep(
                     client,
@@ -1599,17 +1639,69 @@ def join(  # noqa: C901
             )
 
     if is_storage_node:
-        plan4.append(TerraformInitStep(microceph_tfhelper))
-        plan4.append(
-            DeployMicrocephApplicationStep(
-                deployment,
-                client,
-                microceph_tfhelper,
-                jhelper,
-                manifest,
-                deployment.openstack_machines_model,
-            )
+        # Check if this is the first storage node joining
+        is_first_storage_node = (
+            len(client.cluster.list_nodes_by_role(Role.STORAGE.name.lower())) <= 1
         )
+
+        if is_first_storage_node:
+            # Deploy MicroCeph WITHOUT waiting
+            # The charm will be stuck in "waiting" because it needs traefik-route-rgw
+            # integration which doesn't exist as enable-ceph=False.
+            plan4.append(TerraformInitStep(microceph_tfhelper))
+            plan4.append(
+                DeployMicrocephApplicationStep(
+                    deployment,
+                    client,
+                    microceph_tfhelper,
+                    jhelper,
+                    manifest,
+                    deployment.openstack_machines_model,
+                    wait_for_readiness=False,
+                )
+            )
+
+            # Redeploy control plane with enable-ceph=true
+            plan4.append(
+                DeployControlPlaneStep(
+                    deployment,
+                    openstack_tfhelper,
+                    jhelper,
+                    manifest,
+                    "auto",
+                    deployment.openstack_machines_model,
+                    is_region_controller=is_region_controller,
+                )
+            )
+
+            # Redeploy MicroCeph with output from OS TF variables related to
+            # traefik-rgw/keystone-endpoints offers from openstack model
+            microceph_tfhelper = deployment.get_tfhelper("microceph-plan")
+            plan4.append(TerraformInitStep(microceph_tfhelper))
+            plan4.append(
+                DeployMicrocephApplicationStep(
+                    deployment,
+                    client,
+                    microceph_tfhelper,
+                    jhelper,
+                    manifest,
+                    deployment.openstack_machines_model,
+                )
+            )
+        else:
+            # Deploy MicroCeph directly with blocking as OS TF variables are already set
+            plan4.append(TerraformInitStep(microceph_tfhelper))
+            plan4.append(
+                DeployMicrocephApplicationStep(
+                    deployment,
+                    client,
+                    microceph_tfhelper,
+                    jhelper,
+                    manifest,
+                    deployment.openstack_machines_model,
+                )
+            )
+
         plan4.append(
             ConfigureMicrocephOSDStep(
                 client,
@@ -1630,49 +1722,6 @@ def join(  # noqa: C901
                 deployment.openstack_machines_model,
             )
         )
-
-        # Re-deploy control plane if this is the first storage node joining
-        # the cluster to enable mandatory storage services
-        storage_nodes = client.cluster.list_nodes_by_role(Role.STORAGE.name.lower())
-        if len(storage_nodes) == 1:
-            plan4.append(
-                DeployControlPlaneStep(
-                    deployment,
-                    openstack_tfhelper,
-                    jhelper,
-                    manifest,
-                    "auto",
-                    deployment.openstack_machines_model,
-                    is_region_controller=is_region_controller,
-                )
-            )
-
-            # Redeploy of Microceph is required to fill terraform vars
-            # related to traefik-rgw/keystone-endpoints offers from
-            # openstack model
-            microceph_tfhelper = deployment.get_tfhelper("microceph-plan")
-            plan4.append(TerraformInitStep(microceph_tfhelper))
-            plan4.append(
-                DeployMicrocephApplicationStep(
-                    deployment,
-                    client,
-                    microceph_tfhelper,
-                    jhelper,
-                    manifest,
-                    deployment.openstack_machines_model,
-                )
-            )
-            # Fill AMQP / Keystone / MySQL offers from openstack model
-            plan4.append(
-                DeployCinderVolumeApplicationStep(
-                    deployment,
-                    client,
-                    cinder_volume_tfhelper,
-                    jhelper,
-                    manifest,
-                    deployment.openstack_machines_model,
-                )
-            )
 
         plan4.append(
             ReapplyHypervisorOptionalIntegrationsStep(
@@ -1790,9 +1839,11 @@ def list_nodes(
     show_hints: bool,
 ) -> None:
     """List nodes in the cluster."""
-    preflight_checks = [DaemonGroupCheck()]
-    run_preflight_checks(preflight_checks, console)
     deployment: LocalDeployment = ctx.obj
+
+    preflight_checks = [DaemonGroupCheck(), JujuLoginCheck(deployment.juju_account)]
+    run_preflight_checks(preflight_checks, console)
+
     jhelper = JujuHelper(deployment.juju_controller)
     step = LocalClusterStatusStep(deployment, jhelper)
     results = run_plan([step], console, show_hints)
@@ -1817,13 +1868,12 @@ def remove(ctx: click.Context, name: str, force: bool, show_hints: bool) -> None
     deployment: LocalDeployment = ctx.obj
     client = deployment.get_client()
     jhelper = JujuHelper(deployment.juju_controller)
+    microovn_machine_ids = deployment.get_ovn_manager().get_machines()
 
-    preflight_checks = [DaemonGroupCheck()]
+    preflight_checks = [DaemonGroupCheck(), JujuLoginCheck(deployment.juju_account)]
     run_preflight_checks(preflight_checks, console)
 
-    plan: list[BaseStep] = [
-        JujuLoginStep(deployment.juju_account),
-    ]
+    plan: list[BaseStep] = []
 
     if not force:
         plan.append(PromptCheckNodeExistStep(client, name))
@@ -1925,6 +1975,31 @@ def remove(ctx: click.Context, name: str, force: bool, show_hints: bool) -> None
             ClusterRemoveNodeStep(client, name),
         ]
     )
+    if microovn_machine_ids:
+        manifest = deployment.get_manifest()
+        role_distributor_tfhelper = deployment.get_tfhelper("role-distributor-plan")
+        remove_k8s_unit_index = next(
+            i for i, step in enumerate(plan) if isinstance(step, CordonK8SUnitStep)
+        )
+        plan.insert(
+            remove_k8s_unit_index,
+            RemoveRoleDistributorUnitsStep(
+                client, name, jhelper, deployment.openstack_machines_model
+            ),
+        )
+        plan.extend(
+            [
+                TerraformInitStep(role_distributor_tfhelper),
+                ReapplyRoleDistributorApplicationStep(
+                    deployment,
+                    client,
+                    role_distributor_tfhelper,
+                    jhelper,
+                    manifest,
+                    deployment.openstack_machines_model,
+                ),
+            ]
+        )
 
     run_plan(plan, console, show_hints)
     click.echo(f"Removed node {name} from the cluster")
@@ -1976,14 +2051,14 @@ def configure_cmd(
     # Validate manifest file
     manifest = deployment.get_manifest(manifest_path)
 
-    LOG.debug(f"Manifest used for deployment - core: {manifest.core}")
-    LOG.debug(f"Manifest used for deployment - features: {manifest.features}")
+    LOG.debug("Manifest used for deployment - core: %s", manifest.core)
+    LOG.debug("Manifest used for deployment - features: %s", manifest.features)
 
     name = utils.get_fqdn(deployment.get_management_cidr())
     jhelper = deployment.get_juju_helper()
     jhelper_keystone = deployment.get_juju_helper(keystone=True)
     if not jhelper.model_exists(OPENSTACK_MODEL):
-        LOG.error(f"Expected model {OPENSTACK_MODEL} missing")
+        LOG.error("Expected model %s is missing", OPENSTACK_MODEL)
         raise click.ClickException("Please run `sunbeam cluster bootstrap` first")
     # Check if the node is a network node
     node = client.cluster.get_node_info(name)
@@ -2064,12 +2139,21 @@ def configure_cmd(
 
     if "network" in node["role"] or (
         is_microovn_deployment
-        and (
-            "compute" in node["role"]
-            or (split_roles_enabled() and "control" in node["role"])
-        )
+        and ("compute" in node["role"] or "control" in node["role"])
     ):
+        role_distributor_tfhelper = deployment.get_tfhelper("role-distributor-plan")
         microovn_tfhelper = deployment.get_tfhelper("microovn-plan")
+        plan.append(TerraformInitStep(role_distributor_tfhelper))
+        plan.append(
+            DeployRoleDistributorApplicationStep(
+                deployment,
+                client,
+                role_distributor_tfhelper,
+                jhelper,
+                manifest,
+                deployment.openstack_machines_model,
+            )
+        )
         plan.append(
             LocalSetOpenStackNetworkAgentsStep(
                 client,

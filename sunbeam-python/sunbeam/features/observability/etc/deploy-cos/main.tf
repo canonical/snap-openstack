@@ -57,6 +57,8 @@ resource "juju_application" "alertmanager" {
 
   config = var.alertmanager-config
   units  = var.alertmanager-scale
+
+  storage_directives = var.alertmanager-storage
 }
 
 resource "juju_application" "prometheus" {
@@ -73,6 +75,8 @@ resource "juju_application" "prometheus" {
 
   config = var.prometheus-config
   units  = var.prometheus-scale
+
+  storage_directives = var.prometheus-storage
 }
 
 resource "juju_application" "grafana" {
@@ -89,6 +93,8 @@ resource "juju_application" "grafana" {
 
   config = var.grafana-config
   units  = var.grafana-scale
+
+  storage_directives = var.grafana-storage
 }
 
 resource "juju_application" "catalogue" {
@@ -126,6 +132,8 @@ resource "juju_application" "loki" {
 
   config = var.loki-config
   units  = var.loki-scale
+
+  storage_directives = var.loki-storage
 }
 
 # juju integrate traefik prometheus

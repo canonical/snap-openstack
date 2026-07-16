@@ -43,7 +43,7 @@ def connect_to_region_controller(
     Returns a tuple containing the Juju controller name and the
     primary region name.
     """
-    LOG.debug("Connecting to the region controller.")
+    LOG.debug("Connecting to the region controller")
     snap = Snap()
     data_location = snap.paths.user_data
 
@@ -74,7 +74,7 @@ def connect_to_region_controller(
             f"as the primary region: {deployment.get_region_name()}"
         )
 
-    logging.debug(
+    LOG.debug(
         "Primary region name: %s, secondary region name: %s",
         primary_region_name,
         deployment.get_region_name(),

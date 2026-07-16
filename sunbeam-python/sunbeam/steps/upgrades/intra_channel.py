@@ -30,27 +30,32 @@ from sunbeam.features.interface.v1.base import is_maas_deployment
 from sunbeam.steps.cinder_volume import DeployCinderVolumeApplicationStep
 from sunbeam.steps.hypervisor import ReapplyHypervisorTerraformPlanStep
 from sunbeam.steps.k8s import (
-    DeployK8SApplicationStep,
     EnsureCiliumDeviceByHostStep,
     EnsureDefaultL2AdvertisementMutedStep,
     EnsureL2AdvertisementByHostStep,
 )
 from sunbeam.steps.microceph import DeployMicrocephApplicationStep
 from sunbeam.steps.microovn import DeployMicroOVNApplicationStep
-from sunbeam.steps.mysql import MySQLCharmUpgradeStep
+from sunbeam.steps.mysql import MySQLCharmUpgradeStep, ReapplyMySQLTerraformPlanStep
 from sunbeam.steps.openstack import (
     OpenStackPatchLoadBalancerServicesIPPoolStep,
     OpenStackPatchLoadBalancerServicesIPStep,
     ReapplyOpenStackTerraformPlanStep,
     build_overlay_dict,
 )
+from sunbeam.steps.role_distributor import DeployRoleDistributorApplicationStep
 from sunbeam.steps.sunbeam_machine import DeploySunbeamMachineApplicationStep
 from sunbeam.steps.upgrades.base import UpgradeCoordinator, UpgradeFeatures
 
 LOG = logging.getLogger(__name__)
 console = Console()
 
-INFRA_APPS = ["mysql-k8s", "vault-k8s"]
+INFRA_APPS = ["mysql-k8s", "vault-k8s", "k8s"]
+
+# Charms that must be refreshed with trust=True so that their upgrade-charm
+# hook has the necessary k8s RBAC permissions (e.g. get/patch StatefulSets).
+# octavia-k8s needs trust to remove legacy containers during upgrade.
+CHARMS_REQUIRING_TRUST = {"octavia-k8s"}
 
 # Snap-based charm applications that expose a refresh-snap action.
 # These need to be refreshed explicitly after the charm refresh because
@@ -94,6 +99,9 @@ class LatestInChannel(BaseStep, JujuStepHelper):
     def is_track_changed_for_any_charm(self, deployed_apps: dict):
         """Check if chanel track is same in manifest and deployed app."""
         for app_name, (charm, channel, _) in deployed_apps.items():
+            # Infra apps are managed by dedicated subcommands; skip them.
+            if charm in INFRA_APPS:
+                continue
             charm_manifest = self.manifest.core.software.charms.get(charm)
             if not charm_manifest:
                 for _, feature in self.manifest.get_features():
@@ -101,7 +109,7 @@ class LatestInChannel(BaseStep, JujuStepHelper):
                     if not charm_manifest:
                         continue
             if not charm_manifest:
-                LOG.debug(f"Charm not present in manifest: {charm}")
+                LOG.debug("Charm is not present in manifest: %s", charm)
                 continue
 
             channel_from_manifest = charm_manifest.channel or ""
@@ -113,8 +121,11 @@ class LatestInChannel(BaseStep, JujuStepHelper):
             # Compare tracks
             if track_from_manifest != track_from_deployed_app:
                 LOG.debug(
-                    f"Channel track for app {app_name} different in manifest "
-                    "and actual deployed"
+                    "Channel track for app %s is different between the manifest "
+                    "and the actual deployment (manifest: %s, deployed: %s)",
+                    app_name,
+                    track_from_manifest,
+                    track_from_deployed_app,
                 )
                 return True
 
@@ -136,14 +147,14 @@ class LatestInChannel(BaseStep, JujuStepHelper):
         if not refreshed_apps:
             return Result(ResultType.COMPLETED)
 
-        LOG.debug(f"Waiting for apps {refreshed_apps} in model {model}")
+        LOG.debug("Waiting for apps %s in model %s", refreshed_apps, model)
         if model == OPENSTACK_MODEL:
             overlay = build_pre_status_overlay(
                 refreshed_apps,
                 pre_refresh_status,
                 build_overlay_dict(refreshed_apps),
             )
-            LOG.debug(f"Wait overlay for {model}: {overlay}")
+            LOG.debug("Waiting overlay for %s: %s", model, overlay)
             status_queue: queue.Queue[str] = queue.Queue()
             status = context.status if context else None
             task = update_status_background(self, refreshed_apps, status_queue, status)
@@ -156,7 +167,7 @@ class LatestInChannel(BaseStep, JujuStepHelper):
                     overlay=overlay,
                 )
             except (JujuWaitException, TimeoutError) as e:
-                LOG.warning(str(e))
+                LOG.warning("Timed out waiting for refreshed %s: %r", refreshed_apps, e)
                 return Result(ResultType.FAILED, str(e))
             finally:
                 task.stop()
@@ -168,8 +179,10 @@ class LatestInChannel(BaseStep, JujuStepHelper):
                     prior = pre_refresh_status.get(app_name, "active")
                     accepted = list({prior, "active", "unknown"})
                     LOG.debug(
-                        f"Waiting for {app_name} in {model} "
-                        f"with accepted_status={accepted}"
+                        "Waiting for %s in %s with accepted_status=%s",
+                        app_name,
+                        model,
+                        accepted,
                     )
                     self.jhelper.wait_application_ready(
                         app_name,
@@ -178,7 +191,7 @@ class LatestInChannel(BaseStep, JujuStepHelper):
                         timeout=1800,  # 30 minutes
                     )
             except TimeoutError as e:
-                LOG.warning(str(e))
+                LOG.warning("Timed out waiting for refreshed %s: %r", app_name, e)
                 return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.COMPLETED)
@@ -204,7 +217,7 @@ class LatestInChannel(BaseStep, JujuStepHelper):
             )
         except Exception:
             LOG.debug("Could not fetch pre-refresh status", exc_info=True)
-        LOG.debug(f"Pre-refresh workload status in {model}: {pre_refresh_status}")
+        LOG.debug("Pre-refresh workload status in %s: %s", model, pre_refresh_status)
 
         refreshed_apps = []
         for app_name, (charm, channel, _) in apps.items():
@@ -212,18 +225,20 @@ class LatestInChannel(BaseStep, JujuStepHelper):
             if charm in INFRA_APPS:
                 continue
             manifest_charm = self.manifest.find_charm(charm)
+            trust = charm in CHARMS_REQUIRING_TRUST
 
             if not manifest_charm:
-                LOG.debug(f"Running refresh for app {app_name} (no manifest entry)")
-                self.jhelper.charm_refresh(app_name, model)
+                LOG.debug("Running refresh for app %s (no manifest entry)", app_name)
+                self.jhelper.charm_refresh(app_name, model, trust=trust)
                 refreshed_apps.append(app_name)
             else:
-                LOG.debug(f"Running refresh for app {app_name} with manifest config")
+                LOG.debug("Running refresh for app %s with manifest config", app_name)
                 self.jhelper.charm_refresh(
                     app_name,
                     model,
                     channel=manifest_charm.channel,
                     revision=manifest_charm.revision,
+                    trust=trust,
                 )
                 refreshed_apps.append(app_name)
 
@@ -252,7 +267,7 @@ class LatestInChannel(BaseStep, JujuStepHelper):
         all_deployed_apps = deployed_k8s_apps.copy()
         all_deployed_apps.update(deployed_machine_apps)
         all_deployed_apps.update(deployed_infra_apps)
-        LOG.debug(f"All deployed apps: {all_deployed_apps}")
+        LOG.debug("All deployed apps: %s", all_deployed_apps)
         if self.is_track_changed_for_any_charm(all_deployed_apps):
             error_msg = (
                 "Manifest has track values that require upgrades, rerun with "
@@ -315,11 +330,14 @@ class ReapplyInfraModelConfigStep(BaseStep, JujuStepHelper):
             charm_manifest = self.manifest.core.software.charms.get(charm_name)
             if not charm_manifest or not charm_manifest.config:
                 LOG.debug(
-                    f"No manifest config for {charm_name}, skipping config reapply"
+                    "No manifest config for %s, skipping config reapply", charm_name
                 )
                 continue
             LOG.debug(
-                f"Reapplying config for {app_name} in {model}: {charm_manifest.config}"
+                "Reapplying config for %s in %s: %s",
+                app_name,
+                model,
+                charm_manifest.config,
             )
             self.jhelper.set_app_config(app_name, model, charm_manifest.config)
         return Result(ResultType.COMPLETED)
@@ -351,7 +369,7 @@ class RefreshSnapStep(BaseStep, JujuStepHelper):
                 application = self.jhelper.get_application(app_name, model)
             except ApplicationNotFoundException:
                 LOG.debug(
-                    "Application %s not found in %s, skipping snap refresh",
+                    "Application %s is not found in %s, skipping snap refresh",
                     app_name,
                     model,
                 )
@@ -440,22 +458,11 @@ class LatestInChannelCoordinator(UpgradeCoordinator):
             from sunbeam.provider.maas.client import MaasClient  # noqa: PLC0415
             from sunbeam.provider.maas.steps import (  # noqa: PLC0415
                 MaasCreateLoadBalancerIPPoolsStep,
-                MaasDeployK8SApplicationStep,
             )
 
             maas_client = MaasClient.from_deployment(self.deployment)
             plan.extend(
                 [
-                    TerraformInitStep(self.deployment.get_tfhelper("k8s-plan")),
-                    MaasDeployK8SApplicationStep(
-                        self.deployment,  # type: ignore [arg-type]
-                        self.client,
-                        maas_client,
-                        self.deployment.get_tfhelper("k8s-plan"),
-                        self.jhelper,
-                        self.manifest,
-                        self.deployment.openstack_machines_model,
-                    ),
                     EnsureCiliumDeviceByHostStep(
                         self.deployment,
                         self.client,
@@ -486,6 +493,15 @@ class LatestInChannelCoordinator(UpgradeCoordinator):
                         Networks.PUBLIC,
                         self.deployment.public_ip_pool,  # type: ignore [attr-defined]
                     ),
+                    EnsureL2AdvertisementByHostStep(
+                        self.deployment,
+                        self.client,
+                        self.jhelper,
+                        self.deployment.openstack_machines_model,
+                        Networks.STORAGE,
+                        self.deployment.storage_ip_pool,  # type: ignore [attr-defined]
+                        optional_if_pool_missing=True,
+                    ),
                     OpenStackPatchLoadBalancerServicesIPPoolStep(
                         self.client,
                         self.deployment.public_api_label,  # type: ignore [attr-defined]
@@ -495,16 +511,6 @@ class LatestInChannelCoordinator(UpgradeCoordinator):
         else:
             plan.extend(
                 [
-                    TerraformInitStep(self.deployment.get_tfhelper("k8s-plan")),
-                    DeployK8SApplicationStep(
-                        self.deployment,
-                        self.client,
-                        self.deployment.get_tfhelper("k8s-plan"),
-                        self.jhelper,
-                        self.manifest,
-                        self.deployment.openstack_machines_model,
-                        refresh=True,
-                    ),
                     EnsureCiliumDeviceByHostStep(
                         self.deployment,
                         self.client,
@@ -527,6 +533,22 @@ class LatestInChannelCoordinator(UpgradeCoordinator):
             )
 
         if len(network_nodes):
+            role_distributor_tfhelper = self.deployment.get_tfhelper(
+                "role-distributor-plan"
+            )
+            plan.extend(
+                [
+                    TerraformInitStep(role_distributor_tfhelper),
+                    DeployRoleDistributorApplicationStep(
+                        self.deployment,
+                        self.client,
+                        role_distributor_tfhelper,
+                        self.jhelper,
+                        self.manifest,
+                        self.deployment.openstack_machines_model,
+                    ),
+                ]
+            )
             plan.extend(
                 [
                     TerraformInitStep(self.deployment.get_tfhelper("microovn-plan")),
@@ -602,13 +624,12 @@ class MySQLInChannelUpgradeCoordinator(UpgradeCoordinator):
                 self.reset_mysql_upgrade_state,
             ),
             TerraformInitStep(self.deployment.get_tfhelper("openstack-plan")),
-            ReapplyOpenStackTerraformPlanStep(
+            ReapplyMySQLTerraformPlanStep(
                 self.deployment,
                 self.client,
                 self.deployment.get_tfhelper("openstack-plan"),
                 self.jhelper,
                 self.manifest,
-                self.deployment.openstack_machines_model,
             ),
         ]
         return plan

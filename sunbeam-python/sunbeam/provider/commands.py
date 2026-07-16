@@ -12,7 +12,7 @@ from rich.console import Console
 from rich.table import Table
 from snaphelpers import Snap
 
-from sunbeam.core.checks import LocalShareCheck, run_preflight_checks
+from sunbeam.core.checks import JujuLoginCheck, LocalShareCheck, run_preflight_checks
 from sunbeam.core.common import (
     CONTEXT_SETTINGS,
     FORMAT_TABLE,
@@ -46,7 +46,7 @@ def load_deployment(path: Path) -> Deployment:
     deployments = DeploymentsConfig.load(path)
 
     if deployments.active is None:
-        LOG.debug("No active deployment found.")
+        LOG.debug("No active deployment found")
         return LocalDeployment()
 
     return deployments.get_active()
@@ -243,7 +243,12 @@ def update_clusterd_credentials(ctx, show_hints: bool = False):
     snap = Snap()
     path = deployment_path(snap)
     deployments = DeploymentsConfig.load(path)
+
+    # Login to the Juju controller
+    run_preflight_checks([JujuLoginCheck(deployment.juju_account)], console)
+
     jhelper = JujuHelper(deployment.juju_controller)
+
     plan = [MaasSaveClusterdCredentialsStep(jhelper, deployment.name, deployments)]
     run_plan(plan, console, show_hints)
 

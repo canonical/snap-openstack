@@ -1,6 +1,9 @@
 // Package apitypes provides shared types and structs.
 package apitypes
 
+// DefaultArch is the default node architecture when none is specified.
+const DefaultArch = "amd64"
+
 // Nodes holds list of Node type
 type Nodes []Node
 
@@ -12,4 +15,10 @@ type Node struct {
 	MachineID int `json:"machineid" yaml:"machineid"`
 	// SystemID is the unique identifier for the node in machine provider
 	SystemID string `json:"systemid" yaml:"systemid"`
+	// Arch is the machine architecture (e.g. "amd64", "arm64").
+	Arch string `json:"arch" yaml:"arch"`
+	// IsDPU indicates whether the node is a MAAS-enrolled DPU.
+	IsDPU *bool `json:"is_dpu,omitempty" yaml:"is_dpu,omitempty"`
+	// ImageName is the MAAS boot resource name from the dpu-image-<name> tag.
+	ImageName string `json:"image_name,omitempty" yaml:"image_name,omitempty"`
 }

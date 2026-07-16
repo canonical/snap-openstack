@@ -48,8 +48,8 @@ console = Console()
 # Juju application name validation pattern
 # Based on Juju's naming rules: must start with letter, contain only
 # letters, numbers, hyphens. Cannot end with hyphen, cannot have
-# consecutive hyphens, cannot have numbers after final hyphen
-JUJU_APP_NAME_PATTERN = re.compile(r"^[a-z]([a-z0-9]*(-[a-z0-9]*)*)?$")
+# consecutive hyphens, cannot end with a purely numeric segment
+JUJU_APP_NAME_PATTERN = re.compile(r"^(?:[a-z][a-z0-9]*(?:-[a-z0-9]*[a-z][a-z0-9]*)*)$")
 
 # Regex pattern for validating FQDN (Fully Qualified Domain Name)
 FQDN_PATTERN = (
@@ -84,11 +84,12 @@ def validate_juju_application_name(name: str) -> bool:
     if "--" in name:
         return False
 
-    # Check that numbers don't appear after the final hyphen
+    # Check that the segment after the final hyphen is not purely numeric
+    # (Juju reserves the pattern <app-name>-<number> for unit names)
     if "-" in name:
         parts = name.split("-")
         last_part = parts[-1]
-        if any(char.isdigit() for char in last_part):
+        if last_part.isdigit():
             return False
 
     return True
@@ -311,10 +312,10 @@ class StorageBackendBase(FeatureGateMixin, typing.Generic[BackendConfig]):
             raise click.ClickException(
                 f"Invalid backend name '{name}'. "
                 "Backend names must be valid Juju application names: "
-                "start with a letter, contain only lowercase letters, numbers,"
-                "and hyphens, cannot end with hyphen, cannot"
-                "have consecutive hyphens, and cannot have numbers"
-                "after the final hyphen."
+                "start with a letter, contain only lowercase letters, numbers, "
+                "and hyphens, cannot end with a hyphen, cannot "
+                "have consecutive hyphens, and cannot end with a "
+                "purely numeric segment after a hyphen."
             )
 
         openstack_tfhelper = deployment.get_tfhelper("openstack-plan")
@@ -724,5 +725,8 @@ class StorageBackendBase(FeatureGateMixin, typing.Generic[BackendConfig]):
             cli_class_name = f"{self.backend_type.title()}CLI"
             return getattr(cli_module, cli_class_name)
         except (ImportError, AttributeError):
-            LOG.debug(f"{self.backend_type} does not implement custom cli class")
+            LOG.debug(
+                "%s does not implement custom cli class",
+                self.backend_type,
+            )
             return StorageBackendCLIBase

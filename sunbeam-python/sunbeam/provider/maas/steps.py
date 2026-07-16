@@ -18,6 +18,7 @@ from typing import Sequence, Tuple
 import click
 import tenacity
 from rich.console import Console
+from rich.status import Status
 from snaphelpers import Snap
 
 import sunbeam.core.questions
@@ -55,7 +56,6 @@ from sunbeam.core.juju import (
 from sunbeam.core.manifest import Manifest
 from sunbeam.core.steps import CreateLoadBalancerIPPoolsStep
 from sunbeam.core.terraform import TerraformHelper
-from sunbeam.feature_gates import split_roles_enabled
 from sunbeam.lazy import LazyImport
 from sunbeam.provider.common import nic_utils
 from sunbeam.steps import clusterd
@@ -91,6 +91,26 @@ Roles can be assigned to a machine by applying tags in MAAS.
 More on assigning tags: https://maas.io/docs/how-to-use-machine-tags
 """
 MACHINE_DEPLOY_TIMEOUT = 3600
+# "amd64" is the Debian/MAAS name for x86_64.
+DEFAULT_ARCHITECTURE = "amd64"
+
+
+def _node_deploy_order_key(node: dict) -> tuple:
+    """Sort key: non-DPU nodes before DPU nodes, then by hostname."""
+    return (node.get("is_dpu", False), node.get("name", ""))
+
+
+def _partition_nodes_by_dpu(nodes: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Split nodes into non-DPU and DPU groups, each sorted for stable deploy."""
+    non_dpu = sorted(
+        (n for n in nodes if not n.get("is_dpu", False)),
+        key=lambda x: x["name"],
+    )
+    dpu = sorted(
+        (n for n in nodes if n.get("is_dpu", False)),
+        key=lambda x: x["name"],
+    )
+    return non_dpu, dpu
 
 
 class AddMaasDeployment(BaseStep):
@@ -236,7 +256,9 @@ class MachineRolesCheck(DiagnosticsCheck):
         """List machines roles, fail if machine is missing roles."""
         super().run
         assigned_roles = self.machine["roles"]
-        LOG.debug(f"{self.machine['hostname']=!r} assigned roles: {assigned_roles!r}")
+        LOG.debug(
+            "Machine %r assigned roles: %r", self.machine["hostname"], assigned_roles
+        )
         if not assigned_roles:
             return DiagnosticsResult.fail(
                 self.name,
@@ -280,7 +302,9 @@ class MachineNetworkCheck(DiagnosticsCheck):
                 machine=self.machine["hostname"],
             )
         assigned_roles = self.machine["roles"]
-        LOG.debug(f"{self.machine['hostname']=!r} assigned roles: {assigned_roles!r}")
+        LOG.debug(
+            "Machine %r assigned roles: %r", self.machine["hostname"], assigned_roles
+        )
         if not assigned_roles:
             return DiagnosticsResult.fail(
                 self.name,
@@ -289,26 +313,32 @@ class MachineNetworkCheck(DiagnosticsCheck):
                 machine=self.machine["hostname"],
             )
         assigned_spaces = self.machine["spaces"]
-        LOG.debug(f"{self.machine['hostname']=!r} assigned spaces: {assigned_spaces!r}")
+        LOG.debug(
+            "Machine %r assigned spaces: %r", self.machine["hostname"], assigned_spaces
+        )
         required_networks: set[Networks] = set()
         for role in assigned_roles:
             required_networks.update(
                 maas_deployment.ROLE_NETWORK_MAPPING[maas_deployment.RoleTags(role)]
             )
         LOG.debug(
-            f"{self.machine['hostname']=!r} required networks: {required_networks!r}"
+            "Machine %r required networks: %r",
+            self.machine["hostname"],
+            required_networks,
         )
         required_spaces: set[str] = set()
         missing_spaces: set[str] = set()
         for network in required_networks:
             corresponding_space = network_to_space_mapping[network.value]
             if not corresponding_space:
-                LOG.debug(f"{network.value=!r} has no corresponding space")
+                LOG.debug("Network %r has no corresponding space", network.value)
                 continue
             required_spaces.add(corresponding_space)
             if corresponding_space and corresponding_space not in assigned_spaces:
                 missing_spaces.add(corresponding_space)
-        LOG.debug(f"{self.machine['hostname']=!r} missing spaces: {missing_spaces!r}")
+        LOG.debug(
+            "Machine %r missing spaces: %r", self.machine["hostname"], missing_spaces
+        )
         if not assigned_spaces or missing_spaces:
             return DiagnosticsResult.fail(
                 self.name,
@@ -342,7 +372,9 @@ class MachineStorageCheck(DiagnosticsCheck):
     def run(self) -> DiagnosticsResult:
         """Check machine has storage assigned if required."""
         assigned_roles = self.machine["roles"]
-        LOG.debug(f"{self.machine['hostname']=!r} assigned roles: {assigned_roles!r}")
+        LOG.debug(
+            "Machine %r assigned roles: %r", self.machine["hostname"], assigned_roles
+        )
         if not assigned_roles:
             return DiagnosticsResult.fail(
                 self.name,
@@ -410,7 +442,9 @@ class MachineComputeNicCheck(DiagnosticsCheck):
     def run(self) -> DiagnosticsResult:
         """Check machine has neutron nic if required."""
         assigned_roles = self.machine["roles"]
-        LOG.debug(f"{self.machine['hostname']=!r} assigned roles: {assigned_roles!r}")
+        LOG.debug(
+            "Machine %r assigned roles: %r", self.machine["hostname"], assigned_roles
+        )
         if not assigned_roles:
             return DiagnosticsResult.fail(
                 self.name,
@@ -420,14 +454,11 @@ class MachineComputeNicCheck(DiagnosticsCheck):
             )
 
         is_network_node = maas_deployment.RoleTags.NETWORK.value in assigned_roles
-        is_compute_node = maas_deployment.RoleTags.COMPUTE.value in assigned_roles
-        needs_neutron_nic = is_network_node or (
-            is_compute_node and not split_roles_enabled()
-        )
+        needs_neutron_nic = is_network_node
 
         has_nic = self._has_neutron_nic()
 
-        if not needs_neutron_nic and has_nic and split_roles_enabled():
+        if not needs_neutron_nic and has_nic:
             return DiagnosticsResult.warn(
                 self.name,
                 "machine has a neutron-tagged NIC but does not have"
@@ -449,7 +480,6 @@ class MachineComputeNicCheck(DiagnosticsCheck):
                 machine=self.machine["hostname"],
             )
 
-        role_hint = "network" if split_roles_enabled() else "compute/network"
         return DiagnosticsResult.fail(
             self.name,
             "no neutron NIC found",
@@ -459,7 +489,7 @@ class MachineComputeNicCheck(DiagnosticsCheck):
                 '{self.NEUTRON_TAG_PREFIX}<physnet>' """
                 f"""(e.g. {self.NEUTRON_TAG_PREFIX}physnet1)
                 to be a part of an openstack deployment. Either add a
-                neutron-tagged NIC to the machine or remove the {role_hint} role.
+                neutron-tagged NIC to the machine or remove the network role.
                 More on assigning tags: https://maas.io/docs/how-to-use-network-tags
                 """
             ),
@@ -602,13 +632,18 @@ class MachineRequirementsCheck(DiagnosticsCheck):
 def _run_check_list(checks: Sequence[DiagnosticsCheck]) -> list[DiagnosticsResult]:
     check_results = []
     for check in checks:
-        LOG.debug(f"Starting check {check.name}")
+        LOG.debug("Starting check %s", check.name)
         results = check.run()
         if isinstance(results, DiagnosticsResult):
             results = [results]
         for result in results:
             passed = result.passed.value
-            LOG.debug(f"{result.name=!r}, {passed=!r}, {result.message=!r}")
+            LOG.debug(
+                "Result for %r: passed=%r, message=%r",
+                result.name,
+                passed,
+                result.message,
+            )
             check_results.extend(results)
     return check_results
 
@@ -772,7 +807,7 @@ class ZoneBalanceCheck(DiagnosticsCheck):
                 for role in machine["roles"]:
                     zone_role_counts[zone].setdefault(role, 0)
                     zone_role_counts[zone][role] += 1
-        LOG.debug(f"{zone_role_counts=!r}")
+        LOG.debug("Zone role counts: %r", zone_role_counts)
         unbalanced_roles = []
         distribution = ""
         for role in maas_deployment.RoleTags.values():
@@ -1042,7 +1077,7 @@ class NetworkMappingCompleteCheck(Check):
         )
         self.deployment = deployment
 
-    def run(self) -> bool:
+    def run(self, check_status: Status | None = None) -> bool:
         """Check network mapping is complete."""
         network_to_space_mapping = self.deployment.network_mapping
         spaces = network_to_space_mapping.values()
@@ -1066,7 +1101,7 @@ class JujuControllerCheck(Check):
         self.controller = juju_controller
         self.maas_client = maas_client.MaasClient.from_deployment(deployment)
 
-    def run(self) -> bool:
+    def run(self, check_status: Status | None = None) -> bool:
         """Check if juju controller is required."""
         machines = maas_client.list_machines(
             self.maas_client, tags=maas_deployment.RoleTags.JUJU_CONTROLLER.value
@@ -1200,7 +1235,7 @@ class MaasScaleJujuStep(ScaleJujuStep):
         try:
             controller = self.get_controller(self.controller)
         except ControllerNotFoundException as e:
-            LOG.debug(str(e))
+            LOG.debug("Failed to get controller %s: %r", self.controller, e)
             return Result(ResultType.FAILED, f"Controller {self.controller} not found")
 
         controller_machines = controller.get("controller-machines")
@@ -1212,7 +1247,7 @@ class MaasScaleJujuStep(ScaleJujuStep):
         nb_controllers = len(controller_machines)
 
         if nb_controllers == self.n:
-            LOG.debug("Already the correct number of controllers, skipping scaling...")
+            LOG.debug("Already the correct number of controllers, skipping scaling")
             return Result(ResultType.SKIPPED)
 
         if nb_controllers > self.n:
@@ -1233,8 +1268,9 @@ class MaasScaleJujuStep(ScaleJujuStep):
 
         if len(machines) < self.n:
             LOG.debug(
-                f"Found {len(machines)} juju controllers,"
-                f" need {self.n} to scale, skipping..."
+                "Found %d juju controllers, need %d to scale, skipping...",
+                len(machines),
+                self.n,
             )
             return Result(ResultType.SKIPPED)
         machines = sorted(machines, key=lambda x: x["hostname"])
@@ -1396,7 +1432,7 @@ class MaasRemoveDeploymentCredentialsStep(BaseStep):
 class MaasAddMachinesToClusterdStep(BaseStep):
     """Add machines from MAAS to Clusterd."""
 
-    nodes: Sequence[tuple[str, str]] | None
+    nodes: Sequence[dict] | None
     machines: Sequence[dict] | None
 
     def __init__(self, client: Client, maas_client: maas_client.MaasClient):
@@ -1409,14 +1445,14 @@ class MaasAddMachinesToClusterdStep(BaseStep):
     def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not."""
         maas_machines = maas_client.list_machines(self.maas_client)
-        LOG.debug(f"Machines fetched: {maas_machines}")
+        LOG.debug("Machines fetched: %s", maas_machines)
         filtered_machines = []
         for machine in maas_machines:
             if set(machine["roles"]).intersection(
                 set(maas_deployment.RoleTags.enabled_values())
             ):
                 filtered_machines.append(machine)
-        LOG.debug(f"Machines containing worker roles: {filtered_machines}")
+        LOG.debug("Machines containing worker roles: %s", filtered_machines)
         if filtered_machines is None or len(filtered_machines) == 0:
             return Result(ResultType.FAILED, "Maas deployment has no machines.")
         clusterd_nodes = self.client.cluster.list_nodes()
@@ -1425,24 +1461,59 @@ class MaasAddMachinesToClusterdStep(BaseStep):
             for machine in filtered_machines:
                 if node["name"] == machine["hostname"]:
                     filtered_machines.remove(machine)
-                    if sorted(node["role"]) != sorted(machine["roles"]):
-                        nodes_to_update.append((machine["hostname"], machine["roles"]))
+                    if (
+                        sorted(node["role"]) != sorted(machine["roles"])
+                        or node.get("arch", DEFAULT_ARCHITECTURE)
+                        != machine.get("architecture", DEFAULT_ARCHITECTURE)
+                        or node.get("is_dpu", False) != machine.get("is_dpu", False)
+                        or node.get("image_name", "") != machine.get("image_name", "")
+                        or node.get("systemid", "") != machine["system_id"]
+                    ):
+                        nodes_to_update.append(machine)
+                    break
         self.nodes = nodes_to_update
         self.machines = filtered_machines
         return Result(ResultType.COMPLETED)
 
+    def _validate_machine_image_name(self, machine: dict) -> Result | None:
+        """Return a failure result when the machine's dpu-image tag is invalid."""
+        image_name = machine.get("image_name")
+        if not image_name:
+            return None
+        try:
+            self.maas_client.ensure_boot_resource_name_exists(image_name)
+        except ValueError as e:
+            return Result(ResultType.FAILED, str(e))
+        return None
+
     def run(self, context: StepContext) -> Result:
-        """Add machines to Juju model."""
+        """Add machines to clusterd."""
         if self.machines is None or self.nodes is None:
             # only happens if is_skip() was not called before, or if run executed
             # even if is_skip reported a failure
             return Result(ResultType.FAILED, "No machines to add / node to update.")
+        for machine in list(self.machines) + list(self.nodes):
+            validation = self._validate_machine_image_name(machine)
+            if validation is not None:
+                return validation
         for machine in self.machines:
             self.client.cluster.add_node_info(
-                machine["hostname"], machine["roles"], systemid=machine["system_id"]
+                machine["hostname"],
+                machine["roles"],
+                systemid=machine["system_id"],
+                arch=machine.get("architecture", DEFAULT_ARCHITECTURE),
+                is_dpu=machine.get("is_dpu", False),
+                image_name=machine.get("image_name", ""),
             )
-        for node in self.nodes:
-            self.client.cluster.update_node_info(*node)  # type: ignore
+        for machine in self.nodes:
+            self.client.cluster.update_node_info(
+                machine["hostname"],
+                machine["roles"],
+                systemid=machine["system_id"],
+                arch=machine.get("architecture", DEFAULT_ARCHITECTURE),
+                is_dpu=machine.get("is_dpu", False),
+                image_name=machine.get("image_name", ""),
+            )
         return Result(ResultType.COMPLETED)
 
 
@@ -1481,12 +1552,14 @@ class MaasDeployMachinesStep(BaseStep):
         client: Client,
         jhelper: JujuHelper,
         model: str,
+        manifest: "Manifest | None" = None,
     ):
         super().__init__("Deploy machines", "Deploying machines in Juju")
         self.client = client
         self.deployment = deployment
         self.jhelper = jhelper
         self.model = model
+        self.manifest = manifest
 
     def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not."""
@@ -1532,41 +1605,121 @@ class MaasDeployMachinesStep(BaseStep):
                     nodes_to_deploy.remove(node)
                     break
 
-        self.nodes_to_deploy = sorted(nodes_to_deploy, key=lambda x: x["name"])
+        self.nodes_to_deploy = sorted(nodes_to_deploy, key=_node_deploy_order_key)
         self.nodes_to_update = nodes_to_update
 
         if not self.nodes_to_deploy and not self.nodes_to_update:
             return Result(ResultType.SKIPPED)
         return Result(ResultType.COMPLETED)
 
-    def run(self, context: StepContext) -> Result:
-        """Deploy machines in Juju."""
-        for node in self.nodes_to_deploy:
+    def _get_node_architecture(self, node: dict) -> str:
+        """Return the architecture stored in clusterd for this node."""
+        return node.get("arch") or DEFAULT_ARCHITECTURE
+
+    def _get_node_constraints(self, node: dict) -> list[str]:
+        """Return the Juju constraints for deploying this node.
+
+        Adds arch and image-id constraints from clusterd when the node has a
+        non-default architecture or a custom image name from a dpu-image-<name>
+        MAAS tag.
+        """
+        constraints = ["tags=" + self.deployment.resource_tag]
+        architecture = self._get_node_architecture(node)
+        image_name = node.get("image_name") or ""
+
+        if architecture == "arm64":
+            constraints.append("arch=arm64")
+
+        if image_name:
+            LOG.debug(
+                "Node %r has custom image — adding image-id=%r constraint",
+                node["name"],
+                image_name,
+            )
+            constraints.append("image-id=" + image_name)
+
+        return constraints
+
+    def _add_nodes_to_juju(self, context: StepContext, nodes: list[dict]) -> None:
+        """Register clusterd nodes as Juju machines in the model."""
+        for node in nodes:
             self.update_status(context, f"deploying {node['name']}")
-            LOG.debug(f"Adding machine {node['name']} to model {self.model}")
+            constraints = self._get_node_constraints(node)
+            LOG.debug(
+                "Adding machine %s to model %s with constraints %s",
+                node["name"],
+                self.model,
+                constraints,
+            )
             juju_machine = self.jhelper.add_machine(
                 "system-id=" + node["systemid"],
                 self.model,
-                constraints=["tags=" + self.deployment.resource_tag],
+                constraints=constraints,
             )
             self.client.cluster.update_node_info(
                 node["name"], machineid=int(juju_machine)
             )
-        self.update_status(context, "waiting for machines to deploy")
+
+    def _sync_updated_node_machine_ids(self) -> None:
+        """Update clusterd machine IDs for nodes already present in Juju."""
         machines = self.jhelper.get_machines(self.model)
         for node in self.nodes_to_update:
-            LOG.debug(f"Updating machine {node['name']} in model {self.model}")
+            LOG.debug("Updating machine %s in model %s", node["name"], self.model)
             for machine_id, machine in machines.items():
                 if machine.hostname == node["name"]:
                     self.client.cluster.update_node_info(
                         node["name"], machineid=int(machine_id)
                     )
                     break
-        try:
-            self.jhelper.wait_all_machines_deployed(self.model, MACHINE_DEPLOY_TIMEOUT)
-        except TimeoutError:
-            LOG.debug("Timeout waiting for machines to deploy", exc_info=True)
-            return Result(ResultType.FAILED, "Timeout waiting for machines to deploy.")
+
+    def run(self, context: StepContext) -> Result:
+        """Deploy machines in Juju."""
+        non_dpu_nodes, dpu_nodes = _partition_nodes_by_dpu(self.nodes_to_deploy)
+        deploy_batches = [
+            ("non-DPU", non_dpu_nodes),
+            ("DPU", dpu_nodes),
+        ]
+
+        deployed_any = False
+        for batch_label, batch in deploy_batches:
+            if not batch:
+                continue
+            deployed_any = True
+            self._add_nodes_to_juju(context, batch)
+            self._sync_updated_node_machine_ids()
+            wait_message = "waiting for machines to deploy"
+            timeout_message = "Timeout waiting for machines to deploy."
+            if batch_label == "DPU":
+                wait_message = "waiting for DPU machines to deploy"
+                timeout_message = "Timeout waiting for DPU machines to deploy."
+            self.update_status(context, wait_message)
+            try:
+                self.jhelper.wait_all_machines_deployed(
+                    self.model, MACHINE_DEPLOY_TIMEOUT
+                )
+            except TimeoutError:
+                LOG.debug(
+                    "Timeout waiting for %s machines to deploy",
+                    batch_label,
+                    exc_info=True,
+                )
+                return Result(
+                    ResultType.FAILED,
+                    timeout_message,
+                )
+
+        if not deployed_any:
+            self._sync_updated_node_machine_ids()
+            try:
+                self.jhelper.wait_all_machines_deployed(
+                    self.model, MACHINE_DEPLOY_TIMEOUT
+                )
+            except TimeoutError:
+                LOG.debug("Timeout waiting for machines to deploy", exc_info=True)
+                return Result(
+                    ResultType.FAILED, "Timeout waiting for machines to deploy."
+                )
+
         return Result(ResultType.COMPLETED)
 
 
@@ -1589,7 +1742,7 @@ class MaasDeployInfraMachinesStep(BaseStep):
     def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not."""
         maas_machines = maas_client.list_machines(self.maas_client)
-        LOG.debug(f"Machines fetched: {maas_machines}")
+        LOG.debug("Machines fetched: %s", maas_machines)
         filtered_machines = []
         for machine in maas_machines:
             if set(machine["roles"]).intersection(
@@ -1598,13 +1751,13 @@ class MaasDeployInfraMachinesStep(BaseStep):
                 }
             ):
                 filtered_machines.append(machine)
-        LOG.debug(f"Machines containing infra role: {filtered_machines}")
+        LOG.debug("Machines containing infra role: %s", filtered_machines)
         if filtered_machines is None or len(filtered_machines) == 0:
             return Result(ResultType.FAILED, "Maas deployment has no infra machines.")
 
         self.machines_to_deploy = filtered_machines.copy()
         juju_machines = self.jhelper.get_machines(self.model)
-        LOG.debug(f"Machines already deployed: {juju_machines}")
+        LOG.debug("Machines already deployed: %s", juju_machines)
 
         for filtered_machine in filtered_machines:
             for id, deployed_machine in juju_machines.items():
@@ -1619,7 +1772,7 @@ class MaasDeployInfraMachinesStep(BaseStep):
         """Deploy machines in Juju."""
         for machine in self.machines_to_deploy:
             self.update_status(context, f"deploying {machine['hostname']}")
-            LOG.debug(f"Adding machine {machine['hostname']} to model {self.model}")
+            LOG.debug("Adding machine %s to model %s", machine["hostname"], self.model)
             self.jhelper.add_machine(
                 "system-id=" + machine["system_id"],
                 self.model,
@@ -1780,7 +1933,7 @@ class MaasConfigureMicrocephOSDStep(BaseStep):
             microceph_disks = self._get_microceph_disks()
             LOG.debug("Computing disk mapping: %r", microceph_disks)
         except ValueError as e:
-            LOG.debug("Failed to list microceph disks from units", exc_info=True)
+            LOG.debug("Failed to list MicroCeph disks from units", exc_info=True)
             return Result(ResultType.FAILED, str(e))
 
         try:
@@ -1810,7 +1963,7 @@ class MaasConfigureMicrocephOSDStep(BaseStep):
                 )
 
         if len(disks_to_configure) == 0:
-            LOG.debug("No disks to configure, skipping step.")
+            LOG.debug("No disks to configure, skipping step")
             return Result(ResultType.SKIPPED)
 
         self.disks_to_configure = disks_to_configure
@@ -2055,21 +2208,14 @@ class MaasSetExternalNetworkUnitsOptionsStep(SetExternalNetworkUnitsOptionsStep)
 
         for machine, nic in bridge_mappings.items():
             if nic is None:
-                if split_roles_enabled():
-                    node = self.client.cluster.get_node_info(machine)
-                    node_roles = node.get("role", [])
-                    if "network" in node_roles:
-                        return Result(
-                            ResultType.FAILED,
-                            f"Machine {machine} does not have any"
-                            " neutron:* nic defined.",
-                        )
-                else:
+                node = self.client.cluster.get_node_info(machine)
+                node_roles = node.get("role", [])
+                if "network" in node_roles:
                     return Result(
                         ResultType.FAILED,
                         f"Machine {machine} does not have any neutron:* nic defined.",
                     )
-            elif split_roles_enabled():
+            else:
                 node = self.client.cluster.get_node_info(machine)
                 node_roles = node.get("role", [])
                 if "network" not in node_roles:
@@ -2101,6 +2247,7 @@ class MaasSetOpenStackNetworkAgentsStep(
     APP = "openstack-network-agents"
     DISPLAY_NAME = "network agents"
     ACTION = "set-network-agents-local-settings"
+    SUPPORTS_CHASSIS_AS_GW = True
 
 
 class MaasUserQuestions(BaseUserQuestions):
@@ -2149,9 +2296,9 @@ class MaasClusterStatusStep(ClusterStatusStep):
             return models
 
         LOG.debug(
-            f"Model {self.deployment.openstack_machines_model} not found. This is "
-            "expected when cluster is bootstrapped but not deployed yet. "
-            "Skipping model."
+            "Model %s is not found. This is expected when cluster is bootstrapped but"
+            " not yet deployed. Skipping model.",
+            self.deployment.openstack_machines_model,
         )
         return models
 
@@ -2381,7 +2528,8 @@ class MaasConfigSRIOVStep(BaseStep):
                 )
             except (UnitNotFoundException, ActionFailedException) as e:
                 LOG.debug(
-                    f"Failed fetching GPUs from node {node_name}",
+                    "Failed fetching GPUs from node %s",
+                    node_name,
                     exc_info=True,
                 )
                 raise click.ClickException(
@@ -2430,7 +2578,7 @@ class MaasConfigSRIOVStep(BaseStep):
                 )
             except (ActionFailedException, TimeoutError):
                 msg = f"Unable to set hypervisor {node_name} configuration"
-                LOG.error(msg, exc_info=True)
+                LOG.warning(msg)
                 return Result(ResultType.FAILED, msg)
 
         return Result(ResultType.COMPLETED)
@@ -2601,7 +2749,7 @@ class MaasConfigDPDKStep(BaseConfigDPDKStep):
                 )
             except (ActionFailedException, TimeoutError):
                 msg = f"Unable to set hypervisor {node_name} configuration"
-                LOG.error(msg, exc_info=True)
+                LOG.warning(msg)
                 return Result(ResultType.FAILED, msg)
 
         return Result(ResultType.COMPLETED)

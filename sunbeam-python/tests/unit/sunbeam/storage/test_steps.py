@@ -7,7 +7,9 @@ from unittest.mock import Mock, patch
 import pydantic
 import pytest
 
+from sunbeam.core.common import ResultType
 from sunbeam.core.questions import PasswordPromptQuestion, PromptQuestion
+from sunbeam.core.steps import DeployMachineApplicationStep
 from sunbeam.storage.models import SecretDictField
 from sunbeam.storage.steps import (
     DeploySpecificCinderVolumeStep,
@@ -230,6 +232,7 @@ class TestDeploySpecificCinderVolumeStep:
         # Mock manifest
         mock_cinder_volume_charm = Mock()
         mock_cinder_volume_charm.config = {"test": "value"}
+        mock_cinder_volume_charm.model_extra = None
         mock_cinder_volume_charm.channel = "2024.1/edge"
         mock_cinder_volume_charm.revision = 123
         deploy_specific_cinder_volume_step.manifest.core.software.charms = {
@@ -268,6 +271,12 @@ class TestDeploySpecificCinderVolumeStep:
             for binding in tfvars["cinder-volumes"]["cinder-volume-noha"][
                 "endpoint_bindings"
             ]
+        )
+
+        # Verify config from manifest is used as base for charm_config
+        assert (
+            tfvars["cinder-volumes"]["cinder-volume-noha"]["charm_config"].get("test")
+            == "value"
         )
 
     @patch("sunbeam.storage.steps.read_config")
@@ -316,6 +325,7 @@ class TestDeploySpecificCinderVolumeStep:
         # Mock manifest
         mock_cinder_volume_charm = Mock()
         mock_cinder_volume_charm.config = {}
+        mock_cinder_volume_charm.model_extra = None
         mock_cinder_volume_charm.channel = "2024.1/edge"
         mock_cinder_volume_charm.revision = 123
         basic_manifest.core.software.charms = {
@@ -356,3 +366,113 @@ class TestDeploySpecificCinderVolumeStep:
             ]
             is True
         )
+
+    @patch("sunbeam.storage.steps.read_config")
+    @patch("sunbeam.storage.steps.get_optional_control_plane_offers")
+    @patch("sunbeam.storage.steps.get_mandatory_control_plane_offers")
+    def test_charm_config_from_config_map(
+        self,
+        mock_get_offers,
+        mock_get_optional_offers,
+        mock_read_config,
+        basic_deployment,
+        basic_client,
+        basic_tfhelper,
+        basic_jhelper,
+        basic_manifest,
+        test_model,
+        mock_backend_instance,
+        step_context,
+    ):
+        """Test that charm_config is populated from config-map, not config."""
+        mock_read_config.return_value = {"model": "test-uuid"}
+        mock_get_offers.return_value = {
+            "keystone-offer-url": "keystone-url",
+        }
+        mock_get_optional_offers.return_value = {}
+        basic_client.cluster.list_nodes_by_role.return_value = [{"machineid": "1"}]
+
+        basic_jhelper.get_model.return_value = {"model-uuid": "test-uuid"}
+        basic_jhelper.wait_application_ready = Mock()
+
+        basic_deployment.get_space.return_value = "test-space"
+        basic_deployment.get_tfhelper.return_value = Mock()
+        basic_deployment.get_feature_manager.return_value = Mock(
+            is_feature_enabled=lambda *args: False
+        )
+
+        # Set up config-map with per-app entries
+        mock_cinder_volume_charm = Mock()
+        mock_cinder_volume_charm.config = {"some": "value"}
+        mock_cinder_volume_charm.model_extra = {
+            "config-map": {
+                "cinder-volume-noha": {"noha-key": "noha-val"},
+                "cinder-volume": {"ha-key": "ha-val"},
+            }
+        }
+        mock_cinder_volume_charm.channel = "2024.1/edge"
+        mock_cinder_volume_charm.revision = 123
+        basic_manifest.core.software.charms = {
+            "cinder-volume": mock_cinder_volume_charm
+        }
+
+        basic_tfhelper.update_tfvars_and_apply_tf = Mock()
+
+        step = DeploySpecificCinderVolumeStep(
+            basic_deployment,
+            basic_client,
+            basic_tfhelper,
+            basic_jhelper,
+            basic_manifest,
+            "test-backend",
+            mock_backend_instance,
+            test_model,
+        )
+
+        step.run(step_context)
+
+        assert basic_tfhelper.update_tfvars_and_apply_tf.called
+        tfvars = basic_tfhelper.update_tfvars_and_apply_tf.call_args[1][
+            "override_tfvars"
+        ]
+        charm_config = tfvars["cinder-volumes"]["cinder-volume-noha"]["charm_config"]
+
+        # config is the base — should be present
+        assert charm_config.get("some") == "value"
+        # config-map entry for the principal app should override on top
+        assert charm_config.get("noha-key") == "noha-val"
+        # config-map entry for other apps should NOT leak
+        assert "ha-key" not in charm_config
+        # snap-name is always set by the step
+        assert charm_config.get("snap-name") == "cinder-volume_noha"
+
+        def test_deploy_machine_application_step_run_skips_wait(
+            basic_deployment,
+            basic_client,
+            basic_tfhelper,
+            basic_jhelper,
+            basic_manifest,
+            test_model,
+            step_context,
+        ):
+            step = DeployMachineApplicationStep(
+                basic_deployment,
+                basic_client,
+                basic_tfhelper,
+                basic_jhelper,
+                basic_manifest,
+                config="test-config",
+                application="test-app",
+                model=test_model,
+                roles=[],
+                wait_for_readiness=False,
+            )
+
+            basic_jhelper.get_model_uuid.return_value = "model-uuid"
+            basic_client.cluster.list_nodes_by_role.return_value = []
+
+            result = step.run(step_context)
+
+            assert result.result_type == ResultType.COMPLETED
+            basic_tfhelper.update_tfvars_and_apply_tf.assert_called_once()
+            basic_jhelper.wait_application_ready.assert_not_called()

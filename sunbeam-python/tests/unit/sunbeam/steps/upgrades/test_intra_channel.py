@@ -4,18 +4,22 @@
 import sys
 from unittest.mock import Mock, call, patch
 
-from sunbeam.core.common import Result, ResultType
+from sunbeam.core.common import Result, ResultType, Role
 from sunbeam.core.juju import (
     ActionFailedException,
     ApplicationNotFoundException,
     JujuWaitException,
 )
 from sunbeam.core.openstack import OPENSTACK_MODEL
+from sunbeam.core.terraform import TerraformInitStep
 from sunbeam.steps.k8s import (
     EnsureCiliumDeviceByHostStep,
     EnsureDefaultL2AdvertisementMutedStep,
+    EnsureL2AdvertisementByHostStep,
 )
+from sunbeam.steps.microovn import DeployMicroOVNApplicationStep
 from sunbeam.steps.openstack import OpenStackPatchLoadBalancerServicesIPPoolStep
+from sunbeam.steps.role_distributor import DeployRoleDistributorApplicationStep
 from sunbeam.steps.upgrades.base import UpgradeFeatures
 from sunbeam.steps.upgrades.intra_channel import (
     SNAP_APPS_INFRA_MODEL,
@@ -55,8 +59,8 @@ class TestLatestInChannel:
         # Execute
         result = self.upgrader.refresh_apps(apps, model)
 
-        # Verify charm_refresh was called without channel/revision
-        self.jhelper.charm_refresh.assert_called_once_with("nova", model)
+        # Verify charm_refresh was called without channel/revision, trust=False
+        self.jhelper.charm_refresh.assert_called_once_with("nova", model, trust=False)
         assert result.result_type == ResultType.COMPLETED
 
     def test_refresh_apps_with_manifest_channel_and_revision(self):
@@ -79,12 +83,13 @@ class TestLatestInChannel:
         # Execute
         result = self.upgrader.refresh_apps(apps, model)
 
-        # Verify charm_refresh was called with channel and revision
+        # Verify charm_refresh was called with channel and revision, trust=False
         self.jhelper.charm_refresh.assert_called_once_with(
             "nova",
             model,
             channel="2024.1/stable",
             revision=150,
+            trust=False,
         )
         assert result.result_type == ResultType.COMPLETED
 
@@ -108,12 +113,13 @@ class TestLatestInChannel:
         # Execute
         result = self.upgrader.refresh_apps(apps, model)
 
-        # Verify charm_refresh was called with channel but None revision
+        # Verify charm_refresh was called with channel but None revision, trust=False
         self.jhelper.charm_refresh.assert_called_once_with(
             "nova",
             model,
             channel="2024.1/stable",
             revision=None,
+            trust=False,
         )
         assert result.result_type == ResultType.COMPLETED
 
@@ -145,16 +151,72 @@ class TestLatestInChannel:
         # Verify charm_refresh was called for all apps
         assert self.jhelper.charm_refresh.call_count == 3
 
-        # Check calls
+        # Check calls — all non-octavia charms get trust=False
         calls = self.jhelper.charm_refresh.call_args_list
+        assert (
+            call("nova", model, channel="2024.1/candidate", revision=200, trust=False)
+            in calls
+        )
+        assert call("neutron", model, trust=False) in calls
+        assert call("cinder", model, trust=False) in calls
 
-        # Nova should be called with manifest config
-        assert call("nova", model, channel="2024.1/candidate", revision=200) in calls
+        assert result.result_type == ResultType.COMPLETED
 
-        # Neutron and Cinder should be called without channel/revision
-        assert call("neutron", model) in calls
-        assert call("cinder", model) in calls
+    def test_refresh_apps_octavia_passes_trust_true(self):
+        """octavia-k8s is in CHARMS_REQUIRING_TRUST so trust=True must be passed."""
+        apps = {
+            "octavia": ("octavia-k8s", "2024.1/stable", 157),
+        }
+        model = "openstack"
 
+        self.jhelper.wait_until_active = Mock()
+
+        result = self.upgrader.refresh_apps(apps, model)
+
+        self.jhelper.charm_refresh.assert_called_once_with("octavia", model, trust=True)
+        assert result.result_type == ResultType.COMPLETED
+
+    def test_refresh_apps_octavia_with_manifest_passes_trust_true(self):
+        """octavia-k8s with manifest entry still gets trust=True."""
+        apps = {
+            "octavia": ("octavia-k8s", "2024.1/stable", 157),
+        }
+        model = "openstack"
+
+        manifest_charm = Mock()
+        manifest_charm.channel = "2024.1/beta"
+        manifest_charm.revision = 204
+        self.manifest.find_charm.return_value = manifest_charm
+
+        self.jhelper.wait_until_active = Mock()
+
+        result = self.upgrader.refresh_apps(apps, model)
+
+        self.jhelper.charm_refresh.assert_called_once_with(
+            "octavia",
+            model,
+            channel="2024.1/beta",
+            revision=204,
+            trust=True,
+        )
+        assert result.result_type == ResultType.COMPLETED
+
+    def test_refresh_apps_mixed_trust_and_non_trust_charms(self):
+        """Octavia gets trust=True; other charms get trust=False in the same batch."""
+        apps = {
+            "nova": ("nova-k8s", "2024.1/stable", 123),
+            "octavia": ("octavia-k8s", "2024.1/stable", 157),
+        }
+        model = "openstack"
+
+        self.manifest.find_charm.return_value = None
+        self.jhelper.wait_until_active = Mock()
+
+        result = self.upgrader.refresh_apps(apps, model)
+
+        calls = self.jhelper.charm_refresh.call_args_list
+        assert call("nova", model, trust=False) in calls
+        assert call("octavia", model, trust=True) in calls
         assert result.result_type == ResultType.COMPLETED
 
     def test_refresh_apps_machine_model(self):
@@ -171,8 +233,10 @@ class TestLatestInChannel:
         # Execute
         result = self.upgrader.refresh_apps(apps, model)
 
-        # Verify charm_refresh was called
-        self.jhelper.charm_refresh.assert_called_once_with("nova-compute", model)
+        # Verify charm_refresh was called with trust=False
+        self.jhelper.charm_refresh.assert_called_once_with(
+            "nova-compute", model, trust=False
+        )
 
         # Verify wait_application_ready was called (not wait_until_active)
         self.jhelper.wait_application_ready.assert_called_once()
@@ -259,7 +323,7 @@ class TestLatestInChannel:
             result = self.upgrader.refresh_apps(apps, model)
 
         # charm_refresh still called, result still COMPLETED
-        self.jhelper.charm_refresh.assert_called_once_with("nova", model)
+        self.jhelper.charm_refresh.assert_called_once_with("nova", model, trust=False)
         assert result.result_type == ResultType.COMPLETED
 
 
@@ -846,6 +910,7 @@ class TestLatestInChannelCoordinator:
         """MAAS deployment plan should include LB IP pool and pool management steps."""
         mock_is_maas.return_value = True
         self.deployment.public_api_label = "test-public-api"
+        self.deployment.storage_ip_pool = "test-storage-ippool"
 
         mock_maas_client = Mock()
         mock_maas_client_module = Mock()
@@ -853,9 +918,7 @@ class TestLatestInChannelCoordinator:
             mock_maas_client
         )
 
-        mock_maas_deploy_k8s_cls = Mock()
         mock_maas_steps_module = Mock()
-        mock_maas_steps_module.MaasDeployK8SApplicationStep = mock_maas_deploy_k8s_cls
 
         with patch.dict(
             sys.modules,
@@ -873,8 +936,18 @@ class TestLatestInChannelCoordinator:
         assert EnsureCiliumDeviceByHostStep in step_types
         assert OpenStackPatchLoadBalancerServicesIPPoolStep in step_types
         assert EnsureDefaultL2AdvertisementMutedStep in step_types
-        # MaasDeployK8SApplicationStep was called; its return value is in the plan
-        assert mock_maas_deploy_k8s_cls.return_value in plan
+        l2_steps = [
+            step for step in plan if isinstance(step, EnsureL2AdvertisementByHostStep)
+        ]
+        assert len(l2_steps) == 3
+        storage_l2_steps = [step for step in l2_steps if step.network.name == "STORAGE"]
+        assert len(storage_l2_steps) == 1
+        assert storage_l2_steps[0].pool == "test-storage-ippool"
+        assert storage_l2_steps[0].optional_if_pool_missing is True
+        # k8s charm refresh is handled by `sunbeam cluster refresh k8s`, not here
+        assert (
+            mock_maas_steps_module.MaasDeployK8SApplicationStep.return_value not in plan
+        )
 
     @patch(f"{_INTRA_CHANNEL}.is_maas_deployment")
     def test_get_plan_always_includes_core_steps(self, mock_is_maas):
@@ -891,6 +964,62 @@ class TestLatestInChannelCoordinator:
         assert EnsureCiliumDeviceByHostStep in step_types
         assert ReapplyInfraModelConfigStep in step_types
         assert UpgradeFeatures in step_types
+
+    @patch(f"{_INTRA_CHANNEL}.is_maas_deployment")
+    def test_get_plan_deploys_role_distributor_before_microovn(self, mock_is_maas):
+        """MicroOVN upgrade path must create role-distributor first."""
+        mock_is_maas.return_value = False
+        role_distributor_tfhelper = Mock()
+        microovn_tfhelper = Mock()
+
+        def get_tfhelper(plan_name):
+            if plan_name == "role-distributor-plan":
+                return role_distributor_tfhelper
+            if plan_name == "microovn-plan":
+                return microovn_tfhelper
+            return Mock()
+
+        self.deployment.get_tfhelper.side_effect = get_tfhelper
+        ovn_manager = self.deployment.get_ovn_manager()
+        ovn_manager.get_roles_for_microovn.return_value = {Role.NETWORK}
+        self.client.cluster.list_nodes_by_role.return_value = [
+            {"machineid": "0", "role": ["network"]}
+        ]
+
+        coordinator = LatestInChannelCoordinator(
+            self.deployment, self.client, self.jhelper, self.manifest
+        )
+        plan = coordinator.get_plan()
+
+        role_distributor_init_index = next(
+            i
+            for i, step in enumerate(plan)
+            if isinstance(step, TerraformInitStep)
+            and step.tfhelper is role_distributor_tfhelper
+        )
+        role_distributor_deploy_index = next(
+            i
+            for i, step in enumerate(plan)
+            if isinstance(step, DeployRoleDistributorApplicationStep)
+        )
+        microovn_init_index = next(
+            i
+            for i, step in enumerate(plan)
+            if isinstance(step, TerraformInitStep)
+            and step.tfhelper is microovn_tfhelper
+        )
+        microovn_deploy_index = next(
+            i
+            for i, step in enumerate(plan)
+            if isinstance(step, DeployMicroOVNApplicationStep)
+        )
+
+        assert (
+            role_distributor_init_index
+            < role_distributor_deploy_index
+            < microovn_init_index
+            < microovn_deploy_index
+        )
 
 
 class TestReapplyInfraModelConfigStep:

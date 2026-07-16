@@ -15,7 +15,7 @@ def determine_version() -> str:
         snap = Snap()
         risk = str(snap.config.get("deployment.version"))
     except Exception:
-        risk = "2024.1"
+        risk = "2026.1"
     return risk
 
 
@@ -23,17 +23,20 @@ SUPPORTED_RELEASE = "noble"
 JUJU_CHANNEL = "3.6/stable"
 JUJU_BASE = "ubuntu@24.04"
 OPENSTACK_CHANNEL = f"{determine_version()}/stable"
-OVN_CHANNEL = "24.03/stable"
+OVN_CHANNEL = "26.03/stable"
 RABBITMQ_CHANNEL = "3.12/stable"
 TRAEFIK_CHANNEL = "latest/stable"
 MICROCEPH_CHANNEL = "squid/stable"
-MICROOVN_CHANNEL = "24.03/stable"
+MICROOVN_CHANNEL = "25.03/stable"
+ROLE_DISTRIBUTOR_CHANNEL = "latest/stable"
 MYSQL_CHANNEL = "8.0/stable"
 CERT_AUTH_CHANNEL = "1/stable"
+MANUAL_TLS_CERTIFICATES_CHANNEL = "1/stable"
 BIND_CHANNEL = "9/stable"
 VAULT_CHANNEL = "1.18/stable"
 CONSUL_CHANNEL = "1.19/stable"
 K8S_CHANNEL = "1.32/stable"
+MULTUS_CHANNEL = "latest/stable"
 LXD_CHANNEL = "5.21/stable"
 CINDER_VOLUME_CHARM = "cinder-volume"
 
@@ -72,9 +75,9 @@ MISC_CHARMS_K8S = {
 MACHINE_CHARMS = {
     "microceph": MICROCEPH_CHANNEL,
     "microovn": MICROOVN_CHANNEL,
+    "role-distributor": ROLE_DISTRIBUTOR_CHANNEL,
     "openstack-network-agents": OPENSTACK_CHANNEL,
-    # TODO: ensure correct channel for the distributor
-    "microcluster-token-distributor": "latest/edge",
+    "microcluster-token-distributor": "v1/stable",
     "sunbeam-ovn-proxy": OPENSTACK_CHANNEL,
     "k8s": K8S_CHANNEL,
     "openstack-hypervisor": OPENSTACK_CHANNEL,
@@ -103,6 +106,7 @@ TERRAFORM_DIR_NAMES = {
     "sunbeam-machine-plan": "deploy-sunbeam-machine",
     "k8s-plan": "deploy-k8s",
     "microceph-plan": "deploy-microceph",
+    "role-distributor-plan": "deploy-role-distributor",
     "microovn-plan": "deploy-microovn",
     "cinder-volume-plan": "deploy-cinder-volume",
     "openstack-plan": "deploy-openstack",
@@ -176,6 +180,7 @@ DEPLOY_OPENSTACK_TFVAR_MAP: VarMap = {
             "channel": f"{charm.removesuffix('-k8s')}-channel",
             "revision": f"{charm.removesuffix('-k8s')}-revision",
             "config": f"{charm.removesuffix('-k8s')}-config",
+            "resources": f"{charm.removesuffix('-k8s')}-resources",
         }
         for charm, channel in K8S_CHARMS.items()
     },
@@ -201,6 +206,8 @@ DEPLOY_OPENSTACK_TFVAR_MAP["charms"]["kratos-external-idp-integrator"] = {
 
 # mysql-k8s supports a config map when deployed in many-mysql mode
 DEPLOY_OPENSTACK_TFVAR_MAP["charms"]["mysql-k8s"]["config-map"] = "mysql-config-map"
+# traefik-k8s supports a config map to configure each traefik instance separately
+DEPLOY_OPENSTACK_TFVAR_MAP["charms"]["traefik-k8s"]["config-map"] = "traefik-config-map"
 # mysql-k8s supports a storage map when deployed in many-mysql mode
 DEPLOY_OPENSTACK_TFVAR_MAP["charms"]["mysql-k8s"]["storage-map"] = "mysql-storage-map"
 # mysql-k8s storage directive when deployed in single mode
@@ -230,6 +237,14 @@ DEPLOY_MICROCEPH_TFVAR_MAP: VarMap = {
             "channel": "charm_microceph_channel",
             "revision": "charm_microceph_revision",
             "config": "charm_microceph_config",
+        }
+    }
+}
+DEPLOY_ROLE_DISTRIBUTOR_TFVAR_MAP: VarMap = {
+    "charms": {
+        "role-distributor": {
+            "channel": "charm_role_distributor_channel",
+            "revision": "charm_role_distributor_revision",
         }
     }
 }
@@ -300,6 +315,7 @@ MANIFEST_ATTRIBUTES_TFVAR_MAP: dict[str, VarMap] = {
     "sunbeam-machine-plan": DEPLOY_SUNBEAM_MACHINE_TFVAR_MAP,
     "k8s-plan": DEPLOY_K8S_TFVAR_MAP,
     "microceph-plan": DEPLOY_MICROCEPH_TFVAR_MAP,
+    "role-distributor-plan": DEPLOY_ROLE_DISTRIBUTOR_TFVAR_MAP,
     "microovn-plan": DEPLOY_MICROOVN_TFVAR_MAP,
     "openstack-plan": DEPLOY_OPENSTACK_TFVAR_MAP,
     "hypervisor-plan": DEPLOY_OPENSTACK_HYPERVISOR_TFVAR_MAP,

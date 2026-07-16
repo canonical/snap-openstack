@@ -33,7 +33,6 @@ from sunbeam.core.terraform import (
     TerraformHelper,
     TerraformStateLockedException,
 )
-from sunbeam.feature_gates import is_feature_gate_enabled
 from sunbeam.steps.configure import get_external_network_configs
 
 LOG = logging.getLogger(__name__)
@@ -43,6 +42,24 @@ APPLICATION = "microovn"
 MICROOVN_APP_TIMEOUT = 1200
 MICROOVN_UNIT_TIMEOUT = 1200
 AGENT_APP = "openstack-network-agents"
+ROLE_DISTRIBUTOR_APP = "role-distributor"
+
+
+def _role_distributor_application_name(jhelper: JujuHelper, model: str) -> str | None:
+    """Return role-distributor application name when deployed."""
+    try:
+        jhelper.get_application(ROLE_DISTRIBUTOR_APP, model)
+    except ApplicationNotFoundException:
+        return None
+    return ROLE_DISTRIBUTOR_APP
+
+
+def _microovn_accepted_statuses(ovn_manager: ovn.OvnManager) -> list[str]:
+    """Return statuses accepted while waiting for MicroOVN."""
+    statuses = ["active", "unknown"]
+    if ovn_manager.get_provider() == ovn.OvnProvider.OVN_K8S:
+        statuses.append("blocked")
+    return statuses
 
 
 class DeployMicroOVNApplicationStep(DeployMachineApplicationStep):
@@ -76,6 +93,10 @@ class DeployMicroOVNApplicationStep(DeployMachineApplicationStep):
     def get_application_timeout(self) -> int:
         """Return application timeout in seconds."""
         return MICROOVN_APP_TIMEOUT
+
+    def get_accepted_application_status(self) -> list[str]:
+        """Accepted status to pass wait_application_ready function."""
+        return _microovn_accepted_statuses(self.ovn_manager)
 
     def extra_tfvars(self) -> dict:
         """Extra terraform vars to pass to terraform apply."""
@@ -119,6 +140,9 @@ class DeployMicroOVNApplicationStep(DeployMachineApplicationStep):
                 "charm_openstack_network_agents_config": {
                     "snap-channel": versions.OPENSTACK_CHANNEL
                 },
+                "role_distributor_application_name": (
+                    _role_distributor_application_name(self.jhelper, self.model)
+                ),
                 "openstack_network_agents_endpoint_bindings": [
                     {"space": self.deployment.get_space(Networks.MANAGEMENT)},
                     {
@@ -145,12 +169,15 @@ class ReapplyMicroOVNOptionalIntegrationsStep(DeployMicroOVNApplicationStep):
 
     def tf_apply_extra_args(self) -> list[str]:
         """Extra args for terraform apply to reapply only optional CMR integrations."""
-        return [
+        extra_args = [
             "-target=juju_integration.microovn-microcluster-token-distributor",
             "-target=juju_integration.microovn-certs",
             "-target=juju_integration.microovn-ovsdb-cms",
             "-target=juju_integration.microovn-openstack-network-agents",
         ]
+        if _role_distributor_application_name(self.jhelper, self.model):
+            extra_args.append("-target=juju_integration.role-distributor-microovn")
+        return extra_args
 
 
 class ReapplyMicroOVNTerraformPlanStep(BaseStep):
@@ -207,14 +234,14 @@ class ReapplyMicroOVNTerraformPlanStep(BaseStep):
 
         if network_configs:
             LOG.debug(
-                "Add external network configs from DemoSetup to extra tfvars: "
-                f"{network_configs}"
+                "Add external network configs from DemoSetup to extra tfvars: %s",
+                network_configs,
             )
             self.extra_tfvars["charm_openstack_network_agents_config"].update(
                 network_configs
             )
 
-        statuses = ["active", "unknown"]
+        statuses = _microovn_accepted_statuses(self.ovn_manager)
         try:
             self.tfhelper.update_tfvars_and_apply_tf(
                 self.client,
@@ -233,7 +260,7 @@ class ReapplyMicroOVNTerraformPlanStep(BaseStep):
                 timeout=MICROOVN_UNIT_TIMEOUT,
             )
         except TimeoutError as e:
-            LOG.warning(str(e))
+            LOG.warning("Timed out waiting for reapplying MicroOVN: %r", e)
             return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.COMPLETED)
@@ -292,24 +319,26 @@ class EnableMicroOVNStep(BaseStep, JujuStepHelper):
             node = self.client.cluster.get_node_info(self.node)
             self.machine_id = str(node.get("machineid"))
         except NodeNotExistInClusterException:
-            LOG.debug(f"Machine {self.node} does not exist, skipping.")
+            LOG.debug("Machine %s does not exist, skipping", self.node)
             return Result(ResultType.SKIPPED)
 
         try:
             application = self.jhelper.get_application(APPLICATION, self.model)
         except ApplicationNotFoundException as e:
-            LOG.debug(str(e))
+            LOG.debug("MicroOVN application is not found: %r", e)
             return Result(
                 ResultType.SKIPPED, "microovn application has not been deployed yet"
             )
 
         for unit_name, unit in application.units.items():
             if unit.machine == self.machine_id:
-                LOG.debug(f"Unit {unit_name} is deployed on machine: {self.machine_id}")
+                LOG.debug(
+                    "Unit %s is deployed on machine: %s", unit_name, self.machine_id
+                )
                 self.unit = unit_name
                 break
         if not self.unit:
-            LOG.debug(f"Unit is not deployed on machine: {self.machine_id}, skipping.")
+            LOG.debug("Unit is not deployed on machine: %s, skipping", self.machine_id)
             return Result(ResultType.SKIPPED)
         return Result(ResultType.COMPLETED)
 
@@ -336,18 +365,12 @@ class SetOvnProviderStep(BaseStep):
     def get_config_from_snap(self, snap: Snap) -> ovn.OvnProvider:
         """Get OVN provider from snap configuration.
 
-        Returns MICROOVN only if both conditions are met:
-        1. The feature gate 'feature.microovn-sdn' is enabled
-        2. The provider config 'ovn.provider' is set to 'microovn'
+        Returns MICROOVN only when the provider config 'ovn.provider' is set
+        to 'microovn'.
 
         :param snap: the snap instance
         :return: the OVN provider
         """
-        # Check if MicroOVN feature gate is enabled
-        if not is_feature_gate_enabled("feature.microovn-sdn", snap):
-            return ovn.DEFAULT_PROVIDER
-
-        # Check if provider is explicitly set to microovn
         try:
             provider_value = snap.config.get(ovn.SNAP_PROVIDER_CONFIG_KEY)
             if provider_value:

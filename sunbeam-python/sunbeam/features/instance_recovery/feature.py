@@ -204,7 +204,7 @@ class InstanceRecoveryFeature(OpenStackControlPlaneFeature):
                 jhelper,
                 deployment.openstack_machines_model,
                 OPENSTACK_MODEL,
-                saas_apps_to_delete=["masakari"],
+                saas_apps_to_delete=self.set_application_names(deployment),
             ),
             TerraformInitStep(tfhelper_consul_client),
             consul.RemoveConsulClientStep(deployment, tfhelper_consul_client, jhelper),

@@ -12,7 +12,6 @@ from sunbeam.core.common import (
 )
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import (
-    ApplicationNotFoundException,
     JujuException,
     JujuHelper,
     JujuStepHelper,
@@ -33,6 +32,7 @@ from sunbeam.features.vault.feature import (
     auto_unseal_vault,
     migrate_vault_config_in_db,
 )
+from sunbeam.steps.charm_upgrade import CharmRefreshDecision, check_charm_needs_refresh
 from sunbeam.versions import VAULT_CHANNEL
 
 LOG = logging.getLogger(__name__)
@@ -40,6 +40,34 @@ LOG = logging.getLogger(__name__)
 CHARM_NAME = "vault-k8s"
 CHARM_BASE = "ubuntu@24.04"
 VAULT_UPGRADE_TIMEOUT = 600
+
+
+def _get_vault_terraform_targets(
+    tfhelper: TerraformHelper,
+) -> list[str]:
+    """Get terraform targets for Vault resources.
+
+    Uses terraform state to discover vault resources that actually
+    exist, so optional integrations are only targeted when present
+    in state.
+    """
+    targets: list[str] = []
+
+    try:
+        state_resources = tfhelper.state_list()
+        for resource in state_resources:
+            if not (
+                resource.startswith("juju_application.")
+                or resource.startswith("juju_integration.")
+            ):
+                continue
+            if "vault" in resource.lower():
+                targets.append(f"-target={resource}")
+    except Exception as e:
+        LOG.warning("Error discovering vault terraform targets: %s", e)
+
+    LOG.debug("Vault terraform targets: %s", targets)
+    return targets
 
 
 class VaultCharmUpgradeStep(BaseStep, JujuStepHelper):
@@ -65,13 +93,13 @@ class VaultCharmUpgradeStep(BaseStep, JujuStepHelper):
         self.tfhelper = tfhelper
         self.application = application
         self.tfvar_config = OPENSTACK_TERRAFORM_VARS
-        self._skip_charm_refresh = False
+        self._decision: CharmRefreshDecision
 
     def upgrade(
         self, revision: int | None = None, channel: str = VAULT_CHANNEL
     ) -> None:
         """Upgrade vault-k8s to the specified channel."""
-        LOG.info(f"Upgrading {self.application} to channel {channel}")
+        LOG.info("Upgrading %s to channel %s", self.application, channel)
         self.jhelper.charm_refresh(
             self.application,
             OPENSTACK_MODEL,
@@ -81,75 +109,6 @@ class VaultCharmUpgradeStep(BaseStep, JujuStepHelper):
             trust=True,
         )
 
-    def _needs_charm_refresh(self) -> Result:
-        """Determine whether the charm itself needs refreshing.
-
-        Returns SKIPPED when the deployed charm already matches the target,
-        FAILED when the manifest channel is invalid, COMPLETED otherwise.
-        """
-        try:
-            app = self.jhelper.get_application(self.application, OPENSTACK_MODEL)
-        except ApplicationNotFoundException:
-            return Result(
-                ResultType.SKIPPED,
-                f"{self.application} application has not been deployed yet",
-            )
-
-        charm_manifest = self.manifest.find_charm(CHARM_NAME)
-        target_channel = (
-            charm_manifest.channel if charm_manifest else None
-        ) or VAULT_CHANNEL
-        deployed_channel = app.charm_channel or ""
-
-        if charm_manifest and charm_manifest.channel:
-            target_track = target_channel.split("/")[0]
-            minimum_vault_track = VAULT_CHANNEL.split("/")[0]
-            if target_track != minimum_vault_track and not self.channel_update_needed(
-                VAULT_CHANNEL, target_channel
-            ):
-                msg = (
-                    f"Manifest channel {target_channel} track is below "
-                    f"{VAULT_CHANNEL}. "
-                    "Can not refresh to this channel."
-                )
-                LOG.warning(msg)
-                return Result(ResultType.FAILED, msg)
-
-        if charm_manifest and charm_manifest.revision:
-            if (
-                deployed_channel == target_channel
-                and app.charm_rev == charm_manifest.revision
-            ):
-                msg = (
-                    f"{CHARM_NAME} already at manifest pinned revision "
-                    f"{charm_manifest.revision} for channel {target_channel}"
-                )
-                LOG.debug(msg)
-                return Result(ResultType.SKIPPED, msg)
-            return Result(ResultType.COMPLETED)
-
-        try:
-            if app.base:
-                base = f"{app.base.name}@{app.base.channel}"
-                latest_rev = self.jhelper.get_available_charm_revision(
-                    CHARM_NAME, target_channel, base, arch="amd64"
-                )
-            else:
-                latest_rev = self.jhelper.get_available_charm_revision(
-                    CHARM_NAME, target_channel, arch="amd64"
-                )
-        except JujuException as e:
-            LOG.debug("Could not determine latest revision for %s: %s", CHARM_NAME, e)
-            return Result(ResultType.COMPLETED)
-
-        if deployed_channel == target_channel and app.charm_rev == latest_rev:
-            return Result(
-                ResultType.SKIPPED,
-                f"{CHARM_NAME} is already at the latest revision for "
-                f"channel {target_channel}",
-            )
-        return Result(ResultType.COMPLETED)
-
     def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
 
@@ -157,37 +116,43 @@ class VaultCharmUpgradeStep(BaseStep, JujuStepHelper):
         invalid.  The step always runs otherwise so that the DB migration
         and terraform apply happen even when no charm refresh is needed.
         """
-        result = self._needs_charm_refresh()
-        if result.result_type == ResultType.FAILED:
-            return result
-        # Remember whether the charm refresh itself can be skipped so that
-        # run() can avoid the unnecessary upgrade + wait cycle.
-        self._skip_charm_refresh = result.result_type == ResultType.SKIPPED
-        try:
-            self.jhelper.get_application(self.application, OPENSTACK_MODEL)
-        except ApplicationNotFoundException:
-            return Result(
-                ResultType.SKIPPED,
-                f"{self.application} application has not been deployed yet",
-            )
+        decision = check_charm_needs_refresh(
+            self.jhelper,
+            self.manifest,
+            CHARM_NAME,
+            OPENSTACK_MODEL,
+            self.application,
+            default_channel=VAULT_CHANNEL,
+            support_track_upgrades=True,
+        )
+        if (
+            decision.app_not_deployed
+            or decision.result.result_type == ResultType.FAILED
+        ):
+            return decision.result
+        self._decision = decision
+        # Vault always runs (for DB migration + terraform apply) even when
+        # the charm itself is already up-to-date.
         return Result(ResultType.COMPLETED)
+
+    def _get_vault_terraform_targets(self) -> list[str]:
+        """Get terraform targets for Vault resources."""
+        return _get_vault_terraform_targets(self.tfhelper)
 
     def run(self, context: StepContext) -> Result:
         """Run vault-k8s charm upgrade steps."""
-        charm_manifest = self.manifest.find_charm(CHARM_NAME)
-        revision = charm_manifest.revision if charm_manifest else None
-        target_channel = (
-            charm_manifest.channel if charm_manifest else None
-        ) or VAULT_CHANNEL
+        target_channel = self._decision.effective_channel
+        revision = self._decision.effective_revision
+        skip_charm_refresh = self._decision.result.result_type == ResultType.SKIPPED
 
-        if not self._skip_charm_refresh:
+        if not skip_charm_refresh:
             try:
                 self.update_status(
                     context, f"Refreshing Vault to channel {target_channel}"
                 )
                 self.upgrade(revision=revision, channel=target_channel)
             except JujuException as e:
-                LOG.error(f"Failed to refresh Vault: {e}")
+                LOG.error("Failed to refresh Vault: %r", e)
                 return Result(
                     ResultType.FAILED,
                     f"Failed to refresh Vault: {e}",
@@ -204,7 +169,7 @@ class VaultCharmUpgradeStep(BaseStep, JujuStepHelper):
                     timeout=VAULT_UPGRADE_TIMEOUT,
                 )
             except (JujuWaitException, TimeoutError) as e:
-                LOG.error(f"Timed out waiting for {self.application}: {e}")
+                LOG.error("Timed out waiting for %s: %r", self.application, e)
                 return Result(
                     ResultType.FAILED,
                     f"Timed out waiting for {self.application} to stabilise: {e}",
@@ -215,11 +180,16 @@ class VaultCharmUpgradeStep(BaseStep, JujuStepHelper):
                 context, "Updating terraform plan with new vault channel"
             )
             migrate_vault_config_in_db(self.client, self.tfvar_config, target_channel)
+
+            # Build target list for vault and its integrations
+            targets = self._get_vault_terraform_targets()
+
             self.tfhelper.update_tfvars_and_apply_tf(
                 self.client,
                 self.manifest,
                 tfvar_config=self.tfvar_config,
                 override_tfvars={"vault-channel": target_channel},
+                tf_apply_extra_args=targets,
             )
         except (TerraformException, TerraformStateLockedException) as e:
             return Result(
@@ -227,7 +197,7 @@ class VaultCharmUpgradeStep(BaseStep, JujuStepHelper):
                 f"Failed to apply terraform plan after vault config migration: {e}",
             )
 
-        if self._skip_charm_refresh:
+        if skip_charm_refresh:
             return Result(
                 ResultType.COMPLETED,
                 "Vault config migrated, no charm refresh needed.",
@@ -246,8 +216,9 @@ class VaultCharmUpgradeStep(BaseStep, JujuStepHelper):
             )
         except (JujuWaitException, TimeoutError) as e:
             LOG.warning(
-                f"Timed out waiting for {self.application} to stabilise "
-                f"after terraform apply: {e}"
+                "Timed out waiting for %s to stabilise after terraform apply: %r",
+                self.application,
+                e,
             )
 
         try:
@@ -256,7 +227,7 @@ class VaultCharmUpgradeStep(BaseStep, JujuStepHelper):
             )
             vault_status = VaultHelper(self.jhelper).get_vault_status(leader_unit)
         except (JujuException, LeaderNotFoundException, TimeoutError) as e:
-            LOG.warning(f"Could not determine vault seal status: {e}")
+            LOG.warning("Could not determine vault seal status: %r", e)
             return Result(
                 ResultType.COMPLETED,
                 "Vault upgraded. Unable to determine seal status, run "
@@ -286,3 +257,70 @@ class VaultCharmUpgradeStep(BaseStep, JujuStepHelper):
                 "Run unseal and authorize steps manually.",
             )
         return Result(ResultType.COMPLETED, "Vault upgraded and auto-unsealed.")
+
+
+class ReapplyVaultTerraformPlanStep(BaseStep, JujuStepHelper):
+    """Reapply only Vault-related components in the Terraform plan."""
+
+    _CONFIG = OPENSTACK_TERRAFORM_VARS
+
+    def __init__(
+        self,
+        deployment: Deployment,
+        client: Client,
+        tfhelper: TerraformHelper,
+        jhelper: JujuHelper,
+        manifest: Manifest,
+    ):
+        super().__init__(
+            "Applying Vault Terraform changes",
+            "Applying Vault-specific Terraform changes",
+        )
+        self.application = "vault"
+        self.deployment = deployment
+        self.client = client
+        self.tfhelper = tfhelper
+        self.jhelper = jhelper
+        self.manifest = manifest
+        self.model = OPENSTACK_MODEL
+
+    def _get_vault_terraform_targets(self) -> list[str]:
+        """Get terraform targets for Vault resources."""
+        return _get_vault_terraform_targets(self.tfhelper)
+
+    def run(self, context: StepContext) -> Result:
+        """Apply terraform with targets for Vault components only."""
+        try:
+            self.update_status(context, "updating Vault components")
+
+            # Build target list for vault and its integrations
+            targets = self._get_vault_terraform_targets()
+
+            # Apply terraform with targets
+            LOG.info("Applying terraform with %s Vault-specific targets", len(targets))
+            self.tfhelper.update_tfvars_and_apply_tf(
+                self.client,
+                self.manifest,
+                tfvar_config=self._CONFIG,
+                tf_apply_extra_args=targets,
+                reporter=context.reporter,
+            )
+
+        except (TerraformException, TerraformStateLockedException) as e:
+            LOG.warning("Error updating Vault components: %r", e)
+            return Result(ResultType.FAILED, str(e))
+
+        # Wait only for vault application
+        try:
+            self.update_status(context, "waiting for Vault to settle")
+            LOG.debug("Waiting for Vault application")
+            self.jhelper.wait_until_active(
+                model=self.model,
+                apps=[self.application],
+                timeout=600,
+            )
+        except (JujuWaitException, TimeoutError) as e:
+            LOG.warning("Error waiting for Vault application: %r", e)
+            return Result(ResultType.FAILED, str(e))
+
+        return Result(ResultType.COMPLETED)

@@ -48,7 +48,9 @@ core:
         config:
           snap-channel: 2025.1/edge
       microcluster-token-distributor:
-        channel: latest/edge
+        channel: v1/stable
+      role-distributor:
+        channel: latest/stable
       sunbeam-ovn-proxy:
         channel: 2025.1/edge
 features:
@@ -99,7 +101,11 @@ features:
   loadbalancer:
     software:
       charms:
+        multus:
+          channel: latest/stable
         octavia-k8s:
+          channel: 2025.1/edge
+        openstack-port-cni-k8s:
           channel: 2025.1/edge
   orchestration:
     software:

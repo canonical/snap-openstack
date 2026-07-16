@@ -28,6 +28,11 @@ else:
 LOG = logging.getLogger()
 
 
+def normalize_pem(pem_bytes: bytes) -> bytes:
+    """Normalize pem line endings to LF."""
+    return pem_bytes.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+
+
 def get_all_registered_groups(cli: click.Group) -> dict:
     """Get all the registered groups from cli object.
 
@@ -69,21 +74,33 @@ def is_certificate_valid(certificate: bytes) -> bool:
         certificate_bytes = base64.b64decode(certificate)
         x509.load_pem_x509_certificate(certificate_bytes)
     except (binascii.Error, TypeError, ValueError) as e:
-        LOG.debug(e)
+        LOG.debug("Failed to validate certificate: %r", e)
         return False
 
     return True
+
+
+def is_ca_certificate(certificate: str | bytes) -> bool:
+    """Return True if the certificate has BasicConstraints CA:TRUE."""
+    try:
+        cert_bytes = base64.b64decode(certificate)
+        cert = x509.load_pem_x509_certificate(cert_bytes)
+        bc = cert.extensions.get_extension_for_class(x509.BasicConstraints)
+        return bc.value.ca
+    except Exception as e:
+        LOG.debug("CA check failed: %s", e)
+        return False
 
 
 def validate_ca_certificate(
     ctx: click.core.Context, param: click.core.Option, value: str
 ) -> str:
     try:
-        ca_bytes = base64.b64decode(value)
+        ca_bytes = normalize_pem(base64.b64decode(value))
         x509.load_pem_x509_certificate(ca_bytes)
-        return value
+        return base64.b64encode(ca_bytes).decode()
     except (binascii.Error, TypeError, ValueError) as e:
-        LOG.debug(e)
+        LOG.debug("Failed to validate CA certificate: %r", e)
         raise click.BadParameter(str(e))
 
 
@@ -94,7 +111,7 @@ def validate_ca_chain(
         return None
 
     try:
-        chain_bytes = base64.b64decode(value)
+        chain_bytes = normalize_pem(base64.b64decode(value))
         chain_list = re.findall(
             pattern=(
                 "(?=-----BEGIN CERTIFICATE-----)(.*?)(?<=-----END CERTIFICATE-----)"
@@ -108,7 +125,7 @@ def validate_ca_chain(
             for cert in chain_list:
                 x509.load_pem_x509_certificate(cert.encode())
 
-            return value
+            return base64.b64encode(chain_bytes).decode()
 
         # Check if the chain is in correct order
         for i in range(len(chain_list) - 1):
@@ -116,14 +133,14 @@ def validate_ca_chain(
             issuer = x509.load_pem_x509_certificate(chain_list[i + 1].encode())
             cert.verify_directly_issued_by(issuer)
 
-        return value
+        return base64.b64encode(chain_bytes).decode()
     except (
         binascii.Error,
         TypeError,
         ValueError,
         crypto_exceptions.InvalidSignature,
     ) as e:
-        LOG.debug(e)
+        LOG.debug("Failed to validate CA chain: %r", e)
         raise click.BadParameter(str(e))
 
 
@@ -133,11 +150,11 @@ def get_subject_from_csr(csr: str) -> str | None:
         uid = req.subject.get_attributes_for_oid(
             x509_oid.NameOID.X500_UNIQUE_IDENTIFIER
         )
-        LOG.debug(f"UID for requested csr: {uid}")
+        LOG.debug("UID for requested csr: %s", uid)
         # Pick the first available ID
         return str(uid[0].value)
     except (binascii.Error, TypeError, ValueError) as e:
-        LOG.debug(e)
+        LOG.debug("Failed to get subject from CSR: %r", e)
         return None
 
 
@@ -145,7 +162,7 @@ def encode_base64_as_string(data: str) -> str | None:
     try:
         return base64.b64encode(bytes(data, "utf-8")).decode()
     except (binascii.Error, TypeError) as e:
-        LOG.debug(f"Error in encoding data {data} : {str(e)}")
+        LOG.debug("Error in encoding data %s: %r", data, e)
         return None
 
 
@@ -153,7 +170,7 @@ def decode_base64_as_string(data: str) -> str | None:
     try:
         return base64.b64decode(data).decode()
     except (binascii.Error, TypeError) as e:
-        LOG.debug(f"Error in decoding data {data} : {str(e)}")
+        LOG.debug("Error in decoding data %s: %r", data, e)
         return None
 
 

@@ -38,6 +38,9 @@ type Node struct {
 	Role      string
 	MachineID int
 	SystemID  string
+	Arch      string
+	IsDPU     bool
+	ImageName  string
 }
 
 // NodeFilter is a required struct for use with lxd-generate. It is used for filtering fields on database fetches.

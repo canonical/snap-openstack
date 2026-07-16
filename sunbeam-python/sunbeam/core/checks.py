@@ -13,16 +13,25 @@ from typing import Sequence
 
 import click
 from rich.console import Console
+from rich.status import Status
 from snaphelpers import Snap, SnapCtl
 
 from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import ClusterServiceUnavailableException
 from sunbeam.core.common import (
     RAM_16_GB_IN_KB,
+    ResultType,
+    StepContext,
     get_host_total_cores,
     get_host_total_ram,
 )
-from sunbeam.core.juju import JujuStepHelper
+from sunbeam.core.juju import JujuAccount, JujuStepHelper
+from sunbeam.core.progress import (
+    CompositeProgressReporter,
+    LoggingProgressReporter,
+    RichProgressReporter,
+)
+from sunbeam.steps.juju import JujuLoginStep
 
 LOG = logging.getLogger(__name__)
 
@@ -38,10 +47,10 @@ def run_preflight_checks(checks: Sequence["Check"], console: Console):
     Raise ClickException in case of Result Failures.
     """
     for check in checks:
-        LOG.debug(f"Starting pre-flight check {check.name}")
+        LOG.debug("Starting pre-flight check %s", check.name)
         message = f"{check.description} ... "
-        with console.status(message):
-            if not check.run():
+        with console.status(message) as check_status:
+            if not check.run(check_status=check_status):
                 raise click.ClickException(check.message)
 
 
@@ -65,12 +74,53 @@ class Check:
         self.description = description
         self.message = "Check successful"
 
-    def run(self) -> bool:
+    def run(self, check_status: Status | None = None) -> bool:
         """Run the check logic here.
 
         Return True if check is Ok.
         Otherwise update self.message and return False.
         """
+        return True
+
+
+class JujuLoginCheck(Check):
+    """Authenticate with the Juju controller."""
+
+    def __init__(self, juju_account: JujuAccount | None, controller: str | None = None):
+        """Initialize the JujuLoginCheck.
+
+        :param juju_account: Juju account to use for authentication.
+        :param controller: Juju controller to authenticate with.
+        """
+        self.step = JujuLoginStep(juju_account, controller)
+        super().__init__(
+            "Check Juju controller login",
+            f"Authenticating with Juju controller: {controller or 'current'}",
+        )
+
+    def run(self, check_status: Status | None = None) -> bool:
+        """Authenticate with Juju using the preflight check status."""
+        if check_status is None:
+            raise ValueError("JujuLoginCheck requires an active status.")
+
+        reporter = CompositeProgressReporter(
+            RichProgressReporter(check_status, self.step.status),
+            LoggingProgressReporter(),
+        )
+        context = StepContext(status=check_status, reporter=reporter)
+
+        skip_result = self.step.is_skip(context)
+        if skip_result.result_type == ResultType.SKIPPED:
+            return True
+        if skip_result.result_type == ResultType.FAILED:
+            self.message = skip_result.message
+            return False
+
+        result = self.step.run(context)
+        if result.result_type == ResultType.FAILED:
+            self.message = result.message
+            return False
+
         return True
 
 
@@ -181,7 +231,7 @@ class JujuSnapCheck(Check):
             "Checking for presence of Juju",
         )
 
-    def run(self) -> bool:
+    def run(self, check_status: Status | None = None) -> bool:
         """Check for juju-bin content."""
         snap = Snap()
         juju_content = snap.paths.snap / "juju"
@@ -202,7 +252,7 @@ class SshKeysConnectedCheck(Check):
             "Checking for presence of ssh-keys interface",
         )
 
-    def run(self) -> bool:
+    def run(self, check_status: Status | None = None) -> bool:
         """Check for ssh-keys interface."""
         snap = Snap()
         snap_ctl = SnapCtl()
@@ -236,7 +286,7 @@ class DaemonGroupCheck(Check):
             f"Checking if user {self.user} is member of group {self.group}",
         )
 
-    def run(self) -> bool:
+    def run(self, check_status: Status | None = None) -> bool:
         """Return false if user is not member of group.
 
         Checks:
@@ -286,7 +336,7 @@ class LocalShareCheck(Check):
             "Checking for ~/.local/share directory",
         )
 
-    def run(self) -> bool:
+    def run(self, check_status: Status | None = None) -> bool:
         """Check for ~./local/share."""
         snap = Snap()
 
@@ -314,7 +364,7 @@ class VerifyFQDNCheck(Check):
         )
         self.fqdn = fqdn
 
-    def run(self) -> bool:
+    def run(self, check_status: Status | None = None) -> bool:
         """Return false if FQDN is not valid.
 
         Checks:
@@ -383,7 +433,7 @@ class VerifyHypervisorHostnameCheck(Check):
         self.fqdn = fqdn
         self.hypervisor_hostname = hypervisor_hostname
 
-    def run(self) -> bool:
+    def run(self, check_status: Status | None = None) -> bool:
         """Verify if Hypervisor Hostname is same as FQDN."""
         if self.fqdn == self.hypervisor_hostname:
             return True
@@ -404,7 +454,7 @@ class SystemRequirementsCheck(Check):
             "Checking for host configuration of minimum 4 core and 16G RAM",
         )
 
-    def run(self) -> bool:
+    def run(self, check_status: Status | None = None) -> bool:
         """Validate system requirements.
 
         Checks:
@@ -432,7 +482,7 @@ class VerifyBootstrappedCheck(Check):
         )
         self.client = client
 
-    def run(self) -> bool:
+    def run(self, check_status: Status | None = None) -> bool:
         """Validate deployment has been bootstrapped.
 
         Checks:
@@ -459,7 +509,7 @@ class VerifyClusterdNotBootstrappedCheck(Check):
         )
         self.client = Client.from_socket()
 
-    def run(self) -> bool:
+    def run(self, check_status: Status | None = None) -> bool:
         """Verify local instance of clusterd is not bootstrapped.
 
         Checks:
@@ -489,7 +539,7 @@ class TokenCheck(Check):
         )
         self.token = token
 
-    def run(self) -> bool:
+    def run(self, check_status: Status | None = None) -> bool:
         """Return false if the token provided is not valid.
 
         Checks:
@@ -506,14 +556,14 @@ class TokenCheck(Check):
         try:
             token_bytes = base64.b64decode(self.token)
         except Exception:
-            LOG.exception("Failed to decode join token")
+            LOG.warning("Failed to decode join token: invalid base64 encoding")
             self.message = "Join token is not a valid base64 string"
             return False
 
         try:
             token = json.loads(token_bytes)
         except Exception:
-            LOG.exception("Failed to decode join token")
+            LOG.warning("Failed to decode join token: invalid JSON format")
             self.message = "Join token content is not a valid JSON-encoded object"
             return False
 
@@ -551,7 +601,7 @@ class JujuControllerRegistrationCheck(Check):
         self.controller = controller
         self.data_location = data_location
 
-    def run(self) -> bool:
+    def run(self, check_status: Status | None = None) -> bool:
         """Validate registration of juju controller.
 
         Checks:
@@ -577,7 +627,7 @@ class LxdGroupCheck(Check):
             f"Checking if user {self.user} is member of group {self.group}",
         )
 
-    def run(self) -> bool:
+    def run(self, check_status: Status | None = None) -> bool:
         """Return false if user is not member of group.
 
         Checks:
@@ -609,7 +659,7 @@ class LXDJujuControllerRegistrationCheck(Check):
             "Checking if lxd juju controller exists",
         )
 
-    def run(self) -> bool:
+    def run(self, check_status: Status | None = None) -> bool:
         """Check if lxd juju controller exists."""
         controllers = JujuStepHelper().get_controllers(clouds=["localhost"])
         if len(controllers) == 0:

@@ -289,11 +289,48 @@ def test_charm_refresh_with_base(jhelper, juju):
     )
 
 
-def test_charm_refresh_with_trust(jhelper, juju):
-    jhelper.charm_refresh("app", "test-model", trust=True)
+def test_charm_refresh_with_trust_on_k8s_model(jhelper, juju):
+    """On a k8s model, trust=True triggers juju.trust(scope=cluster) before refresh."""
+    with patch.object(jhelper, "is_k8s_model", return_value=True):
+        jhelper.charm_refresh("app", "test-model", trust=True)
+    juju.trust.assert_called_once_with("app", scope="cluster")
     juju.refresh.assert_called_with(
         "app", channel=None, revision=None, base=None, trust=True
     )
+
+
+def test_charm_refresh_with_trust_on_machine_model(jhelper, juju):
+    """On a machine model with trust=True, juju.trust must NOT be called."""
+    with patch.object(jhelper, "is_k8s_model", return_value=False):
+        jhelper.charm_refresh("app", "test-model", trust=True)
+    juju.trust.assert_not_called()
+    juju.refresh.assert_called_with(
+        "app", channel=None, revision=None, base=None, trust=True
+    )
+
+
+def test_charm_refresh_without_trust_does_not_call_juju_trust(jhelper, juju):
+    """When trust=False (default), juju.trust must not be called."""
+    jhelper.charm_refresh("app", "test-model")
+    juju.trust.assert_not_called()
+
+
+def test_charm_trust(jhelper, juju):
+    """charm_trust calls juju.trust with scope=cluster."""
+    jhelper.charm_trust("app", "test-model")
+    juju.trust.assert_called_once_with("app", scope="cluster")
+
+
+def test_is_k8s_model_caas(jhelper):
+    """is_k8s_model returns True for caas model-type."""
+    with patch.object(jhelper, "get_model", return_value={"model-type": "caas"}):
+        assert jhelper.is_k8s_model("openstack") is True
+
+
+def test_is_k8s_model_iaas(jhelper):
+    """is_k8s_model returns False for iaas model-type."""
+    with patch.object(jhelper, "get_model", return_value={"model-type": "iaas"}):
+        assert jhelper.is_k8s_model("openstack-machines") is False
 
 
 def test_get_spaces(jhelper):
@@ -658,22 +695,93 @@ def test_jhelper_update_k8s_cloud(jhelper: jujulib.JujuHelper):
         )
 
 
-def test_get_available_charm_revision(jhelper: jujulib.JujuHelper, juju):
+def test_get_available_charm_revisions(jhelper: jujulib.JujuHelper, juju):
     cmd_out = {
         "channels": {
             "legacy": {
                 "edge": [
                     {
                         "revision": 121,
+                        "architectures": ["amd64"],
                         "bases": [{"name": "ubuntu", "channel": "24.04"}],
-                    }
+                    },
+                    {
+                        "revision": 122,
+                        "architectures": ["arm64"],
+                        "bases": [{"name": "ubuntu", "channel": "24.04"}],
+                    },
                 ]
             }
         }
     }
     juju.cli.return_value = json.dumps(cmd_out)
-    revno = jhelper.get_available_charm_revision("k8s", "legacy/edge")
-    assert revno == 121
+    revisions = jhelper.get_available_charm_revisions("k8s", "legacy/edge")
+    assert revisions == {"amd64": 121, "arm64": 122}
+
+
+def test_get_available_charm_revisions_branch_channel(
+    jhelper: jujulib.JujuHelper, juju
+):
+    """Branch channels (track/risk/branch) work when track/risk exists in channels."""
+    cmd_out = {
+        "channels": {
+            "1.32": {
+                "edge": [
+                    {
+                        "revision": 200,
+                        "architectures": ["amd64"],
+                        "bases": [{"name": "ubuntu", "channel": "24.04"}],
+                    },
+                ]
+            }
+        }
+    }
+    juju.cli.return_value = json.dumps(cmd_out)
+    revisions = jhelper.get_available_charm_revisions(
+        "k8s", "1.32/edge/hue-fix-kubelet-0405-1"
+    )
+    assert revisions == {"amd64": 200}
+
+
+def test_get_available_charm_revisions_branch_channel_not_in_channels(
+    jhelper: jujulib.JujuHelper, juju
+):
+    """Branch channels absent from the channels dict raise JujuException."""
+    # juju info for a private/ephemeral branch channel may return an empty channels dict
+    cmd_out = {"channels": {}}
+    juju.cli.return_value = json.dumps(cmd_out)
+    with pytest.raises(jujulib.JujuException):
+        jhelper.get_available_charm_revisions("k8s", "1.32/edge/hue-fix-kubelet-0405-1")
+
+
+def test_get_available_charm_revisions_no_matching_base(
+    jhelper: jujulib.JujuHelper, juju
+):
+    """Raise JujuException when channel exists but no entry matches the base."""
+    cmd_out = {
+        "channels": {
+            "legacy": {
+                "edge": [
+                    {
+                        "revision": 121,
+                        "architectures": ["amd64"],
+                        "bases": [{"name": "ubuntu", "channel": "20.04"}],
+                    },
+                ]
+            }
+        }
+    }
+    juju.cli.return_value = json.dumps(cmd_out)
+    with pytest.raises(jujulib.JujuException):
+        jhelper.get_available_charm_revisions("k8s", "legacy/edge", "ubuntu@24.04")
+
+
+def test_get_available_charm_revisions_malformed_channel(
+    jhelper: jujulib.JujuHelper, juju
+):
+    """Abbreviated/malformed channels (no '/') raise JujuException, not IndexError."""
+    with pytest.raises(jujulib.JujuException, match="Invalid channel format"):
+        jhelper.get_available_charm_revisions("k8s", "edge")
 
 
 def test_set_app_config(jhelper: jujulib.JujuHelper, juju):
@@ -712,6 +820,16 @@ class TestJujuStepHelper:
         assert not jsh.channel_update_needed("2023.2/stable", "2023.1/stable")
         assert not jsh.channel_update_needed("latest/stable", "latest/stable")
         assert not jsh.channel_update_needed("foo/stable", "ba/stable")
+        # branch channels (track/risk/branch) must not raise ValueError
+        assert not jsh.channel_update_needed(
+            "1.32/edge/hue-fix-kubelet-0405-1", "1.32/edge/hue-fix-kubelet-0405-1"
+        )
+        assert jsh.channel_update_needed(
+            "1.32/edge/hue-fix-kubelet-0405-1", "1.33/stable"
+        )
+        # malformed channels (no '/') must not raise IndexError
+        assert not jsh.channel_update_needed("malformed", "1.33/stable")
+        assert not jsh.channel_update_needed("1.33/stable", "malformed")
 
     def test_find_subordinate_unit_for(self):
         jhelper = jujulib.JujuStepHelper()

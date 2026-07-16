@@ -25,7 +25,7 @@ from sunbeam.commands.configure import (
     UserOpenRCStep,
     retrieve_admin_credentials,
 )
-from sunbeam.commands.dashboard_url import retrieve_dashboard_url
+from sunbeam.commands.dashboard import retrieve_dashboard_url
 from sunbeam.commands.proxy import PromptForProxyStep
 from sunbeam.core import ovn
 from sunbeam.core.checks import (
@@ -33,6 +33,7 @@ from sunbeam.core.checks import (
     DiagnosticResultType,
     DiagnosticsCheck,
     DiagnosticsResult,
+    JujuLoginCheck,
     JujuSnapCheck,
     LocalShareCheck,
     VerifyBootstrappedCheck,
@@ -68,7 +69,7 @@ from sunbeam.core.juju import (
 from sunbeam.core.manifest import AddManifestStep
 from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.core.terraform import TerraformInitStep
-from sunbeam.feature_gates import feature_gate_option, split_roles_enabled
+from sunbeam.feature_gates import feature_gate_option
 from sunbeam.provider.base import ProviderBase
 from sunbeam.provider.common.multiregion import connect_to_region_controller
 from sunbeam.provider.maas.client import (
@@ -133,6 +134,7 @@ from sunbeam.steps.clusterd import (
     DeploySunbeamClusterdApplicationStep,
 )
 from sunbeam.steps.features import DisableEnabledFeatures
+from sunbeam.steps.horizon import AttachHorizonThemeStep
 from sunbeam.steps.hypervisor import (
     DeployHypervisorApplicationStep,
     DestroyHypervisorApplicationStep,
@@ -165,7 +167,6 @@ from sunbeam.steps.k8s import (
     EnsureK8SUnitsTaggedStep,
     EnsureL2AdvertisementByHostStep,
     MigrateK8SKubeconfigStep,
-    PatchCoreDNSStep,
     RemoveK8SUnitsStep,
     StoreK8SKubeConfigStep,
     UpdateK8SCloudStep,
@@ -180,6 +181,7 @@ from sunbeam.steps.microceph import (
 from sunbeam.steps.microovn import (
     DeployMicroOVNApplicationStep,
     ReapplyMicroOVNOptionalIntegrationsStep,
+    RemoveMicroOVNUnitsStep,
     SetOvnProviderStep,
 )
 from sunbeam.steps.openstack import (
@@ -190,6 +192,11 @@ from sunbeam.steps.openstack import (
     PromptDatabaseTopologyStep,
     PromptRegionStep,
     ReapplyOpenStackTerraformPlanStep,
+)
+from sunbeam.steps.role_distributor import (
+    DeployRoleDistributorApplicationStep,
+    ReapplyRoleDistributorApplicationStep,
+    RemoveRoleDistributorUnitsStep,
 )
 from sunbeam.steps.sso import (
     DeployIdentityProvidersStep,
@@ -330,8 +337,8 @@ def bootstrap(
     # Validate manifest file
     manifest = deployment.get_manifest(manifest_path)
 
-    LOG.debug(f"Manifest used for deployment - core: {manifest.core}")
-    LOG.debug(f"Manifest used for deployment - features: {manifest.features}")
+    LOG.debug("Manifest used for deployment - core: %s", manifest.core)
+    LOG.debug("Manifest used for deployment - features: %s", manifest.features)
 
     deployments = DeploymentsConfig.load(deployment_path(Snap()))
 
@@ -536,11 +543,11 @@ def bootstrap(
         deployments.update_deployment(deployment)
 
     if proxy_from_user and isinstance(proxy_from_user, dict):
-        LOG.debug(f"Writing proxy information to clusterdb: {proxy_from_user}")
+        LOG.debug("Writing proxy information to clusterdb: %s", proxy_from_user)
         client.cluster.update_config(PROXY_CONFIG_KEY, json.dumps(proxy_from_user))
 
     # Store deployment type for feature gate sync behavior
-    LOG.debug(f"Writing deployment type to clusterdb: {deployment.type}")
+    LOG.debug("Writing deployment type to clusterdb: %s", deployment.type)
     client.cluster.update_config(DEPLOYMENT_TYPE_CONFIG_KEY, deployment.type)
 
     console.print("Bootstrap controller components complete.")
@@ -589,6 +596,7 @@ def deploy(
     preflight_checks.append(JujuSnapCheck())
     preflight_checks.append(LocalShareCheck())
     preflight_checks.append(VerifyClusterdNotBootstrappedCheck())
+    preflight_checks.append(JujuLoginCheck(deployment.juju_account))
     run_preflight_checks(preflight_checks, console)
 
     if (
@@ -603,13 +611,14 @@ def deploy(
             deployment.juju_controller,
         )
         console.print(
-            f"{deployment.name!r} deployment is not complete, was bootstrap completed ?"
+            f"{deployment.name!r} deployment is not complete, was bootstrap completed?"
         )
         sys.exit(1)
 
     deployment_location = deployment_path(Snap())
     deployments = DeploymentsConfig.load(deployment_location)
     maas_client = MaasClient.from_deployment(deployment)
+
     jhelper = JujuHelper(deployment.juju_controller)
     clusterd_plan = [
         MaasSaveClusterdCredentialsStep(jhelper, deployment.name, deployments)
@@ -623,8 +632,8 @@ def deploy(
 
     manifest = deployment.get_manifest(manifest_path)
 
-    LOG.debug(f"Manifest used for deployment - core: {manifest.core}")
-    LOG.debug(f"Manifest used for deployment - features: {manifest.features}")
+    LOG.debug("Manifest used for deployment - core: %s", manifest.core)
+    LOG.debug("Manifest used for deployment - features: %s", manifest.features)
     proxy_settings = deployment.get_proxy_settings()
 
     tfhelper_sunbeam_machine = deployment.get_tfhelper("sunbeam-machine-plan")
@@ -633,6 +642,7 @@ def deploy(
     tfhelper_cinder_volume = deployment.get_tfhelper("cinder-volume-plan")
     tfhelper_openstack_deploy = deployment.get_tfhelper("openstack-plan")
     tfhelper_hypervisor_deploy = deployment.get_tfhelper("hypervisor-plan")
+    tfhelper_role_distributor = deployment.get_tfhelper("role-distributor-plan")
     tfhelper_microovn = deployment.get_tfhelper("microovn-plan")
 
     ovn_manager = deployment.get_ovn_manager()
@@ -654,7 +664,11 @@ def deploy(
     plan.append(MaasAddMachinesToClusterdStep(client, maas_client))
     plan.append(
         MaasDeployMachinesStep(
-            deployment, client, jhelper, deployment.openstack_machines_model
+            deployment,
+            client,
+            jhelper,
+            deployment.openstack_machines_model,
+            manifest=manifest,
         )
     )
     run_plan(plan, console, show_hints)
@@ -777,8 +791,18 @@ def deploy(
             deployment.public_ip_pool,
         )
     )
+    plan2.append(
+        EnsureL2AdvertisementByHostStep(
+            deployment,
+            client,
+            jhelper,
+            deployment.openstack_machines_model,
+            Networks.STORAGE,
+            deployment.storage_ip_pool,
+            optional_if_pool_missing=True,
+        )
+    )
     plan2.append(AddK8SCloudStep(deployment, jhelper))
-    plan2.append(PatchCoreDNSStep(deployment, jhelper))
 
     plan2.append(TerraformInitStep(tfhelper_microceph))
     plan2.append(
@@ -817,6 +841,17 @@ def deploy(
         nb_network, nb_compute, nb_control
     )
     if microovn_necessary:
+        plan2.append(TerraformInitStep(tfhelper_role_distributor))
+        plan2.append(
+            DeployRoleDistributorApplicationStep(
+                deployment,
+                client,
+                tfhelper_role_distributor,
+                jhelper,
+                manifest,
+                deployment.openstack_machines_model,
+            )
+        )
         plan2.append(TerraformInitStep(tfhelper_microovn))
         plan2.append(
             DeployMicroOVNApplicationStep(
@@ -849,6 +884,14 @@ def deploy(
             deployment.openstack_machines_model,
             proxy_settings=proxy_settings,
             is_region_controller=bool(nb_region_controllers),
+        )
+    )
+    plan2.append(
+        AttachHorizonThemeStep(
+            client=client,
+            jhelper=jhelper,
+            manifest=manifest,
+            model=OPENSTACK_MODEL,
         )
     )
     if microovn_necessary:
@@ -1009,12 +1052,12 @@ def configure_cmd(
     # Validate manifest file
     manifest = deployment.get_manifest(manifest_path)
 
-    LOG.debug(f"Manifest used for deployment - core: {manifest.core}")
-    LOG.debug(f"Manifest used for deployment - features: {manifest.features}")
+    LOG.debug("Manifest used for deployment - core: %s", manifest.core)
+    LOG.debug("Manifest used for deployment - features: %s", manifest.features)
 
     jhelper = JujuHelper(deployment.juju_controller)
     if not jhelper.model_exists(OPENSTACK_MODEL):
-        LOG.error(f"Expected model {OPENSTACK_MODEL} missing")
+        LOG.error("Expected model %s is missing", OPENSTACK_MODEL)
         raise click.ClickException("Please run `sunbeam cluster bootstrap` first")
     admin_credentials = retrieve_admin_credentials(jhelper, deployment, OPENSTACK_MODEL)
     # Add OS_INSECURE as https not working with terraform openstack provider.
@@ -1032,10 +1075,11 @@ def configure_cmd(
         map(_name_mapper, client.cluster.list_nodes_by_role(RoleTags.NETWORK.value))
     )
     ovn_manager = deployment.get_ovn_manager()
-    # When split-roles is active, all nodes with microovn + network-agents
-    # need the action called. Only network nodes get enable-chassis-as-gw=true;
-    # compute-only and control-only get enable-chassis-as-gw=false.
-    if split_roles_enabled():
+    network_agents_names = network
+    if ovn_manager.get_provider() == ovn.OvnProvider.MICROOVN:
+        # All nodes with MicroOVN network agents need the action called. Only
+        # network nodes get enable-chassis-as-gw=true; compute-only and
+        # control-only nodes get enable-chassis-as-gw=false.
         control = list(
             map(
                 _name_mapper,
@@ -1043,8 +1087,6 @@ def configure_cmd(
             )
         )
         network_agents_names = list(dict.fromkeys(network + compute + control))
-    else:
-        network_agents_names = network
     plan = [
         AddManifestStep(client, manifest_path),
         JujuLoginStep(deployment.juju_account),
@@ -1120,6 +1162,10 @@ def configure_cmd(
 def list_nodes(ctx: click.Context, format: str, show_hints: bool) -> None:
     """List nodes in the custer."""
     deployment: MaasDeployment = ctx.obj
+
+    # Login to the Juju controller
+    run_preflight_checks([JujuLoginCheck(deployment.juju_account)], console)
+
     jhelper = JujuHelper(deployment.juju_controller)
     step = MaasClusterStatusStep(deployment, jhelper)
     results = run_plan([step], console, show_hints)
@@ -1185,12 +1231,19 @@ def list_machines_cmd(ctx: click.Context, format: str) -> None:
         table.add_column("Roles")
         table.add_column("Zone")
         table.add_column("Status")
+        table.add_column("DPU image")
         for machine in machines:
             hostname = machine["hostname"]
             status = machine["status"]
             zone = machine["zone"]
             roles = ", ".join(machine["roles"])
-            table.add_row(hostname, roles, zone, status)
+            table.add_row(
+                hostname,
+                roles,
+                zone,
+                status,
+                machine.get("image_name", ""),
+            )
         console.print(table)
     elif format == FORMAT_YAML:
         console.print(yaml.dump(machines), end="")
@@ -1231,6 +1284,8 @@ def show_machine_cmd(ctx: click.Context, hostname: str, format: str) -> None:
         )
         table.add_row(header.format("Zone"), machine["zone"])
         table.add_row(header.format("Status"), machine["status"])
+        if image_name := machine.get("image_name"):
+            table.add_row(header.format("DPU image"), image_name)
         console.print(table)
     elif format == FORMAT_YAML:
         console.print(yaml.dump(machine), end="")
@@ -1467,7 +1522,7 @@ def _run_maas_checks(checks: list[DiagnosticsCheck], console: Console) -> list[d
     """
     check_results = []
     for check in checks:
-        LOG.debug(f"Starting check {check.name!r}")
+        LOG.debug("Starting check %r", check.name)
         message = f"{check.description}..."
         with console.status(message):
             results = check.run()
@@ -1479,7 +1534,12 @@ def _run_maas_checks(checks: list[DiagnosticsCheck], console: Console) -> list[d
 
             for result in results:
                 passed = result.passed.value
-                LOG.debug(f"{result.name=!r}, {passed=!r}, {result.message=!r}")
+                LOG.debug(
+                    "Result for %r: passed=%r, message=%r",
+                    result.name,
+                    passed,
+                    result.message,
+                )
                 console.print(
                     message,
                     result.message,
@@ -1501,7 +1561,7 @@ def _run_maas_meta_checks(
     check_results = []
 
     for check in checks:
-        LOG.debug(f"Starting check {check.name!r}")
+        LOG.debug("Starting check %r", check.name)
         message = f"{check.description}..."
         with console.status(message):
             results = check.run()
@@ -1550,7 +1610,7 @@ def validate_machine_cmd(ctx: click.Context, machine: str):
     with console.status(f"Fetching {machine} ..."):
         try:
             machine_obj = get_machine(client, machine)
-            LOG.debug(f"{machine_obj=!r}")
+            LOG.debug("Fetched machine: %r", machine_obj)
         except ValueError as e:
             console.print("Error:", e)
             sys.exit(1)
@@ -1613,6 +1673,7 @@ def remove_node(ctx: click.Context, name: str, force: bool, show_hints: bool) ->
     deployment: MaasDeployment = ctx.obj
     client = deployment.get_client()
     jhelper = JujuHelper(deployment.juju_controller)
+    microovn_machine_ids = deployment.get_ovn_manager().get_machines()
 
     preflight_checks = [
         LocalShareCheck(),
@@ -1679,6 +1740,9 @@ def remove_node(ctx: click.Context, name: str, force: bool, show_hints: bool) ->
         RemoveMicrocephUnitsStep(
             client, name, jhelper, deployment.openstack_machines_model
         ),
+        RemoveMicroOVNUnitsStep(
+            client, name, jhelper, deployment.openstack_machines_model
+        ),
         CordonK8SUnitStep(client, name, jhelper, deployment.openstack_machines_model),
         DrainK8SUnitStep(
             client, name, jhelper, deployment.openstack_machines_model, remove_pvc=True
@@ -1706,6 +1770,15 @@ def remove_node(ctx: click.Context, name: str, force: bool, show_hints: bool) ->
             Networks.PUBLIC,
             deployment.public_ip_pool,
         ),
+        EnsureL2AdvertisementByHostStep(
+            deployment,
+            client,
+            jhelper,
+            deployment.openstack_machines_model,
+            Networks.STORAGE,
+            deployment.storage_ip_pool,
+            optional_if_pool_missing=True,
+        ),
         RemoveSunbeamMachineUnitsStep(
             client, name, jhelper, deployment.openstack_machines_model
         ),
@@ -1715,12 +1788,35 @@ def remove_node(ctx: click.Context, name: str, force: bool, show_hints: bool) ->
         MaasRemoveMachineFromClusterdStep(client, name),
         SetCephMgrPoolSizeStep(client, jhelper, deployment.openstack_machines_model),
     ]
+    if microovn_machine_ids:
+        manifest = deployment.get_manifest()
+        role_distributor_tfhelper = deployment.get_tfhelper("role-distributor-plan")
+        cordon_k8s_unit_index = next(
+            i for i, step in enumerate(plan) if isinstance(step, CordonK8SUnitStep)
+        )
+        plan.insert(
+            cordon_k8s_unit_index,
+            RemoveRoleDistributorUnitsStep(
+                client, name, jhelper, deployment.openstack_machines_model
+            ),
+        )
+        ceph_pool_size_index = next(
+            i for i, step in enumerate(plan) if isinstance(step, SetCephMgrPoolSizeStep)
+        )
+        plan[ceph_pool_size_index:ceph_pool_size_index] = [
+            TerraformInitStep(role_distributor_tfhelper),
+            ReapplyRoleDistributorApplicationStep(
+                deployment,
+                client,
+                role_distributor_tfhelper,
+                jhelper,
+                manifest,
+                deployment.openstack_machines_model,
+            ),
+        ]
 
     run_plan(plan, console, show_hints)
-    click.echo(
-        f"Removed node {name} from the cluster."
-        " Run `sunbeam cluster resize` to scale down the cluster"
-    )
+    click.echo(f"Removed node {name} from the cluster.")
 
 
 @click.command("destroy")
@@ -1749,13 +1845,17 @@ def destroy_deployment_cmd(
     """
     if not no_prompt:
         click.confirm("This will destroy the deployment. Are you sure?", abort=True)
+
+    deployment: MaasDeployment = ctx.obj
+
     preflight_checks = [
         JujuSnapCheck(),
         LocalShareCheck(),
+        JujuLoginCheck(deployment.juju_account),
     ]
     run_preflight_checks(preflight_checks, console)
     deployments = DeploymentsConfig.load(deployment_path(Snap()))
-    deployment: MaasDeployment = ctx.obj
+
     plan = []
 
     client = None
@@ -1889,6 +1989,10 @@ def configure_sriov(
     deployment: MaasDeployment = ctx.obj
     client = deployment.get_client()
     manifest = deployment.get_manifest(manifest_path)
+
+    # Login to the Juju controller
+    run_preflight_checks([JujuLoginCheck(deployment.juju_account)], console)
+
     jhelper = JujuHelper(deployment.juju_controller)
 
     admin_credentials = retrieve_admin_credentials(jhelper, deployment, OPENSTACK_MODEL)
@@ -1949,6 +2053,10 @@ def configure_dpdk(
     deployment: MaasDeployment = ctx.obj
     client = deployment.get_client()
     manifest = deployment.get_manifest(manifest_path)
+
+    # Login to the Juju controller
+    run_preflight_checks([JujuLoginCheck(deployment.juju_account)], console)
+
     jhelper = JujuHelper(deployment.juju_controller)
 
     admin_credentials = retrieve_admin_credentials(jhelper, deployment, OPENSTACK_MODEL)

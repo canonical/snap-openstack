@@ -59,8 +59,31 @@ class TestDeployMicroOVNApplicationStep:
         timeout = deploy_microovn_step.get_application_timeout()
         assert timeout == 1200
 
+    def test_get_accepted_application_status_allows_blocked_for_ovn_k8s(
+        self, deploy_microovn_step, ovn_manager
+    ):
+        ovn_manager.get_provider.return_value = ovn.OvnProvider.OVN_K8S
+
+        statuses = deploy_microovn_step.get_accepted_application_status()
+
+        assert statuses == ["active", "unknown", "blocked"]
+
+    def test_get_accepted_application_status_excludes_blocked_for_microovn_provider(
+        self, deploy_microovn_step, ovn_manager
+    ):
+        ovn_manager.get_provider.return_value = ovn.OvnProvider.MICROOVN
+
+        statuses = deploy_microovn_step.get_accepted_application_status()
+
+        assert statuses == ["active", "unknown"]
+
     def test_extra_tfvars(
-        self, deploy_microovn_step, basic_deployment, basic_client, ovn_manager
+        self,
+        deploy_microovn_step,
+        basic_deployment,
+        basic_client,
+        basic_jhelper,
+        ovn_manager,
     ):
         openstack_tfhelper = Mock()
         openstack_tfhelper.output.return_value = {
@@ -68,6 +91,7 @@ class TestDeployMicroOVNApplicationStep:
         }
         basic_deployment.get_tfhelper.return_value = openstack_tfhelper
         ovn_manager.get_machines.return_value = ["1", "2"]
+        basic_jhelper.get_application.return_value = Mock()
 
         extra_tfvars = deploy_microovn_step.extra_tfvars()
 
@@ -75,6 +99,7 @@ class TestDeployMicroOVNApplicationStep:
         assert "microovn_machine_ids" in extra_tfvars
         assert set(extra_tfvars["microovn_machine_ids"]) == {"1", "2"}
         assert extra_tfvars["token_distributor_machine_ids"] == ["1"]
+        assert extra_tfvars["role_distributor_application_name"] == "role-distributor"
 
     def test_extra_tfvars_no_network_nodes(
         self, deploy_microovn_step, basic_deployment, basic_client, ovn_manager
@@ -91,6 +116,25 @@ class TestDeployMicroOVNApplicationStep:
         assert "ca-offer-url" in extra_tfvars
         assert "endpoint_bindings" in extra_tfvars
         assert extra_tfvars["ca-offer-url"] == "provider:admin/default.ca"
+
+    def test_extra_tfvars_disables_role_distributor_when_missing(
+        self,
+        deploy_microovn_step,
+        basic_deployment,
+        basic_jhelper,
+        ovn_manager,
+    ):
+        openstack_tfhelper = Mock()
+        openstack_tfhelper.output.return_value = {}
+        basic_deployment.get_tfhelper.return_value = openstack_tfhelper
+        ovn_manager.get_machines.return_value = ["1"]
+        basic_jhelper.get_application.side_effect = ApplicationNotFoundException(
+            "Application missing from model: 'test-model'"
+        )
+
+        extra_tfvars = deploy_microovn_step.extra_tfvars()
+
+        assert extra_tfvars["role_distributor_application_name"] is None
 
     def test_extra_tfvars_network_agents_endpoint_bindings(
         self, deploy_microovn_step, basic_deployment, ovn_manager
@@ -133,6 +177,7 @@ class TestReapplyMicroOVNOptionalIntegrationsStep:
 
     def test_tf_apply_extra_args(self, reapply_microovn_step):
         reapply_microovn_step.tfhelper.output.return_value = {}
+        reapply_microovn_step.jhelper.get_application.return_value = Mock()
         extra_args = reapply_microovn_step.tf_apply_extra_args()
 
         expected_args = [
@@ -140,8 +185,26 @@ class TestReapplyMicroOVNOptionalIntegrationsStep:
             "-target=juju_integration.microovn-certs",
             "-target=juju_integration.microovn-ovsdb-cms",
             "-target=juju_integration.microovn-openstack-network-agents",
+            "-target=juju_integration.role-distributor-microovn",
         ]
         assert extra_args == expected_args
+
+    def test_tf_apply_extra_args_omits_role_distributor_when_missing(
+        self, reapply_microovn_step
+    ):
+        reapply_microovn_step.tfhelper.output.return_value = {}
+        reapply_microovn_step.jhelper.get_application.side_effect = (
+            ApplicationNotFoundException("Application missing from model: 'test-model'")
+        )
+
+        extra_args = reapply_microovn_step.tf_apply_extra_args()
+
+        assert extra_args == [
+            "-target=juju_integration.microovn-microcluster-token-distributor",
+            "-target=juju_integration.microovn-certs",
+            "-target=juju_integration.microovn-ovsdb-cms",
+            "-target=juju_integration.microovn-openstack-network-agents",
+        ]
 
 
 class TestEnableMicroOVNStep:
@@ -292,47 +355,75 @@ class TestReapplyMicroOVNTerraformPlanStep:
             == "10.0.0.1/24"
         )
 
+    def test_run_allows_blocked_status_for_ovn_k8s(
+        self,
+        reapply_microovn_terraform_step,
+        basic_jhelper,
+        step_context,
+    ):
+        reapply_microovn_terraform_step.ovn_manager.get_provider.return_value = (
+            ovn.OvnProvider.OVN_K8S
+        )
+
+        with patch(
+            "sunbeam.steps.microovn.get_external_network_configs", return_value={}
+        ):
+            result = reapply_microovn_terraform_step.run(step_context)
+
+        assert result.result_type == ResultType.COMPLETED
+        basic_jhelper.wait_application_ready.assert_called_once_with(
+            "microovn",
+            "test-model",
+            accepted_status=["active", "unknown", "blocked"],
+            timeout=1200,
+        )
+
+    def test_run_excludes_blocked_status_for_microovn_provider(
+        self,
+        reapply_microovn_terraform_step,
+        basic_jhelper,
+        step_context,
+    ):
+        reapply_microovn_terraform_step.ovn_manager.get_provider.return_value = (
+            ovn.OvnProvider.MICROOVN
+        )
+
+        with patch(
+            "sunbeam.steps.microovn.get_external_network_configs", return_value={}
+        ):
+            result = reapply_microovn_terraform_step.run(step_context)
+
+        assert result.result_type == ResultType.COMPLETED
+        basic_jhelper.wait_application_ready.assert_called_once_with(
+            "microovn",
+            "test-model",
+            accepted_status=["active", "unknown"],
+            timeout=1200,
+        )
+
 
 class TestSetOvnProviderStep:
-    def test_get_config_from_snap_feature_gate_disabled(self, basic_client):
-        """Test get_config_from_snap when feature gate is disabled."""
-        mock_snap = Mock()
-        mock_snap.config.get.return_value = "microovn"
-        step = SetOvnProviderStep(basic_client, mock_snap)
-
-        with patch("sunbeam.steps.microovn.is_feature_gate_enabled") as mock_gate:
-            mock_gate.return_value = False
-            result = step.get_config_from_snap(mock_snap)
-            assert result == ovn.DEFAULT_PROVIDER
-            mock_gate.assert_called_once_with("feature.microovn-sdn", mock_snap)
-
-    def test_get_config_from_snap_feature_gate_enabled_provider_not_set(
-        self, basic_client
-    ):
-        """Test get_config_from_snap when gate enabled but no provider."""
+    def test_get_config_from_snap_provider_not_set(self, basic_client):
+        """Test get_config_from_snap when no provider is configured."""
         mock_snap = Mock()
         mock_snap.config.get.return_value = None
         step = SetOvnProviderStep(basic_client, mock_snap)
 
-        with patch("sunbeam.steps.microovn.is_feature_gate_enabled") as mock_gate:
-            mock_gate.return_value = True
-            result = step.get_config_from_snap(mock_snap)
-            assert result == ovn.DEFAULT_PROVIDER
-            mock_gate.assert_called_once_with("feature.microovn-sdn", mock_snap)
+        result = step.get_config_from_snap(mock_snap)
 
-    def test_get_config_from_snap_feature_gate_enabled_provider_microovn(
-        self, basic_client
-    ):
-        """Test get_config_from_snap when both gate enabled and provider set."""
+        assert result == ovn.DEFAULT_PROVIDER
+        mock_snap.config.get.assert_called_once_with(ovn.SNAP_PROVIDER_CONFIG_KEY)
+
+    def test_get_config_from_snap_provider_microovn(self, basic_client):
+        """Test get_config_from_snap when provider is set to microovn."""
         mock_snap = Mock()
         mock_snap.config.get.return_value = ovn.OvnProvider.MICROOVN
         step = SetOvnProviderStep(basic_client, mock_snap)
 
-        with patch("sunbeam.steps.microovn.is_feature_gate_enabled") as mock_gate:
-            mock_gate.return_value = True
-            result = step.get_config_from_snap(mock_snap)
-            assert result == ovn.OvnProvider.MICROOVN
-            mock_gate.assert_called_once_with("feature.microovn-sdn", mock_snap)
+        result = step.get_config_from_snap(mock_snap)
+
+        assert result == ovn.OvnProvider.MICROOVN
+        mock_snap.config.get.assert_called_once_with(ovn.SNAP_PROVIDER_CONFIG_KEY)
 
     def test_get_config_from_snap_unknown_config_key(self, basic_client):
         """Test get_config_from_snap when snap config key doesn't exist."""
@@ -342,10 +433,9 @@ class TestSetOvnProviderStep:
         mock_snap.config.get.side_effect = UnknownConfigKey("ovn.provider")
         step = SetOvnProviderStep(basic_client, mock_snap)
 
-        with patch("sunbeam.steps.microovn.is_feature_gate_enabled") as mock_gate:
-            mock_gate.return_value = True
-            result = step.get_config_from_snap(mock_snap)
-            assert result == ovn.DEFAULT_PROVIDER
+        result = step.get_config_from_snap(mock_snap)
+
+        assert result == ovn.DEFAULT_PROVIDER
 
     def test_get_config_from_snap_invalid_provider_value(self, basic_client):
         """Test get_config_from_snap with invalid provider value raises error."""
@@ -353,13 +443,11 @@ class TestSetOvnProviderStep:
         mock_snap.config.get.return_value = "invalid-provider"
         step = SetOvnProviderStep(basic_client, mock_snap)
 
-        with patch("sunbeam.steps.microovn.is_feature_gate_enabled") as mock_gate:
-            mock_gate.return_value = True
-            with pytest.raises(ValueError) as exc_info:
-                step.get_config_from_snap(mock_snap)
-            assert "Invalid value 'invalid-provider'" in str(exc_info.value)
-            assert "ovn.provider" in str(exc_info.value)
-            assert "Valid values are:" in str(exc_info.value)
+        with pytest.raises(ValueError) as exc_info:
+            step.get_config_from_snap(mock_snap)
+        assert "Invalid value 'invalid-provider'" in str(exc_info.value)
+        assert "ovn.provider" in str(exc_info.value)
+        assert "Valid values are:" in str(exc_info.value)
 
     def test_is_skip(self, basic_client, step_context):
         """Test is_skip method."""

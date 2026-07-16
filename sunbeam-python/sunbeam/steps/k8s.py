@@ -1,9 +1,7 @@
 # SPDX-FileCopyrightText: 2024 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
-import copy
 import ipaddress
-import json
 import logging
 import subprocess
 import time
@@ -81,12 +79,14 @@ if typing.TYPE_CHECKING:
     import lightkube.config.kubeconfig as l_kubeconfig
     import lightkube.core.client as l_client
     import lightkube.core.exceptions as l_exceptions
+    import lightkube.types as l_patch_type
     from lightkube.models import meta_v1
     from lightkube.resources import apps_v1, autoscaling_v2, core_v1
 else:
     l_kubeconfig = LazyImport("lightkube.config.kubeconfig")
     l_client = LazyImport("lightkube.core.client")
     l_exceptions = LazyImport("lightkube.core.exceptions")
+    l_patch_type = LazyImport("lightkube.types")
     meta_v1 = LazyImport("lightkube.models.meta_v1")
     apps_v1 = LazyImport("lightkube.resources.apps_v1")
     autoscaling_v2 = LazyImport("lightkube.resources.autoscaling_v2")
@@ -102,33 +102,9 @@ K8S_DESTROY_TIMEOUT = 900
 K8S_UNIT_TIMEOUT = 1800  # 30 minutes, adding / removing units can take a long time
 K8S_ENABLE_ADDONS_TIMEOUT = 300  # 5 minutes
 K8SD_SNAP_SOCKET = "/var/snap/k8s/common/var/lib/k8sd/state/control.socket"
-
-COREDNS_HPA = {
-    "enabled": True,
-    "minReplicas": 1,
-    "maxReplicas": 5,
-    "metrics": [
-        {
-            "type": "Resource",
-            "resource": {
-                "name": "cpu",
-                "target": {"type": "Utilization", "averageUtilization": 80},
-            },
-        }
-    ],
-    "behavior": {
-        "scaleUp": {"policies": [{"periodSeconds": 30, "type": "Pods", "value": 2}]},
-        "scaleDown": {
-            "stabilizationWindowSeconds": 300,
-            "policies": [{"type": "Pods", "value": 2, "periodSeconds": 60}],
-        },
-    },
-}
-
-COREDNS_RESOURCES = {
-    "limits": {"cpu": "500m", "memory": "128Mi"},
-    "requests": {"cpu": "500m", "memory": "128Mi"},
-}
+# Toleration seconds for node failure recovery k8s default of 5 min to 1 min
+DEFAULT_NOT_READY_TOLERATION_SECONDS = 60
+DEFAULT_UNREACHABLE_TOLERATION_SECONDS = 60
 
 
 def validate_cidrs(ip_ranges: str, separator: str = ","):
@@ -288,6 +264,22 @@ class DeployK8SApplicationStep(DeployMachineApplicationStep):
         config_tfvars["node-labels"] = " ".join(
             node_label for node_label in node_labels if node_label
         )
+        toleration_settings = {
+            "default-not-ready-toleration-seconds": str(
+                DEFAULT_NOT_READY_TOLERATION_SECONDS
+            ),
+            "default-unreachable-toleration-seconds": str(
+                DEFAULT_UNREACHABLE_TOLERATION_SECONDS
+            ),
+        }
+        existing_apiserver_args = [
+            arg
+            for arg in str(config_tfvars.get("kube-apiserver-extra-args", "")).split()
+            if arg.split("=")[0] not in toleration_settings
+        ]
+        for key, value in toleration_settings.items():
+            existing_apiserver_args.append(f"{key}={value}")
+        config_tfvars["kube-apiserver-extra-args"] = " ".join(existing_apiserver_args)
 
         return config_tfvars
 
@@ -296,6 +288,10 @@ class DeployK8SApplicationStep(DeployMachineApplicationStep):
         tfvars = {
             "endpoint_bindings": [
                 {"space": self.deployment.get_space(Networks.MANAGEMENT)},
+                {
+                    "endpoint": "cluster",
+                    "space": self.deployment.get_space(Networks.INTERNAL),
+                },
             ],
             "k8s_config": self._get_k8s_config_tfvars(),
         }
@@ -328,9 +324,9 @@ class EnsureK8SUnitsTaggedStep(BaseStep):
     This step ensures that every k8s node is tagged with the
     HOSTNAME_LABEL, to ensure sunbeam can query the correct nodes
     afterwards.
-    Match is done on management ip address. Node IP in k8s is guaranteed by
-    the cluster space binding, which is always bound to the management
-    space.
+    Match is done on the IP addresses from the space configured as
+    Networks.INTERNAL. Node IP in k8s is guaranteed by the cluster
+    space binding.
     """
 
     def __init__(
@@ -351,18 +347,16 @@ class EnsureK8SUnitsTaggedStep(BaseStep):
         self.fqdn = fqdn
         self.to_update: dict[str, str] = {}
 
-    def _get_management_ips(
+    def _get_cluster_ips(
         self, juju_machine: "jubilant.statustypes.MachineStatus"
     ) -> list[str]:
-        management_space = self.deployment.get_space(Networks.MANAGEMENT)
-        management_networks = self.jhelper.get_space_networks(
-            self.model, management_space
-        )
+        cluster_space = self.deployment.get_space(Networks.INTERNAL)
+        cluster_networks = self.jhelper.get_space_networks(self.model, cluster_space)
 
         return _get_machines_space_ips(
             juju_machine.network_interfaces,
-            management_space,
-            management_networks,
+            cluster_space,
+            cluster_networks,
         )
 
     @tenacity.retry(
@@ -384,12 +378,12 @@ class EnsureK8SUnitsTaggedStep(BaseStep):
         Raises K8SError if client not able to get nodes
         from k8s.
         """
-        LOG.debug(f"Matching K8S Node with name {hostname} and IPs {ips}")
+        LOG.debug("Matching K8S Node with name %s and IPs %s", hostname, ips)
         hostname_without_domain = hostname.split(".")[0]
         k8s_nodes = list_nodes(
             self.kube, labels={DEPLOYMENT_LABEL: self.deployment.name}
         )
-        LOG.debug(f"K8S nodes filtered by deployment label: {k8s_nodes}")
+        LOG.debug("K8S nodes filtered by deployment label: %s", k8s_nodes)
 
         for k8s_node in k8s_nodes:
             if k8s_node.metadata is None:
@@ -438,18 +432,18 @@ class EnsureK8SUnitsTaggedStep(BaseStep):
                 raise SunbeamException(
                     f"{sunbeam_name!r} not found in Juju, expected id {machine_id!r}"
                 )
-            management_ips = self._get_management_ips(juju_machine)
-            if not management_ips:
-                LOG.debug("No management IPs found for machine %s", machine_id)
-                raise SunbeamException(f"{sunbeam_name!r} has no management IPs")
+            cluster_ips = self._get_cluster_ips(juju_machine)
+            if not cluster_ips:
+                LOG.debug("No cluster IPs found for machine %s", machine_id)
+                raise SunbeamException(f"{sunbeam_name!r} has no cluster IPs")
 
             try:
-                k8s_node = self._find_matching_k8s_node(sunbeam_name, management_ips)
+                k8s_node = self._find_matching_k8s_node(sunbeam_name, cluster_ips)
             except ValueError:
                 LOG.debug(
-                    "No matching k8s node found for %s, management IPs %s",
+                    "No matching k8s node found for %s, cluster IPs %s",
                     sunbeam_name,
-                    management_ips,
+                    cluster_ips,
                 )
                 raise SunbeamException(f"{sunbeam_name} has no matching k8s node")
             except K8SError as e:
@@ -587,7 +581,7 @@ class AddK8SCloudStep(BaseStep, JujuStepHelper):
                 ResultType.COMPLETED or ResultType.FAILED otherwise
         """
         clouds = self.jhelper.get_clouds()
-        LOG.debug(f"Clouds registered in the controller: {clouds}")
+        LOG.debug("Clouds registered in the controller: %s", clouds)
         # TODO(hemanth): Need to check if cloud credentials are also created?
         if self.cloud_name in clouds.keys():
             return Result(ResultType.SKIPPED)
@@ -624,7 +618,7 @@ class AddK8SCloudInClientStep(BaseStep, JujuStepHelper):
                 ResultType.COMPLETED or ResultType.FAILED otherwise
         """
         clouds = self.get_clouds("k8s", local=True)
-        LOG.debug(f"Clouds registered in the client: {clouds}")
+        LOG.debug("Clouds registered in the client: %s", clouds)
         if self.cloud_name in clouds:
             return Result(ResultType.SKIPPED)
 
@@ -659,7 +653,7 @@ class UpdateK8SCloudStep(BaseStep, JujuStepHelper):
                 ResultType.COMPLETED or ResultType.FAILED otherwise
         """
         clouds = self.jhelper.get_clouds()
-        LOG.debug(f"Clouds registered in the controller: {clouds}")
+        LOG.debug("Clouds registered in the controller: %s", clouds)
         if self.cloud_name not in clouds.keys():
             return Result(
                 ResultType.SKIPPED,
@@ -704,8 +698,8 @@ class AddK8SCredentialStep(BaseStep, JujuStepHelper):
             if "not found" in e.stderr:
                 return Result(ResultType.COMPLETED)
 
-            LOG.debug(e.stderr)
-            LOG.exception("Error retrieving juju credentails from controller.")
+            LOG.debug("%s: %s", e, e.stderr)
+            LOG.warning("Error retrieving Juju credentials from controller: %r", e)
             return Result(ResultType.FAILED, str(e))
 
         if self.credential_name in credentials.get("controller-credentials", {}).keys():
@@ -761,7 +755,7 @@ class StoreK8SKubeConfigStep(BaseStep, JujuStepHelper):
             unit = self.jhelper.get_leader_unit(APPLICATION, self.model)
             machine = self.jhelper.get_leader_unit_machine(APPLICATION, self.model)
 
-            LOG.debug(unit)
+            LOG.debug("Leader unit: %s", unit)
             leader_unit_management_ip = self._get_management_server_ip(machine)
             LOG.debug("Leader unit management IP: %s", leader_unit_management_ip)
             run_action_kwargs = (
@@ -776,7 +770,7 @@ class StoreK8SKubeConfigStep(BaseStep, JujuStepHelper):
                 run_action_kwargs,
             )
 
-            LOG.debug(result)
+            LOG.debug("Result from getting kubeconfig for %s: %s", unit, result)
             if not result.get("kubeconfig"):
                 return Result(
                     ResultType.FAILED,
@@ -1329,6 +1323,19 @@ class _PerHostK8SResourceStep(BaseStep):
         else:
             self.control_nodes = self.client.cluster.list_nodes_by_role(control)
 
+        # Skip control nodes whose machines are not yet in juju. This can
+        # happen during node removal (machine removed before clusterd cleanup)
+        # or during concurrent joins (machine not yet provisioned). Skipping
+        # is safe: stale resources are cleaned up later when the node is
+        # removed from clusterd, at which point it won't appear in
+        # control_nodes and _get_outdated_resources will report it as deleted.
+        juju_machines = set(self.jhelper.get_machines(self.model).keys())
+        self.control_nodes = [
+            node
+            for node in self.control_nodes
+            if str(node.get("machineid", "")) in juju_machines
+        ]
+
         try:
             self.kube = get_kube_client(self.client, self.kube_namespace)
         except KubeClientError as e:
@@ -1653,6 +1660,7 @@ class EnsureCiliumDeviceByHostStep(_PerHostK8SResourceStep):
                         }
                     },
                     namespace=self._CILIUM_NAMESPACE,
+                    patch_type=l_patch_type.PatchType.MERGE,
                 )
             except l_exceptions.ApiError:
                 LOG.debug(
@@ -1704,6 +1712,7 @@ class EnsureL2AdvertisementByHostStep(_PerHostK8SResourceStep):
         network: Networks,
         pool: str,
         fqdn: str | None = None,
+        optional_if_pool_missing: bool = False,
     ):
         super().__init__(
             "Ensure L2 advertisement",
@@ -1717,10 +1726,39 @@ class EnsureL2AdvertisementByHostStep(_PerHostK8SResourceStep):
             fqdn=fqdn,
         )
         self.pool = pool
+        self.optional_if_pool_missing = optional_if_pool_missing
+        self.lbpool_resource = K8SHelper.get_lightkube_loadbalancer_resource()
         self.l2_advertisement_resource = (
             K8SHelper.get_lightkube_l2_advertisement_resource()
         )
         self.l2_advertisement_namespace = K8SHelper.get_loadbalancer_namespace()
+
+    def is_skip(self, context: StepContext) -> Result:
+        """Skip optional advertisements when the IPAddressPool is absent."""
+        self.to_update = []
+        self.to_delete = []
+        if self.optional_if_pool_missing:
+            try:
+                kube = get_kube_client(self.client, self.kube_namespace)
+                kube.get(
+                    self.lbpool_resource,
+                    name=self.pool,
+                    namespace=self.l2_advertisement_namespace,
+                )
+            except KubeClientError as e:
+                LOG.debug("Failed to create k8s client", exc_info=True)
+                return Result(ResultType.FAILED, str(e))
+            except l_exceptions.ApiError as e:
+                if e.status.code == 404:
+                    LOG.debug(
+                        "Skipping L2 advertisement for missing optional pool %s",
+                        self.pool,
+                    )
+                    return Result(ResultType.SKIPPED)
+                LOG.debug("Failed to get ipaddresspool %s", self.pool, exc_info=True)
+                return Result(ResultType.FAILED, str(e))
+
+        return super().is_skip(context)
 
     def _labels(self, name: str, space: str) -> dict[str, str]:
         """Return labels for the L2 advertisement."""
@@ -1988,126 +2026,6 @@ class EnsureDefaultL2AdvertisementMutedStep(BaseStep):
             return Result(
                 ResultType.FAILED, "Failed to update L2 default advertisement"
             )
-
-        return Result(ResultType.COMPLETED)
-
-
-class PatchCoreDNSStep(BaseStep):
-    """Ensure HA for Coredns.
-
-    This is a workaround for https://github.com/canonical/k8s-operator/issues/504
-    Resources and HPA settings are updated for coredns
-    """
-
-    def __init__(
-        self,
-        deployment: Deployment,
-        jhelper: JujuHelper,
-    ):
-        super().__init__(
-            "Patch Coredns resources and horizontal pod autoscaling",
-            "Patching Coredns resources and horizontal pod autoscaling",
-        )
-        self.deployment = deployment
-        self.client = deployment.get_client()
-        self.jhelper = jhelper
-        self.juju_app_name = "k8s"
-        self.coredns_namespace = "kube-system"
-        self.coredns_hpa = "ck-dns-coredns"
-        self.timeout = 180  # 3 minutes for helm upgrade
-        self.replica_count = 1
-
-    def compute_coredns_replica_count(self, control_nodes: int) -> int:
-        """Determine replica count for coredns."""
-        return 1 if control_nodes < 3 else 3
-
-    def is_skip(self, context: StepContext) -> Result:
-        """Determines if the step should be skipped or not.
-
-        :return: ResultType.SKIPPED if the Step should be skipped,
-                 ResultType.COMPLETED or ResultType.FAILED otherwise
-        """
-        try:
-            self.kube = get_kube_client(
-                self.client,
-                self.coredns_namespace,
-            )
-        except KubeClientError as e:
-            LOG.debug("Failed to create k8s client", exc_info=True)
-            return Result(ResultType.FAILED, str(e))
-
-        try:
-            coredns_hpa = self.kube.get(
-                autoscaling_v2.HorizontalPodAutoscaler, name=self.coredns_hpa
-            )
-            LOG.debug(f"Existing coredns hpa: {coredns_hpa}")
-            coredns_hpa_spec = coredns_hpa.spec
-            if coredns_hpa_spec is None:
-                LOG.debug("Coredns HPA has no spec")
-                return Result(ResultType.COMPLETED)
-
-            control_nodes = self.client.cluster.list_nodes_by_role("control")
-            self.replica_count = self.compute_coredns_replica_count(len(control_nodes))
-
-            if self.replica_count == coredns_hpa_spec.minReplicas:
-                return Result(ResultType.SKIPPED)
-        except l_exceptions.ApiError as e:
-            if "not found" not in str(e):
-                LOG.debug("Failed to get coredns hpa", exc_info=True)
-                return Result(ResultType.FAILED, str(e))
-            else:
-                LOG.debug(f"No hpa found for coredns: {str(e)}")
-
-        return Result(ResultType.COMPLETED)
-
-    def run(self, context: StepContext) -> Result:
-        """Run the step to completion.
-
-        Invoked when the step is run and returns a ResultType to indicate
-
-        :return:
-        """
-        try:
-            leader = self.jhelper.get_leader_unit(
-                self.juju_app_name, self.deployment.openstack_machines_model
-            )
-        except JujuException as e:
-            LOG.debug(f"Failed to get {self.juju_app_name} leader", exc_info=True)
-            return Result(ResultType.FAILED, str(e))
-
-        hpa_dict = copy.deepcopy(COREDNS_HPA)
-        hpa_dict["minReplicas"] = self.replica_count
-        hpa = json.dumps(hpa_dict)
-        resources = json.dumps(COREDNS_RESOURCES)
-        # Note: Applying coredns hpa with modified minReplica will take time
-        # to see the scale in, scale out based on policy defined in COREDNS_HPA
-        try:
-            cmd_str = (
-                f"k8s helm upgrade -n {self.coredns_namespace} ck-dns "
-                "/snap/k8s/current/k8s/manifests/charts/coredns-*.tgz"
-                f" --reuse-values --set-json hpa='{hpa}',resources='{resources}'"
-            )
-            LOG.debug(f"Running cmd in unit {leader}: {cmd_str}")
-
-            result = self.jhelper.run_cmd_on_machine_unit_payload(
-                leader,
-                self.deployment.openstack_machines_model,
-                cmd_str,
-                self.timeout,
-            )
-            LOG.debug(f"Result: {result}")
-
-            if result.return_code != 0:
-                return Result(
-                    ResultType.FAILED,
-                    f"Error in setting coredns hpa: {result.stderr}",
-                )
-        except JujuException as e:
-            LOG.info(
-                "Failed to run helm upgrade on coredns",
-                exc_info=True,
-            )
-            return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.COMPLETED)
 

@@ -18,7 +18,6 @@ from pathlib import Path
 
 import click
 import netifaces  # type: ignore [import-untyped]
-import pydantic.alias_generators
 
 from sunbeam.errors import SunbeamException
 from sunbeam.lazy import LazyImport
@@ -76,7 +75,7 @@ def get_fqdn(cidr: str | None = None) -> str:
             return fqdn
     except Exception as e:
         LOG.debug("Ignoring error in getting FQDN")
-        LOG.debug(e, exc_info=True)
+        LOG.debug("FQDN lookup failed: %r", e)
 
     # return hostname if fqdn is localhost
     return socket.gethostname()
@@ -99,7 +98,7 @@ def _get_default_gw_iface_fallback() -> str | None:
     iface = None
     with open("/proc/net/route", "r") as f:
         contents = [line.strip() for line in f.readlines() if line.strip()]
-        logging.debug(contents)
+        LOG.debug("Contents of /proc/net/route: %s", contents)
 
         entries: list[dict[str, str]] = []
         # First line is a header line of the table contents. Note, we skip blank entries
@@ -241,17 +240,17 @@ class CatchGroup(click.Group):
         try:
             return self.main(*args, **kwargs)
         except SunbeamException as e:
-            LOG.debug(e, exc_info=True)
+            LOG.debug("SunbeamException caught: %r", e)
             LOG.error("Error: %s", e)
             sys.exit(1)
         except Exception as e:
-            LOG.debug(e, exc_info=True)
+            LOG.debug("Unexpected exception caught: %r", e)
             message = (
                 "An unexpected error has occurred."
                 " Please see https://canonical-openstack.readthedocs-hosted.com/en/latest/how-to/troubleshooting/inspecting-the-cluster/"
                 " for troubleshooting information."
             )
-            LOG.warn(message)
+            LOG.warning(message)
             LOG.error("Error: %s", e)
             sys.exit(1)
 
@@ -309,7 +308,7 @@ def first_connected_server(servers: list) -> str | None:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         ip_port = server.rsplit(":", 1)
         if len(ip_port) != 2:
-            LOG.debug(f"Server {server} not in <ip>:<port> format")
+            LOG.debug("Server %s is not in the <ip>:<port> format", server)
             continue
 
         ip = ipaddress.ip_address(ip_port[0].lstrip("[").rstrip("]"))
@@ -325,8 +324,7 @@ def first_connected_server(servers: list) -> str | None:
             s.connect((str(ip), port))
             return server
         except Exception as e:
-            LOG.debug(str(e))
-            LOG.debug(f"Not able to connect to {ip} {port}")
+            LOG.debug("Not able to connect to %s:%s server: %r", ip, port, e)
         finally:
             s.close()
 
@@ -411,6 +409,24 @@ def clean_env():
             os.environ.pop(key)
 
 
+def to_snake(value: str) -> str:
+    """Convert a string to snake_case.
+
+    Same as pydantic.alias_generators.to_snake except letter-to-digit and
+    digit-to-letter transitions do NOT insert underscores. This preserves
+    product names like 'hpe3par' (pydantic would turn it into 'hpe_3par').
+    """
+    # Handle sequences of uppercase letters followed by a lowercase letter
+    # e.g. 'APIUrl' -> 'API_Url'
+    value = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", value)
+    # Insert underscore between a lowercase letter and an uppercase letter
+    # e.g. 'myField' -> 'my_Field'
+    value = re.sub(r"([a-z])([A-Z])", r"\1_\2", value)
+    # Replace hyphens with underscores to handle kebab-case
+    value = value.replace("-", "_")
+    return value.lower()
+
+
 def to_kebab(value: str) -> str:
     """Convert a string to kebab-case."""
-    return pydantic.alias_generators.to_snake(value).replace("_", "-")
+    return to_snake(value).replace("_", "-")

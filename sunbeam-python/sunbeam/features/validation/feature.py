@@ -17,12 +17,14 @@ from rich.console import Console
 from rich.table import Column, Table
 
 from sunbeam.clusterd.client import Client
+from sunbeam.core.checks import JujuLoginCheck, run_preflight_checks
 from sunbeam.core.common import BaseStep, Result, ResultType, StepContext, run_plan
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import (
     ActionFailedException,
     ApplicationNotFoundException,
     JujuHelper,
+    JujuStepHelper,
     LeaderNotFoundException,
     UnitNotFoundException,
 )
@@ -39,7 +41,6 @@ from sunbeam.features.interface.v1.openstack import (
     OpenStackControlPlaneFeature,
     TerraformPlanLocation,
 )
-from sunbeam.steps.juju import JujuLoginStep
 from sunbeam.utils import click_option_show_hints, pass_method_obj
 from sunbeam.versions import OPENSTACK_CHANNEL
 
@@ -221,7 +222,7 @@ class ConfigureValidationStep(BaseStep):
             charms = self.tfhelper.tfvar_map["charms"]
             tempest_k8s_config_var = charms["tempest-k8s"]["config"]
             roles = get_enabled_roles(self.deployment)
-            LOG.info(f"OpenStack roles enabled for Tempest: {roles}")
+            LOG.info("OpenStack roles enabled for Tempest: %s", roles)
             override_tfvars: dict[str, Any] = {}
             if self.config_changes.schedule is not None or roles:
                 override_tfvars[tempest_k8s_config_var] = {}
@@ -239,13 +240,13 @@ class ConfigureValidationStep(BaseStep):
                 reporter=context.reporter,
             )
         except (TerraformException, TerraformStateLockedException) as e:
-            LOG.exception("Error configuring validation feature.")
+            LOG.warning("Error configuring validation feature: %r", e)
             return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.COMPLETED)
 
 
-class ValidationFeature(OpenStackControlPlaneFeature):
+class ValidationFeature(OpenStackControlPlaneFeature, JujuStepHelper):
     """Deploy tempest to openstack model."""
 
     version = Version(FEATURE_VERSION)
@@ -380,21 +381,17 @@ class ValidationFeature(OpenStackControlPlaneFeature):
         # since python-libjuju does not support such feature. See related
         # bug: https://github.com/juju/python-libjuju/issues/1029
         try:
-            subprocess.run(
-                [
-                    "juju",
-                    "ssh",
-                    "--model",
-                    model_name,
-                    "--container",
-                    TEMPEST_CONTAINER_NAME,
-                    unit,
-                    "ls",
-                    TEMPEST_VALIDATION_RESULT,
-                ],
-                check=True,
+            self._juju_cmd(
+                "ssh",
+                "--model",
+                model_name,
+                "--container",
+                TEMPEST_CONTAINER_NAME,
+                unit,
+                "ls",
+                TEMPEST_VALIDATION_RESULT,
+                json_format=False,
                 timeout=30,  # 30 seconds should be enough for `ls`
-                capture_output=True,
             )
         except subprocess.CalledProcessError:
             return False
@@ -416,13 +413,7 @@ class ValidationFeature(OpenStackControlPlaneFeature):
         with console.status(progress_message):
             # Note: this is a workaround to cache the model in the juju client
             try:
-                subprocess.run(
-                    ["juju", "show-model", model_name],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    check=True,
-                    timeout=30,
-                )
+                self._juju_cmd("show-model", model_name, json_format=False, timeout=30)
             except subprocess.TimeoutExpired:
                 raise click.ClickException("Timed out while priming Juju model cache")
             # Note: this is a workaround to run command to payload container
@@ -432,18 +423,15 @@ class ValidationFeature(OpenStackControlPlaneFeature):
                 # juju scp does not allow directory as destination
                 destination = str(Path(destination, Path(source).name))
             try:
-                subprocess.run(
-                    [
-                        "juju",
-                        "scp",
-                        "--model",
-                        model_name,
-                        "--container",
-                        TEMPEST_CONTAINER_NAME,
-                        f"{unit}:{source}",
-                        destination,
-                    ],
-                    check=True,
+                self._juju_cmd(
+                    "scp",
+                    "--model",
+                    model_name,
+                    "--container",
+                    TEMPEST_CONTAINER_NAME,
+                    f"{unit}:{source}",
+                    destination,
+                    json_format=False,
                     timeout=60,  # 60 seconds should be enough for copying a file
                 )
             except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
@@ -576,7 +564,7 @@ class ValidationFeature(OpenStackControlPlaneFeature):
         if output:
             # Due to shelling out to the juju cli (rather than using libjuju),
             # we need to ensure the juju cli is logged in.
-            run_plan([JujuLoginStep(deployment.juju_account)], console, show_hints)
+            run_preflight_checks([JujuLoginCheck(deployment.juju_account)], console)
 
             self._copy_file_from_tempest_container(
                 deployment, TEMPEST_VALIDATION_RESULT, output
@@ -617,7 +605,7 @@ class ValidationFeature(OpenStackControlPlaneFeature):
         """Get last validation result."""
         # Due to shelling out to the juju cli (rather than using libjuju),
         # we need to ensure the juju cli is logged in.
-        run_plan([JujuLoginStep(deployment.juju_account)], console, show_hints)
+        run_preflight_checks([JujuLoginCheck(deployment.juju_account)], console)
 
         if not self._check_file_exist_in_tempest_container(
             deployment, TEMPEST_VALIDATION_RESULT

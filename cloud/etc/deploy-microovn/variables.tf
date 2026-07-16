@@ -3,7 +3,7 @@
 
 variable "charm_microovn_channel" {
   type    = string
-  default = "24.03/stable"
+  default = "25.03/stable"
 }
 
 variable "charm_microovn_revision" {
@@ -21,7 +21,7 @@ variable "charm_microovn_config" {
 variable "charm_openstack_network_agents_channel" {
   description = "Operator channel for openstack-network-agents deployment"
   type        = string
-  default     = "2024.1/stable"
+  default     = "2026.1/stable"
 }
 
 variable "charm_openstack_network_agents_revision" {
@@ -48,7 +48,7 @@ variable "openstack_network_agents_endpoint_bindings" {
 variable "charm_microcluster_token_distributor_channel" {
   description = "Operator channel for microcluster-token-distributor deployment"
   type        = string
-  default     = "latest/edge"
+  default     = "v1/stable"
 }
 
 variable "charm_microcluster_token_distributor_revision" {
@@ -66,7 +66,7 @@ variable "charm_microcluster_token_distributor_config" {
 variable "charm_sunbeam_ovn_proxy_channel" {
   description = "Operator channel for sunbeam-ovn-proxy deployment"
   type        = string
-  default     = "2024.1/stable"
+  default     = "2026.1/stable"
 }
 
 variable "charm_sunbeam_ovn_proxy_revision" {
@@ -91,6 +91,12 @@ variable "token_distributor_machine_ids" {
   description = "List of machine ids to include"
   type        = list(string)
   default     = []
+}
+
+variable "role_distributor_application_name" {
+  description = "Role distributor application name"
+  type        = string
+  default     = null
 }
 
 variable "machine_model_uuid" {

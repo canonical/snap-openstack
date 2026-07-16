@@ -8,7 +8,9 @@ This feature have options to deploy a COS Lite stack internally
 or point to an external COS Lite.
 """
 
+import copy
 import enum
+import json
 import logging
 import queue
 from pathlib import Path
@@ -16,7 +18,9 @@ from pathlib import Path
 import click
 from packaging.version import Version
 from rich.console import Console
+from rich.table import Table
 
+from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import (
     ClusterServiceUnavailableException,
     ConfigItemNotFoundException,
@@ -24,6 +28,7 @@ from sunbeam.clusterd.service import (
 from sunbeam.core.checks import (
     Check,
     JujuControllerRegistrationCheck,
+    JujuLoginCheck,
     run_preflight_checks,
 )
 from sunbeam.core.common import (
@@ -32,6 +37,7 @@ from sunbeam.core.common import (
     ResultType,
     StepContext,
     convert_proxy_to_model_configs,
+    get_step_message,
     read_config,
     run_plan,
     update_config,
@@ -52,6 +58,7 @@ from sunbeam.core.manifest import (
     Manifest,
     SoftwareConfig,
     TerraformManifest,
+    check_storage_modifications_in_manifest,
 )
 from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.core.steps import (
@@ -76,7 +83,10 @@ from sunbeam.features.interface.v1.openstack import (
     TerraformPlanLocation,
 )
 from sunbeam.steps import openstack
-from sunbeam.steps.juju import RemoveSaasApplicationsStep
+from sunbeam.steps.juju import (
+    JujuGrantModelAccessStep,
+    RemoveSaasApplicationsStep,
+)
 from sunbeam.steps.k8s import CREDENTIAL_SUFFIX
 from sunbeam.utils import click_option_show_hints, pass_method_obj
 from sunbeam.versions import TRAEFIK_CHANNEL
@@ -90,10 +100,25 @@ OBSERVABILITY_DEPLOY_TIMEOUT = 1800  # 30 minutes
 OBSERVABILITY_AGENT_K8S_DEPLOY_TIMEOUT = 1800  # 30 minutes
 COS_TFPLAN = "cos-plan"
 OBSERVABILITY_AGENT_TFPLAN = "grafana-agent-plan"
+OBSERVABILITY_AGENT_INFRA_TFPLAN = "observability-agent-infra-plan"
+HARDWARE_OBSERVER_TFPLAN = "hardware-observer-plan"
 COS_CONFIG_KEY = "TerraformVarsFeatureObservabilityPlanCos"
 OBSERVABILITY_AGENT_CONFIG_KEY = (
     "TerraformVarsFeatureObservabilityPlanObservabilityAgent"
 )
+OBSERVABILITY_AGENT_INFRA_CONFIG_KEY = (
+    "TerraformVarsFeatureObservabilityPlanObservabilityAgentInfra"
+)
+HARDWARE_OBSERVER_CONFIG_KEY = "TerraformVarsFeatureObservabilityPlanHardwareObserver"
+
+COS_STORAGE_KEY = "ObservabilityStorage"
+
+CHARM_STORAGE_MAP = {
+    "prometheus-k8s": "prometheus-storage",
+    "loki-k8s": "loki-storage",
+    "grafana-k8s": "grafana-storage",
+    "alertmanager-k8s": "alertmanager-storage",
+}
 
 COS_CHANNEL = "1/stable"
 OPENTELEMETRY_COLLECTOR_CHANNEL = "2/stable"
@@ -103,12 +128,72 @@ OBSERVABILITY_OFFER_INTERFACES = [
     "prometheus_remote_write",
     "loki_push_api",
 ]
-INTEGRATION_APPS = ["openstack-hypervisor", "microceph", "k8s"]
+OBSERVABILITY_AGNET_INTEGRATION_APPS = ["openstack-hypervisor", "microceph", "k8s"]
+OBSERVABILITY_AGENT_APP = "opentelemetry-collector"
+MICROOVN_APP = "microovn"
+SUNBEAM_MACHINE_APP = "sunbeam-machine"
+SUNBEAM_CLUSTERD_APP = "sunbeam-clusterd"
+
+HARDWARE_OBSERVER_APP = "hardware-observer"
+HARDWARE_OBSERVER_CHANNEL = "latest/stable"
 
 
 class ProviderType(enum.Enum):
     EXTERNAL = 1
     EMBEDDED = 2
+
+
+def get_cos_storage_from_manifest(
+    manifest: Manifest,
+) -> dict[str, dict[str, str]]:
+    """Get charm storage for COS Lite from manifest file."""
+    storage: dict[str, dict[str, str]] = {}
+    for charm_name, tfvar_name in CHARM_STORAGE_MAP.items():
+        charm = manifest.find_charm(charm_name)
+        if charm and charm.model_extra:
+            charm_storage = charm.model_extra.get("storage")
+            if isinstance(charm_storage, dict) and charm_storage:
+                storage[tfvar_name] = charm_storage
+    return storage
+
+
+def get_cos_storage_dict(
+    client: Client, manifest: Manifest
+) -> dict[str, dict[str, str]]:
+    """Returns a dict containing the storage allocation for COS Lite.
+
+    Storage is retrieved for each COS charm.
+    Default storage sizes are defined in the Terraform variables.
+    """
+    try:
+        storage_from_db = read_config(client, COS_STORAGE_KEY)
+        if not isinstance(storage_from_db, dict):
+            LOG.warning(
+                "Invalid observability storage config in database: %s.", storage_from_db
+            )
+            raise ValueError("Invalid observability storage config in database")
+    except (ConfigItemNotFoundException, ValueError):
+        storage_from_db = {}
+
+    storage_from_manifest = get_cos_storage_from_manifest(manifest)
+
+    storage = copy.deepcopy(storage_from_db)
+    for charm_key, charm_storage in storage_from_manifest.items():
+        if (
+            charm_key in storage
+            and isinstance(storage[charm_key], dict)
+            and isinstance(charm_storage, dict)
+        ):
+            storage[charm_key].update(charm_storage)
+        else:
+            storage[charm_key] = charm_storage
+
+    return storage
+
+
+def write_cos_storage_dict(client: Client, storage: dict):
+    """Write the COS storage dict."""
+    update_config(client, COS_STORAGE_KEY, storage)
 
 
 class DeployObservabilityStackStep(BaseStep, JujuStepHelper):
@@ -132,6 +217,30 @@ class DeployObservabilityStackStep(BaseStep, JujuStepHelper):
         self.model = OBSERVABILITY_MODEL
         self.cloud = K8SHelper.get_cloud(deployment.name)
 
+    def is_skip(self, context: StepContext) -> Result:
+        """Determines if the step should be skipped or not.
+
+        :return: ResultType.SKIPPED if the Step should be skipped,
+                ResultType.COMPLETED or ResultType.FAILED otherwise
+        """
+        # Check for storage size modifications in manifest
+        client = self.deployment.get_client()
+        modified = check_storage_modifications_in_manifest(
+            client,
+            self.manifest,
+            self.tfhelper.tfvar_map,
+            self._CONFIG,
+            extra_tfvar_config_keys=[self.feature.get_tfvar_config_key()],
+        )
+        if modified:
+            return Result(
+                ResultType.FAILED,
+                "Storage sizes are immutable and cannot be modified"
+                f" in manifest: {', '.join(modified)}",
+            )
+
+        return Result(ResultType.COMPLETED)
+
     def run(self, context: StepContext) -> Result:
         """Execute configuration using terraform."""
         f_manifest = self.manifest.get_feature(self.feature.name.split(".")[-1])
@@ -145,12 +254,18 @@ class DeployObservabilityStackStep(BaseStep, JujuStepHelper):
         model_config.update(convert_proxy_to_model_configs(proxy_settings))
         model_config.update({"workload-storage": K8SHelper.get_default_storageclass()})
 
-        extra_tfvars = {
+        extra_tfvars: dict = {
             "model": self.model,
             "cloud": self.cloud,
             "credential": f"{self.cloud}{CREDENTIAL_SUFFIX}",
             "config": model_config,
         }
+
+        # Get COS storage from database and manifest
+        client = self.deployment.get_client()
+        cos_storage = get_cos_storage_dict(client, self.manifest)
+        write_cos_storage_dict(client, cos_storage)
+        extra_tfvars.update(cos_storage)
 
         try:
             self.update_status(context, "deploying services")
@@ -162,11 +277,11 @@ class DeployObservabilityStackStep(BaseStep, JujuStepHelper):
                 reporter=context.reporter,
             )
         except (TerraformException, TerraformStateLockedException) as e:
-            LOG.exception("Error deploying Observability Stack")
+            LOG.warning("Error deploying Observability Stack: %r", e)
             return Result(ResultType.FAILED, str(e))
 
         apps = self.jhelper.get_application_names(self.model)
-        LOG.debug(f"Application monitored for readiness: {apps}")
+        LOG.debug("Application monitored for readiness: %s", apps)
         status_queue: queue.Queue[str] = queue.Queue()
         task = update_status_background(self, apps, status_queue, context.status)
         try:
@@ -209,6 +324,26 @@ class UpdateObservabilityModelConfigStep(BaseStep, JujuStepHelper):
         self.model = OBSERVABILITY_MODEL
         self.cloud = K8SHelper.get_cloud(deployment.name)
 
+    def is_skip(self, context: StepContext) -> Result:
+        """Determines if the step should be skipped or not.
+
+        :return: ResultType.SKIPPED if the Step should be skipped,
+                ResultType.COMPLETED or ResultType.FAILED otherwise
+        """
+        modified = check_storage_modifications_in_manifest(
+            self.client,
+            self.manifest,
+            self.tfhelper.tfvar_map,
+            self._CONFIG,
+        )
+        if modified:
+            return Result(
+                ResultType.FAILED,
+                "Storage sizes are immutable and cannot be modified"
+                f" in manifest: {', '.join(modified)}",
+            )
+        return Result(ResultType.COMPLETED)
+
     def run(self, context: StepContext) -> Result:
         """Execute configuration using terraform."""
         proxy_settings = self.deployment.get_proxy_settings()
@@ -231,7 +366,7 @@ class UpdateObservabilityModelConfigStep(BaseStep, JujuStepHelper):
                 reporter=context.reporter,
             )
         except (TerraformException, TerraformStateLockedException) as e:
-            LOG.exception("Error updating Observability Model config")
+            LOG.warning("Error updating Observability Model config: %r", e)
             return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.COMPLETED)
@@ -264,9 +399,17 @@ class DeployObservabilityAgentStep(BaseStep, JujuStepHelper):
 
     def run(self, context: StepContext) -> Result:
         """Execute configuration using terraform."""
+        model_status = self.jhelper.get_model_status(self.model)
+        integration_apps = list(OBSERVABILITY_AGNET_INTEGRATION_APPS)
+        # network role is optional, only add microovn if it's deployed in the model
+        if MICROOVN_APP in model_status.apps:
+            integration_apps.append(MICROOVN_APP)
         extra_tfvars = {
             "principal-application-model-uuid": self.jhelper.get_model_uuid(self.model),
-            "observability-agent-integration-apps": INTEGRATION_APPS,
+            "observability-agent-integration-apps": integration_apps,
+            "observability-agent-integration-apps-juju-info": [SUNBEAM_MACHINE_APP],
+            # Workaround for https://github.com/canonical/opentelemetry-collector-k8s-operator/issues/265
+            "opentelemetry-collector-config": {"tls_insecure_skip_verify": True},
         }
         # Offer URLs from COS are added from feature
         extra_tfvars.update(
@@ -283,11 +426,11 @@ class DeployObservabilityAgentStep(BaseStep, JujuStepHelper):
                 reporter=context.reporter,
             )
         except (TerraformException, TerraformStateLockedException) as e:
-            LOG.exception("Error deploying observability agent")
+            LOG.warning("Error deploying observability agent: %r", e)
             return Result(ResultType.FAILED, str(e))
 
         app = "opentelemetry-collector"
-        LOG.debug(f"Application monitored for readiness: {app}")
+        LOG.debug("Application monitored for readiness: %s", app)
         try:
             self.jhelper.wait_application_ready(
                 app,
@@ -300,6 +443,180 @@ class DeployObservabilityAgentStep(BaseStep, JujuStepHelper):
             return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.COMPLETED)
+
+
+class DeployHardwareObserverStep(BaseStep, JujuStepHelper):
+    """Deploy Hardware Observer using Terraform."""
+
+    _CONFIG = HARDWARE_OBSERVER_CONFIG_KEY
+
+    def __init__(
+        self,
+        deployment: Deployment,
+        config: FeatureConfig,
+        feature: "ObservabilityFeature",
+        tfhelper: TerraformHelper,
+        jhelper: JujuHelper,
+        accepted_app_status: list[str] = ["active", "blocked"],
+    ):
+        super().__init__("Deploy Hardware Observer", "Deploy Hardware Observer")
+        self.deployment = deployment
+        self.config = config
+        self.feature = feature
+        self.tfhelper = tfhelper
+        self.jhelper = jhelper
+        self.manifest = self.feature.manifest
+        self.accepted_app_status = accepted_app_status
+        self.client = self.deployment.get_client()
+        self.model = self.deployment.openstack_machines_model
+
+    def run(self, context: StepContext) -> Result:
+        """Deploy hardware-observer and wait for it to settle."""
+        extra_tfvars = {
+            "principal-application-model-uuid": self.jhelper.get_model_uuid(self.model),
+            "principal-applications": [SUNBEAM_MACHINE_APP],
+            "observability-agent-app": OBSERVABILITY_AGENT_APP,
+        }
+
+        try:
+            self.update_status(context, "deploying services")
+            self.tfhelper.update_tfvars_and_apply_tf(
+                self.client,
+                self.manifest,
+                tfvar_config=self._CONFIG,
+                override_tfvars=extra_tfvars,
+                reporter=context.reporter,
+            )
+        except (TerraformException, TerraformStateLockedException) as e:
+            LOG.exception("Error deploying hardware observer")
+            return Result(ResultType.FAILED, str(e))
+
+        LOG.debug("Application monitored for readiness: %s", HARDWARE_OBSERVER_APP)
+        try:
+            self.jhelper.wait_application_ready(
+                HARDWARE_OBSERVER_APP,
+                self.model,
+                accepted_status=self.accepted_app_status,
+                timeout=OBSERVABILITY_DEPLOY_TIMEOUT,
+            )
+        except (JujuWaitException, TimeoutError) as e:
+            LOG.debug("Failed to deploy hardware observer", exc_info=True)
+            return Result(ResultType.FAILED, str(e))
+
+        return Result(ResultType.COMPLETED)
+
+
+class RemoveHardwareObserverStep(BaseStep, JujuStepHelper):
+    """Remove Hardware Observer using Terraform."""
+
+    _CONFIG = HARDWARE_OBSERVER_CONFIG_KEY
+
+    def __init__(
+        self,
+        deployment: Deployment,
+        feature: "ObservabilityFeature",
+        tfhelper: TerraformHelper,
+        jhelper: JujuHelper,
+    ):
+        super().__init__("Remove Hardware Observer", "Removing Hardware Observer")
+        self.deployment = deployment
+        self.feature = feature
+        self.tfhelper = tfhelper
+        self.jhelper = jhelper
+        self.manifest = self.feature.manifest
+        self.client = deployment.get_client()
+        self.model = deployment.openstack_machines_model
+
+    def run(self, context: StepContext) -> Result:
+        """Destroy hardware-observer terraform plan and wait for app to be gone."""
+        try:
+            self.tfhelper.destroy(reporter=context.reporter)
+        except TerraformException as e:
+            LOG.exception("Error destroying hardware observer")
+            return Result(ResultType.FAILED, str(e))
+
+        try:
+            self.jhelper.wait_application_gone(
+                [HARDWARE_OBSERVER_APP],
+                self.model,
+                timeout=OBSERVABILITY_DEPLOY_TIMEOUT,
+            )
+        except TimeoutError as e:
+            LOG.debug("Failed to destroy hardware observer", exc_info=True)
+            return Result(ResultType.FAILED, str(e))
+
+        extra_tfvars = {
+            "principal-application-model-uuid": self.jhelper.get_model_uuid(self.model),
+        }
+        update_config(self.client, self._CONFIG, extra_tfvars)
+
+        return Result(ResultType.COMPLETED)
+
+
+class AttachHardwareObserverResourceStep(BaseStep):
+    """Attach a file resource to the hardware-observer application."""
+
+    def __init__(
+        self,
+        deployment: Deployment,
+        jhelper: JujuHelper,
+        resource_name: str,
+        resource_path: str,
+    ):
+        super().__init__(
+            "Attach Hardware Observer Resource",
+            f"Attaching resource {resource_name!r} to {HARDWARE_OBSERVER_APP}",
+        )
+        self.deployment = deployment
+        self.jhelper = jhelper
+        self.resource_name = resource_name
+        self.resource_path = resource_path
+        self.model = deployment.openstack_machines_model
+
+    def run(self, context: StepContext) -> Result:
+        """Upload a local file resource to the hardware-observer charm."""
+        try:
+            self.jhelper.attach_resource(
+                HARDWARE_OBSERVER_APP,
+                self.model,
+                self.resource_name,
+                self.resource_path,
+            )
+        except Exception as e:
+            LOG.exception("Error attaching resource to hardware observer")
+            return Result(ResultType.FAILED, str(e))
+
+        return Result(ResultType.COMPLETED)
+
+
+class ListHardwareObserverResourcesStep(BaseStep):
+    """List resources defined for the hardware-observer application."""
+
+    def __init__(
+        self,
+        deployment: Deployment,
+        jhelper: JujuHelper,
+    ):
+        super().__init__(
+            "List Hardware Observer Resources",
+            f"Listing resources for {HARDWARE_OBSERVER_APP}",
+        )
+        self.deployment = deployment
+        self.jhelper = jhelper
+        self.model = deployment.openstack_machines_model
+
+    def run(self, context: StepContext) -> Result:
+        """Retrieve resource names from the hardware-observer application."""
+        try:
+            resources = self.jhelper.get_application_resources(
+                HARDWARE_OBSERVER_APP,
+                self.model,
+            )
+        except Exception as e:
+            LOG.exception("Error listing resources for hardware observer")
+            return Result(ResultType.FAILED, str(e))
+
+        return Result(ResultType.COMPLETED, json.dumps(resources))
 
 
 class RemoveObservabilityStackStep(BaseStep, JujuStepHelper):
@@ -326,7 +643,7 @@ class RemoveObservabilityStackStep(BaseStep, JujuStepHelper):
         try:
             self.tfhelper.destroy(reporter=context.reporter)
         except TerraformException as e:
-            LOG.exception("Error destroying Observability Stack")
+            LOG.warning("Error destroying Observability Stack: %r", e)
             return Result(ResultType.FAILED, str(e))
 
         try:
@@ -367,7 +684,7 @@ class RemoveObservabilityAgentStep(BaseStep, JujuStepHelper):
         try:
             self.tfhelper.destroy(reporter=context.reporter)
         except TerraformException as e:
-            LOG.exception("Error destroying observability agent")
+            LOG.warning("Error destroying observability agent: %r", e)
             return Result(ResultType.FAILED, str(e))
 
         apps = ["opentelemetry-collector"]
@@ -379,6 +696,129 @@ class RemoveObservabilityAgentStep(BaseStep, JujuStepHelper):
             )
         except TimeoutError as e:
             LOG.debug("Failed to destroy observability agent", exc_info=True)
+            return Result(ResultType.FAILED, str(e))
+
+        extra_tfvars = {
+            "principal-application-model-uuid": self.jhelper.get_model_uuid(self.model),
+            "observability-agent-integration-apps": [],
+        }
+        # Offer URLs from COS are added from feature
+        extra_tfvars.update(self.feature.set_tfvars_on_disable(self.deployment))
+        update_config(self.client, self._CONFIG, extra_tfvars)
+
+        return Result(ResultType.COMPLETED)
+
+
+class DeployObservabilityAgentInfraStep(BaseStep, JujuStepHelper):
+    """Deploy Observability Agent in openstack-infra model (MAAS only)."""
+
+    _CONFIG = OBSERVABILITY_AGENT_INFRA_CONFIG_KEY
+
+    def __init__(
+        self,
+        deployment: Deployment,
+        feature: "ObservabilityFeature",
+        tfhelper: TerraformHelper,
+        jhelper: JujuHelper,
+        accepted_app_status: list[str] = ["active"],
+    ):
+        super().__init__(
+            "Deploy Observability Agent (infra)",
+            "Deploy Observability Agent in infra model",
+        )
+        self.deployment = deployment
+        self.feature = feature
+        self.tfhelper = tfhelper
+        self.jhelper = jhelper
+        self.manifest = self.feature.manifest
+        self.accepted_app_status = accepted_app_status
+        self.client = self.deployment.get_client()
+        self.model = self.deployment.infra_model  # type: ignore [attr-defined]
+
+    def run(self, context: StepContext) -> Result:
+        """Execute configuration using terraform."""
+        extra_tfvars = {
+            "principal-application-model-uuid": self.jhelper.get_model_uuid(self.model),
+            "observability-agent-integration-apps": [],
+            "observability-agent-integration-apps-juju-info": [SUNBEAM_CLUSTERD_APP],
+        }
+
+        extra_tfvars.update(self.feature.get_cos_offer_urls(self.deployment))
+
+        try:
+            self.update_status(context, "deploying services")
+            self.tfhelper.update_tfvars_and_apply_tf(
+                self.client,
+                self.manifest,
+                tfvar_config=self._CONFIG,
+                override_tfvars=extra_tfvars,
+                reporter=context.reporter,
+            )
+        except (TerraformException, TerraformStateLockedException) as e:
+            LOG.warning("Error deploying observability agent in infra model: %r", e)
+            return Result(ResultType.FAILED, str(e))
+
+        app = OBSERVABILITY_AGENT_APP
+        LOG.debug("Application monitored for readiness: %s", app)
+        try:
+            self.jhelper.wait_application_ready(
+                app,
+                self.model,
+                accepted_status=self.accepted_app_status,
+                timeout=OBSERVABILITY_DEPLOY_TIMEOUT,
+            )
+        except (JujuWaitException, TimeoutError) as e:
+            LOG.debug(
+                "Failed to deploy observability agent in infra model", exc_info=True
+            )
+            return Result(ResultType.FAILED, str(e))
+
+        return Result(ResultType.COMPLETED)
+
+
+class RemoveObservabilityAgentInfraStep(BaseStep, JujuStepHelper):
+    """Remove Observability Agent from openstack-infra model (MAAS only)."""
+
+    _CONFIG = OBSERVABILITY_AGENT_INFRA_CONFIG_KEY
+
+    def __init__(
+        self,
+        deployment: Deployment,
+        feature: "ObservabilityFeature",
+        tfhelper: TerraformHelper,
+        jhelper: JujuHelper,
+    ):
+        super().__init__(
+            "Remove Observability Agent (infra)",
+            "Removing Observability Agent from infra model",
+        )
+        self.deployment = deployment
+        self.feature = feature
+        self.tfhelper = tfhelper
+        self.jhelper = jhelper
+        self.manifest = self.feature.manifest
+        self.client = deployment.get_client()
+        self.model = deployment.infra_model  # type: ignore [attr-defined]
+
+    def run(self, context: StepContext) -> Result:
+        """Execute configuration using terraform."""
+        try:
+            self.tfhelper.destroy(reporter=context.reporter)
+        except TerraformException as e:
+            LOG.warning("Error destroying observability agent in infra model: %r", e)
+            return Result(ResultType.FAILED, str(e))
+
+        apps = [OBSERVABILITY_AGENT_APP]
+        try:
+            self.jhelper.wait_application_gone(
+                apps,
+                self.model,
+                timeout=OBSERVABILITY_DEPLOY_TIMEOUT,
+            )
+        except TimeoutError as e:
+            LOG.debug(
+                "Failed to destroy observability agent in infra model", exc_info=True
+            )
             return Result(ResultType.FAILED, str(e))
 
         extra_tfvars = {
@@ -446,10 +886,11 @@ class IntegrateRemoteCosOffersStep(BaseStep, JujuStepHelper):
 
     def run(self, context: StepContext) -> Result:
         """Execute integrations using external offers."""
-        for model in [
-            OPENSTACK_MODEL,
-            self.deployment.openstack_machines_model,
-        ]:
+        models = [OPENSTACK_MODEL, self.deployment.openstack_machines_model]
+        if is_maas_deployment(self.deployment):
+            models.append(self.deployment.infra_model)  # type: ignore [attr-defined]
+
+        for model in models:
             for relation_pair in self.relations:
                 if relation_pair[0] and relation_pair[1]:
                     self.integrate(
@@ -458,12 +899,9 @@ class IntegrateRemoteCosOffersStep(BaseStep, JujuStepHelper):
                         relation_pair[1],
                     )
 
-        for model in [
-            OPENSTACK_MODEL,
-            self.deployment.openstack_machines_model,
-        ]:
+        for model in models:
             app = "opentelemetry-collector"
-            LOG.debug(f"Application monitored for readiness: {app}")
+            LOG.debug("Application monitored for readiness: %s", app)
             try:
                 self.jhelper.wait_application_ready(
                     app,
@@ -519,12 +957,13 @@ class RemoveRemoteCosOffersStep(BaseStep, JujuStepHelper):
 
     def run(self, context: StepContext) -> Result:
         """Execute integrations using external offers."""
-        for model in [
-            OPENSTACK_MODEL,
-            self.deployment.openstack_machines_model,
-        ]:
+        models = [OPENSTACK_MODEL, self.deployment.openstack_machines_model]
+        if is_maas_deployment(self.deployment):
+            models.append(self.deployment.infra_model)  # type: ignore [attr-defined]
+
+        for model in models:
             relations = self._get_relations(model, self.endpoints)
-            LOG.debug(f"List of relations to remove in model {model}: {relations}")
+            LOG.debug("List of relations to remove in model %s: %s", model, relations)
             for relation_pair in relations:
                 self.remove_relation(
                     model,
@@ -532,12 +971,9 @@ class RemoveRemoteCosOffersStep(BaseStep, JujuStepHelper):
                     relation_pair[1],
                 )
 
-        for model in [
-            OPENSTACK_MODEL,
-            self.deployment.openstack_machines_model,
-        ]:
+        for model in models:
             app = "opentelemetry-collector"
-            LOG.debug(f"Application monitored for readiness: {app}")
+            LOG.debug("Application monitored for readiness: %s", app)
             try:
                 self.jhelper.wait_application_ready(
                     app,
@@ -581,6 +1017,10 @@ class ObservabilityFeature(OpenStackControlPlaneFeature):
         self.tfplan_observability_agent = OBSERVABILITY_AGENT_TFPLAN
         self.tfplan_observability_agent_dir = "deploy-grafana-agent"
         self.tfplan_observability_agent_k8s_dir = "deploy-grafana-agent-k8s"
+        self.tfplan_observability_agent_infra = OBSERVABILITY_AGENT_INFRA_TFPLAN
+        self.tfplan_observability_agent_infra_dir = "deploy-grafana-agent"
+        self.tfplan_hardware_observer = HARDWARE_OBSERVER_TFPLAN
+        self.tfplan_hardware_observer_dir = "deploy-hardware-observer"
 
         self.prometheus_offer_url = ""
         self.grafana_offer_url = ""
@@ -613,6 +1053,7 @@ class ObservabilityFeature(OpenStackControlPlaneFeature):
                 "opentelemetry-collector-k8s": CharmManifest(
                     channel=OPENTELEMETRY_COLLECTOR_K8S_CHANNEL
                 ),
+                "hardware-observer": CharmManifest(channel=HARDWARE_OBSERVER_CHANNEL),
             },
             terraform={
                 self.tfplan_cos: TerraformManifest(
@@ -622,6 +1063,16 @@ class ObservabilityFeature(OpenStackControlPlaneFeature):
                     source=Path(__file__).parent
                     / "etc"
                     / self.tfplan_observability_agent_dir
+                ),
+                self.tfplan_observability_agent_infra: TerraformManifest(
+                    source=Path(__file__).parent
+                    / "etc"
+                    / self.tfplan_observability_agent_infra_dir
+                ),
+                self.tfplan_hardware_observer: TerraformManifest(
+                    source=Path(__file__).parent
+                    / "etc"
+                    / self.tfplan_hardware_observer_dir
                 ),
             },
         )
@@ -640,11 +1091,13 @@ class ObservabilityFeature(OpenStackControlPlaneFeature):
                         "channel": "alertmanager-channel",
                         "revision": "alertmanager-revision",
                         "config": "alertmanager-config",
+                        "storage": "alertmanager-storage",
                     },
                     "grafana-k8s": {
                         "channel": "grafana-channel",
                         "revision": "grafana-revision",
                         "config": "grafana-config",
+                        "storage": "grafana-storage",
                     },
                     "catalogue-k8s": {
                         "channel": "catalogue-channel",
@@ -655,11 +1108,13 @@ class ObservabilityFeature(OpenStackControlPlaneFeature):
                         "channel": "prometheus-channel",
                         "revision": "prometheus-revision",
                         "config": "prometheus-config",
+                        "storage": "prometheus-storage",
                     },
                     "loki-k8s": {
                         "channel": "loki-channel",
                         "revision": "loki-revision",
                         "config": "loki-config",
+                        "storage": "loki-storage",
                     },
                 }
             },
@@ -669,7 +1124,25 @@ class ObservabilityFeature(OpenStackControlPlaneFeature):
                         "channel": "opentelemetry-collector-channel",
                         "revision": "opentelemetry-collector-revision",
                         "config": "opentelemetry-collector-config",
-                    }
+                    },
+                }
+            },
+            self.tfplan_observability_agent_infra: {
+                "charms": {
+                    "opentelemetry-collector": {
+                        "channel": "opentelemetry-collector-channel",
+                        "revision": "opentelemetry-collector-revision",
+                        "config": "opentelemetry-collector-config",
+                    },
+                }
+            },
+            self.tfplan_hardware_observer: {
+                "charms": {
+                    "hardware-observer": {
+                        "channel": "hardware-observer-channel",
+                        "revision": "hardware-observer-revision",
+                        "config": "hardware-observer-config",
+                    },
                 }
             },
             self.tfplan: {
@@ -678,6 +1151,8 @@ class ObservabilityFeature(OpenStackControlPlaneFeature):
                         "channel": "opentelemetry-collector-channel",
                         "revision": "opentelemetry-collector-revision",
                         "config": "opentelemetry-collector-config",
+                        "storage": "opentelemetry-collector-storage",
+                        "storage-map": "opentelemetry-collector-storage-map",
                     }
                 }
             },
@@ -706,6 +1181,8 @@ class ObservabilityFeature(OpenStackControlPlaneFeature):
         """Set terraform variables to enable the application."""
         tfvars = {
             "enable-observability": True,
+            # Workaround for https://github.com/canonical/opentelemetry-collector-k8s-operator/issues/265
+            "opentelemetry-collector-config": {"tls_insecure_skip_verify": True},
         }
         tfvars.update(self.get_cos_offer_urls(deployment))
         return tfvars
@@ -761,6 +1238,22 @@ class ObservabilityFeature(OpenStackControlPlaneFeature):
         }
         update_config(deployment.get_client(), OBSERVABILITY_FEATURE_KEY, provider)
 
+        # Grant all existing Juju users access to the observability model
+        client = deployment.get_client()
+        jhelper = JujuHelper(deployment.juju_controller)
+
+        for user in client.cluster.list_juju_users():
+            user_name = user["username"]
+            try:
+                plan = [
+                    JujuGrantModelAccessStep(jhelper, user_name, OBSERVABILITY_MODEL)
+                ]
+                run_plan(plan, console, show_hints)
+            except Exception as e:
+                LOG.warning(
+                    "Failed to grant %s access to observability model: %s", user_name, e
+                )
+
     def pre_disable(self, deployment: Deployment, show_hints: bool) -> None:
         """Handler to perform tasks before disabling the feature."""
         super().pre_disable(deployment, show_hints)
@@ -803,6 +1296,72 @@ class ObservabilityFeature(OpenStackControlPlaneFeature):
     #             "Use `sunbeam disable observability embedded` instead."
     #         )
     #         self.disable_feature(deployment, FeatureConfig())
+
+    @click.command()
+    @click.argument("resource-name", type=str)
+    @click.argument("resource-path", type=click.Path(exists=True, dir_okay=False))
+    @pass_method_obj
+    def attach_resource(
+        self, deployment: Deployment, resource_name: str, resource_path: str
+    ) -> None:
+        """Attach a file resource to the hardware-observer charm.
+
+        RESOURCE_NAME is the name of the resource.
+
+        RESOURCE_PATH is the local path to the resource file to attach.
+
+        Use the `sunbeam observability hardware-monitoring-utility list` command to see
+        the available resource names.
+        """
+        jhelper = JujuHelper(deployment.juju_controller)
+
+        list_plan = [ListHardwareObserverResourcesStep(deployment, jhelper)]
+        list_results = run_plan(list_plan, console)
+        raw = get_step_message(list_results, ListHardwareObserverResourcesStep)
+        if raw is None:
+            raise click.ClickException("Failed to retrieve resource list.")
+        valid_names = [r["name"] for r in json.loads(raw)]
+        if resource_name not in valid_names:
+            raise click.ClickException(
+                f"Unknown resource {resource_name!r}. "
+                "Use the `sunbeam observability hardware-monitoring-utility list` "
+                "command to see valid names."
+            )
+
+        plan = [
+            AttachHardwareObserverResourceStep(
+                deployment, jhelper, resource_name, resource_path
+            )
+        ]
+        run_plan(plan, console)
+        click.echo(f"Resource {resource_name!r} attached to {HARDWARE_OBSERVER_APP}.")
+
+    @click.command()
+    @pass_method_obj
+    def list_resources(self, deployment: Deployment) -> None:
+        """List available resource names for the hardware-observer charm."""
+        jhelper = JujuHelper(deployment.juju_controller)
+        plan = [ListHardwareObserverResourcesStep(deployment, jhelper)]
+        plan_results = run_plan(plan, console)
+        result = get_step_message(plan_results, ListHardwareObserverResourcesStep)
+        if result is None:
+            raise click.ClickException("Failed to retrieve resource list.")
+        resources = json.loads(result)
+        table = Table(title=f"{HARDWARE_OBSERVER_APP} resources")
+        table.add_column("Name")
+        table.add_column("Type")
+        table.add_column("Description")
+        for r in resources:
+            table.add_row(
+                r.get("name", ""),
+                r.get("type", ""),
+                r.get("description", ""),
+            )
+        console.print(table)
+
+    @click.group()
+    def hardware_monitoring_utility(self):
+        """Manage hardware monitoring utility resources."""
 
     @click.group()
     def observability_group(self):
@@ -860,6 +1419,9 @@ class EmbeddedObservabilityFeature(ObservabilityFeature):
         tfhelper_observability_agent = deployment.get_tfhelper(
             self.tfplan_observability_agent
         )
+        tfhelper_hardware_observer = deployment.get_tfhelper(
+            self.tfplan_hardware_observer
+        )
 
         client = deployment.get_client()
         plan = []
@@ -896,10 +1458,33 @@ class EmbeddedObservabilityFeature(ObservabilityFeature):
             ),
         ]
 
+        hardware_observer_plan = [
+            TerraformInitStep(tfhelper_hardware_observer),
+            DeployHardwareObserverStep(
+                deployment, config, self, tfhelper_hardware_observer, jhelper
+            ),
+        ]
+
         run_plan(plan, console, show_hints)
         run_plan(cos_plan, console, show_hints)
         run_plan(observability_agent_k8s_plan, console, show_hints)
         run_plan(observability_agent_plan, console, show_hints)
+        run_plan(hardware_observer_plan, console, show_hints)
+
+        if is_maas_deployment(deployment):
+            tfhelper_observability_agent_infra = deployment.get_tfhelper(
+                self.tfplan_observability_agent_infra
+            )
+            infra_agent_plan = [
+                TerraformInitStep(tfhelper_observability_agent_infra),
+                DeployObservabilityAgentInfraStep(
+                    deployment,
+                    self,
+                    tfhelper_observability_agent_infra,
+                    jhelper,
+                ),
+            ]
+            run_plan(infra_agent_plan, console, show_hints)
 
         click.echo("Observability enabled.")
 
@@ -911,12 +1496,22 @@ class EmbeddedObservabilityFeature(ObservabilityFeature):
         tfhelper_observability_agent = deployment.get_tfhelper(
             self.tfplan_observability_agent
         )
+        tfhelper_hardware_observer = deployment.get_tfhelper(
+            self.tfplan_hardware_observer
+        )
 
         observability_agent_k8s_plan = [
             TerraformInitStep(tfhelper),
             DisableOpenStackApplicationStep(deployment, tfhelper, jhelper, self),
             RemoveSaasApplicationsStep(
                 jhelper, OPENSTACK_MODEL, offering_model=OBSERVABILITY_MODEL
+            ),
+        ]
+
+        hardware_observer_plan = [
+            TerraformInitStep(tfhelper_hardware_observer),
+            RemoveHardwareObserverStep(
+                deployment, self, tfhelper_hardware_observer, jhelper
             ),
         ]
 
@@ -938,6 +1533,25 @@ class EmbeddedObservabilityFeature(ObservabilityFeature):
         ]
 
         run_plan(observability_agent_k8s_plan, console, show_hints)
+        run_plan(hardware_observer_plan, console, show_hints)
+
+        if is_maas_deployment(deployment):
+            tfhelper_observability_agent_infra = deployment.get_tfhelper(
+                self.tfplan_observability_agent_infra
+            )
+            infra_agent_remove_plan = [
+                TerraformInitStep(tfhelper_observability_agent_infra),
+                RemoveObservabilityAgentInfraStep(
+                    deployment, self, tfhelper_observability_agent_infra, jhelper
+                ),
+                RemoveSaasApplicationsStep(
+                    jhelper,
+                    deployment.infra_model,  # type: ignore [attr-defined]
+                    offering_model=OBSERVABILITY_MODEL,
+                ),
+            ]
+            run_plan(infra_agent_remove_plan, console, show_hints)
+
         run_plan(observability_agent_plan, console, show_hints)
         run_plan(cos_plan, console, show_hints)
 
@@ -947,6 +1561,9 @@ class EmbeddedObservabilityFeature(ObservabilityFeature):
     @pass_method_obj
     def dashboard_url(self, deployment: Deployment) -> None:
         """Retrieve COS Dashboard URL."""
+        # Login to the Juju controller
+        run_preflight_checks([JujuLoginCheck(deployment.juju_account)], console)
+
         jhelper = JujuHelper(deployment.juju_controller)
 
         with console.status("Retrieving dashboard URL from Grafana service ... "):
@@ -994,7 +1611,15 @@ class EmbeddedObservabilityFeature(ObservabilityFeature):
         return {
             "init": [{"name": "observability", "command": self.observability_group}],
             "init.observability": [
-                {"name": "dashboard-url", "command": self.dashboard_url}
+                {"name": "dashboard-url", "command": self.dashboard_url},
+                {
+                    "name": "hardware-monitoring-utility",
+                    "command": self.hardware_monitoring_utility,
+                },
+            ],
+            "init.observability.hardware-monitoring-utility": [
+                {"name": "add", "command": self.attach_resource},
+                {"name": "list", "command": self.list_resources},
             ],
         }
 
@@ -1028,6 +1653,9 @@ class ExternalObservabilityFeature(ObservabilityFeature):
         tfhelper_observability_agent = deployment.get_tfhelper(
             self.tfplan_observability_agent
         )
+        tfhelper_hardware_observer = deployment.get_tfhelper(
+            self.tfplan_hardware_observer
+        )
 
         client = deployment.get_client()
         plan = []
@@ -1058,6 +1686,13 @@ class ExternalObservabilityFeature(ObservabilityFeature):
             ),
         ]
 
+        hardware_observer_plan = [
+            TerraformInitStep(tfhelper_hardware_observer),
+            DeployHardwareObserverStep(
+                deployment, config, self, tfhelper_hardware_observer, jhelper
+            ),
+        ]
+
         # Workaround as integrations are not handled in terraform plan
         # https://github.com/juju/terraform-provider-juju/issues/119
         observability_integrations_plan = [
@@ -1067,6 +1702,23 @@ class ExternalObservabilityFeature(ObservabilityFeature):
         run_plan(plan, console, show_hints)
         run_plan(observability_agent_k8s_plan, console, show_hints)
         run_plan(observability_agent_plan, console, show_hints)
+        run_plan(hardware_observer_plan, console, show_hints)
+
+        if is_maas_deployment(deployment):
+            tfhelper_observability_agent_infra = deployment.get_tfhelper(
+                self.tfplan_observability_agent_infra
+            )
+            infra_agent_plan = [
+                TerraformInitStep(tfhelper_observability_agent_infra),
+                DeployObservabilityAgentInfraStep(
+                    deployment,
+                    self,
+                    tfhelper_observability_agent_infra,
+                    jhelper,
+                ),
+            ]
+            run_plan(infra_agent_plan, console, show_hints)
+
         run_plan(observability_integrations_plan, console, show_hints)
 
         click.echo("Observability enabled.")
@@ -1077,6 +1729,9 @@ class ExternalObservabilityFeature(ObservabilityFeature):
         tfhelper = deployment.get_tfhelper(self.tfplan)
         tfhelper_observability_agent = deployment.get_tfhelper(
             self.tfplan_observability_agent
+        )
+        tfhelper_hardware_observer = deployment.get_tfhelper(
+            self.tfplan_hardware_observer
         )
 
         # Workaround as integrations are not handled in terraform plan
@@ -1095,6 +1750,13 @@ class ExternalObservabilityFeature(ObservabilityFeature):
             ),
         ]
 
+        hardware_observer_plan = [
+            TerraformInitStep(tfhelper_hardware_observer),
+            RemoveHardwareObserverStep(
+                deployment, self, tfhelper_hardware_observer, jhelper
+            ),
+        ]
+
         grafana_agent_plan = [
             TerraformInitStep(tfhelper_observability_agent),
             RemoveObservabilityAgentStep(
@@ -1109,6 +1771,25 @@ class ExternalObservabilityFeature(ObservabilityFeature):
 
         run_plan(observability_remove_offers_plan, console, show_hints)
         run_plan(observability_agent_k8s_plan, console, show_hints)
+        run_plan(hardware_observer_plan, console, show_hints)
+
+        if is_maas_deployment(deployment):
+            tfhelper_observability_agent_infra = deployment.get_tfhelper(
+                self.tfplan_observability_agent_infra
+            )
+            infra_agent_remove_plan = [
+                TerraformInitStep(tfhelper_observability_agent_infra),
+                RemoveObservabilityAgentInfraStep(
+                    deployment, self, tfhelper_observability_agent_infra, jhelper
+                ),
+                RemoveSaasApplicationsStep(
+                    jhelper,
+                    deployment.infra_model,  # type: ignore [attr-defined]
+                    offering_interfaces=OBSERVABILITY_OFFER_INTERFACES,
+                ),
+            ]
+            run_plan(infra_agent_remove_plan, console, show_hints)
+
         run_plan(grafana_agent_plan, console, show_hints)
 
         click.echo("Observability disabled.")
@@ -1164,6 +1845,25 @@ class ExternalObservabilityFeature(ObservabilityFeature):
     def get_provider_type(self) -> ProviderType:
         """Return provide type external or embedded."""
         return ProviderType.EXTERNAL
+
+    def enabled_commands(self) -> dict[str, list[dict]]:
+        """Dict of clickgroup along with commands.
+
+        Return the commands available once the feature is enabled.
+        """
+        return {
+            "init": [{"name": "observability", "command": self.observability_group}],
+            "init.observability": [
+                {
+                    "name": "hardware-monitoring-utility",
+                    "command": self.hardware_monitoring_utility,
+                },
+            ],
+            "init.observability.hardware-monitoring-utility": [
+                {"name": "add", "command": self.attach_resource},
+                {"name": "list", "command": self.list_resources},
+            ],
+        }
 
     def get_cos_offer_urls(self, deployment: Deployment) -> dict:
         """Return COS offer URLs."""

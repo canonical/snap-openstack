@@ -14,6 +14,7 @@ from rich.console import Console
 from sunbeam.clusterd.service import (
     ConfigItemNotFoundException,
 )
+from sunbeam.core.checks import JujuLoginCheck, run_preflight_checks
 from sunbeam.core.common import (
     BaseStep,
     Result,
@@ -45,6 +46,16 @@ console = Console()
 
 APPLICATION_DEPLOY_TIMEOUT = 900  # 15 minutes
 APPLICATION_REMOVE_TIMEOUT = 300  # 5 minutes
+
+# The LDAP steps reapply the whole OpenStack plan, which reverts any
+# out-of-band charm config (e.g. Traefik TLS set with juju config) as
+# drift. Restrict the apply to the LDAP domain resources only.
+# See LP#2159042.
+LDAP_APPLY_TARGETS = [
+    "-target=juju_application.ldap-apps",
+    "-target=juju_integration.ldap-apps-to-logging",
+    "-target=juju_integration.ldap-to-keystone",
+]
 
 
 class DisableLDAPDomainStep(BaseStep, JujuStepHelper):
@@ -94,7 +105,7 @@ class DisableLDAPDomainStep(BaseStep, JujuStepHelper):
         update_config(self.client, config_key, tfvars)
 
         try:
-            self.tfhelper.apply(reporter=context.reporter)
+            self.tfhelper.apply(LDAP_APPLY_TARGETS, reporter=context.reporter)
         except TerraformException as e:
             return Result(ResultType.FAILED, str(e))
 
@@ -110,7 +121,7 @@ class DisableLDAPDomainStep(BaseStep, JujuStepHelper):
                 timeout=APPLICATION_REMOVE_TIMEOUT,
             )
         except (JujuWaitException, TimeoutError) as e:
-            LOG.warning(str(e))
+            LOG.warning("Timed out disabling LDAP domain: %r", e)
             return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.COMPLETED)
@@ -162,12 +173,12 @@ class UpdateLDAPDomainStep(BaseStep, JujuStepHelper):
         update_config(self.client, config_key, tfvars)
 
         try:
-            self.tfhelper.apply(reporter=context.reporter)
+            self.tfhelper.apply(LDAP_APPLY_TARGETS, reporter=context.reporter)
         except TerraformException as e:
             return Result(ResultType.FAILED, str(e))
         charm_name = "keystone-ldap-{}".format(self.charm_config["domain-name"])
         apps = ["keystone", charm_name]
-        LOG.debug(f"Application monitored for readiness: {apps}")
+        LOG.debug("Application monitored for readiness: %s", apps)
         status_queue: queue.Queue[str] = queue.Queue()
         task = update_status_background(self, apps, status_queue, context.status)
         try:
@@ -178,7 +189,7 @@ class UpdateLDAPDomainStep(BaseStep, JujuStepHelper):
                 queue=status_queue,
             )
         except (JujuWaitException, TimeoutError) as e:
-            LOG.warning(str(e))
+            LOG.warning("Timed out updating LDAP domain: %r", e)
             return Result(ResultType.FAILED, str(e))
         finally:
             task.stop()
@@ -232,12 +243,12 @@ class AddLDAPDomainStep(BaseStep, JujuStepHelper):
         update_config(self.client, config_key, tfvars)
 
         try:
-            self.tfhelper.apply(reporter=context.reporter)
+            self.tfhelper.apply(LDAP_APPLY_TARGETS, reporter=context.reporter)
         except TerraformException as e:
             return Result(ResultType.FAILED, str(e))
         charm_name = "keystone-ldap-{}".format(self.charm_config["domain-name"])
         apps = ["keystone", charm_name]
-        LOG.debug(f"Application monitored for readiness: {apps}")
+        LOG.debug("Application monitored for readiness: %s", apps)
         status_queue: queue.Queue[str] = queue.Queue()
         task = update_status_background(self, apps, status_queue, context.status)
         try:
@@ -248,7 +259,7 @@ class AddLDAPDomainStep(BaseStep, JujuStepHelper):
                 queue=status_queue,
             )
         except (JujuWaitException, TimeoutError) as e:
-            LOG.warning(str(e))
+            LOG.warning("Timed out adding LDAP domain: %r", e)
             return Result(ResultType.FAILED, str(e))
         finally:
             task.stop()
@@ -370,7 +381,12 @@ class LDAPFeature(OpenStackControlPlaneFeature):
             "domain-name": domain_name,
             "tls-ca-ldap": ca,
         }
+
+        # Login to the Juju controller
+        run_preflight_checks([JujuLoginCheck(deployment.juju_account)], console)
+
         jhelper = JujuHelper(deployment.juju_controller)
+
         plan = [
             TerraformInitStep(deployment.get_tfhelper(self.tfplan)),
             AddLDAPDomainStep(deployment, FeatureConfig(), jhelper, self, charm_config),
@@ -415,7 +431,12 @@ class LDAPFeature(OpenStackControlPlaneFeature):
             with Path(ca_cert_file).open(mode="r") as f:
                 ca = f.read()
             charm_config["tls-ca-ldap"] = ca
+
+        # Login to the Juju controller
+        run_preflight_checks([JujuLoginCheck(deployment.juju_account)], console)
+
         jhelper = JujuHelper(deployment.juju_controller)
+
         plan = [
             TerraformInitStep(deployment.get_tfhelper(self.tfplan)),
             UpdateLDAPDomainStep(deployment, jhelper, self, charm_config),
@@ -431,7 +452,11 @@ class LDAPFeature(OpenStackControlPlaneFeature):
         self, deployment: Deployment, domain_name: str, show_hints: bool
     ) -> None:
         """Remove LDAP backed domain."""
+        # Login to the Juju controller
+        run_preflight_checks([JujuLoginCheck(deployment.juju_account)], console)
+
         jhelper = JujuHelper(deployment.juju_controller)
+
         plan = [
             TerraformInitStep(deployment.get_tfhelper(self.tfplan)),
             DisableLDAPDomainStep(

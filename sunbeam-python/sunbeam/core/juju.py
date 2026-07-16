@@ -1193,7 +1193,7 @@ class JujuHelper:
                 )
                 break
             except jubilant.CLIError as e:
-                LOG.error(f"Error occurred while waiting: {e}")
+                LOG.error("Error occurred while waiting: %r", e)
         else:
             raise TimeoutError(
                 f"Timed out after {timeout} seconds while waiting for status"
@@ -1227,11 +1227,11 @@ class JujuHelper:
             app = juju.status().apps.get(name)
             if not app:
                 return
-            LOG.debug(f"Application {name!r} is in status: {app.app_status.current!r}")
+            LOG.debug("Application %r is in status: %r", name, app.app_status.current)
             LOG.debug(
-                "Waiting for app status to be: {} {}".format(
-                    app.app_status.current, accepted_status
-                )
+                "Waiting for app status %r to be %r",
+                app.app_status.current,
+                accepted_status,
             )
             self._wait(_ready_callback, juju, delay=MODEL_DELAY, timeout=timeout)
 
@@ -1569,6 +1569,65 @@ class JujuHelper:
                 timeout=timeout,
             )
 
+    def is_k8s_model(self, model: str) -> bool:
+        """Return True if the model is a k8s (CAAS) model.
+
+        :param model: Name of the model
+        """
+        return self.get_model(model).get("model-type") == "caas"
+
+    def charm_trust(self, application_name: str, model: str) -> None:
+        """Grant cluster-scoped trust to a k8s charm application.
+
+        On k8s models, ``juju refresh --trust`` does not create a
+        ClusterRoleBinding. Only ``juju trust <app> --scope=cluster``
+        creates the binding required for hooks that access the k8s API
+        (e.g. patching StatefulSets).
+
+        :param application_name: Name of application
+        :param model: Model containing the application
+        """
+        with self._model(model) as juju:
+            juju.trust(application_name, scope="cluster")
+
+    def attach_resource(
+        self,
+        application_name: str,
+        model: str,
+        resource_name: str,
+        resource_path: str,
+    ) -> None:
+        """Upload a file resource to a deployed application.
+
+        :param application_name: Name of the application
+        :param model: Name of the model
+        :param resource_name: Name of the resource as defined in the charm metadata
+        :param resource_path: Local path to the resource file to upload
+        """
+        with self._model(model) as juju:
+            juju.cli(
+                "attach-resource",
+                application_name,
+                f"{resource_name}={resource_path}",
+            )
+
+    def get_application_resources(
+        self,
+        application_name: str,
+        model: str,
+    ) -> list[dict]:
+        """Return the resources defined for a deployed application.
+
+        :param application_name: Name of the application
+        :param model: Name of the model
+        :returns: List of resource dicts sorted by name, each containing at
+            minimum the keys ``name``, ``type``, and ``description``.
+        """
+        with self._model(model) as juju:
+            raw = juju.cli("resources", "--format", "json", application_name)
+        data = json.loads(raw)
+        return sorted(data.get("resources", []), key=lambda r: r["name"])
+
     def charm_refresh(
         self,
         application_name: str,
@@ -1585,9 +1644,12 @@ class JujuHelper:
         :param channel: Channel to refresh to, if None uses current channel
         :param revision: Revision to refresh to, if None uses latest revision
         :param base: Select a different base than is currently running
-        :param trust: If true, allows charm to run hooks that require access to
-            cloud credentials
+        :param trust: If true, grants cluster-scoped k8s RBAC trust before
+            refresh so that upgrade-charm hooks can access the k8s API.
+            On non-k8s models, trust is passed directly to juju refresh.
         """
+        if trust and self.is_k8s_model(model):
+            self.charm_trust(application_name, model)
         with self._model(model) as juju:
             juju.refresh(
                 application_name,
@@ -1597,22 +1659,36 @@ class JujuHelper:
                 trust=trust,
             )
 
-    def get_available_charm_revision(
+    def get_available_charm_revisions(
         self,
         charm_name: str,
         channel: str,
         base: str = JUJU_BASE,
-        arch: str | None = None,
-    ) -> int:
-        """Find the latest available revision of a charm in a given channel.
+    ) -> dict[str, int]:
+        """Return a mapping of architecture to revision for a channel+base.
+
+        Each entry in the juju info channel listing may cover one or more
+        architectures, or have a different revision per architecture.  This
+        method expands the list into an ``{arch: revision}`` dict so callers
+        can do either an arch-aware lookup (``revisions.get("amd64")``) or a
+        simple membership check across all architectures
+        (``app.charm_rev in revisions.values()``).
+
+        When no architectures are listed for an entry, the key ``"all"`` is
+        used as a fallback.
 
         :param charm_name: Name of charm to look up
         :param channel: Channel to lookup charm in
         :param base: Base to lookup charm in, default is JUJU_BASE
-        :param arch: Architecture to filter by, or None to match any
+        :raises JujuException: if the channel/base combination is not found
         """
-        track, risk = channel.split("/")
-        base_name, base_channel = base.split("@")
+        parts = channel.split("/")
+        if len(parts) < 2:
+            raise JujuException(
+                f"Invalid channel format {channel!r}: expected track/risk[/branch]"
+            )
+        track, risk = parts[0], parts[1]
+        _, base_channel = base.split("@")
         output = json.loads(
             self._juju.cli(
                 "info",
@@ -1625,17 +1701,58 @@ class JujuHelper:
             )
         )
 
-        for risk_info in output["channels"][track][risk]:
-            if arch is not None and arch not in risk_info.get("architectures", []):
-                continue
+        revisions: dict[str, int] = {}
+        try:
+            channel_entries = output["channels"][track][risk]
+        except KeyError:
+            raise JujuException(
+                f"Could not find charm {charm_name!r} in channel {channel!r} "
+                f"with base {base!r}"
+            )
+        for risk_info in channel_entries:
             for base_info in risk_info["bases"]:
                 if base_info["channel"] == base_channel:
-                    return risk_info["revision"]
+                    archs = risk_info.get("architectures") or ["all"]
+                    for arch in archs:
+                        revisions[arch] = risk_info["revision"]
 
-        raise JujuException(
-            f"Could not find charm {charm_name!r} in channel {channel!r} "
-            f"with base {base!r}"
+        if not revisions:
+            raise JujuException(
+                f"Could not find charm {charm_name!r} in channel {channel!r} "
+                f"with base {base!r}"
+            )
+        return revisions
+
+    def get_charm_channel_for_revision(
+        self,
+        charm_name: str,
+        revision: int,
+    ) -> str | None:
+        """Return the first channel (track/risk) that publishes a given revision.
+
+        Scans all channels returned by ``juju info`` for *charm_name* and returns
+        the channel name (e.g. ``"1.32/stable"``) for the first entry whose
+        revision number matches *revision*.  Returns ``None`` if the revision is
+        not found in any channel.
+
+        :param charm_name: Name of charm to look up
+        :param revision: Charm revision number to find
+        """
+        output = json.loads(
+            self._juju.cli(
+                "info",
+                "--format",
+                "json",
+                charm_name,
+                include_model=False,
+            )
         )
+        for track, risks in output.get("channels", {}).items():
+            for risk, entries in risks.items():
+                for entry in entries:
+                    if entry.get("revision") == revision:
+                        return f"{track}/{risk}"
+        return None
 
     @staticmethod
     def manual_cloud(cloud_name: str, ip_address: str) -> dict[str, dict]:
@@ -1789,8 +1906,11 @@ class JujuHelper:
         relation_map = {}
         relation_ids = result.stdout.strip().splitlines()
         LOG.debug(
-            f"Relation IDs for interface {interface!r} on provider application "
-            f"{provider_app!r} in model {model!r}: {relation_ids}"
+            "Relation IDs for interface %r on provider application %r in model %r: %r",
+            interface,
+            provider_app,
+            model,
+            relation_ids,
         )
         for relation_id in relation_ids:
             cmd = f"relation-list -r {relation_id} --app"
@@ -1813,13 +1933,18 @@ class JujuHelper:
             relation_map[relation_id] = app_name
 
         LOG.debug(
-            f"Relation map for interface {interface!r} on provider application "
-            f"{provider_app!r} in model {model!r}: {relation_map}"
+            "Relation map for interface %r on provider application %r in model %r: %r",
+            interface,
+            provider_app,
+            model,
+            relation_map,
         )
         return relation_map
 
 
 class JujuStepHelper:
+    """Base class for Juju step."""
+
     jhelper: JujuHelper
 
     def _get_juju_binary(self) -> str:
@@ -1828,12 +1953,12 @@ class JujuStepHelper:
         juju_binary = snap.paths.snap / "juju" / "bin" / "juju"
         return str(juju_binary)
 
-    def _juju_cmd(self, *args):
+    def _juju_cmd(self, *args, json_format=True, env=None, cwd=None, timeout=None):
         """Runs the specified juju command line command.
 
-        The command will be run using the json formatter. Invoking functions
-        do not need to worry about the format or the juju command that should
-        be used.
+        The command will be run using the json formatter by default. Invoking
+        functions do not need to worry about the format or the juju command
+        that should be used.
 
         For example, to run the juju bootstrap k8s, this method should
         be invoked as:
@@ -1841,20 +1966,39 @@ class JujuStepHelper:
           self._juju_cmd('bootstrap', 'k8s')
 
         Any results from running with json are returned after being parsed.
+        When json_format is False, the subprocess.CompletedProcess output is returned.
+
         Subprocess execution errors are raised to the calling code.
 
         :param args: command to run
-        :return:
+        :param json_format: if True, add ``--format json`` and parse output
+        :param env: optional environment variables for the subprocess
+        :param cwd: optional working directory for the subprocess
+        :param timeout: optional timeout in seconds for the subprocess
+        :return: parsed JSON (dict/list) if json_format, else CompletedProcess
         """
         cmd = [self._get_juju_binary()]
         cmd.extend(args)
-        cmd.extend(["--format", "json"])
+        if json_format:
+            cmd.extend(["--format", "json"])
 
-        LOG.debug(f"Running command {' '.join(cmd)}")
-        process = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        LOG.debug(f"Command finished. stdout={process.stdout}, stderr={process.stderr}")
+        LOG.debug("Running command %s", " ".join(cmd))
+        process = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=True,
+            env=env,
+            cwd=cwd,
+            timeout=timeout,
+        )
+        LOG.debug(
+            "Command finished. stdout=%r, stderr=%r", process.stdout, process.stderr
+        )
 
-        return json.loads(process.stdout.strip())
+        if json_format:
+            return json.loads(process.stdout.strip())
+        return process
 
     def get_clouds(
         self, cloud_type: str, local: bool = False, controller: str | None = None
@@ -1874,13 +2018,15 @@ class JujuStepHelper:
             if controller:
                 cmd.extend(["--controller", controller])
         clouds_from_juju_cmd = self._juju_cmd(*cmd)
-        LOG.debug(f"Available clouds in juju are {clouds_from_juju_cmd.keys()}")
+        LOG.debug("Available clouds in Juju are %s", list(clouds_from_juju_cmd.keys()))
 
         for name, details in clouds_from_juju_cmd.items():
             if details["type"] == cloud_type:
                 clouds.append(name)
 
-        LOG.debug(f"There are {len(clouds)} {cloud_type} clouds available: {clouds}")
+        LOG.debug(
+            "There are %d %s clouds available: %s", len(clouds), cloud_type, clouds
+        )
 
         return clouds
 
@@ -1909,8 +2055,10 @@ class JujuStepHelper:
             name for name, details in controllers.items() if details["cloud"] in clouds
         ]
         LOG.debug(
-            f"There are {len(existing_controllers)} existing {clouds} "
-            f"controllers running: {existing_controllers}"
+            "There are %d existing %s controllers running: %s",
+            len(existing_controllers),
+            clouds,
+            existing_controllers,
         )
         return existing_controllers
 
@@ -1933,7 +2081,7 @@ class JujuStepHelper:
         try:
             return self._juju_cmd("show-controller", controller)[controller]
         except subprocess.CalledProcessError as e:
-            LOG.debug(e)
+            LOG.debug("%s: %s", e, e.stderr)
             raise ControllerNotFoundException() from e
 
     def get_controller_ip(self, controller: str) -> str:
@@ -1965,21 +2113,10 @@ class JujuStepHelper:
         with tempfile.NamedTemporaryFile() as temp:
             temp.write(yaml.dump(cloud).encode("utf-8"))
             temp.flush()
-            cmd = [
-                self._get_juju_binary(),
-                "add-cloud",
-                name,
-                "--file",
-                temp.name,
-                "--client",
-            ]
+            args = ["add-cloud", name, "--file", temp.name, "--client"]
             if controller:
-                cmd.extend(["--controller", controller, "--force"])
-            LOG.debug(f"Running command {' '.join(cmd)}")
-            process = subprocess.run(cmd, capture_output=True, text=True, check=True)
-            LOG.debug(
-                f"Command finished. stdout={process.stdout}, stderr={process.stderr}"
-            )
+                args.extend(["--controller", controller, "--force"])
+            self._juju_cmd(*args, json_format=False)
 
         return True
 
@@ -1988,22 +2125,15 @@ class JujuStepHelper:
         with tempfile.NamedTemporaryFile() as temp:
             temp.write(yaml.dump(kubeconfig).encode("utf-8"))
             temp.flush()
-            cmd = [
-                self._get_juju_binary(),
+            env = os.environ.copy()
+            env.update({"KUBECONFIG": temp.name})
+            self._juju_cmd(
                 "add-k8s",
                 name,
                 "--client",
                 "--region=localhost/localhost",
-            ]
-
-            env = os.environ.copy()
-            env.update({"KUBECONFIG": temp.name})
-            LOG.debug(f"Running command {' '.join(cmd)}")
-            process = subprocess.run(
-                cmd, capture_output=True, text=True, check=True, env=env
-            )
-            LOG.debug(
-                f"Command finished. stdout={process.stdout}, stderr={process.stderr}"
+                json_format=False,
+                env=env,
             )
 
     def add_credential(self, cloud: str, credential: dict, controller: str | None):
@@ -2015,22 +2145,12 @@ class JujuStepHelper:
         with tempfile.NamedTemporaryFile() as temp:
             temp.write(yaml.dump(credential).encode("utf-8"))
             temp.flush()
-            cmd = [
-                self._get_juju_binary(),
-                "add-credential",
-                cloud,
-                "--file",
-                temp.name,
-            ]
+            args = ["add-credential", cloud, "--file", temp.name]
             if controller:
-                cmd.extend(["--controller", controller])
+                args.extend(["--controller", controller])
             else:
-                cmd.extend(["--client"])
-            LOG.debug(f"Running command {' '.join(cmd)}")
-            process = subprocess.run(cmd, capture_output=True, text=True, check=True)
-            LOG.debug(
-                f"Command finished. stdout={process.stdout}, stderr={process.stderr}"
-            )
+                args.extend(["--client"])
+            self._juju_cmd(*args, json_format=False)
 
     def integrate(
         self,
@@ -2040,38 +2160,20 @@ class JujuStepHelper:
         ignore_error_if_exists: bool = True,
     ):
         """Juju integrate applications."""
-        cmd = [
-            self._get_juju_binary(),
-            "integrate",
-            "-m",
-            model,
-            provider,
-            requirer,
-        ]
         try:
-            LOG.debug(f"Running command {' '.join(cmd)}")
-            process = subprocess.run(cmd, capture_output=True, text=True, check=True)
-            LOG.debug(
-                f"Command finished. stdout={process.stdout}, stderr={process.stderr}"
+            self._juju_cmd(
+                "integrate", "-m", model, provider, requirer, json_format=False
             )
         except subprocess.CalledProcessError as e:
-            LOG.debug(e.stderr)
+            LOG.debug("%s: %s", e, e.stderr)
             if ignore_error_if_exists and "already exists" not in e.stderr:
                 raise e
 
     def remove_relation(self, model: str, provider: str, requirer: str):
         """Juju remove relation."""
-        cmd = [
-            self._get_juju_binary(),
-            "remove-relation",
-            "-m",
-            model,
-            provider,
-            requirer,
-        ]
-        LOG.debug(f"Running command {' '.join(cmd)}")
-        process = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        LOG.debug(f"Command finished. stdout={process.stdout}, stderr={process.stderr}")
+        self._juju_cmd(
+            "remove-relation", "-m", model, provider, requirer, json_format=False
+        )
 
     def get_charm_deployed_versions(self, model: str) -> dict:
         """Return charm deployed info for all the applications in model.
@@ -2123,13 +2225,26 @@ class JujuStepHelper:
         """
         risks = ["stable", "candidate", "beta", "edge"]
         current_channel = self.normalise_channel(channel)
-        current_track, current_risk = current_channel.split("/")
-        new_track, new_risk = new_channel.split("/")
+        current_parts = current_channel.split("/")
+        if len(current_parts) < 2:
+            LOG.error("Invalid channel format %r", channel)
+            return False
+        current_track, current_risk = current_parts[0], current_parts[1]
+        new_channel = self.normalise_channel(new_channel)
+        new_parts = new_channel.split("/")
+        if len(new_parts) < 2:
+            LOG.error("Invalid channel format %r", new_channel)
+            return False
+        new_track, new_risk = new_parts[0], new_parts[1]
         if current_track != new_track:
             try:
                 return version.parse(current_track) < version.parse(new_track)
             except version.InvalidVersion:
-                LOG.error("Error: Could not compare tracks")
+                LOG.error(
+                    "Could not compare tracks between %r and %r channels",
+                    current_track,
+                    new_track,
+                )
                 return False
         if risks.index(current_risk) < risks.index(new_risk):
             return True
@@ -2241,7 +2356,7 @@ class JujuActionHelper:
         try:
             unit = JujuActionHelper.get_unit(client, jhelper, model, node, app)
             LOG.debug(
-                "Running action '%s' on unit '%s', params: %s",
+                "Running action %r on unit %r, params: %s",
                 action_name,
                 unit,
                 action_params,
@@ -2255,8 +2370,8 @@ class JujuActionHelper:
             )
             return action_result
         except UnitNotFoundException as e:
-            LOG.debug(f"Application {app} not found on node {node}")
+            LOG.debug("Application %r is not found on node %r: %r", app, node, e)
             raise e
         except ActionFailedException as e:
-            LOG.debug("Action '%s' failed on node '%s': %s", action_name, node, e)
+            LOG.debug("Action %r failed on node %r: %r", action_name, node, e)
             raise e

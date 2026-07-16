@@ -4,13 +4,15 @@ summary: Dead simple OpenStack installation
 license: Apache-2.0
 description: |
   snap-openstack aims to provide a scalable, simple to deploy OpenStack solution.
-version: "2024.1"
+version: "2026.1"
+adopt-info: snap-version
 
 confinement: strict
 grade: stable
 
 platforms:
   amd64:
+  s390x:
 
 system-usernames:
   snap_daemon: shared
@@ -38,6 +40,7 @@ apps:
       - network-bind
   sunbeam:
     command: bin/sunbeam
+    completer: usr/share/bash-completion/completions/sunbeam-completion
     plugs:
       - dot-local-share-juju
       - home
@@ -60,6 +63,21 @@ apps:
       PATH: $PATH:$SNAP/juju/bin
 
 parts:
+  snap-version:
+    plugin: nil
+    build-packages:
+      - git
+    override-build: |
+      set -eu
+      craftctl default
+      gitref="$(git -C "$CRAFT_PROJECT_DIR" rev-parse --short=8 HEAD)"
+      version="$(craftctl get version)-${gitref}"
+      git -C "$CRAFT_PROJECT_DIR" update-index -q --refresh
+      if ! git -C "$CRAFT_PROJECT_DIR" diff-index --quiet HEAD --; then
+        version="${version}+dirty"
+      fi
+      craftctl set version="${version}"
+
   dqlite:
     source: https://github.com/canonical/dqlite
     source-type: git
@@ -113,7 +131,7 @@ parts:
     source: https://github.com/hashicorp/terraform
     source-depth: 1
     source-type: git
-    source-tag: "v1.5.7"
+    source-tag: "v1.15.8"
     build-snaps: [go]
     build-environment:
       - CGO_ENABLED: "0"
@@ -191,8 +209,8 @@ parts:
       '*': etc/manifests/
     override-prime: |
       craftctl default
-      # For backward compatibility, we symlink 2024.1 manifests to the root manifests dir
-      for manifest in $CRAFT_PRIME/etc/manifests/2024.1/*yml;
+      # Symlink current release manifests to the root manifests dir
+      for manifest in $CRAFT_PRIME/etc/manifests/2026.1/*yml;
       do
         link=$CRAFT_PRIME/etc/manifests/$(basename $manifest)
         [ -e $link ] && rm $link || true
@@ -200,6 +218,7 @@ parts:
       done
 
   sunbeam-and-openstackclients:
+    after: [wrappers]
     plugin: python
     source: .
     source-subdir: sunbeam-python/
@@ -231,6 +250,9 @@ parts:
       mkdir -p usr/share/bash-completion/completions
       ./bin/openstack complete > usr/share/bash-completion/completions/openstack
       echo "complete -F _openstack openstack.openstack" >> usr/share/bash-completion/completions/openstack
+      # Pre-generate sunbeam completion cache
+      cp completions/sunbeam-completion usr/share/bash-completion/completions/sunbeam-completion
+      ./bin/python3 completions/generate_completion_cache.py usr/share/bash-completion/completions/.sunbeam-completion-cache
 
   plugin-packages:
     plugin: nil

@@ -8,7 +8,7 @@ from typing import Any
 import click
 from rich.console import Console
 
-from sunbeam.core.checks import Check, run_preflight_checks
+from sunbeam.core.checks import Check, JujuLoginCheck, run_preflight_checks
 from sunbeam.core.common import (
     BaseStep,
     get_step_message,
@@ -639,6 +639,9 @@ def enable(
     show_hints: bool = False,
 ) -> None:
     """Enable maintenance mode for node."""
+    # Login to the Juju controller
+    run_preflight_checks([JujuLoginCheck(deployment.juju_account)], console)
+
     cluster_status = get_cluster_status(
         deployment=deployment,
         jhelper=JujuHelper(deployment.juju_controller),
@@ -697,6 +700,9 @@ def disable(
     show_hints: bool = False,
 ) -> None:
     """Disable maintenance mode for node."""
+    # Login to the Juju controller
+    run_preflight_checks([JujuLoginCheck(deployment.juju_account)], console)
+
     cluster_status = get_cluster_status(
         deployment=deployment,
         jhelper=JujuHelper(deployment.juju_controller),

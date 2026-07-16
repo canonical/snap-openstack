@@ -6,6 +6,7 @@ import typing
 from collections.abc import Mapping
 
 from rich.console import Console
+from rich.status import Status
 
 from sunbeam.clusterd.client import Client
 from sunbeam.core.checks import Check
@@ -77,7 +78,7 @@ class InstancesStatusCheck(Check):
         self.node = node
         self.force = force
 
-    def run(self) -> bool:
+    def run(self, check_status: Status | None = None) -> bool:
         """Run the check logic here.
 
         Return True if check is Ok.
@@ -98,7 +99,7 @@ class InstancesStatusCheck(Check):
         if not_expected_status_instances:
             _msg = f"Instances not in expected status: {not_expected_status_instances}"
             if self.force:
-                LOG.warning(f"Ignore issue: {_msg}")
+                LOG.warning("Ignore issue: %s", _msg)
                 return True
             self.message = _msg
             return False
@@ -118,7 +119,7 @@ class NoEphemeralDiskCheck(Check):
         self.node = node
         self.force = force
 
-    def run(self) -> bool:
+    def run(self, check_status: Status | None = None) -> bool:
         """Run the check logic here.
 
         Return True if check is Ok.
@@ -138,7 +139,7 @@ class NoEphemeralDiskCheck(Check):
         if unexpected_instances:
             _msg = f"Instances have ephemeral disk: {unexpected_instances}"
             if self.force:
-                LOG.warning(f"Ignore issue: {_msg}")
+                LOG.warning("Ignore issue: %s", _msg)
                 return True
             self.message = _msg
             return False
@@ -158,7 +159,7 @@ class NoInstancesOnNodeCheck(Check):
         self.node = node
         self.force = force
 
-    def run(self) -> bool:
+    def run(self, check_status: Status | None = None) -> bool:
         """Run the check logic here.
 
         Return True if check is Ok.
@@ -172,7 +173,7 @@ class NoInstancesOnNodeCheck(Check):
             instance_ids = ",".join([inst.id for inst in instances])
             _msg = f"Instances {instance_ids} still on node {self.node}"
             if self.force:
-                LOG.warning(f"Ignore issue: {_msg}")
+                LOG.warning("Ignore issue: %s", _msg)
                 return True
             self.message = _msg
             return False
@@ -192,7 +193,7 @@ class NovaInDisableStatusCheck(Check):
         self.node = node
         self.force = force
 
-    def run(self) -> bool:
+    def run(self, check_status: Status | None = None) -> bool:
         """Run the check logic here.
 
         Return True if check is Ok.
@@ -209,7 +210,7 @@ class NovaInDisableStatusCheck(Check):
         if not len(expected_services) == 1:
             _msg = f"Nova compute still not disabled on node {self.node}"
             if self.force:
-                LOG.warning(f"Ignore issue: {_msg}")
+                LOG.warning("Ignore issue: %s", _msg)
                 return True
             self.message = _msg
             return False
@@ -239,7 +240,7 @@ class MicroCephMaintenancePreflightCheck(Check):
         self.action_params["check-only"] = True
         self.force = force
 
-    def run(self) -> bool:
+    def run(self, check_status: Status | None = None) -> bool:
         """Run the check logic here.
 
         Return True if check is Ok.
@@ -265,7 +266,7 @@ class MicroCephMaintenancePreflightCheck(Check):
                 if action.get("error"):
                     msg = action.get("error")
                     if self.force:
-                        LOG.warning(f"Ignore issue: {msg}")
+                        LOG.warning("Ignore issue: %s", msg)
                     else:
                         self.message = msg
                         return False
@@ -285,7 +286,7 @@ class WatcherApplicationExistsCheck(Check):
         )
         self.jhelper = jhelper
 
-    def run(self) -> bool:
+    def run(self, check_status: Status | None = None) -> bool:
         """Run the check logic here.
 
         Return True if check is Ok.
@@ -316,7 +317,7 @@ class NodeExistCheck(Check):
         self.node = node
         self.cluster_status = cluster_status
 
-    def run(self) -> bool:
+    def run(self, check_status: Status | None = None) -> bool:
         """Check if the node is in the cluster."""
         if not self.cluster_status.get(self.node):
             self.message = f"'{self.node}' does not exist in cluster."
@@ -335,7 +336,7 @@ class NoLastNodeCheck(Check):
         self.force = force
         self.cluster_status = cluster_status
 
-    def run(self) -> bool:
+    def run(self, check_status: Status | None = None) -> bool:
         """Check if the cluster has more than one node."""
         if len(self.cluster_status) > 1:
             return True
@@ -368,7 +369,7 @@ class NoLastControlRoleCheck(Check):
         self.deployment = deployment
         self.cluster_status = cluster_status
 
-    def run(self) -> bool:
+    def run(self, check_status: Status | None = None) -> bool:
         """Check if the cluster has only one active control role."""
         try:
             kube_client = get_kube_client(self.deployment.get_client())
@@ -436,7 +437,7 @@ class K8sDqliteRedundancyCheck(Check):
         self.jhelper = jhelper
         self.deployment = deployment
 
-    def run(self) -> bool:
+    def run(self, check_status: Status | None = None) -> bool:
         """Check if the k8s dqlite has enough redundancy."""
         datastore = self._get_k8s_configs().get(K8S_DATASTORE_CONFIG, "")
         if datastore != "dqlite":
@@ -485,7 +486,7 @@ class K8sDqliteRedundancyCheck(Check):
             )
             LOG.debug("Got config %s for %s", config, K8S_APP_NAME)
         except (ApplicationNotFoundException, JujuException) as e:
-            LOG.debug("%s", str(e))
+            LOG.debug("Failed to get config for %s: %r", K8S_APP_NAME, e)
             return {}
         return config
 
@@ -497,7 +498,7 @@ class K8sDqliteRedundancyCheck(Check):
             )
             LOG.debug("Got %s application", k8s_application)
         except ApplicationNotFoundException as e:
-            LOG.debug("%s", str(e))
+            LOG.debug("Failed to get application %s: %r", K8S_APP_NAME, e)
             return []
         return list(k8s_application.units.keys())
 
@@ -512,7 +513,7 @@ class K8sDqliteRedundancyCheck(Check):
                 K8S_APP_NAME,
             )
         except UnitNotFoundException:
-            LOG.debug("cannot find %s unit in '%s'", K8S_APP_NAME, node)
+            LOG.debug("Cannot find %s unit in %r", K8S_APP_NAME, node)
             return ""
 
     def _has_active_k8s_dqlite_svc(self, k8s_unit_name: str) -> bool:
@@ -524,10 +525,10 @@ class K8sDqliteRedundancyCheck(Check):
                 f"snap services {K8S_DQLITE_SVC_NAME} | grep active",
                 timeout=COMMAND_TIMEOUT,
             )
-            LOG.debug(result)
+            LOG.debug("Checking k8s dqlite svc for %s: %r", k8s_unit_name, result)
             status = result.stdout.split()[2]
         except (ExecFailedException, IndexError) as e:
-            LOG.debug("%s", str(e))
+            LOG.debug("Failed to check k8s dqlite svc for %s: %r", k8s_unit_name, e)
             return False
         return "active" == status
 
@@ -549,7 +550,7 @@ class ReplicasRedundancyCheck(Check):
         self.force = force
         self.deployment = deployment
 
-    def run(self) -> bool:
+    def run(self, check_status: Status | None = None) -> bool:
         """Check if the k8s resource has enough replicas."""
         try:
             kube_client = get_kube_client(self.deployment.get_client())
@@ -579,7 +580,7 @@ class ReplicasRedundancyCheck(Check):
                 ready_replicas = r.status.readyReplicas or 0
                 if ready_replicas <= 1:
                     LOG.debug(
-                        "name=%s kind=%s namespace=%s replicas=%d/%d",
+                        "K8S name=%s kind=%s namespace=%s replicas=%d/%d",
                         owner.name,
                         owner.kind,
                         namespace,
@@ -618,7 +619,7 @@ class NoJujuControllerPodCheck(Check):
         self.node = node
         self.deployment = deployment
 
-    def run(self) -> bool:
+    def run(self, check_status: Status | None = None) -> bool:
         """Check if the node has juju controller pods."""
         if is_maas_deployment(self.deployment):
             LOG.debug(
@@ -646,7 +647,7 @@ class NoJujuControllerPodCheck(Check):
             # Found juju controller pod in this node
             if pod.spec and pod.spec.nodeName == self.node:
                 LOG.debug(
-                    "Found juju controller pod '%s' in '%s'",
+                    "Found juju controller pod %r in %r",
                     pod.metadata.name,
                     self.node,
                 )
@@ -687,7 +688,7 @@ class ControlRoleNodeCordonedCheck(Check):
         self.force = force
         self.deployment = deployment
 
-    def run(self) -> bool:
+    def run(self, check_status: Status | None = None) -> bool:
         """Check if the node is cordoned."""
         try:
             kube_client = get_kube_client(self.deployment.get_client())
@@ -705,7 +706,7 @@ class ControlRoleNodeCordonedCheck(Check):
             return True
 
         if self.force:
-            LOG.debug("Ignore issue: node is not cordoned.")
+            LOG.debug("Ignore issue: node is not cordoned")
             return True
 
         self.message = "node is not cordoned."
@@ -725,7 +726,7 @@ class ControlRoleNodeUncordonedCheck(Check):
         self.force = force
         self.deployment = deployment
 
-    def run(self) -> bool:
+    def run(self, check_status: Status | None = None) -> bool:
         """Check if the node is uncordoned."""
         try:
             kube_client = get_kube_client(self.deployment.get_client())
@@ -743,7 +744,7 @@ class ControlRoleNodeUncordonedCheck(Check):
             return True
 
         if self.force:
-            LOG.debug("Ignore issue: node is not uncordoned.")
+            LOG.debug("Ignore issue: node is not uncordoned")
             return True
 
         self.message = "node is not uncordoned."

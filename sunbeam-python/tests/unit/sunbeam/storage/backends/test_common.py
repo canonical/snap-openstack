@@ -156,22 +156,22 @@ class TestAllBackends(BaseBackendTests):
 # Backend uniqueness tests
 
 
-def test_all_backends_have_unique_types(
-    hitachi_backend, purestorage_backend, dellsc_backend
-):
+def test_all_backends_have_unique_types():
     """Test that all backends have unique type identifiers."""
-    backends = [hitachi_backend, purestorage_backend, dellsc_backend]
+    from tests.unit.sunbeam.storage.backends.conftest import BACKENDS
+
+    backends = [cls() for cls in BACKENDS.values()]
     types = [b.backend_type for b in backends]
 
     # Check no duplicates
     assert len(types) == len(set(types)), f"Duplicate backend types found: {types}"
 
 
-def test_all_backends_have_unique_charm_names(
-    hitachi_backend, purestorage_backend, dellsc_backend
-):
+def test_all_backends_have_unique_charm_names():
     """Test that all backends have unique charm names."""
-    backends = [hitachi_backend, purestorage_backend, dellsc_backend]
+    from tests.unit.sunbeam.storage.backends.conftest import BACKENDS
+
+    backends = [cls() for cls in BACKENDS.values()]
     charm_names = [b.charm_name for b in backends]
 
     # Check no duplicates
@@ -180,29 +180,25 @@ def test_all_backends_have_unique_charm_names(
     )
 
 
-@pytest.mark.parametrize(
-    "backend_type,expected_type",
-    [
-        ("hitachi", "hitachi"),
-        ("purestorage", "purestorage"),
-        ("dellsc", "dellsc"),
-    ],
-)
-def test_backend_types_match_expected(any_backend, backend_type, expected_type):
-    """Test that backend types match expected values."""
-    if any_backend.backend_type == backend_type:
-        assert any_backend.backend_type == expected_type
+def test_backend_types_match_expected():
+    """Test that each backend's type matches its registry key."""
+    from tests.unit.sunbeam.storage.backends.conftest import BACKENDS
+
+    for key, cls in BACKENDS.items():
+        backend = cls()
+        assert backend.backend_type == key, (
+            f"Backend registered as '{key}' has type '{backend.backend_type}'"
+        )
 
 
-@pytest.mark.parametrize(
-    "backend_type,expected_charm",
-    [
-        ("hitachi", "cinder-volume-hitachi"),
-        ("purestorage", "cinder-volume-purestorage"),
-        ("dellsc", "cinder-volume-dellsc"),
-    ],
-)
-def test_backend_charm_names_match_expected(any_backend, backend_type, expected_charm):
-    """Test that backend charm names match expected values."""
-    if any_backend.backend_type == backend_type:
-        assert any_backend.charm_name == expected_charm
+def test_backend_charm_names_match_expected():
+    """Test that each backend's charm name follows convention."""
+    from tests.unit.sunbeam.storage.backends.conftest import BACKENDS
+
+    for key, cls in BACKENDS.items():
+        backend = cls()
+        expected_charm = f"cinder-volume-{key}"
+        assert backend.charm_name == expected_charm, (
+            f"Backend '{key}' has charm_name '{backend.charm_name}', "
+            f"expected '{expected_charm}'"
+        )

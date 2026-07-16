@@ -223,19 +223,14 @@ class FeatureGateMixin:
 # Example gates:
 # - feature.multi-region: Gates multi-region deployment options and
 #                         region_controller role
-# - feature.microovn-sdn: Gates MicroOVN SDN provider option
 # - feature.experimental: Gates experimental features
 #
 FEATURE_GATES: dict[str, dict[str, bool | list[str]]] = {
     "feature.multi-region": {
         "generally_available": False,  # TODO: Set to True when multi-region is GA
     },
-    "feature.microovn-sdn": {
-        "generally_available": False,  # TODO: Set to True when MicroOVN is GA
-    },
-    "feature.split-roles": {
-        "generally_available": False,  # TODO: Set to True when split-roles is GA
-        "requires": ["feature.microovn-sdn"],
+    "feature.loadbalancer-amphora": {
+        "generally_available": False,  # TODO: Set to True when Amphora support is GA
     },
 }
 
@@ -278,16 +273,6 @@ def is_feature_gate_enabled(
         return bool(snap.config.get(gate_key))
     except (UnknownConfigKey, SnapCtlError):
         return False
-
-
-def split_roles_enabled(snap: Optional[Snap] = None) -> bool:
-    """Check if the split-roles feature gate is enabled.
-
-    When enabled, compute and network roles become independent:
-    - Compute + network can co-locate on the same node
-    - Compute-only nodes do not act as OVN gateways
-    """
-    return is_feature_gate_enabled("feature.split-roles", snap)
 
 
 def _get_feature_gate_states(snap: Snap) -> dict[str, bool]:
@@ -755,8 +740,10 @@ def log_gated_feature(feature_name: str, gate_key: str) -> None:
         gate_key: The snap config key for the gate
     """
     LOG.debug(
-        f"Feature '{feature_name}' is gated via '{gate_key}'. "
-        f"Enable with: snap set openstack {gate_key}=true"
+        "Feature %r is gated via %r. Enable with: snap set openstack %s=true",
+        feature_name,
+        gate_key,
+        gate_key,
     )
 
 
@@ -790,5 +777,5 @@ def get_feature_gate_from_cluster(
         gate = client.cluster.get_feature_gate(gate_key)
         return gate.enabled
     except Exception as e:
-        LOG.debug(f"Feature gate '{gate_key}' not found in cluster DB: {e}")
+        LOG.debug("Feature gate %r not found in cluster DB: %r", gate_key, e)
         return None

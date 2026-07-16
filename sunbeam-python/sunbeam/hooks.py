@@ -20,7 +20,7 @@ DEFAULT_CONFIG = {
     "daemon.debug": False,
     "k8s.provider": "k8s",
     "deployment.risk": "stable",
-    "deployment.version": "2024.1",
+    "deployment.version": "2026.1",
 }
 
 OPTION_KEYS = {k.split(".")[0] for k in DEFAULT_CONFIG.keys()}
@@ -153,8 +153,10 @@ def sync_feature_gates_from_snap_to_cluster(
                 missing_deps = _check_feature_gate_dependencies(gate_key, flattened)
                 if missing_deps:
                     LOG.error(
-                        f"Cannot enable '{gate_key}': dependencies not enabled: "
-                        f"{', '.join(missing_deps)}. Enable them first."
+                        "Cannot enable %r: dependencies are not enabled: "
+                        "%s. Enable them first.",
+                        gate_key,
+                        ", ".join(missing_deps),
                     )
                     continue
 
@@ -166,23 +168,27 @@ def sync_feature_gates_from_snap_to_cluster(
                 if existing_gate.enabled != enabled_bool:
                     client.cluster.update_feature_gate(gate_key, enabled_bool)
                     LOG.info(
-                        f"Updated gate '{gate_key}' in cluster "
-                        f"(changed from {existing_gate.enabled} to {enabled_bool})"
+                        "Updated gate %r in cluster (changed from %s to %s)",
+                        gate_key,
+                        existing_gate.enabled,
+                        enabled_bool,
                     )
             except Exception:
                 # Create if doesn't exist
                 try:
                     client.cluster.add_feature_gate(gate_key, enabled_bool)
                     LOG.info(
-                        f"Created gate '{gate_key}' in cluster (enabled={enabled_bool})"
+                        "Created gate %r in cluster (enabled=%s)",
+                        gate_key,
+                        enabled_bool,
                     )
                 except Exception as e:
-                    LOG.warning(f"Failed to sync gate '{gate_key}': {e}")
+                    LOG.warning("Failed to sync gate %r: %r", gate_key, e)
 
     except ClusterServiceUnavailableException:
         LOG.debug("Cluster service unavailable, skipping feature gate sync")
     except Exception as e:
-        LOG.warning(f"Failed to sync feature gates to cluster: {e}")
+        LOG.warning("Failed to sync feature gates to cluster: %r", e)
 
 
 def _sync_feature_gates_to_cluster(snap: Snap) -> None:
@@ -216,8 +222,8 @@ def install(snap: Snap) -> None:
     :return:
     """
     setup_logging(snap.paths.common / "hooks.log")
-    LOG.debug("Running install hook...")
-    logging.info(f"Setting default config: {DEFAULT_CONFIG}")
+    LOG.debug("Running install hook")
+    LOG.info("Setting default config: %s", DEFAULT_CONFIG)
     snap.config.set(DEFAULT_CONFIG)
 
 
@@ -230,7 +236,7 @@ def upgrade(snap: Snap) -> None:
     :param snap: the snap reference
     """
     setup_logging(snap.paths.common / "hooks.log")
-    LOG.debug("Running the upgrade hook...")
+    LOG.debug("Running the upgrade hook")
 
 
 def configure(snap: Snap) -> None:
@@ -247,7 +253,7 @@ def configure(snap: Snap) -> None:
     :param snap: the snap reference
     """
     setup_logging(snap.paths.common / "hooks.log")
-    logging.info("Running configure hook")
+    LOG.info("Running configure hook")
 
     _update_default_config(snap)
 

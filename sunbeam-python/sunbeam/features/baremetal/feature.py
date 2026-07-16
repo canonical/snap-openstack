@@ -8,6 +8,7 @@ import click
 from packaging.version import Version
 from rich.console import Console
 
+from sunbeam.core.checks import JujuLoginCheck, run_preflight_checks
 from sunbeam.core.common import (
     BaseStep,
     run_plan,
@@ -124,6 +125,9 @@ class BaremetalFeature(OpenStackControlPlaneFeature):
         show_hints: bool,
     ):
         """Run the enablement plans."""
+        # Login to the Juju controller
+        run_preflight_checks([JujuLoginCheck(deployment.juju_account)], console)
+
         jhelper = JujuHelper(deployment.juju_controller)
         tfhelper = deployment.get_tfhelper(self.tfplan)
 
@@ -288,6 +292,9 @@ class BaremetalFeature(OpenStackControlPlaneFeature):
         self, deployment: Deployment, group_name: str, show_hints: bool
     ):
         """Add ironic-conductor group."""
+        # Login to the Juju controller
+        run_preflight_checks([JujuLoginCheck(deployment.juju_account)], console)
+
         step = steps.DeployIronicConductorGroupsStep(deployment, self, [group_name])
         jhelper = JujuHelper(deployment.juju_controller)
         temp_url_secret_step = steps.RunSetTempUrlSecretStep(

@@ -21,6 +21,7 @@ from sunbeam.clusterd.service import (
     ClusterServiceUnavailableException,
     ConfigItemNotFoundException,
 )
+from sunbeam.core.checks import JujuLoginCheck, run_preflight_checks
 from sunbeam.core.common import (
     FORMAT_DEFAULT,
     FORMAT_JSON,
@@ -178,9 +179,9 @@ class VaultHelper:
             "-tls-skip-verify",
             "-format=json",
         ]
-        LOG.debug(f"Running vault command: {' '.join(cmd)}")
+        LOG.debug("Running vault command: %s", " ".join(cmd))
         result = self._run_command_on_container(unit, cmd)
-        LOG.debug(f"Vault command result: {result}")
+        LOG.debug("Vault command result: %s", result)
         return json.loads(result.get("stdout"))
 
     def initialize_vault(self, unit: str, key_shares: int, key_threshold: int) -> dict:
@@ -201,10 +202,10 @@ class VaultHelper:
             "-tls-skip-verify",
             "-format=json",
         ]
-        LOG.debug(f"Running vault command: {' '.join(cmd)}")
+        LOG.debug("Running vault command: %s", " ".join(cmd))
         result = self._run_command_on_container(unit, cmd)
         # Do not log result since the result has secret keys
-        LOG.debug(f"Vault command result code: {result['return-code']}")
+        LOG.debug("Vault command result code: %s", result["return-code"])
         if result["return-code"] != 0:
             raise VaultCommandFailedException(result.get("stderr"))
 
@@ -227,9 +228,9 @@ class VaultHelper:
             "-format=json",
             key,
         ]
-        LOG.debug(f"Running vault command: {' '.join(cmd[:-1])}")
+        LOG.debug("Running vault command: %s", " ".join(cmd[:-1]))
         result = self._run_command_on_container(unit, cmd)
-        LOG.debug(f"Vault command result: {result}")
+        LOG.debug("Vault command result: %s", result)
         if result["return-code"] != 0:
             raise VaultCommandFailedException(result.get("stderr"))
 
@@ -253,10 +254,10 @@ class VaultHelper:
             "-format=json",
         ]
         env = {"VAULT_TOKEN": root_token}
-        LOG.debug(f"Running vault command: {' '.join(cmd)}")
+        LOG.debug("Running vault command: %s", " ".join(cmd))
         result = self._run_command_on_container(unit, cmd, env)
         # Do not log result since the result has root token
-        LOG.debug(f"Vault command result code: {result.get('return-code')}")
+        LOG.debug("Vault command result code: %s", result.get("return-code"))
         if result["return-code"] != 0:
             raise VaultCommandFailedException(result.get("stderr"))
 
@@ -285,10 +286,10 @@ class VaultInitStep(BaseStep):
             )
             res = self.vhelper.get_vault_status(self.leader_unit)
             if res.get("initialized") is True:
-                LOG.info("Vault already initialized")
+                LOG.info("Vault is already initialized")
                 return Result(ResultType.SKIPPED, "Vault already initialized.")
         except LeaderNotFoundException as e:
-            LOG.debug(f"Failed to get {VAULT_APPLICATION_NAME} leader", exc_info=True)
+            LOG.debug("Failed to get %s leader", VAULT_APPLICATION_NAME, exc_info=True)
             return Result(ResultType.FAILED, str(e))
         except TimeoutError as e:
             LOG.debug("Timeout running vault status", exc_info=True)
@@ -310,7 +311,7 @@ class VaultInitStep(BaseStep):
             )
             keys: str = json.dumps(res)
         except LeaderNotFoundException as e:
-            LOG.debug(f"Failed to get {VAULT_APPLICATION_NAME} leader", exc_info=True)
+            LOG.debug("Failed to get %s leader", VAULT_APPLICATION_NAME, exc_info=True)
             return Result(ResultType.FAILED, str(e))
         except TimeoutError as e:
             LOG.debug("Timeout running vault init", exc_info=True)
@@ -426,11 +427,11 @@ class VaultUnsealStep(BaseStep):
             # Leader is unsealed, apply unseal on non-leader units.
             LOG.debug("Running vault unseal command on non-leader units")
             for unit in non_leader_units:
-                LOG.debug(f"Running vault unseal command on unit {unit}")
+                LOG.debug("Running vault unseal command on unit %s", unit)
                 res = self.vhelper.unseal_vault(unit, self.unseal_key)
                 unseal_status[unit] = self._get_remaining_keys_count(res)
 
-            LOG.debug(f"Unseal status non leader units: {unseal_status}")
+            LOG.debug("Unseal status non leader units: %s", unseal_status)
             # Some units are sealed if remaining is greater than 0
             if any(v > 0 for k, v in unseal_status.items()):
                 message = "Vault unseal operation status: "
@@ -441,7 +442,7 @@ class VaultUnsealStep(BaseStep):
 
             return Result(ResultType.COMPLETED, message)
         except ApplicationNotFoundException as e:
-            LOG.debug(f"Failed to get info on {VAULT_APPLICATION_NAME}", exc_info=True)
+            LOG.debug("Failed to get info on %s", VAULT_APPLICATION_NAME, exc_info=True)
             return Result(ResultType.FAILED, str(e))
         except TimeoutError as e:
             LOG.debug("Timeout running vault unseal", exc_info=True)
@@ -492,7 +493,8 @@ class AuthorizeVaultCharmStep(BaseStep, JujuStepHelper):
             self.jhelper.grant_secret(
                 OPENSTACK_MODEL, self.tmp_secret_name, VAULT_APPLICATION_NAME
             )
-            LOG.debug(f"Created secret: {secret}")
+            # TODO(himax16): should this be logged?
+            LOG.debug("Created secret: %s", secret)
 
             # Run authorize-charm action on vault leader unit
             action_cmd = "authorize-charm"
@@ -504,10 +506,10 @@ class AuthorizeVaultCharmStep(BaseStep, JujuStepHelper):
             # Remove the juju secret
             self.jhelper.remove_secret(OPENSTACK_MODEL, self.tmp_secret_name)
 
-            LOG.debug(f"Result from action {action_cmd}: {action_result}")
+            LOG.debug("Result from action %s: %s", action_cmd, action_result)
 
         except LeaderNotFoundException as e:
-            LOG.debug(f"Failed to get {VAULT_APPLICATION_NAME} leader", exc_info=True)
+            LOG.debug("Failed to get %s leader", VAULT_APPLICATION_NAME, exc_info=True)
             return Result(ResultType.FAILED, str(e))
         except TimeoutError as e:
             LOG.debug("Timeout running vault token create", exc_info=True)
@@ -516,7 +518,9 @@ class AuthorizeVaultCharmStep(BaseStep, JujuStepHelper):
             LOG.debug("Failed to run vault token create", exc_info=True)
             return Result(ResultType.FAILED, str(e))
         except ActionFailedException as e:
-            LOG.debug(f"Running action {action_cmd} on {leader_unit} failed")
+            LOG.debug(
+                "Running action %s on %s failed", action_cmd, leader_unit, exc_info=True
+            )
             return Result(ResultType.FAILED, str(e))
         except JujuException as e:
             LOG.debug("Failed to run vault token create", exc_info=True)
@@ -592,7 +596,7 @@ class VaultStatusStep(BaseStep):
 
             return Result(ResultType.COMPLETED, json.dumps(consolidated_status))
         except ApplicationNotFoundException as e:
-            LOG.debug(f"Failed to get info on {VAULT_APPLICATION_NAME}", exc_info=True)
+            LOG.debug("Failed to get info on %s", VAULT_APPLICATION_NAME, exc_info=True)
             return Result(ResultType.FAILED, str(e))
         except TimeoutError as e:
             LOG.debug("Timeout running vault unseal", exc_info=True)
@@ -774,7 +778,11 @@ class VaultFeature(OpenStackControlPlaneFeature):
         format: str,
     ):
         """Initialize Vault."""
+        # Login to the Juju controller
+        run_preflight_checks([JujuLoginCheck(deployment.juju_account)], console)
+
         jhelper = JujuHelper(deployment.juju_controller)
+
         plan = [VaultInitStep(jhelper, key_shares, key_threshold)]
         plan_results = run_plan(plan, console)
 
@@ -813,7 +821,11 @@ class VaultFeature(OpenStackControlPlaneFeature):
         if unseal_key == "-":
             unseal_key = get_stdin_reopen_tty()
 
+        # Login to the Juju controller
+        run_preflight_checks([JujuLoginCheck(deployment.juju_account)], console)
+
         jhelper = JujuHelper(deployment.juju_controller)
+
         plan = [VaultUnsealStep(jhelper, unseal_key)]
         plan_results = run_plan(plan, console)
         click.echo(get_step_message(plan_results, VaultUnsealStep))
@@ -829,7 +841,11 @@ class VaultFeature(OpenStackControlPlaneFeature):
         if root_token == "-":
             root_token = get_stdin_reopen_tty()
 
+        # Login to the Juju controller
+        run_preflight_checks([JujuLoginCheck(deployment.juju_account)], console)
+
         jhelper = JujuHelper(deployment.juju_controller)
+
         plan = [AuthorizeVaultCharmStep(jhelper, root_token)]
         run_plan(plan, console)
         click.echo("Vault charm is authorized.")
@@ -845,7 +861,11 @@ class VaultFeature(OpenStackControlPlaneFeature):
     @pass_method_obj
     def vault_status(self, deployment: Deployment, format: str):
         """Vault status."""
+        # Login to the Juju controller
+        run_preflight_checks([JujuLoginCheck(deployment.juju_account)], console)
+
         jhelper = JujuHelper(deployment.juju_controller)
+
         plan = [VaultStatusStep(jhelper)]
         plan_results = run_plan(plan, console)
 

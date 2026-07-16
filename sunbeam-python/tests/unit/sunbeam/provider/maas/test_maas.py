@@ -13,11 +13,14 @@ from lightkube import ApiError
 from maas.client.bones import CallError
 
 import sunbeam.provider.maas.steps as maas_steps
+from sunbeam.core import ovn
 from sunbeam.core.checks import DiagnosticResultType
 from sunbeam.core.deployment import Networks
 from sunbeam.core.deployments import DeploymentsConfig
 from sunbeam.core.juju import ControllerNotFoundException
 from sunbeam.provider.maas.commands import (
+    configure_cmd,
+    remove_node,
     validate_deployment_cmd,
     validate_machine_cmd,
 )
@@ -40,6 +43,7 @@ from sunbeam.provider.maas.steps import (
     MaasDeployInfraMachinesStep,
     MaasDeployK8SApplicationStep,
     MaasDeployMachinesStep,
+    MaasRemoveMachineFromClusterdStep,
     MaasScaleJujuStep,
     MachineComputeNicCheck,
     MachineNetworkCheck,
@@ -53,6 +57,87 @@ from sunbeam.provider.maas.steps import (
     ZoneBalanceCheck,
     ZonesCheck,
 )
+from sunbeam.steps.juju import RemoveJujuMachineStep
+from sunbeam.steps.role_distributor import (
+    ReapplyRoleDistributorApplicationStep,
+    RemoveRoleDistributorUnitsStep,
+)
+
+
+class TestMaasConfigureCommand:
+    @pytest.mark.parametrize(
+        "provider,expected_names",
+        [
+            (ovn.OvnProvider.OVN_K8S, ["net-1"]),
+            (
+                ovn.OvnProvider.MICROOVN,
+                ["net-1", "compute-1", "control-1"],
+            ),
+        ],
+    )
+    def test_network_agents_match_ovn_provider(
+        self,
+        mocker,
+        tmp_path,
+        provider,
+        expected_names,
+    ):
+        client = Mock()
+        nodes_by_role = {
+            RoleTags.NETWORK.value: [{"name": "net-1"}],
+            RoleTags.COMPUTE.value: [{"name": "compute-1"}],
+            RoleTags.CONTROL.value: [{"name": "control-1"}],
+        }
+        client.cluster.list_nodes_by_role.side_effect = nodes_by_role.__getitem__
+
+        tfhelper = Mock()
+        tfhelper.env = {}
+        tfhelper.path = tmp_path
+
+        ovn_manager = Mock()
+        ovn_manager.get_provider.return_value = provider
+
+        deployment = Mock()
+        deployment.get_client.return_value = client
+        deployment.get_manifest.return_value = Mock(core={}, features={})
+        deployment.get_tfhelper.return_value = tfhelper
+        deployment.get_ovn_manager.return_value = ovn_manager
+        deployment.juju_controller = "controller"
+        deployment.juju_account = "account"
+        deployment.openstack_machines_model = "openstack-machines"
+
+        jhelper = Mock()
+        jhelper.model_exists.return_value = True
+
+        mocker.patch("sunbeam.provider.maas.commands.run_preflight_checks")
+        mocker.patch(
+            "sunbeam.provider.maas.commands.MaasClient.from_deployment",
+            return_value=Mock(),
+        )
+        mocker.patch("sunbeam.provider.maas.commands.JujuHelper", return_value=jhelper)
+        mocker.patch(
+            "sunbeam.provider.maas.commands.retrieve_admin_credentials",
+            return_value={
+                "OS_AUTH_URL": "https://keystone.example.com",
+                "OS_AUTH_VERSION": "3",
+            },
+        )
+        run_plan = mocker.patch("sunbeam.provider.maas.commands.run_plan")
+        mocker.patch(
+            "sunbeam.provider.maas.commands.retrieve_dashboard_url",
+            return_value="https://horizon.example.com",
+        )
+
+        result = CliRunner().invoke(configure_cmd, obj=deployment)
+
+        assert result.exit_code == 0, result.output
+        plan = run_plan.call_args.args[0]
+        network_agents_step = next(
+            step
+            for step in plan
+            if isinstance(step, maas_steps.MaasSetOpenStackNetworkAgentsStep)
+        )
+        assert network_agents_step.names == expected_names
 
 
 class TestAddMaasDeployment:
@@ -423,11 +508,9 @@ class TestMachineComputeNicCheck:
         }
         check = MachineComputeNicCheck(machine)
         result = check.run()
-        assert result.passed is DiagnosticResultType.FAILURE
+        assert result.passed is DiagnosticResultType.SUCCESS
         assert result.details["machine"] == "test_machine"
-        assert result.message and "no neutron NIC found" in result.message
-        assert result.diagnostics
-        assert "https://maas.io/docs/how-to-use-network-tags" in result.diagnostics
+        assert result.message and "not required" in result.message
 
     def test_run_with_neutron_nic(self):
         machine = {
@@ -437,12 +520,12 @@ class TestMachineComputeNicCheck:
         }
         check = MachineComputeNicCheck(machine)
         result = check.run()
-        assert result.passed is DiagnosticResultType.SUCCESS
+        assert result.passed is DiagnosticResultType.WARNING
         assert result.details["machine"] == "test_machine"
-        assert result.message and "neutron NIC found" in result.message
+        assert result.message and "will be ignored" in result.message
 
     def test_run_with_different_physnet_tag(self):
-        """Any neutron:<physnet> tag should be accepted."""
+        """Any compute-only neutron:<physnet> tag should warn."""
         machine = {
             "hostname": "test_machine",
             "roles": [RoleTags.COMPUTE.value],
@@ -450,7 +533,7 @@ class TestMachineComputeNicCheck:
         }
         check = MachineComputeNicCheck(machine)
         result = check.run()
-        assert result.passed is DiagnosticResultType.SUCCESS
+        assert result.passed is DiagnosticResultType.WARNING
 
 
 class TestMachineRootDiskCheck:
@@ -1080,24 +1163,96 @@ class TestMaasAddMachinesToClusterdStep:
                 "hostname": "machine1",
                 "roles": [RoleTags.CONTROL.value],
                 "system_id": "1st",
+                "architecture": "amd64",
+                "is_dpu": False,
+                "image_name": "",
             },
             {
                 "hostname": "machine2",
                 "roles": [RoleTags.COMPUTE.value],
                 "system_id": "2nd",
+                "architecture": "arm64",
+                "is_dpu": True,
+                "image_name": "bf-3.2.1-v2-ovs-hack",
             },
         ]
         maas_add_machines_to_clusterd_step.nodes = [
-            ("machine1", [RoleTags.CONTROL.value]),
-            ("machine2", [RoleTags.COMPUTE.value]),
+            {
+                "hostname": "machine1",
+                "roles": [RoleTags.CONTROL.value],
+                "system_id": "1st",
+                "architecture": "amd64",
+                "is_dpu": False,
+                "image_name": "",
+            },
+            {
+                "hostname": "machine2",
+                "roles": [RoleTags.COMPUTE.value],
+                "system_id": "2nd",
+                "architecture": "arm64",
+                "is_dpu": True,
+                "image_name": "bf-3.2.1-v2-ovs-hack",
+            },
         ]
+        maas_add_machines_to_clusterd_step.maas_client.ensure_boot_resource_name_exists.return_value = None
         result = maas_add_machines_to_clusterd_step.run(step_context)
         assert result.result_type == ResultType.COMPLETED
+        maas_add_machines_to_clusterd_step.client.cluster.add_node_info.assert_any_call(
+            "machine2",
+            [RoleTags.COMPUTE.value],
+            systemid="2nd",
+            arch="arm64",
+            is_dpu=True,
+            image_name="bf-3.2.1-v2-ovs-hack",
+        )
+        maas_add_machines_to_clusterd_step.client.cluster.update_node_info.assert_any_call(
+            "machine2",
+            [RoleTags.COMPUTE.value],
+            systemid="2nd",
+            arch="arm64",
+            is_dpu=True,
+            image_name="bf-3.2.1-v2-ovs-hack",
+        )
+
+    def test_run_fails_when_dpu_image_tag_does_not_exist_in_maas(
+        self, maas_add_machines_to_clusterd_step, step_context
+    ):
+        maas_add_machines_to_clusterd_step.machines = [
+            {
+                "hostname": "pc8a-rb3-n4-dpu",
+                "roles": [RoleTags.NETWORK.value],
+                "system_id": "dpu-sys",
+                "architecture": "arm64",
+                "is_dpu": True,
+                "image_name": "missing-image",
+            }
+        ]
+        maas_add_machines_to_clusterd_step.nodes = []
+        maas_add_machines_to_clusterd_step.maas_client.ensure_boot_resource_name_exists.side_effect = ValueError(
+            "Image with name missing-image is missing from maas boot-resources"
+        )
+
+        result = maas_add_machines_to_clusterd_step.run(step_context)
+
+        assert result.result_type == ResultType.FAILED
+        assert result.message == (
+            "Image with name missing-image is missing from maas boot-resources"
+        )
 
 
 class TestMaasDeployMachinesStep:
     @pytest.fixture
     def maas_deploy_machines_step(self):
+        deployment = Mock()
+        deployment.resource_tag = "test-tag"
+        client = Mock()
+        jhelper = Mock()
+        model = "test_model"
+        return MaasDeployMachinesStep(deployment, client, jhelper, model)
+
+    @pytest.fixture
+    def step_with_dpu_image_tag(self):
+        """Step configured for a clusterd node with a dpu-image tag."""
         deployment = Mock()
         deployment.resource_tag = "test-tag"
         client = Mock()
@@ -1177,6 +1332,97 @@ class TestMaasDeployMachinesStep:
         assert (
             maas_deploy_machines_step.jhelper.wait_all_machines_deployed.call_count == 1
         )
+
+    def test_get_node_constraints_returns_default_without_dpu_image_tag(
+        self, maas_deploy_machines_step
+    ):
+        """No image_name in clusterd → only default tag constraint."""
+        node = {"name": "n1", "systemid": "s1", "arch": "arm64"}
+        constraints = maas_deploy_machines_step._get_node_constraints(node)
+        assert constraints == ["tags=test-tag", "arch=arm64"]
+
+    def test_get_node_constraints_adds_image_id_from_clusterd(
+        self, step_with_dpu_image_tag
+    ):
+        """arm64 node with image_name in clusterd → adds image-id constraint."""
+        step = step_with_dpu_image_tag
+        constraints = step._get_node_constraints(
+            {
+                "name": "n4-dpu",
+                "systemid": "arm-sys",
+                "arch": "arm64",
+                "image_name": "bf-3.2.1-v2-ovs-hack",
+            }
+        )
+        assert "tags=test-tag" in constraints
+        assert "image-id=bf-3.2.1-v2-ovs-hack" in constraints
+        assert "arch=arm64" in constraints
+
+    def test_get_node_constraints_no_image_id_for_amd64_node(
+        self, step_with_dpu_image_tag
+    ):
+        """amd64 node without image_name → no image-id constraint."""
+        step = step_with_dpu_image_tag
+        constraints = step._get_node_constraints(
+            {"name": "n1", "systemid": "x86-sys", "arch": "amd64"}
+        )
+        assert constraints == ["tags=test-tag"]
+        assert "image-id=bf-3.2.1-v2-ovs-hack" not in constraints
+
+    def test_run_uses_image_id_constraint_for_arm64_and_default_for_amd64(
+        self, step_with_dpu_image_tag, step_context
+    ):
+        """Mixed cluster: arm64 DPU gets image-id constraint, amd64 does not."""
+        step = step_with_dpu_image_tag
+        step.nodes_to_deploy = [
+            {"name": "n1-x86", "systemid": "x86-sys", "arch": "amd64"},
+            {
+                "name": "n4-dpu",
+                "systemid": "arm-sys",
+                "arch": "arm64",
+                "is_dpu": True,
+                "image_name": "bf-3.2.1-v2-ovs-hack",
+            },
+        ]
+        step.nodes_to_update = []
+        step.jhelper.add_machine.side_effect = ["0", "1"]
+        step.jhelper.get_machines.return_value = {}
+
+        result = step.run(step_context)
+
+        assert result.result_type == ResultType.COMPLETED
+        calls = step.jhelper.add_machine.call_args_list
+        # First batch (non-DPU) deploys x86 before DPU
+        assert calls[0].kwargs["constraints"] == ["tags=test-tag"]
+        arm_constraints = calls[1].kwargs["constraints"]
+        assert "tags=test-tag" in arm_constraints
+        assert "image-id=bf-3.2.1-v2-ovs-hack" in arm_constraints
+        assert "arch=arm64" in arm_constraints
+        assert step.jhelper.wait_all_machines_deployed.call_count == 2
+
+    def test_run_deploys_non_dpu_before_dpu(
+        self, maas_deploy_machines_step, step_context
+    ):
+        step = maas_deploy_machines_step
+        step.nodes_to_deploy = [
+            {
+                "name": "pc8a-rb3-n4-dpu",
+                "systemid": "dpu-sys",
+                "is_dpu": True,
+            },
+            {"name": "pc8a-rb3-n4", "systemid": "host-sys", "is_dpu": False},
+        ]
+        step.nodes_to_update = []
+        step.jhelper.add_machine.side_effect = ["9", "10"]
+        step.jhelper.get_machines.return_value = {}
+
+        result = step.run(step_context)
+
+        assert result.result_type == ResultType.COMPLETED
+        calls = step.jhelper.add_machine.call_args_list
+        assert calls[0].args[0] == "system-id=host-sys"
+        assert calls[1].args[0] == "system-id=dpu-sys"
+        assert step.jhelper.wait_all_machines_deployed.call_count == 2
 
 
 class TestMaasDeployInfraMachinesStep:
@@ -1555,8 +1801,12 @@ class TestMaasDeployK8SApplicationStep:
         step.ranges = "10.0.0.0/28"
         step.client.cluster.get_config.return_value = "{}"
         expected_tfvars = {
-            "endpoint_bindings": [{"space": "data"}],
+            "endpoint_bindings": [
+                {"space": "data"},
+                {"endpoint": "cluster", "space": "internal_space"},
+            ],
             "k8s_config": {
+                "kube-apiserver-extra-args": "default-not-ready-toleration-seconds=60 default-unreachable-toleration-seconds=60",
                 "load-balancer-cidrs": "10.0.0.0/28",
                 "load-balancer-enabled": True,
                 "load-balancer-l2-mode": True,
@@ -1998,18 +2248,25 @@ class TestMachineComputeNicCheckNetworkNode:
         assert result.details["machine"] == "test_machine"
         assert result.message and "no neutron NIC found" in result.message
 
-    def test_run_with_compute_and_network_both_need_nic(self):
-        """Both compute and network nodes require a neutron NIC."""
-        for role in [RoleTags.COMPUTE.value, RoleTags.NETWORK.value]:
-            machine = {
-                "hostname": f"test_machine_{role}",
-                "roles": [role],
-                "nics": [{"name": "eth1", "tags": ["neutron:physnet1"]}],
-            }
-            check = MachineComputeNicCheck(machine)
-            result = check.run()
-            assert result.passed is DiagnosticResultType.SUCCESS
-            assert result.message and "neutron NIC found" in result.message
+    def test_run_with_compute_role_warns_and_network_role_passes_with_nic(self):
+        """Only network nodes require and consume a neutron NIC."""
+        compute_machine = {
+            "hostname": "test_machine_compute",
+            "roles": [RoleTags.COMPUTE.value],
+            "nics": [{"name": "eth1", "tags": ["neutron:physnet1"]}],
+        }
+        compute_result = MachineComputeNicCheck(compute_machine).run()
+        assert compute_result.passed is DiagnosticResultType.WARNING
+        assert compute_result.message and "will be ignored" in compute_result.message
+
+        network_machine = {
+            "hostname": "test_machine_network",
+            "roles": [RoleTags.NETWORK.value],
+            "nics": [{"name": "eth1", "tags": ["neutron:physnet1"]}],
+        }
+        network_result = MachineComputeNicCheck(network_machine).run()
+        assert network_result.passed is DiagnosticResultType.SUCCESS
+        assert network_result.message and "neutron NIC found" in network_result.message
 
     def test_run_with_network_node_different_physnet(self):
         """Network node with any neutron:<physnet> tag should pass."""
@@ -2023,12 +2280,11 @@ class TestMachineComputeNicCheckNetworkNode:
         assert result.passed is DiagnosticResultType.SUCCESS
 
 
-class TestMachineComputeNicCheckSplitRoles:
-    """Test MachineComputeNicCheck behavior when feature.split-roles is enabled."""
+class TestMachineComputeNicCheckDefaultRoles:
+    """Test MachineComputeNicCheck behavior with default role separation."""
 
-    @patch("sunbeam.provider.maas.steps.split_roles_enabled", return_value=True)
-    def test_split_roles_on_compute_only_no_nic_success(self, mock_split):
-        """Split-roles ON + compute-only node without NIC → SUCCESS."""
+    def test_compute_only_no_nic_success(self):
+        """Compute-only node without NIC succeeds."""
         machine = {
             "hostname": "test_machine",
             "roles": [RoleTags.COMPUTE.value],
@@ -2039,9 +2295,8 @@ class TestMachineComputeNicCheckSplitRoles:
         assert result.passed is DiagnosticResultType.SUCCESS
         assert result.message and "not required" in result.message
 
-    @patch("sunbeam.provider.maas.steps.split_roles_enabled", return_value=True)
-    def test_split_roles_on_compute_only_with_nic_warns(self, mock_split):
-        """Split-roles ON + compute-only with neutron NIC → WARNING."""
+    def test_compute_only_with_nic_warns(self):
+        """Compute-only node with neutron NIC warns."""
         machine = {
             "hostname": "test_machine",
             "roles": [RoleTags.COMPUTE.value],
@@ -2052,9 +2307,8 @@ class TestMachineComputeNicCheckSplitRoles:
         assert result.passed is DiagnosticResultType.WARNING
         assert result.message and "will be ignored" in result.message
 
-    @patch("sunbeam.provider.maas.steps.split_roles_enabled", return_value=True)
-    def test_split_roles_on_network_node_no_nic_failure(self, mock_split):
-        """Split-roles ON + network node without NIC → FAILURE."""
+    def test_network_node_no_nic_failure(self):
+        """Network node without NIC fails."""
         machine = {
             "hostname": "test_machine",
             "roles": [RoleTags.NETWORK.value],
@@ -2064,9 +2318,8 @@ class TestMachineComputeNicCheckSplitRoles:
         result = check.run()
         assert result.passed is DiagnosticResultType.FAILURE
 
-    @patch("sunbeam.provider.maas.steps.split_roles_enabled", return_value=True)
-    def test_split_roles_on_network_node_with_nic_success(self, mock_split):
-        """Split-roles ON + network node with NIC → SUCCESS."""
+    def test_network_node_with_nic_success(self):
+        """Network node with NIC succeeds."""
         machine = {
             "hostname": "test_machine",
             "roles": [RoleTags.NETWORK.value],
@@ -2076,9 +2329,8 @@ class TestMachineComputeNicCheckSplitRoles:
         result = check.run()
         assert result.passed is DiagnosticResultType.SUCCESS
 
-    @patch("sunbeam.provider.maas.steps.split_roles_enabled", return_value=True)
-    def test_split_roles_on_compute_network_with_nic_success(self, mock_split):
-        """Split-roles ON + compute+network node with NIC → SUCCESS."""
+    def test_compute_network_with_nic_success(self):
+        """Compute+network node with NIC succeeds."""
         machine = {
             "hostname": "test_machine",
             "roles": [RoleTags.COMPUTE.value, RoleTags.NETWORK.value],
@@ -2088,9 +2340,8 @@ class TestMachineComputeNicCheckSplitRoles:
         result = check.run()
         assert result.passed is DiagnosticResultType.SUCCESS
 
-    @patch("sunbeam.provider.maas.steps.split_roles_enabled", return_value=True)
-    def test_split_roles_on_compute_network_no_nic_failure(self, mock_split):
-        """Split-roles ON + compute+network node without NIC → FAILURE."""
+    def test_compute_network_no_nic_failure(self):
+        """Compute+network node without NIC fails."""
         machine = {
             "hostname": "test_machine",
             "roles": [RoleTags.COMPUTE.value, RoleTags.NETWORK.value],
@@ -2100,9 +2351,8 @@ class TestMachineComputeNicCheckSplitRoles:
         result = check.run()
         assert result.passed is DiagnosticResultType.FAILURE
 
-    @patch("sunbeam.provider.maas.steps.split_roles_enabled", return_value=True)
-    def test_split_roles_on_control_only_success(self, mock_split):
-        """Split-roles ON + control-only node → SUCCESS."""
+    def test_control_only_success(self):
+        """Control-only node succeeds."""
         machine = {
             "hostname": "test_machine",
             "roles": [RoleTags.CONTROL.value],
@@ -2112,9 +2362,8 @@ class TestMachineComputeNicCheckSplitRoles:
         result = check.run()
         assert result.passed is DiagnosticResultType.SUCCESS
 
-    @patch("sunbeam.provider.maas.steps.split_roles_enabled", return_value=True)
-    def test_split_roles_on_control_with_nic_warns(self, mock_split):
-        """Split-roles ON + control-only with neutron NIC → WARNING."""
+    def test_control_with_nic_warns(self):
+        """Control-only node with neutron NIC warns."""
         machine = {
             "hostname": "test_machine",
             "roles": [RoleTags.CONTROL.value],
@@ -2125,36 +2374,11 @@ class TestMachineComputeNicCheckSplitRoles:
         assert result.passed is DiagnosticResultType.WARNING
         assert result.message and "will be ignored" in result.message
 
-    @patch("sunbeam.provider.maas.steps.split_roles_enabled", return_value=True)
-    def test_split_roles_on_no_roles_failure(self, mock_split):
-        """Split-roles ON + no roles → FAILURE."""
+    def test_no_roles_failure(self):
+        """Machine with no roles fails."""
         machine = {
             "hostname": "test_machine",
             "roles": [],
-            "nics": [{"name": "eth0", "tags": []}],
-        }
-        check = MachineComputeNicCheck(machine)
-        result = check.run()
-        assert result.passed is DiagnosticResultType.FAILURE
-
-    @patch("sunbeam.provider.maas.steps.split_roles_enabled", return_value=False)
-    def test_split_roles_off_compute_only_no_nic_failure(self, mock_split):
-        """Split-roles OFF + compute-only without NIC → FAILURE."""
-        machine = {
-            "hostname": "test_machine",
-            "roles": [RoleTags.COMPUTE.value],
-            "nics": [{"name": "eth0", "tags": []}],
-        }
-        check = MachineComputeNicCheck(machine)
-        result = check.run()
-        assert result.passed is DiagnosticResultType.FAILURE
-
-    @patch("sunbeam.provider.maas.steps.split_roles_enabled", return_value=False)
-    def test_split_roles_off_network_only_no_nic_failure(self, mock_split):
-        """Split-roles OFF + network-only without NIC → FAILURE."""
-        machine = {
-            "hostname": "test_machine",
-            "roles": [RoleTags.NETWORK.value],
             "nics": [{"name": "eth0", "tags": []}],
         }
         check = MachineComputeNicCheck(machine)
@@ -2202,8 +2426,7 @@ class TestMachineComputeNicCheckMultiPhysnet:
         result = check.run()
         assert result.passed is DiagnosticResultType.FAILURE
 
-    @patch("sunbeam.provider.maas.steps.split_roles_enabled", return_value=True)
-    def test_split_roles_compute_with_physnet2_warns(self, mock_split):
+    def test_compute_with_physnet2_warns(self):
         """Compute-only with neutron:physnet2 warns (NIC ignored)."""
         machine = {
             "hostname": "test_machine",
@@ -2254,6 +2477,79 @@ class TestMaasDeploymentProperties:
             assert deployment.storage_ip_pool == expected_label
 
 
+class TestRemoveNodeRoleDistributor:
+    @patch("sunbeam.provider.maas.commands.JujuHelper")
+    @patch("sunbeam.provider.maas.commands.run_preflight_checks")
+    @patch("sunbeam.provider.maas.commands.run_plan")
+    def test_remove_cleans_role_distributor_before_machine_removal_and_reapplies(
+        self,
+        run_plan_cmd,
+        run_preflight,
+        juju_helper,
+    ):
+        deployment = Mock()
+        deployment.openstack_machines_model = "openstack-machines"
+        deployment.get_manifest.return_value = Mock()
+        deployment.get_tfhelper.return_value = Mock()
+        deployment.get_ovn_manager.return_value.get_machines.return_value = ["1"]
+
+        runner = CliRunner()
+        result = runner.invoke(remove_node, ["node-1"], obj=deployment)
+
+        assert result.exit_code == 0, result.output
+
+        plan = run_plan_cmd.call_args_list[1][0][0]
+        role_remove_idx = next(
+            i
+            for i, step in enumerate(plan)
+            if isinstance(step, RemoveRoleDistributorUnitsStep)
+        )
+        juju_remove_idx = next(
+            i for i, step in enumerate(plan) if isinstance(step, RemoveJujuMachineStep)
+        )
+        clusterd_remove_idx = next(
+            i
+            for i, step in enumerate(plan)
+            if isinstance(step, MaasRemoveMachineFromClusterdStep)
+        )
+        role_reapply_idx = next(
+            i
+            for i, step in enumerate(plan)
+            if isinstance(step, ReapplyRoleDistributorApplicationStep)
+        )
+
+        assert role_remove_idx < juju_remove_idx
+        assert clusterd_remove_idx < role_reapply_idx
+
+    @patch("sunbeam.provider.maas.commands.JujuHelper")
+    @patch("sunbeam.provider.maas.commands.run_preflight_checks")
+    @patch("sunbeam.provider.maas.commands.run_plan")
+    def test_remove_skips_role_distributor_when_microovn_has_no_machines(
+        self,
+        run_plan_cmd,
+        run_preflight,
+        juju_helper,
+    ):
+        deployment = Mock()
+        deployment.openstack_machines_model = "openstack-machines"
+        deployment.get_manifest.return_value = Mock()
+        deployment.get_tfhelper.return_value = Mock()
+        deployment.get_ovn_manager.return_value.get_machines.return_value = []
+
+        runner = CliRunner()
+        result = runner.invoke(remove_node, ["node-1"], obj=deployment)
+
+        assert result.exit_code == 0, result.output
+
+        plan = run_plan_cmd.call_args_list[1][0][0]
+        assert not any(
+            isinstance(step, RemoveRoleDistributorUnitsStep) for step in plan
+        )
+        assert not any(
+            isinstance(step, ReapplyRoleDistributorApplicationStep) for step in plan
+        )
+
+
 class TestIsMaasDeployment:
     """Test is_maas_deployment TypeGuard function."""
 
@@ -2276,3 +2572,35 @@ class TestIsMaasDeployment:
         # Create a mock non-MAAS deployment
         deployment = mocker.Mock(spec=Deployment)
         assert is_maas_deployment(deployment) is False
+
+
+class TestParseImageNameFromTags:
+    def test_extracts_image_name_from_tag(self):
+        from sunbeam.provider.maas.client import parse_image_name_from_tags
+
+        assert (
+            parse_image_name_from_tags(["network", "dpu-image-bf-3.2.1-v2-ovs-hack"])
+            == "bf-3.2.1-v2-ovs-hack"
+        )
+
+    def test_returns_none_when_tag_missing(self):
+        from sunbeam.provider.maas.client import parse_image_name_from_tags
+
+        assert parse_image_name_from_tags(["network", "dpu"]) is None
+
+    def test_returns_none_when_tag_names_missing(self):
+        from sunbeam.provider.maas.client import parse_image_name_from_tags
+
+        assert parse_image_name_from_tags(None) is None
+
+    def test_raises_when_multiple_dpu_image_tags(self):
+        from sunbeam.provider.maas.client import parse_image_name_from_tags
+
+        with pytest.raises(ValueError, match="Multiple dpu-image tags"):
+            parse_image_name_from_tags(["dpu-image-one", "dpu-image-two"])
+
+    def test_raises_when_dpu_image_tag_has_empty_name(self):
+        from sunbeam.provider.maas.client import parse_image_name_from_tags
+
+        with pytest.raises(ValueError, match="image name is empty"):
+            parse_image_name_from_tags(["network", "dpu-image-"])

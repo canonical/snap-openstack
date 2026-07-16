@@ -5,13 +5,14 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from sunbeam.core.common import ResultType
+from sunbeam.core.common import Result, ResultType
 from sunbeam.core.juju import (
     ApplicationNotFoundException,
     JujuException,
 )
 from sunbeam.core.terraform import TerraformException
 from sunbeam.features.vault.feature import VaultCommandFailedException
+from sunbeam.steps.charm_upgrade import CharmRefreshDecision
 from sunbeam.steps.vault import (
     CHARM_BASE,
     VAULT_CHANNEL,
@@ -38,7 +39,7 @@ def mock_auto_unseal():
 
 
 @pytest.fixture
-def step(basic_deployment, basic_client, basic_manifest, basic_jhelper, basic_tfhelper):
+def step(basic_deployment, basic_client, basic_manifest, basic_jhelper, basic_tfhelper):  # noqa: C901
     return VaultCharmUpgradeStep(
         basic_deployment, basic_client, basic_manifest, basic_jhelper, basic_tfhelper
     )
@@ -64,8 +65,7 @@ class TestVaultCharmUpgradeStep:
             channel="1.16/stable", revision=None
         )
 
-        with patch.object(step, "channel_update_needed", return_value=False):
-            result = step.is_skip(step_context)
+        result = step.is_skip(step_context)
 
         assert result.result_type == ResultType.FAILED
         assert "track is below" in result.message
@@ -79,55 +79,63 @@ class TestVaultCharmUpgradeStep:
             channel="1.19/stable", revision=200
         )
 
-        with patch.object(step, "channel_update_needed", return_value=True):
-            result = step.is_skip(step_context)
+        result = step.is_skip(step_context)
 
         assert result.result_type == ResultType.COMPLETED
-        assert step._skip_charm_refresh is True
+        assert step._decision.result.result_type == ResultType.SKIPPED
 
     def test_no_skip_when_already_at_latest_revision_for_target(
         self, step, basic_jhelper, basic_manifest, step_context
     ):
         app = Mock(charm_rev=100, charm_channel=VAULT_CHANNEL, base=None)
         basic_jhelper.get_application.return_value = app
-        basic_jhelper.get_available_charm_revision.return_value = 100
+        basic_jhelper.get_available_charm_revisions.return_value = {"amd64": 100}
         basic_manifest.find_charm.return_value = None
 
         result = step.is_skip(step_context)
 
         assert result.result_type == ResultType.COMPLETED
-        assert step._skip_charm_refresh is True
+        assert step._decision.result.result_type == ResultType.SKIPPED
 
     def test_not_skipped_when_newer_revision_available(
         self, step, basic_jhelper, basic_manifest, step_context
     ):
         app = Mock(charm_rev=50, charm_channel="1.18/stable", base=None)
         basic_jhelper.get_application.return_value = app
-        basic_jhelper.get_available_charm_revision.return_value = 100
+        basic_jhelper.get_available_charm_revisions.return_value = {"amd64": 100}
         basic_manifest.find_charm.return_value = None
 
         result = step.is_skip(step_context)
 
         assert result.result_type == ResultType.COMPLETED
-        assert step._skip_charm_refresh is False
+        assert step._decision.result.result_type == ResultType.COMPLETED
 
     def test_not_skipped_when_manifest_channel_is_upgrade(
         self, step, basic_jhelper, basic_manifest, step_context
     ):
         app = Mock(charm_rev=100, charm_channel="1.18/stable", base=None)
         basic_jhelper.get_application.return_value = app
-        basic_jhelper.get_available_charm_revision.return_value = 120
         basic_manifest.find_charm.return_value = Mock(
             channel="1.19/stable", revision=None
         )
 
-        with patch.object(step, "channel_update_needed", return_value=True):
-            result = step.is_skip(step_context)
+        result = step.is_skip(step_context)
 
         assert result.result_type == ResultType.COMPLETED
-        basic_jhelper.get_available_charm_revision.assert_called_once_with(
-            "vault-k8s", "1.19/stable", arch="amd64"
-        )
+        basic_jhelper.get_available_charm_revisions.assert_not_called()
+
+    def test_completed_on_branch_channel(
+        self, step, basic_jhelper, basic_manifest, step_context
+    ):
+        """Branch channel: proceed with refresh, no Charmhub revision lookup."""
+        app = Mock(charm_rev=50, charm_channel="1.18/stable/my-fix-branch", base=None)
+        basic_jhelper.get_application.return_value = app
+        basic_manifest.find_charm.return_value = None
+
+        result = step.is_skip(step_context)
+
+        assert result.result_type == ResultType.COMPLETED
+        basic_jhelper.get_available_charm_revisions.assert_not_called()
 
     def test_run_fails_when_vault_unsealed_after_upgrade(
         self,
@@ -141,6 +149,9 @@ class TestVaultCharmUpgradeStep:
         basic_manifest.find_charm.return_value = None
         vaulthelper.get_vault_status.return_value = {"sealed": False}
         basic_jhelper.get_leader_unit.return_value = "vault/0"
+        step._decision = CharmRefreshDecision(
+            result=Result(ResultType.COMPLETED), effective_channel=VAULT_CHANNEL
+        )
 
         result = step.run(step_context)
 
@@ -172,6 +183,9 @@ class TestVaultCharmUpgradeStep:
         vaulthelper.get_vault_status.return_value = {"sealed": True}
         basic_jhelper.get_leader_unit.return_value = "vault/0"
         mock_auto_unseal.return_value = None
+        step._decision = CharmRefreshDecision(
+            result=Result(ResultType.COMPLETED), effective_channel="1.18/stable"
+        )
 
         result = step.run(step_context)
 
@@ -193,6 +207,9 @@ class TestVaultCharmUpgradeStep:
         basic_jhelper.charm_refresh.side_effect = JujuException(
             "something bad happened"
         )
+        step._decision = CharmRefreshDecision(
+            result=Result(ResultType.COMPLETED), effective_channel=VAULT_CHANNEL
+        )
 
         result = step.run(step_context)
 
@@ -202,6 +219,9 @@ class TestVaultCharmUpgradeStep:
 
     def test_run_wait_times_out(self, step, basic_jhelper, step_context):
         basic_jhelper.wait_until_desired_status.side_effect = TimeoutError("timed out")
+        step._decision = CharmRefreshDecision(
+            result=Result(ResultType.COMPLETED), effective_channel=VAULT_CHANNEL
+        )
 
         result = step.run(step_context)
 
@@ -222,6 +242,9 @@ class TestVaultCharmUpgradeStep:
         mock_auto_unseal.side_effect = VaultCommandFailedException(
             "Vault is not in dev mode"
         )
+        step._decision = CharmRefreshDecision(
+            result=Result(ResultType.COMPLETED), effective_channel=VAULT_CHANNEL
+        )
 
         result = step.run(step_context)
 
@@ -240,6 +263,9 @@ class TestVaultCharmUpgradeStep:
         basic_jhelper.get_leader_unit.return_value = "vault/0"
         vaulthelper.get_vault_status.return_value = {"sealed": True}
         mock_auto_unseal.return_value = None
+        step._decision = CharmRefreshDecision(
+            result=Result(ResultType.COMPLETED), effective_channel=VAULT_CHANNEL
+        )
 
         result = step.run(step_context)
 
@@ -259,6 +285,9 @@ class TestVaultCharmUpgradeStep:
         basic_jhelper.get_leader_unit.return_value = "vault/0"
         vaulthelper.get_vault_status.return_value = {"sealed": True}
         mock_auto_unseal.side_effect = VaultCommandFailedException("unseal failed")
+        step._decision = CharmRefreshDecision(
+            result=Result(ResultType.COMPLETED), effective_channel=VAULT_CHANNEL
+        )
 
         result = step.run(step_context)
 
@@ -276,7 +305,9 @@ class TestVaultCharmUpgradeStep:
         step_context,
     ):
         basic_manifest.find_charm.return_value = None
-        step._skip_charm_refresh = True
+        step._decision = CharmRefreshDecision(
+            result=Result(ResultType.SKIPPED), effective_channel=VAULT_CHANNEL
+        )
 
         result = step.run(step_context)
 
@@ -299,7 +330,9 @@ class TestVaultCharmUpgradeStep:
         basic_tfhelper.update_tfvars_and_apply_tf.side_effect = TerraformException(
             "apply failed"
         )
-        step._skip_charm_refresh = True
+        step._decision = CharmRefreshDecision(
+            result=Result(ResultType.SKIPPED), effective_channel=VAULT_CHANNEL
+        )
 
         result = step.run(step_context)
 
@@ -318,6 +351,9 @@ class TestVaultCharmUpgradeStep:
         basic_manifest.find_charm.return_value = None
         basic_tfhelper.update_tfvars_and_apply_tf.side_effect = TerraformException(
             "apply failed"
+        )
+        step._decision = CharmRefreshDecision(
+            result=Result(ResultType.COMPLETED), effective_channel=VAULT_CHANNEL
         )
 
         result = step.run(step_context)
@@ -341,12 +377,62 @@ class TestVaultCharmUpgradeStep:
         vaulthelper.get_vault_status.return_value = {"sealed": True}
         basic_jhelper.get_leader_unit.return_value = "vault/0"
         mock_auto_unseal.return_value = None
+        step._decision = CharmRefreshDecision(
+            result=Result(ResultType.COMPLETED), effective_channel=VAULT_CHANNEL
+        )
 
         step.run(step_context)
 
         mock_migrate.assert_called_once_with(
             step.client, step.tfvar_config, VAULT_CHANNEL
         )
+
+    def test_terraform_with_targets(
+        self,
+        step,
+        basic_jhelper,
+        basic_tfhelper,
+        step_context,
+        basic_client,
+        mock_migrate,
+        vaulthelper,
+        mock_auto_unseal,
+    ):
+        """Test that terraform is applied with vault-specific targets."""
+        # Setup check_charm_needs_refresh to proceed with upgrade
+        with patch("sunbeam.steps.vault.check_charm_needs_refresh") as mock_check:
+            mock_check.return_value = CharmRefreshDecision(
+                result=Result(ResultType.COMPLETED),
+                effective_channel="2.1/stable",
+            )
+            step.is_skip(step_context)
+
+            # Mock vault as sealed
+            vaulthelper.get_vault_status.return_value = {"sealed": True}
+
+            # Mock terraform state to return vault resources
+            basic_tfhelper.state_list.return_value = [
+                "juju_application.vault",
+                "juju_integration.vault-to-ca",
+                "juju_integration.barbican-to-vault",
+                "juju_application.certificate-authority",
+            ]
+
+            # Execute
+            result = step.run(step_context)
+
+            # Verify terraform was called with targets
+            basic_tfhelper.update_tfvars_and_apply_tf.assert_called()
+            call_args = basic_tfhelper.update_tfvars_and_apply_tf.call_args
+
+            # Check that targets were provided
+            assert "tf_apply_extra_args" in call_args.kwargs
+            targets = call_args.kwargs["tf_apply_extra_args"]
+            assert "-target=juju_application.vault" in targets
+            assert "-target=juju_integration.vault-to-ca" in targets
+            assert "-target=juju_integration.barbican-to-vault" in targets
+
+            assert result.result_type == ResultType.COMPLETED
 
     def test_run_calls_migrate_with_manifest_channel(
         self,
@@ -365,9 +451,95 @@ class TestVaultCharmUpgradeStep:
         vaulthelper.get_vault_status.return_value = {"sealed": True}
         basic_jhelper.get_leader_unit.return_value = "vault/0"
         mock_auto_unseal.return_value = None
+        step._decision = CharmRefreshDecision(
+            result=Result(ResultType.COMPLETED), effective_channel="1.19/stable"
+        )
 
         step.run(step_context)
 
         mock_migrate.assert_called_once_with(
             step.client, step.tfvar_config, "1.19/stable"
         )
+
+
+class TestReapplyVaultTerraformPlanStep:
+    VAULT_STATE_RESOURCES = [
+        "juju_application.vault-k8s",
+        "juju_integration.vault-to-ca",
+        "juju_integration.barbican-to-vault",
+    ]
+
+    def test_get_vault_terraform_targets(
+        self, basic_deployment, basic_client, basic_jhelper, basic_manifest
+    ):
+        """Test generation of Vault-specific terraform targets."""
+        from sunbeam.steps.vault import ReapplyVaultTerraformPlanStep
+
+        tfhelper = Mock()
+        tfhelper.state_list.return_value = self.VAULT_STATE_RESOURCES
+        step = ReapplyVaultTerraformPlanStep(
+            basic_deployment, basic_client, tfhelper, basic_jhelper, basic_manifest
+        )
+
+        targets = step._get_vault_terraform_targets()
+
+        # Check that vault targets are included
+        assert "-target=juju_application.vault-k8s" in targets
+        assert "-target=juju_integration.vault-to-ca" in targets
+        assert "-target=juju_integration.barbican-to-vault" in targets
+
+    def test_run_success(
+        self, basic_deployment, basic_client, basic_jhelper, basic_manifest
+    ):
+        """Test successful Vault terraform apply with targets."""
+        from sunbeam.steps.vault import ReapplyVaultTerraformPlanStep
+
+        tfhelper = Mock()
+        tfhelper.state_list.return_value = self.VAULT_STATE_RESOURCES
+        step = ReapplyVaultTerraformPlanStep(
+            basic_deployment, basic_client, tfhelper, basic_jhelper, basic_manifest
+        )
+
+        # Mock wait_until_active
+        basic_jhelper.wait_until_active.return_value = None
+
+        context = Mock()
+        context.reporter = Mock()
+        result = step.run(context)
+
+        # Check that terraform was applied with targets
+        tfhelper.update_tfvars_and_apply_tf.assert_called_once()
+        call_args = tfhelper.update_tfvars_and_apply_tf.call_args
+        assert call_args.kwargs["tf_apply_extra_args"] is not None
+        assert len(call_args.kwargs["tf_apply_extra_args"]) >= 3  # All vault targets
+
+        # Check that we waited for vault
+        basic_jhelper.wait_until_active.assert_called_once()
+        call_args = basic_jhelper.wait_until_active.call_args
+        assert call_args.kwargs["apps"] == ["vault"]
+
+        assert result.result_type == ResultType.COMPLETED
+
+    def test_run_terraform_failure(
+        self, basic_deployment, basic_client, basic_jhelper, basic_manifest
+    ):
+        """Test Vault terraform apply failure."""
+        from sunbeam.core.terraform import TerraformException
+        from sunbeam.steps.vault import ReapplyVaultTerraformPlanStep
+
+        tfhelper = Mock()
+        step = ReapplyVaultTerraformPlanStep(
+            basic_deployment, basic_client, tfhelper, basic_jhelper, basic_manifest
+        )
+
+        # Mock terraform failure
+        tfhelper.update_tfvars_and_apply_tf.side_effect = TerraformException(
+            "Terraform apply failed"
+        )
+
+        context = Mock()
+        context.reporter = Mock()
+        result = step.run(context)
+
+        assert result.result_type == ResultType.FAILED
+        assert "Terraform apply failed" in result.message

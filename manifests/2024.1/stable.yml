@@ -51,6 +51,8 @@ core:
           snap-channel: 2024.1/stable
       microcluster-token-distributor:
         channel: latest/edge
+      role-distributor:
+        channel: latest/stable
       sunbeam-ovn-proxy:
         channel: 2024.1/stable
 features:
@@ -101,7 +103,11 @@ features:
   loadbalancer:
     software:
       charms:
+        multus:
+          channel: latest/stable
         octavia-k8s:
+          channel: 2024.1/stable
+        openstack-port-cni-k8s:
           channel: 2024.1/stable
   orchestration:
     software:
