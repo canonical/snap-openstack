@@ -97,9 +97,10 @@ if grep -E -q 'NO_PROXY=' /etc/environment; then
     done
 fi
 
-# Ensure there is no existing/leftover config in /etc/cni
-# These will prevent k8s starting the load balancer if present
-if [[ -d /etc/cni ]]; then
+# Ensure there is no existing/leftover multus config in /etc/cni
+# from testing amphora loadbalancer
+# These will prevent k8s starting the k8s load balancer if present
+if [[ $(sudo find /etc/cni -name '*multus*') ]]; then
    echo 'ERROR: existing CNI config detected in /etc/cni'
    exit 1
 fi
