@@ -14,6 +14,7 @@ from rich.table import Table
 
 from sunbeam.core.common import BaseStep, get_step_message, run_plan
 from sunbeam.core.deployment import Deployment
+from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.steps.backup_restore import (
     BACKUP_COMPONENTS,
     DEFAULT_BACKUP_TIMEOUT,
@@ -21,7 +22,6 @@ from sunbeam.steps.backup_restore import (
     DEFAULT_SCALE_TIMEOUT,
     MYSQL_S3_RELATION,
     RESTORE_TIME_FORMAT,
-    VAULT_PREREQUISITE_MSG,
     VAULT_S3_RELATION,
     BackupInventory,
     BackupResult,
@@ -140,17 +140,26 @@ def _list_inventory(
 def _print_inventory(results: list[BackupInventory]) -> None:
     table = Table()
     table.add_column("Application")
-    table.add_column("Unit")
     table.add_column("Component")
     table.add_column("Backup IDs")
     table.add_column("Status")
 
     for result in sorted(results, key=lambda inventory: inventory.app):
-        status = "[green]done[/green]" if result.success else "[red]failed[/red]"
-        backup_ids = "-"
-        if result.success and result.backup_ids:
-            backup_ids = "\n".join(result.backup_ids)
-        table.add_row(result.app, result.unit, result.component, backup_ids, status)
+        if result.backups:
+            ordered = sorted(result.backups, key=lambda b: b.backup_id, reverse=True)
+            backup_ids = "\n".join(b.backup_id for b in ordered)
+            statuses = "\n".join(
+                "[green]ok[/green]"
+                if b.success is True
+                else "[red]failed[/red]"
+                if b.success is False
+                else "-"
+                for b in ordered
+            )
+        else:
+            backup_ids = "-"
+            statuses = "[red]failed[/red]" if result.error else "-"
+        table.add_row(result.app, result.component, backup_ids, statuses)
 
     console.print(table)
 
@@ -158,18 +167,22 @@ def _print_inventory(results: list[BackupInventory]) -> None:
 def _print_summary(results: list[BackupResult]) -> None:
     table = Table()
     table.add_column("Application")
-    table.add_column("Unit")
     table.add_column("Component")
-    table.add_column("Status")
     table.add_column("Backup ID")
+    table.add_column("Status")
     for result in results:
-        status = "[green]done[/green]" if result.success else "[red]failed[/red]"
+        if result.backup is None:
+            table.add_row(result.app, result.component, "-", "-")
+            continue
+        status = (
+            "[green]ok[/green]"
+            if result.backup.success is True
+            else "[red]failed[/red]"
+            if result.backup.success is False
+            else "-"
+        )
         table.add_row(
-            result.app,
-            result.unit,
-            result.component,
-            status,
-            result.backup_id or "-",
+            result.app, result.component, result.backup.backup_id or "-", status
         )
     console.print(table)
 
@@ -181,28 +194,48 @@ def _filter_restore_targets(
     """Warn on missing inventory and keep only restorable targets."""
     inventory_by_app = {entry.app: entry for entry in inventory}
     failed_inventory = sorted(
-        (entry for entry in inventory if not entry.success or not entry.backup_ids),
+        (
+            entry
+            for entry in inventory
+            if not entry.backups or not any(b.success is True for b in entry.backups)
+        ),
         key=lambda entry: entry.app,
     )
     for entry in failed_inventory:
-        if not entry.success:
+        if entry.error:
             details = f": {entry.error}" if entry.error else ""
             console.print(
                 "[yellow]Warning:[/yellow] Failed to list backups for "
                 f"{entry.app}{details}"
             )
-        else:
+        elif not entry.backups:
             console.print(
                 f"[yellow]Warning:[/yellow] No backups available for {entry.app}."
             )
+        else:
+            console.print(
+                f"[yellow]Warning:[/yellow] No successful backups available for"
+                f" {entry.app}."
+            )
 
-    return [
-        target
-        for target in targets
-        if (inventory_by_app.get(target.app) is not None)
-        and inventory_by_app[target.app].success
-        and inventory_by_app[target.app].backup_ids
-    ]
+    restorable = []
+    for target in targets:
+        target_inventory = inventory_by_app.get(target.app)
+        if (
+            target_inventory is not None
+            and target_inventory.error is None
+            and target_inventory.backups
+            and any(b.success is True for b in target_inventory.backups)
+        ):
+            restorable.append(target)
+    return restorable
+
+
+def _get_api_app_from_mysql_app(app_name: str) -> str:
+    """Return the API application name for a given MySQL application name."""
+    if app_name.endswith("-mysql"):
+        return app_name.replace("-mysql", "", 1)
+    return app_name
 
 
 def _run_mysql_restore(
@@ -213,8 +246,10 @@ def _run_mysql_restore(
     timeout: int,
 ) -> None:
     """Run the restore plan for a MySQL target."""
+    api_app = _get_api_app_from_mysql_app(target.app)
+
     app_plan = [
-        PauseAppStep(jhelper, target.app, model=model),
+        PauseAppStep(jhelper, api_app, model=model),
         ScaleAppStep(
             jhelper,
             target.app,
@@ -236,7 +271,7 @@ def _run_mysql_restore(
             timeout=DEFAULT_SCALE_TIMEOUT,
             model=model,
         ),
-        ResumeAppStep(jhelper, target.app, model=model),
+        ResumeAppStep(jhelper, api_app, model=model),
     ]
 
     try:
@@ -250,7 +285,7 @@ def _run_mysql_restore(
                 timeout=DEFAULT_SCALE_TIMEOUT,
                 model=model,
             ),
-            ResumeAppStep(jhelper, target.app, model=model),
+            ResumeAppStep(jhelper, api_app, model=model),
         ]
         try:
             run_plan(revert_plan, console)
@@ -299,15 +334,12 @@ def _validate_restore_to_time(
 @click.pass_context
 def backup(ctx: click.Context, force: bool, timeout: int, no_prompt: bool) -> None:
     """Create backups of stateful Sunbeam applications (MySQL and Vault)."""
-    if not no_prompt:
-        click.confirm(VAULT_PREREQUISITE_MSG, abort=True)
-
     deployment: Deployment = ctx.obj
     jhelper = deployment.get_juju_helper()
-    model = deployment.openstack_machines_model
+    model = OPENSTACK_MODEL
 
     console.print(
-        f"[bold]Backing up [{','.join(c.name for c in BACKUP_COMPONENTS)}]"
+        f"[bold]Backing up \\[{','.join(c.name for c in BACKUP_COMPONENTS)}]"
         f" in model '{model}'...[/bold]"
     )
 
@@ -322,6 +354,7 @@ def backup(ctx: click.Context, force: bool, timeout: int, no_prompt: bool) -> No
     if was_filtered and not no_prompt:
         click.confirm(
             "Continue and back up the remaining components?",
+            default=False,
             abort=True,
         )
 
@@ -336,8 +369,8 @@ def backup(ctx: click.Context, force: bool, timeout: int, no_prompt: bool) -> No
         )
         sys.exit(EXIT_FAILURE)
 
-    dispatched_at = datetime.now(timezone.utc).isoformat()
-    console.print(f"Dispatching backups at {dispatched_at}...")
+    dispatched_at = datetime.now(timezone.utc).strftime(RESTORE_TIME_FORMAT)
+    console.print(f"Dispatching backups at {dispatched_at} UTC...")
     run_step = RunBackupsStep(
         jhelper, targets, force=force, timeout=timeout, model=model
     )
@@ -352,14 +385,17 @@ def backup(ctx: click.Context, force: bool, timeout: int, no_prompt: bool) -> No
     if manifest_path:
         console.print(f"Backup manifest written to: {manifest_path}")
 
-    succeeded = sum(1 for r in results if r.success)
-    failed = len(results) - succeeded
+    succeeded = sum(1 for r in results if r.backup is not None and r.backup.success)
+    failed = sum(1 for r in results if r.error is not None)
     console.print(f"Backup summary: {succeeded} succeeded, {failed} failed.")
 
     if failed == 0:
         sys.exit(EXIT_SUCCESS)
 
-    if any(r.component == "mysql" and not r.success for r in results):
+    if any(
+        r.component == "mysql" and (r.backup is None or not r.backup.success)
+        for r in results
+    ):
         console.print(
             "[yellow]Warning:[/yellow] one or more MySQL backups failed. A partial"
             " restore from this set may result in dangling OpenStack objects."
@@ -382,10 +418,10 @@ def list_backups(ctx: click.Context, timeout: int) -> None:
     """List backup IDs from stateful Sunbeam applications."""
     deployment: Deployment = ctx.obj
     jhelper = deployment.get_juju_helper()
-    model = deployment.openstack_machines_model
+    model = OPENSTACK_MODEL
 
     console.print(
-        f"[bold]Listing backups for [{','.join(c.name for c in BACKUP_COMPONENTS)}]"
+        f"[bold]Listing backups for \\[{','.join(c.name for c in BACKUP_COMPONENTS)}]"
         f" in model '{model}'...[/bold]"
     )
 
@@ -400,13 +436,13 @@ def list_backups(ctx: click.Context, timeout: int) -> None:
         console, jhelper, discovered, model, force=False
     )
 
-    listed_at = datetime.now(timezone.utc).isoformat()
+    listed_at = datetime.now(timezone.utc).strftime(RESTORE_TIME_FORMAT)
     inventory: list[BackupInventory] = _list_inventory(
         console, jhelper, targets, model, timeout
     )
 
     failed_inventory = sorted(
-        (entry for entry in inventory if not entry.success),
+        (entry for entry in inventory if entry.error),
         key=lambda entry: entry.app,
     )
     for entry in failed_inventory:
@@ -466,10 +502,10 @@ def restore(
     """Restore stateful Sunbeam applications from a backup."""
     deployment: Deployment = ctx.obj
     jhelper = deployment.get_juju_helper()
-    model = deployment.openstack_machines_model
+    model = OPENSTACK_MODEL
 
     console.print(
-        f"[bold]Restoring [{','.join(c.name for c in BACKUP_COMPONENTS)}]"
+        f"[bold]Restoring \\[{','.join(c.name for c in BACKUP_COMPONENTS)}]"
         f" in model '{model}' from backup...[/bold]"
     )
 
@@ -484,6 +520,7 @@ def restore(
     if was_filtered and not no_prompt:
         click.confirm(
             "Continue and restore the remaining components?",
+            default=False,
             abort=True,
         )
 
@@ -509,14 +546,14 @@ def restore(
             " the latest Vault backup will be used."
         )
 
-    if any(t.component == "vault" for t in targets) and not no_prompt:
-        click.confirm(VAULT_PREREQUISITE_MSG, abort=True)
-
     mysql_targets = [t for t in targets if t.component == "mysql"]
     vault_targets = [t for t in targets if t.component == "vault"]
 
     precheck_plan: list[BaseStep] = []
-    apps_to_pause_resume = sorted({target.app for target in mysql_targets})
+
+    apps_to_pause_resume = sorted(
+        {_get_api_app_from_mysql_app(target.app) for target in mysql_targets}
+    )
     if apps_to_pause_resume:
         precheck_plan.append(
             CheckAppPauseResumeSupportStep(

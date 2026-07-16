@@ -9,6 +9,7 @@ from click.testing import CliRunner
 
 from sunbeam.commands.backup_restore import restore
 from sunbeam.core.juju import JujuException
+from sunbeam.core.openstack import OPENSTACK_MODEL
 
 
 def _app_status(charm_name):
@@ -29,13 +30,11 @@ def _model_status(apps):
 def _default_list_backups(unit, model, action, params=None, timeout=None):
     if action == "get-cluster-status":
         return {
-            "status": json.dumps(
-                {
-                    "defaultreplicaset": {
-                        "topology": {"mysql-0": {"memberrole": "PRIMARY"}}
-                    }
+            "status": {
+                "defaultreplicaset": {
+                    "topology": {"mysql-0": {"memberrole": "PRIMARY"}}
                 }
-            )
+            }
         }
     if action == "list-backups" and unit.startswith("keystone-mysql"):
         return {
@@ -84,20 +83,6 @@ def jhelper(deployment):
 
 
 class TestRestoreCommand:
-    def test_prompt_abort_stops_before_work(self, deployment, jhelper):
-        result = CliRunner().invoke(restore, obj=deployment, input="n\n")
-
-        assert result.exit_code == 1, result.output
-        assert "Aborted" in result.output
-        jhelper.scale_application.assert_not_called()
-        restore_actions = {
-            call.args[2]
-            for call in jhelper.run_action.call_args_list
-            if len(call.args) > 2
-        }
-        assert "restore-backup" not in restore_actions
-        assert "restore" not in restore_actions
-
     def test_stops_at_pause_guard_and_is_non_destructive(self, deployment, jhelper):
         jhelper.get_application_actions.return_value = []
         result = CliRunner().invoke(restore, ["--no-prompt"], obj=deployment)
@@ -127,8 +112,8 @@ class TestRestoreCommand:
         )
 
         def _get_actions(app, model):
-            if app == "nova-mysql":
-                return ["pause"]
+            if app == "nova":
+                return []
             return ["pause", "resume"]
 
         jhelper.get_application_actions.side_effect = _get_actions
@@ -136,13 +121,11 @@ class TestRestoreCommand:
         def _run_action(unit, model, action, params=None, timeout=None):
             if action == "get-cluster-status":
                 return {
-                    "status": json.dumps(
-                        {
-                            "defaultreplicaset": {
-                                "topology": {"mysql-0": {"memberrole": "PRIMARY"}}
-                            }
+                    "status": {
+                        "defaultreplicaset": {
+                            "topology": {"mysql-0": {"memberrole": "PRIMARY"}}
                         }
-                    )
+                    }
                 }
             if action == "list-backups":
                 return {
@@ -160,7 +143,7 @@ class TestRestoreCommand:
 
         assert result.exit_code == 1, result.output
         assert "pause/resume" in result.output
-        assert "nova-mysql" in result.output
+        assert "nova" in result.output
         jhelper.scale_application.assert_not_called()
 
         restore_actions = {
@@ -273,13 +256,11 @@ class TestRestoreCommand:
         def _run_action(unit, model, action, params=None, timeout=None):
             if action == "get-cluster-status":
                 return {
-                    "status": json.dumps(
-                        {
-                            "defaultreplicaset": {
-                                "topology": {"mysql-0": {"memberrole": "PRIMARY"}}
-                            }
+                    "status": {
+                        "defaultreplicaset": {
+                            "topology": {"mysql-0": {"memberrole": "PRIMARY"}}
                         }
-                    )
+                    }
                 }
             if action == "list-backups" and unit.startswith("keystone-mysql"):
                 return {
@@ -306,13 +287,11 @@ class TestRestoreCommand:
         def _run_action(unit, model, action, params=None, timeout=None):
             if action == "get-cluster-status":
                 return {
-                    "status": json.dumps(
-                        {
-                            "defaultreplicaset": {
-                                "topology": {"mysql-0": {"memberrole": "PRIMARY"}}
-                            }
+                    "status": {
+                        "defaultreplicaset": {
+                            "topology": {"mysql-0": {"memberrole": "PRIMARY"}}
                         }
-                    )
+                    }
                 }
             if action == "list-backups":
                 raise Exception("list failed")
@@ -352,13 +331,11 @@ class TestRestoreCommand:
         def _run_action(unit, model, action, params=None, timeout=None):
             if action == "get-cluster-status":
                 return {
-                    "status": json.dumps(
-                        {
-                            "defaultreplicaset": {
-                                "topology": {"mysql-0": {"memberrole": "PRIMARY"}}
-                            }
+                    "status": {
+                        "defaultreplicaset": {
+                            "topology": {"mysql-0": {"memberrole": "PRIMARY"}}
                         }
-                    )
+                    }
                 }
             if action == "list-backups":
                 return {
@@ -380,6 +357,6 @@ class TestRestoreCommand:
         assert "keystone-mysql" in result.output
         assert "restore failed" in result.output
         assert jhelper.scale_application.call_args_list == [
-            ((deployment.openstack_machines_model, "keystone-mysql", 1),),
-            ((deployment.openstack_machines_model, "keystone-mysql", 2),),
+            ((OPENSTACK_MODEL, "keystone-mysql", 1),),
+            ((OPENSTACK_MODEL, "keystone-mysql", 2),),
         ]

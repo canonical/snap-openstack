@@ -17,6 +17,7 @@ from sunbeam.steps.backup_restore import (
     S3_INTERFACE,
     BackupComponent,
     BackupInventory,
+    BackupItem,
     BackupResult,
     BackupTarget,
     CheckS3RelationsStep,
@@ -26,8 +27,8 @@ from sunbeam.steps.backup_restore import (
     RunBackupsStep,
     WriteBackupInventoryManifestStep,
     WriteBackupManifestStep,
-    _parse_mysql_backup_ids,
-    _parse_vault_backup_ids,
+    _parse_mysql_backups,
+    _parse_vault_backups,
     _resolve_mysql_target,
     _resolve_vault_target,
 )
@@ -53,7 +54,7 @@ def _cluster_status(secondary_ordinal):
         "mysql-0.mysql-endpoints": {"memberrole": "PRIMARY"},
         f"mysql-{secondary_ordinal}.mysql-endpoints": {"memberrole": "SECONDARY"},
     }
-    return {"status": json.dumps({"defaultreplicaset": {"topology": topology}})}
+    return {"status": {"defaultreplicaset": {"topology": topology}}}
 
 
 class TestBackupResult:
@@ -62,11 +63,10 @@ class TestBackupResult:
             app="keystone-mysql",
             unit="keystone-mysql/0",
             component="mysql",
-            success=False,
             error="boom",
         )
-        assert result.success is False
-        assert result.backup_id is None
+        assert result.error == "boom"
+        assert result.backup is None
         assert result.error == "boom"
 
 
@@ -99,13 +99,11 @@ class TestResolveMySQLTarget:
         jhelper = Mock()
         jhelper.get_leader_unit.return_value = "cinder-mysql/0"
         jhelper.run_action.return_value = {
-            "status": json.dumps(
-                {
-                    "defaultreplicaset": {
-                        "topology": {"mysql-0": {"memberrole": "PRIMARY"}}
-                    }
+            "status": {
+                "defaultreplicaset": {
+                    "topology": {"mysql-0": {"memberrole": "PRIMARY"}}
                 }
-            )
+            }
         }
         jhelper.get_application.return_value = _app_status(
             "mysql-k8s", units={"cinder-mysql/0": Mock()}
@@ -321,11 +319,13 @@ class TestRunBackupsStep:
 
         assert result.result_type == ResultType.COMPLETED
         by_app = {r.app: r for r in result.message}
-        assert by_app["keystone-mysql"].success is True
-        assert by_app["keystone-mysql"].backup_id == "backup-keystone-mysql-1"
-        assert by_app["glance-mysql"].success is False
+        assert by_app["keystone-mysql"].backup is not None
+        assert by_app["keystone-mysql"].backup.success is True
+        assert by_app["keystone-mysql"].backup.backup_id == "backup-keystone-mysql-1"
+        assert by_app["glance-mysql"].backup is None
         assert by_app["glance-mysql"].error is not None
-        assert by_app["vault"].success is True
+        assert by_app["vault"].backup is not None
+        assert by_app["vault"].backup.success is True
 
     def test_force_passes_force_param_only_to_mysql(self, step_context):
         jhelper = Mock()
@@ -357,9 +357,13 @@ class TestListBackupsParsing:
             )
         }
 
-        backup_ids = _parse_mysql_backup_ids(action_result)
+        backups = _parse_mysql_backups(action_result)
 
-        assert backup_ids == ["2026-07-15T00:00:00Z"]
+        assert [b.backup_id for b in backups] == [
+            "2026-07-15T00:00:00Z",
+            "2026-07-14T00:00:00Z",
+        ]
+        assert [b.success for b in backups] == [True, False]
 
     def test_parse_vault_backup_ids_json_array(self):
         action_result = {
@@ -371,12 +375,13 @@ class TestListBackupsParsing:
             )
         }
 
-        backup_ids = _parse_vault_backup_ids(action_result)
+        backups = _parse_vault_backups(action_result)
 
-        assert backup_ids == [
+        assert [b.backup_id for b in backups] == [
             "vault-backup-openstack-2026-07-15-00-03-28",
             "vault-backup-openstack-2026-07-14-00-03-28",
         ]
+        assert all(b.success for b in backups)
 
 
 class TestListBackupsStep:
@@ -409,10 +414,12 @@ class TestListBackupsStep:
 
         assert result.result_type == ResultType.COMPLETED
         by_app = {r.app: r for r in result.message}
-        assert by_app["keystone-mysql"].success is True
-        assert by_app["keystone-mysql"].backup_ids == ["2026-07-15T00:00:00Z"]
-        assert by_app["vault"].success is True
-        assert by_app["vault"].backup_ids == [
+        assert by_app["keystone-mysql"].error is None
+        assert [b.backup_id for b in by_app["keystone-mysql"].backups] == [
+            "2026-07-15T00:00:00Z"
+        ]
+        assert by_app["vault"].error is None
+        assert [b.backup_id for b in by_app["vault"].backups] == [
             "vault-backup-openstack-2026-07-15-00-03-28"
         ]
 
@@ -428,15 +435,20 @@ class TestListBackupsStep:
         result = ListBackupsStep(jhelper, targets).run(step_context)
 
         assert result.result_type == ResultType.COMPLETED
-        assert result.message[0].success is False
+        assert result.message[0].backups is None
         assert result.message[0].error == "boom"
 
 
 class TestWriteBackupManifestStep:
     def test_writes_manifest(self, step_context, tmp_path):
         results = [
-            BackupResult("keystone-mysql", "keystone-mysql/1", "mysql", True, "id-1"),
-            BackupResult("glance-mysql", "glance-mysql/1", "mysql", False, None, "err"),
+            BackupResult(
+                "keystone-mysql",
+                "keystone-mysql/1",
+                "mysql",
+                BackupItem("id-1", success=True),
+            ),
+            BackupResult("glance-mysql", "glance-mysql/1", "mysql", None, "err"),
         ]
         step = WriteBackupManifestStep(
             results, "2026-04-09T14:22:01+00:00", manifest_dir=tmp_path
@@ -465,14 +477,12 @@ class TestWriteBackupInventoryManifestStep:
                 app="keystone-mysql",
                 unit="keystone-mysql/1",
                 component="mysql",
-                success=True,
-                backup_ids=["2026-07-15T00:00:00Z"],
+                backups=[BackupItem("2026-07-15T00:00:00Z", success=True)],
             ),
             BackupInventory(
                 app="vault",
                 unit="vault/0",
                 component="vault",
-                success=False,
                 error="failed",
             ),
         ]
@@ -524,5 +534,6 @@ class TestExtensibility:
 
         run = RunBackupsStep(jhelper, fake_targets).run(step_context)
         assert run.message[0].component == "fake"
-        assert run.message[0].success is True
-        assert run.message[0].backup_id == "fake-backup"
+        assert run.message[0].backup is not None
+        assert run.message[0].backup.success is True
+        assert run.message[0].backup.backup_id == "fake-backup"

@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: 2026 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
-import json
 from unittest.mock import Mock
 
 import pytest
@@ -41,25 +40,16 @@ def jhelper(deployment):
 def _leader_only_cluster_status(unit, model, action, params=None, timeout=None):
     if action == "get-cluster-status":
         return {
-            "status": json.dumps(
-                {
-                    "defaultreplicaset": {
-                        "topology": {"mysql-0": {"memberrole": "PRIMARY"}}
-                    }
+            "status": {
+                "defaultreplicaset": {
+                    "topology": {"mysql-0": {"memberrole": "PRIMARY"}}
                 }
-            )
+            }
         }
     return {"backup-id": f"backup-{unit.replace('/', '-')}"}
 
 
 class TestBackupCommand:
-    def test_prompt_abort_stops_before_work(self, deployment, jhelper):
-        result = CliRunner().invoke(backup, obj=deployment, input="n\n")
-
-        assert result.exit_code == 1, result.output
-        assert "Aborted" in result.output
-        jhelper.get_model_status.assert_not_called()
-
     def test_no_applications(self, deployment, jhelper):
         jhelper.get_model_status.return_value = _model_status({})
 
@@ -111,13 +101,11 @@ class TestBackupCommand:
         def _run_action(unit, model, action, params=None, timeout=None):
             if action == "get-cluster-status":
                 return {
-                    "status": json.dumps(
-                        {
-                            "defaultreplicaset": {
-                                "topology": {"mysql-0": {"memberrole": "PRIMARY"}}
-                            }
+                    "status": {
+                        "defaultreplicaset": {
+                            "topology": {"mysql-0": {"memberrole": "PRIMARY"}}
                         }
-                    )
+                    }
                 }
             if unit == "keystone-mysql/0":
                 raise Exception("backup failed")
@@ -142,13 +130,11 @@ class TestBackupCommand:
         def _run_action(unit, model, action, params=None, timeout=None):
             if action == "get-cluster-status":
                 return {
-                    "status": json.dumps(
-                        {
-                            "defaultreplicaset": {
-                                "topology": {"mysql-0": {"memberrole": "PRIMARY"}}
-                            }
+                    "status": {
+                        "defaultreplicaset": {
+                            "topology": {"mysql-0": {"memberrole": "PRIMARY"}}
                         }
-                    )
+                    }
                 }
             raise Exception("backup failed")
 
@@ -213,13 +199,11 @@ class TestBackupCommand:
         def _run_action(unit, model, action, params=None, timeout=None):
             if action == "get-cluster-status":
                 return {
-                    "status": json.dumps(
-                        {
-                            "defaultreplicaset": {
-                                "topology": {"mysql-0": {"memberrole": "PRIMARY"}}
-                            }
+                    "status": {
+                        "defaultreplicaset": {
+                            "topology": {"mysql-0": {"memberrole": "PRIMARY"}}
                         }
-                    )
+                    }
                 }
             return {"backup-id": "backup-keystone-mysql-0"}
 

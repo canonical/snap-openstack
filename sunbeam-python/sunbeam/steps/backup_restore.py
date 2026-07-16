@@ -38,10 +38,6 @@ VAULT_S3_RELATION = "s3-parameters"
 S3_INTERFACE = "s3"
 DEFAULT_BACKUP_TIMEOUT = 300
 BACKUP_MANIFEST_DIR = SHARE_PATH / "backups"
-VAULT_PREREQUISITE_MSG = (
-    "Vault backup/restore requires the unseal keys and root token that were in effect "
-    "when the backup was created. Are you sure you want to continue?"
-)
 DEFAULT_SCALE_TIMEOUT = 1800
 DEFAULT_RESTORE_TIMEOUT = 1800
 MYSQL_RESTORE_ACTION = "restore"
@@ -64,14 +60,21 @@ class BackupTarget:
 
 
 @dataclass
+class BackupItem:
+    """A single backup entry in a backup inventory."""
+
+    backup_id: str
+    success: bool | None = None
+
+
+@dataclass
 class BackupResult:
     """The outcome of attempting a backup for a single application."""
 
     app: str
     unit: str
     component: str
-    success: bool
-    backup_id: str | None = None
+    backup: BackupItem | None = None
     error: str | None = None
 
 
@@ -82,8 +85,7 @@ class BackupInventory:
     app: str
     unit: str
     component: str
-    success: bool
-    backup_ids: list[str] | None = None
+    backups: list[BackupItem] | None = None
     error: str | None = None
 
 
@@ -96,7 +98,7 @@ class BackupComponent:
     action: str
     resolve_target: Callable[[JujuHelper, str, str, bool], BackupTarget | None]
     list_action: str = LIST_BACKUPS_ACTION
-    parse_backup_ids: Callable[[dict], list[str]] | None = None
+    parse_backups: Callable[[dict], list[BackupItem]] | None = None
     backup_id_key: str = "backup-id"
     supports_force: bool = False
 
@@ -123,7 +125,7 @@ def _app_status_value(app_status: object) -> str:
     return "unknown"
 
 
-def _parse_mysql_backup_ids(action_result: dict) -> list[str]:
+def _parse_mysql_backups(action_result: dict) -> list[BackupItem]:
     """Parse MySQL list-backups output table and return finished backup IDs."""
     backups_text = action_result.get("backups")
     if backups_text is None:
@@ -131,7 +133,7 @@ def _parse_mysql_backup_ids(action_result: dict) -> list[str]:
     if not isinstance(backups_text, str):
         return []
 
-    backup_ids: list[str] = []
+    backups: list[BackupItem] = []
     for raw_line in backups_text.splitlines():
         line = raw_line.strip()
         if not line or line.startswith("backup-id") or set(line) == {"-"}:
@@ -140,20 +142,16 @@ def _parse_mysql_backup_ids(action_result: dict) -> list[str]:
         if len(columns) < 3:
             continue
         if columns[2].lower() != "finished":
+            backups.append(BackupItem(backup_id=columns[0], success=False))
             continue
-        backup_ids.append(columns[0])
-    return backup_ids
+        backups.append(BackupItem(columns[0], success=True))
+    return backups
 
 
-def _parse_vault_backup_ids(action_result: dict) -> list[str]:
+def _parse_vault_backups(action_result: dict) -> list[BackupItem]:
     """Parse Vault list-backups output and return backup IDs."""
     raw_backup_ids = action_result.get("backup-ids")
-    if raw_backup_ids is None:
-        raw_backup_ids = (action_result.get("results") or {}).get("backup-ids")
-
-    if isinstance(raw_backup_ids, list):
-        return [str(backup_id) for backup_id in raw_backup_ids]
-    if not isinstance(raw_backup_ids, str):
+    if raw_backup_ids is None or not isinstance(raw_backup_ids, str):
         return []
 
     try:
@@ -162,7 +160,7 @@ def _parse_vault_backup_ids(action_result: dict) -> list[str]:
         return []
     if not isinstance(parsed, list):
         return []
-    return [str(backup_id) for backup_id in parsed]
+    return [BackupItem(backup_id=str(backup_id), success=True) for backup_id in parsed]
 
 
 def _secondary_unit_from_status(units: list[str], action_result: dict) -> str | None:
@@ -172,16 +170,12 @@ def _secondary_unit_from_status(units: list[str], action_result: dict) -> str | 
     name, so match members flagged SECONDARY back to one of the application's
     Juju units by ordinal.
     """
-    try:
-        status = json.loads(action_result.get("status", "{}"))
-    except (json.JSONDecodeError, TypeError):
-        return None
-
+    status = action_result.get("status") or {}
     topology = status.get("defaultreplicaset", {}).get("topology", {})
     secondary_labels = [
         label
         for label, info in topology.items()
-        if isinstance(info, dict) and info.get("memberrole", "").upper() == "SECONDARY"
+        if isinstance(info, dict) and info.get("memberrole", "").lower() == "secondary"
     ]
     if not secondary_labels:
         return None
@@ -194,11 +188,12 @@ def _secondary_unit_from_status(units: list[str], action_result: dict) -> str | 
     return None
 
 
-def _latest_backup_id(backup_ids: list[str]) -> str | None:
-    """Return the lexicographically latest backup ID, if present."""
-    if not backup_ids:
+def _latest_backup(backups: list[BackupItem]) -> str | None:
+    """Return the lexicographically latest successful backup ID, if present."""
+    successful = [b for b in backups if b.success]
+    if not successful:
         return None
-    return sorted(backup_ids)[-1]
+    return sorted(successful, key=lambda b: b.backup_id)[-1].backup_id
 
 
 def _resolve_mysql_target(
@@ -287,19 +282,20 @@ def _run_single_backup(
         result = jhelper.run_action(
             target.unit, model, target.action, action_params, timeout=timeout
         )
+        backup_id = result.get(backup_id_key)
         return BackupResult(
             app=target.app,
             unit=target.unit,
             component=target.component,
-            success=True,
-            backup_id=result.get(backup_id_key),
+            backup=BackupItem(backup_id=backup_id, success=True)
+            if backup_id is not None
+            else None,
         )
     except Exception as e:
         return BackupResult(
             app=target.app,
             unit=target.unit,
             component=target.component,
-            success=False,
             error=str(e),
         )
 
@@ -308,27 +304,25 @@ def _run_single_list_backups(
     jhelper: JujuHelper,
     target: BackupTarget,
     action_name: str,
-    parse_backup_ids: Callable[[dict], list[str]] | None,
+    parse_backups: Callable[[dict], list[BackupItem]] | None,
     model: str,
     timeout: int,
 ) -> BackupInventory:
     """Dispatch a single list-backups action and parse backup IDs."""
     try:
         result = jhelper.run_action(target.unit, model, action_name, timeout=timeout)
-        backup_ids = parse_backup_ids(result) if parse_backup_ids is not None else []
+        backups = parse_backups(result) if parse_backups is not None else []
         return BackupInventory(
             app=target.app,
             unit=target.unit,
             component=target.component,
-            success=True,
-            backup_ids=backup_ids,
+            backups=backups,
         )
     except Exception as e:
         return BackupInventory(
             app=target.app,
             unit=target.unit,
             component=target.component,
-            success=False,
             error=str(e),
         )
 
@@ -339,7 +333,7 @@ BACKUP_COMPONENTS: list[BackupComponent] = [
         charm_names=[MYSQL_CHARM],
         action=BACKUP_ACTION,
         resolve_target=_resolve_mysql_target,
-        parse_backup_ids=_parse_mysql_backup_ids,
+        parse_backups=_parse_mysql_backups,
         supports_force=True,
     ),
     BackupComponent(
@@ -347,7 +341,7 @@ BACKUP_COMPONENTS: list[BackupComponent] = [
         charm_names=[VAULT_CHARM],
         action=BACKUP_ACTION,
         resolve_target=_resolve_vault_target,
-        parse_backup_ids=_parse_vault_backup_ids,
+        parse_backups=_parse_vault_backups,
     ),
 ]
 
@@ -414,7 +408,7 @@ class ResolveBackupTargetsStep(BaseStep):
     ):
         super().__init__(
             "Resolve backup targets",
-            "Resolving units for consistent backup targets",
+            "Resolving units for backup targets",
         )
         self.jhelper = jhelper
         self.discovered = discovered
@@ -576,7 +570,7 @@ class ListBackupsStep(BaseStep):
                     if component is not None
                     else LIST_BACKUPS_ACTION
                 )
-                parser = component.parse_backup_ids if component is not None else None
+                parser = component.parse_backups if component is not None else None
                 futures.append(
                     executor.submit(
                         _run_single_list_backups,
@@ -616,8 +610,10 @@ class WriteBackupManifestStep(BaseStep):
             directory = Snap().paths.user_common / BACKUP_MANIFEST_DIR
         directory.mkdir(parents=True, exist_ok=True)
 
-        succeeded = sum(1 for r in self.results if r.success)
-        failed = len(self.results) - succeeded
+        succeeded = sum(
+            1 for r in self.results if r.backup is not None and r.backup.success
+        )
+        failed = sum(1 for r in self.results if r.error is not None)
         manifest = {
             "dispatched_at": self.dispatched_at,
             "summary": {"succeeded": succeeded, "failed": failed},
@@ -657,7 +653,9 @@ class WriteBackupInventoryManifestStep(BaseStep):
             directory = Snap().paths.user_common / BACKUP_MANIFEST_DIR
         directory.mkdir(parents=True, exist_ok=True)
 
-        succeeded = sum(1 for r in self.results if r.success)
+        succeeded = sum(
+            1 for r in self.results if r.backups and any(b.success for b in r.backups)
+        )
         failed = len(self.results) - succeeded
         manifest = {
             "listed_at": self.listed_at,
@@ -855,7 +853,7 @@ class RestoreMySQLStep(BaseStep):
             except (ActionFailedException, JujuException) as e:
                 return Result(ResultType.FAILED, str(e))
 
-            latest = _latest_backup_id(_parse_mysql_backup_ids(list_result))
+            latest = _latest_backup(_parse_mysql_backups(list_result))
             if latest is None:
                 return Result(
                     ResultType.FAILED,
@@ -910,7 +908,7 @@ class RestoreVaultStep(BaseStep):
         except (ActionFailedException, JujuException) as e:
             return Result(ResultType.FAILED, str(e))
 
-        latest = _latest_backup_id(_parse_vault_backup_ids(list_result))
+        latest = _latest_backup(_parse_vault_backups(list_result))
         if latest is None:
             return Result(
                 ResultType.FAILED,
