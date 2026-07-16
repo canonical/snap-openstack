@@ -8,7 +8,7 @@ terraform {
   required_providers {
     juju = {
       source  = "juju/juju"
-      version = "= 1.3.1"
+      version = "= 1.5.6"
     }
   }
 }
@@ -36,7 +36,7 @@ resource "juju_application" "traefik" {
     name     = "traefik-k8s"
     channel  = var.traefik-channel == null ? var.cos-channel : var.traefik-channel
     revision = var.traefik-revision
-    base     = "ubuntu@20.04"
+    base     = "ubuntu@26.04"
   }
 
   config = var.traefik-config
