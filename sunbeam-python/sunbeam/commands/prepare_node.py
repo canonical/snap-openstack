@@ -96,6 +96,13 @@ if grep -E -q 'NO_PROXY=' /etc/environment; then
                     /etc/environment
     done
 fi
+
+# Ensure there is no existing/leftover config in /etc/cni
+# These will prevent k8s starting the load balancer if present
+if [[ -d /etc/cni ]]; then
+   echo 'ERROR: existing CNI config detected in /etc/cni'
+   exit 1
+fi
 """
 
 COMMON_TEMPLATE = f"""
