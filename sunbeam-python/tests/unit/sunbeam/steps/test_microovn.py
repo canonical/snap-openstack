@@ -298,8 +298,29 @@ class TestReapplyMicroOVNOptionalIntegrationsStep:
             "-target=juju_integration.microovn_arm64_certs",
             "-target=juju_integration.microovn_arm64_ovsdb_cms",
             "-target=juju_integration.role-distributor-microovn",
+            "-target=juju_integration.role-distributor-microovn-arm64",
         ]
         assert extra_args == expected_args
+
+    def test_tf_apply_extra_args_omits_role_distributor_when_missing(
+        self, reapply_microovn_step
+    ):
+        reapply_microovn_step.tfhelper.output.return_value = {}
+        reapply_microovn_step.jhelper.get_application.side_effect = (
+            ApplicationNotFoundException("Application missing from model: 'test-model'")
+        )
+
+        extra_args = reapply_microovn_step.tf_apply_extra_args()
+
+        assert extra_args == [
+            "-target=juju_integration.microovn-microcluster-token-distributor",
+            "-target=juju_integration.microovn-certs",
+            "-target=juju_integration.microovn-ovsdb-cms",
+            "-target=juju_integration.microovn-openstack-network-agents",
+            "-target=juju_integration.microovn_arm64_microcluster_token_distributor",
+            "-target=juju_integration.microovn_arm64_certs",
+            "-target=juju_integration.microovn_arm64_ovsdb_cms",
+        ]
 
 
 class TestEnableMicroOVNStep:

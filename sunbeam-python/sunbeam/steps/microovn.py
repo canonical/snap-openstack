@@ -286,6 +286,9 @@ class ReapplyMicroOVNOptionalIntegrationsStep(DeployMicroOVNApplicationStep):
         ]
         if _role_distributor_application_name(self.jhelper, self.model):
             extra_args.append("-target=juju_integration.role-distributor-microovn")
+            extra_args.append(
+                "-target=juju_integration.role-distributor-microovn-arm64"
+            )
         return extra_args
 
 

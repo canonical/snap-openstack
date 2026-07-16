@@ -195,6 +195,21 @@ resource "juju_integration" "microovn-openstack-network-agents" {
   }
 }
 
+resource "juju_integration" "role-distributor-microovn" {
+  count      = var.role_distributor_application_name != null ? 1 : 0
+  model_uuid = data.juju_model.machine_model.uuid
+
+  application {
+    name     = var.role_distributor_application_name
+    endpoint = "role-assignment"
+  }
+
+  application {
+    name     = juju_application.microovn.name
+    endpoint = "role-assignment"
+  }
+}
+
 resource "juju_integration" "microovn_arm64_microcluster_token_distributor" {
   count      = length(local.microovn_arm64_machine_ids) > 0 ? 1 : 0
   model_uuid = data.juju_model.machine_model.uuid
@@ -222,6 +237,24 @@ resource "juju_integration" "microovn_arm64_openstack_network_agents" {
   application {
     name     = juju_application.openstack-network-agents-arm64[0].name
     endpoint = "juju-info"
+  }
+}
+
+resource "juju_integration" "role-distributor-microovn-arm64" {
+  count = (
+    var.role_distributor_application_name != null
+    && length(local.microovn_arm64_machine_ids) > 0
+  ) ? 1 : 0
+  model_uuid = data.juju_model.machine_model.uuid
+
+  application {
+    name     = var.role_distributor_application_name
+    endpoint = "role-assignment"
+  }
+
+  application {
+    name     = juju_application.microovn_arm64[0].name
+    endpoint = "role-assignment"
   }
 }
 
