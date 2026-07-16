@@ -3,6 +3,7 @@
 
 import base64
 import binascii
+import datetime
 import logging
 import re
 import typing
@@ -156,6 +157,52 @@ def get_subject_from_csr(csr: str) -> str | None:
     except (binascii.Error, TypeError, ValueError) as e:
         LOG.debug("Failed to get subject from CSR: %r", e)
         return None
+
+
+def get_cn_from_csr(csr: str) -> str | None:
+    """Return the Common Name from a PEM-encoded CSR string, or None."""
+    try:
+        req = x509.load_pem_x509_csr(bytes(csr, "utf-8"))
+        cn_attrs = req.subject.get_attributes_for_oid(x509_oid.NameOID.COMMON_NAME)
+        if not cn_attrs:
+            return None
+        return str(cn_attrs[0].value)
+    except (binascii.Error, TypeError, ValueError) as e:
+        LOG.debug("Failed to get CN from CSR: %r", e)
+        return None
+
+
+def get_cn_from_cert(certificate: str) -> str | None:
+    """Return the Common Name from a base64-encoded PEM certificate, or None."""
+    try:
+        certificate_bytes = base64.b64decode(certificate)
+        cert = x509.load_pem_x509_certificate(certificate_bytes)
+        cn_attrs = cert.subject.get_attributes_for_oid(x509_oid.NameOID.COMMON_NAME)
+        if not cn_attrs:
+            return None
+        return str(cn_attrs[0].value)
+    except (binascii.Error, TypeError, ValueError) as e:
+        LOG.debug("Failed to get CN from certificate: %r", e)
+        return None
+
+
+def is_cert_expired(certificate: str) -> bool:
+    """Return True if the base64-encoded PEM certificate has expired.
+
+    Returns True (treat as expired) if the certificate cannot be decoded.
+    """
+    try:
+        certificate_bytes = base64.b64decode(certificate)
+        cert = x509.load_pem_x509_certificate(certificate_bytes)
+        try:
+            expiry = cert.not_valid_after_utc
+        except AttributeError:
+            # cryptography < 42 returns a naive datetime; assume UTC
+            expiry = cert.not_valid_after.replace(tzinfo=datetime.timezone.utc)
+        return expiry < datetime.datetime.now(datetime.timezone.utc)
+    except (binascii.Error, TypeError, ValueError) as e:
+        LOG.debug("Failed to check certificate expiry: %r", e)
+        return True
 
 
 def encode_base64_as_string(data: str) -> str | None:

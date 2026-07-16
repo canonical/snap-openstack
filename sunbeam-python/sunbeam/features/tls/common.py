@@ -40,7 +40,10 @@ from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.features.interface.utils import (
     encode_base64_as_string,
     generate_ca_chain,
+    get_cn_from_cert,
+    get_cn_from_csr,
     get_subject_from_csr,
+    is_cert_expired,
     is_certificate_valid,
     normalize_pem,
 )
@@ -791,22 +794,43 @@ class ReapplyTLSCertificatesStep(ConfigureTLSCertificatesStep):
             elif unit_name:
                 app = unit_name.split("/")[0]
 
-            subject = get_subject_from_csr(csr)
-            if not subject:
-                LOG.warning("Skipping invalid CSR for unit %s", unit_name)
+            cn = get_cn_from_csr(csr)
+            if not cn:
+                LOG.warning("Skipping CSR with no CN for unit %s", unit_name)
                 continue
 
-            stored_cert = stored_certs.get(subject, {}).get("certificate")
+            # Find a stored certificate whose CN matches the CSR's CN
+            # and that has not yet expired.
+            stored_cert = None
+            for stored_data in stored_certs.values():
+                cert_b64 = stored_data.get("certificate")
+                if cert_b64 and get_cn_from_cert(cert_b64) == cn:
+                    if is_cert_expired(cert_b64):
+                        LOG.warning(
+                            "Stored certificate for CN %s has expired; skipping.",
+                            cn,
+                        )
+                        continue
+                    stored_cert = cert_b64
+                    break
+
             if not stored_cert:
                 LOG.warning(
-                    "No stored certificate for outstanding CSR (app=%s, subject=%s); "
+                    "No stored certificate for outstanding CSR (app=%s, cn=%s); "
                     "skipping. Sign it with `sunbeam tls ca unit_certs`.",
                     app,
-                    subject,
+                    cn,
                 )
                 continue
+                
+            LOG.debug(
+                "Re-providing stored certificate for outstanding CSR (app=%s, cn=%s, cert=%s)",
+                app,
+                cn,
+                stored_cert,
+            )
 
-            self.process_certs[subject] = {
+            self.process_certs[cn] = {
                 "app": app,
                 "unit": unit_name,
                 "relation_id": relation_id,
