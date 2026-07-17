@@ -15,7 +15,6 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
-from enum import Enum
 from pathlib import Path
 
 import yaml
@@ -46,8 +45,8 @@ MYSQL_CLUSTER_STATUS_ACTION = "get-cluster-status"
 S3_INTERFACE = "s3"
 S3_ENDPOINT = "s3-parameters"
 DEFAULT_BACKUP_TIMEOUT = 1800
-DEFAULT_SCALE_TIMEOUT = 1800
 DEFAULT_RESTORE_TIMEOUT = 1800
+DEFAULT_ACTION_TIMEOUT = 120
 BACKUP_MANIFEST_DIR = SHARE_PATH / "backups"
 PAUSE_ACTION = "pause"
 RESUME_ACTION = "resume"
@@ -62,7 +61,6 @@ class ActionTarget:
     unit: str
     component: str
     action: str
-    scale: int = 1
 
 
 @dataclass
@@ -106,11 +104,13 @@ class RestoreResult:
     reverted: bool = False
 
 
-class ValidationCheck(Enum):
-    """An application-readiness check (predicate resolved by identity)."""
+@dataclass
+class ValidationCheck:
+    """An application-readiness check."""
 
-    ACTIVE = "active"
-    S3_RELATION = "s3-relation"
+    name: str
+    predicate: Callable[[object], bool]
+    forceable: bool = False
 
 
 ResolveTargetFn = Callable[[JujuHelper, str, str, bool], "ActionTarget | None"]
@@ -119,15 +119,15 @@ BackupPlanFn = Callable[
     list[BaseStep],
 ]
 RestorePlanFn = Callable[
-    [JujuHelper, "BackupComponent", "ActionTarget", str | None, int, str],
+    [JujuHelper, "BackupComponent", "ActionTarget", str | None, bool, int, str],
     list[BaseStep],
 ]
 RevertPlanFn = Callable[
-    [JujuHelper, "BackupComponent", "ActionTarget", str],
+    [JujuHelper, "BackupComponent", "ActionTarget", bool, int, str],
     list[BaseStep],
 ]
 PrecheckPlanFn = Callable[
-    [JujuHelper, "BackupComponent", "ActionTarget", str],
+    [JujuHelper, "BackupComponent", "ActionTarget", bool, int, str],
     list[BaseStep],
 ]
 
@@ -140,6 +140,7 @@ class BackupComponent:
 
     resolve_backup_target: ResolveTargetFn
     parse_backup_list: Callable[[dict], list[BackupOutcome]]
+    parse_backup: Callable[[dict], BackupOutcome | None]
     build_backup_plan: BackupPlanFn
     build_restore_plan: RestorePlanFn
     build_restore_revert_plan: RevertPlanFn | None = None
@@ -148,10 +149,9 @@ class BackupComponent:
     backup_action: str = BACKUP_ACTION
     restore_action: str = RESTORE_ACTION
     list_action: str = LIST_BACKUPS_ACTION
-    backup_id_key: str = BACKUP_RESULT_ID_KEY
 
-    supports_force: bool = False
-    supports_restore_to_time: bool = False
+    restore_to_time_param: str | None = None
+    backup_id_param: str = BACKUP_RESULT_ID_KEY
 
     validate_checks: list[ValidationCheck] = field(default_factory=list)
 
@@ -179,14 +179,20 @@ def _is_related_to_s3(app_status: object) -> bool:
     return any(rel.interface == S3_INTERFACE for rel in endpoint_relations)
 
 
-_VALIDATION_PREDICATES: dict[ValidationCheck, Callable[[object], bool]] = {
-    ValidationCheck.ACTIVE: _is_app_active,
-    ValidationCheck.S3_RELATION: _is_related_to_s3,
-}
+APP_READY_VALIDATION_CHECK: ValidationCheck = ValidationCheck(
+    name="active",
+    predicate=_is_app_active,
+    forceable=True,
+)
+
+S3_RELATION_VALIDATION_CHECK: ValidationCheck = ValidationCheck(
+    name="s3-relation",
+    predicate=_is_related_to_s3,
+)
 
 
 # ---------------------------------------------------------------------------
-# Backup-list parsing
+# Backup result parsing
 # ---------------------------------------------------------------------------
 def _parse_mysql_backups(action_result: dict) -> list[BackupOutcome]:
     """Parse MySQL list-backups output table and return finished backup IDs."""
@@ -209,6 +215,14 @@ def _parse_mysql_backups(action_result: dict) -> list[BackupOutcome]:
             continue
         backups.append(BackupOutcome(columns[0], success=True))
     return backups
+
+
+def _parse_backup(action_result: dict) -> BackupOutcome | None:
+    """Parse create-backup output and return the backup ID."""
+    backup_id = action_result.get(BACKUP_RESULT_ID_KEY)
+    if not isinstance(backup_id, str):
+        return None
+    return BackupOutcome(backup_id=backup_id, success=True)
 
 
 def _parse_vault_backups(action_result: dict) -> list[BackupOutcome]:
@@ -271,12 +285,13 @@ def _api_app_for_mysql(app_name: str) -> str:
     return app_name
 
 
-def _current_scale(jhelper: JujuHelper, app: str, model: str, fallback: int) -> int:
+def _current_scale(jhelper: JujuHelper, app: str, model: str) -> int:
     """Read the current unit count for an application, live."""
     try:
         return len(list(jhelper.get_application(app, model).units))
     except (ApplicationNotFoundException, JujuException):
-        return fallback
+        LOG.warning("Could not read current scale for %s, assuming 1", app)
+        return 1
 
 
 # ---------------------------------------------------------------------------
@@ -301,7 +316,6 @@ def _resolve_mysql_backup_target(
         LOG.warning("Could not resolve %s, skipping", app)
         return None
 
-    scale = len(units)
     try:
         result = jhelper.run_action(leader, model, MYSQL_CLUSTER_STATUS_ACTION)
         secondary = _secondary_unit_from_status(units, result)
@@ -311,7 +325,6 @@ def _resolve_mysql_backup_target(
                 unit=secondary,
                 component=MYSQL_CHARM,
                 action=BACKUP_ACTION,
-                scale=scale,
             )
     except ActionFailedException as e:
         if not force:
@@ -328,7 +341,6 @@ def _resolve_mysql_backup_target(
         unit=leader,
         component=MYSQL_CHARM,
         action=BACKUP_ACTION,
-        scale=scale,
     )
 
 
@@ -341,7 +353,6 @@ def _resolve_vault_backup_target(
     """Resolve the Vault backup target to the leader unit."""
     try:
         leader = jhelper.get_leader_unit(app, model)
-        units = list(jhelper.get_application(app, model).units)
     except (LeaderNotFoundException, ApplicationNotFoundException):
         LOG.warning("Could not resolve %s, skipping", app)
         return None
@@ -351,14 +362,13 @@ def _resolve_vault_backup_target(
         unit=leader,
         component=VAULT_CHARM,
         action=BACKUP_ACTION,
-        scale=len(units),
     )
 
 
 # ---------------------------------------------------------------------------
 # Atomic action steps
 # ---------------------------------------------------------------------------
-class _ApiAppActionStep(BaseStep):
+class _ActionStep(BaseStep):
     """Dispatch an action on an application's leader."""
 
     def __init__(
@@ -368,6 +378,8 @@ class _ApiAppActionStep(BaseStep):
         description: str,
         app: str,
         action_name: str,
+        force: bool = False,
+        timeout: int = DEFAULT_ACTION_TIMEOUT,
         model: str = OPENSTACK_MODEL,
     ):
         super().__init__(name, description)
@@ -375,6 +387,8 @@ class _ApiAppActionStep(BaseStep):
         self.model = model
         self.app = app
         self.action_name = action_name
+        self.force = force
+        self.timeout = timeout
 
     def run(self, context: StepContext) -> Result:
         """Run action on the application's leader."""
@@ -384,8 +398,16 @@ class _ApiAppActionStep(BaseStep):
                 leader,
                 self.model,
                 self.action_name,
-                timeout=DEFAULT_RESTORE_TIMEOUT,
+                timeout=self.timeout,
             )
+            if not self.force:
+                self.jhelper.wait_until_desired_status(
+                    self.model,
+                    apps=[self.app],
+                    status=[],
+                    agent_status=["idle"],
+                    timeout=self.timeout,
+                )
         except (
             ActionFailedException,
             LeaderNotFoundException,
@@ -397,31 +419,49 @@ class _ApiAppActionStep(BaseStep):
         return Result(ResultType.COMPLETED)
 
 
-class _PauseAppStep(_ApiAppActionStep):
+class _PauseAppStep(_ActionStep):
     """Pause application API services."""
 
-    def __init__(self, jhelper: JujuHelper, app: str, model: str = OPENSTACK_MODEL):
+    def __init__(
+        self,
+        jhelper: JujuHelper,
+        app: str,
+        force: bool = False,
+        timeout=DEFAULT_ACTION_TIMEOUT,
+        model: str = OPENSTACK_MODEL,
+    ):
         super().__init__(
             jhelper,
             "Pause App",
             "Pause API container services",
             app,
             PAUSE_ACTION,
-            model,
+            force=force,
+            timeout=timeout,
+            model=model,
         )
 
 
-class _ResumeAppStep(_ApiAppActionStep):
+class _ResumeAppStep(_ActionStep):
     """Resume application API services."""
 
-    def __init__(self, jhelper: JujuHelper, app: str, model: str = OPENSTACK_MODEL):
+    def __init__(
+        self,
+        jhelper: JujuHelper,
+        app: str,
+        force: bool = False,
+        timeout=DEFAULT_ACTION_TIMEOUT,
+        model: str = OPENSTACK_MODEL,
+    ):
         super().__init__(
             jhelper,
             "Resume App",
             "Resume API container services",
             app,
             RESUME_ACTION,
-            model,
+            force=force,
+            timeout=timeout,
+            model=model,
         )
 
 
@@ -433,7 +473,8 @@ class _ScaleAppStep(BaseStep):
         jhelper: JujuHelper,
         application: str,
         scale: int,
-        timeout: int = DEFAULT_SCALE_TIMEOUT,
+        force: bool = False,
+        timeout: int = DEFAULT_ACTION_TIMEOUT,
         model: str = OPENSTACK_MODEL,
     ) -> None:
         super().__init__("Scale App", f"Scaling {application} to {scale} unit(s)")
@@ -442,6 +483,7 @@ class _ScaleAppStep(BaseStep):
         self.scale = scale
         self.timeout = timeout
         self.model = model
+        self.force = force
 
     def run(self, context: StepContext) -> Result:
         """Scale the application and wait for it to settle."""
@@ -464,6 +506,7 @@ class _RestoreAppStep(BaseStep):
         component: "BackupComponent",
         target: ActionTarget,
         restore_to_time: str | None = None,
+        force: bool = False,
         timeout: int = DEFAULT_RESTORE_TIMEOUT,
         model: str = OPENSTACK_MODEL,
     ):
@@ -474,6 +517,7 @@ class _RestoreAppStep(BaseStep):
         self.component = component
         self.model = model
         self.timeout = timeout
+        self.force = force
 
     def run(self, context: StepContext) -> Result:
         """Restore an app using latest backup or restore-to-time."""
@@ -482,9 +526,11 @@ class _RestoreAppStep(BaseStep):
         except (LeaderNotFoundException, JujuException) as e:
             return Result(ResultType.FAILED, str(e))
 
-        params: dict[str, str] = {}
-        if self.restore_to_time is not None and self.component.supports_restore_to_time:
-            params["restore-to-time"] = self.restore_to_time
+        params: dict[str, str | bool] = {"force": True} if self.force else {}
+        restore_to_time_param = self.component.restore_to_time_param
+
+        if self.restore_to_time is not None and restore_to_time_param is not None:
+            params[restore_to_time_param] = self.restore_to_time
         else:
             try:
                 list_result = self.jhelper.run_action(
@@ -502,7 +548,7 @@ class _RestoreAppStep(BaseStep):
                     ResultType.FAILED,
                     f"No finished backups found for {self.target.app}.",
                 )
-            params[self.component.backup_id_key] = latest
+            params[self.component.backup_id_param] = latest
 
         try:
             self.jhelper.run_action(
@@ -539,30 +585,25 @@ class _BackupAppStep(BaseStep):
         self.model = model
         self.result: BackupResult | None = None
 
-    def _action_params(self) -> dict | None:
-        if self.force and self.component.supports_force:
-            return {"force": True}
-        return None
-
     def run(self, context: StepContext) -> Result:
         """Dispatch the backup action, recording the outcome on ``self.result``."""
         target = self.target
+        params: dict[str, str | bool] = {"force": True} if self.force else {}
+
         try:
             action_result = self.jhelper.run_action(
                 target.unit,
                 self.model,
                 target.action,
-                self._action_params(),
+                params,
                 timeout=self.timeout,
             )
-            backup_id = action_result.get(self.component.backup_id_key)
+            backup = self.component.parse_backup(action_result)
             self.result = BackupResult(
                 app=target.app,
                 unit=target.unit,
                 component=target.component,
-                backup=BackupOutcome(backup_id=backup_id, success=True)
-                if backup_id is not None
-                else None,
+                backup=backup,
             )
         except Exception as e:
             message = str(e)
@@ -587,6 +628,8 @@ class _CheckPauseResumeSupportStep(BaseStep):
         self,
         jhelper: JujuHelper,
         app: str,
+        force: bool = False,
+        timeout: int = DEFAULT_ACTION_TIMEOUT,
         model: str = OPENSTACK_MODEL,
     ):
         super().__init__(
@@ -596,6 +639,8 @@ class _CheckPauseResumeSupportStep(BaseStep):
         self.jhelper = jhelper
         self.app = app
         self.model = model
+        self.force = force
+        self.timeout = timeout
 
     def run(self, context: StepContext) -> Result:
         """Fail fast if the application does not support pause/resume actions."""
@@ -608,11 +653,19 @@ class _CheckPauseResumeSupportStep(BaseStep):
             )
 
         if PAUSE_ACTION not in actions or RESUME_ACTION not in actions:
-            return Result(
-                ResultType.FAILED,
-                f"Application {self.app} does not support the 'pause/resume' action "
-                "required for restore. No changes have been made.",
-            )
+            if not self.force:
+                return Result(
+                    ResultType.FAILED,
+                    f"Control-plane application {self.app} does not support the "
+                    "'pause/resume' action required for restore. "
+                    "No changes have been made.",
+                )
+            else:
+                LOG.warning(
+                    "Control-plane application %s does not support pause/resume"
+                    ", proceeding (--force).",
+                    self.app,
+                )
 
         return Result(ResultType.COMPLETED)
 
@@ -656,11 +709,17 @@ def _build_mysql_restore_precheck_plan(
     jhelper: JujuHelper,
     component: BackupComponent,
     target: ActionTarget,
+    force: bool,
+    timeout: int,
     model: str,
 ) -> list[BaseStep]:
     """Precheck that the MySQL app's API app supports pause/resume."""
     api_app = _api_app_for_mysql(target.app)
-    return [_CheckPauseResumeSupportStep(jhelper, api_app, model=model)]
+    return [
+        _CheckPauseResumeSupportStep(
+            jhelper, api_app, force=force, timeout=timeout, model=model
+        )
+    ]
 
 
 def _build_mysql_restore_plan(
@@ -668,27 +727,25 @@ def _build_mysql_restore_plan(
     component: BackupComponent,
     target: ActionTarget,
     restore_to_time: str | None,
+    force: bool,
     timeout: int,
     model: str,
 ) -> list[BaseStep]:
-    """Build the MySQL restore plan: pause, scale down, restore, scale up, resume.
-
-    The scale to restore back to is read live at plan-build time so the value
-    is accurate before the application is scaled down.
-    """
+    """Build the MySQL restore plan: pause, scale down, restore, scale up, resume."""
     api_app = _api_app_for_mysql(target.app)
-    original_scale = _current_scale(jhelper, target.app, model, target.scale)
+    original_scale = _current_scale(jhelper, target.app, model)
 
     return [
-        _PauseAppStep(jhelper, api_app, model=model),
+        _PauseAppStep(jhelper, api_app, force=force, timeout=timeout, model=model),
         _ScaleAppStep(
-            jhelper, target.app, 1, timeout=DEFAULT_SCALE_TIMEOUT, model=model
+            jhelper, target.app, 1, force=force, timeout=timeout, model=model
         ),
         _RestoreAppStep(
             jhelper,
             component,
             target,
             restore_to_time=restore_to_time,
+            force=force,
             timeout=timeout,
             model=model,
         ),
@@ -696,10 +753,17 @@ def _build_mysql_restore_plan(
             jhelper,
             target.app,
             original_scale,
-            timeout=DEFAULT_SCALE_TIMEOUT,
+            force=force,
+            timeout=timeout,
             model=model,
         ),
-        _ResumeAppStep(jhelper, api_app, model=model),
+        _ResumeAppStep(
+            jhelper,
+            api_app,
+            force=force,
+            timeout=timeout,
+            model=model,
+        ),
     ]
 
 
@@ -707,20 +771,24 @@ def _build_mysql_restore_revert_plan(
     jhelper: JujuHelper,
     component: BackupComponent,
     target: ActionTarget,
+    force: bool,
+    timeout: int,
     model: str,
 ) -> list[BaseStep]:
     """Build the revert plan for a failed MySQL restore: scale back up, resume."""
     api_app = _api_app_for_mysql(target.app)
-    original_scale = _current_scale(jhelper, target.app, model, target.scale)
+    original_scale = _current_scale(jhelper, target.app, model)
+
     return [
         _ScaleAppStep(
             jhelper,
             target.app,
             original_scale,
-            timeout=DEFAULT_SCALE_TIMEOUT,
+            force=force,
+            timeout=timeout,
             model=model,
         ),
-        _ResumeAppStep(jhelper, api_app, model=model),
+        _ResumeAppStep(jhelper, api_app, force=force, timeout=timeout, model=model),
     ]
 
 
@@ -729,6 +797,7 @@ def _build_vault_restore_plan(
     component: BackupComponent,
     target: ActionTarget,
     restore_to_time: str | None,
+    force: bool,
     timeout: int,
     model: str,
 ) -> list[BaseStep]:
@@ -739,6 +808,7 @@ def _build_vault_restore_plan(
             component,
             target,
             restore_to_time=restore_to_time,
+            force=force,
             timeout=timeout,
             model=model,
         ),
@@ -753,28 +823,22 @@ BACKUP_COMPONENTS: list[BackupComponent] = [
         name=MYSQL_CHARM,
         resolve_backup_target=_resolve_mysql_backup_target,
         parse_backup_list=_parse_mysql_backups,
+        parse_backup=_parse_backup,
         build_backup_plan=_build_mysql_backup_plan,
         build_restore_plan=_build_mysql_restore_plan,
         build_restore_revert_plan=_build_mysql_restore_revert_plan,
         build_restore_precheck_plan=_build_mysql_restore_precheck_plan,
-        restore_action=RESTORE_ACTION,
-        supports_force=True,
-        validate_checks=[
-            ValidationCheck.ACTIVE,
-            ValidationCheck.S3_RELATION,
-        ],
+        validate_checks=[APP_READY_VALIDATION_CHECK, S3_RELATION_VALIDATION_CHECK],
     ),
     BackupComponent(
         name=VAULT_CHARM,
         resolve_backup_target=_resolve_vault_backup_target,
         parse_backup_list=_parse_vault_backups,
+        parse_backup=_parse_backup,
         build_backup_plan=_build_vault_backup_plan,
         build_restore_plan=_build_vault_restore_plan,
+        validate_checks=[APP_READY_VALIDATION_CHECK, S3_RELATION_VALIDATION_CHECK],
         restore_action=VAULT_RESTORE_ACTION,
-        validate_checks=[
-            ValidationCheck.ACTIVE,
-            ValidationCheck.S3_RELATION,
-        ],
     ),
 ]
 
@@ -829,12 +893,14 @@ class ValidateStep(BaseStep):
         discovered: dict[str, list[str]],
         model: str = OPENSTACK_MODEL,
         components: list[BackupComponent] = BACKUP_COMPONENTS,
+        force: bool = False,
     ):
         super().__init__("Validate applications", "Validating backup readiness")
         self.jhelper = jhelper
         self.discovered = discovered
         self.model = model
         self.components = components
+        self.force = force
 
     def run(self, context: StepContext) -> Result:
         """Return {'valid': {...}, 'failures': {app: [check names]}}."""
@@ -852,7 +918,7 @@ class ValidateStep(BaseStep):
                 continue
             for app_name in apps:
                 app_status = status.apps.get(app_name)
-                failed = self._failed_checks(component, app_status)
+                failed = self._failed_checks(component, app_status, self.force)
                 if failed:
                     failures[app_name] = failed
                 else:
@@ -862,14 +928,14 @@ class ValidateStep(BaseStep):
 
     @staticmethod
     def _failed_checks(
-        component: BackupComponent, app_status: object | None
+        component: BackupComponent, app_status: object | None, force: bool = False
     ) -> list[str]:
         if app_status is None:
-            return [check.value for check in component.validate_checks] or ["present"]
+            return [check.name for check in component.validate_checks] or ["present"]
         return [
-            check.value
+            check.name
             for check in component.validate_checks
-            if not _VALIDATION_PREDICATES[check](app_status)
+            if not (check.forceable and force) and not check.predicate(app_status)
         ]
 
 
@@ -891,8 +957,9 @@ class ResolveActionTargetsStep(BaseStep):
         self.model = model
 
     def run(self, context: StepContext) -> Result:
-        """Return a flat list of resolved leader targets across components."""
+        """Return resolved targets and unresolved apps across components."""
         targets: list[ActionTarget] = []
+        unresolved: list[dict[str, str]] = []
         for component_name, apps in self.discovered.items():
             component = _component_for(component_name)
             if component is None:
@@ -902,6 +969,7 @@ class ResolveActionTargetsStep(BaseStep):
                     leader = self.jhelper.get_leader_unit(app, self.model)
                 except (LeaderNotFoundException, ApplicationNotFoundException):
                     self.update_status(context, f"skipped {app}")
+                    unresolved.append({"app": app, "component": component.name})
                     continue
                 targets.append(
                     ActionTarget(
@@ -912,7 +980,13 @@ class ResolveActionTargetsStep(BaseStep):
                     )
                 )
 
-        return Result(ResultType.COMPLETED, targets)
+        return Result(
+            ResultType.COMPLETED,
+            {
+                "targets": targets,
+                "unresolved": sorted(unresolved, key=lambda item: item["app"]),
+            },
+        )
 
 
 class RunBackupsStep(BaseStep):
@@ -1077,17 +1151,19 @@ class RestoreStep(BaseStep):
     def __init__(
         self,
         jhelper: JujuHelper,
-        targets: list[ActionTarget],
+        discovered: dict[str, list[str]],
         restore_to_time: str | None = None,
+        force: bool = False,
         timeout: int = DEFAULT_RESTORE_TIMEOUT,
         model: str = OPENSTACK_MODEL,
     ):
         super().__init__("Restore applications", "Restoring applications from backup")
         self.jhelper = jhelper
-        self.targets = targets
+        self.discovered = discovered
         self.restore_to_time = restore_to_time
         self.timeout = timeout
         self.model = model
+        self.force = force
 
     def _run_plan(self, plan: list[BaseStep], context: StepContext) -> None:
         """Run a plan of steps, raising RuntimeError on the first failure."""
@@ -1096,14 +1172,39 @@ class RestoreStep(BaseStep):
             if result.result_type == ResultType.FAILED:
                 raise RuntimeError(result.message)
 
+    def _resolve_targets(
+        self, context: StepContext
+    ) -> list[tuple[BackupComponent, ActionTarget]]:
+        """Resolve one backup target per discovered application."""
+        resolved: list[tuple[BackupComponent, ActionTarget]] = []
+        for component_name, apps in self.discovered.items():
+            component = _component_for(component_name)
+            if component is None:
+                continue
+            for app in apps:
+                target = ActionTarget(
+                    app=app,
+                    unit=self.jhelper.get_leader_unit(app, self.model),
+                    component=component.name,
+                    action=component.restore_action,
+                )
+                resolved.append((component, target))
+        return resolved
+
     def _restore_one(
         self, component: BackupComponent, target: ActionTarget, context: StepContext
     ) -> RestoreResult:
+        revert_plan: list[BaseStep] = []
+        if component.build_restore_revert_plan is not None:
+            revert_plan = component.build_restore_revert_plan(
+                self.jhelper, component, target, self.force, self.timeout, self.model
+            )
         plan = component.build_restore_plan(
             self.jhelper,
             component,
             target,
             self.restore_to_time,
+            self.force,
             self.timeout,
             self.model,
         )
@@ -1111,11 +1212,6 @@ class RestoreStep(BaseStep):
             self._run_plan(plan, context)
             return RestoreResult(app=target.app, component=component.name, success=True)
         except Exception as e:
-            revert_plan: list[BaseStep] = []
-            if component.build_restore_revert_plan is not None:
-                revert_plan = component.build_restore_revert_plan(
-                    self.jhelper, component, target, self.model
-                )
             reverted = False
             if revert_plan:
                 try:
@@ -1133,23 +1229,15 @@ class RestoreStep(BaseStep):
 
     def run(self, context: StepContext) -> Result:
         """Precheck all targets, then restore each sequentially, aggregating."""
-        planned: list[tuple[BackupComponent, ActionTarget]] = []
-        for target in self.targets:
-            component = _component_for(target.component)
-            if component is None:
-                return Result(
-                    ResultType.FAILED,
-                    f"No restore plan defined for {target.app}.",
-                )
-            planned.append((component, target))
+        resolved = self._resolve_targets(context)
+        if not resolved:
+            return Result(ResultType.COMPLETED, [])
 
-        # Global fail-fast precheck: run every component's precheck before any
-        # restore work so an unsupported app never leaves others half-restored.
-        for component, target in planned:
+        for component, target in resolved:
             if component.build_restore_precheck_plan is None:
                 continue
             precheck = component.build_restore_precheck_plan(
-                self.jhelper, component, target, self.model
+                self.jhelper, component, target, self.force, self.timeout, self.model
             )
             try:
                 self._run_plan(precheck, context)
@@ -1157,7 +1245,7 @@ class RestoreStep(BaseStep):
                 return Result(ResultType.FAILED, str(e))
 
         results: list[RestoreResult] = []
-        for component, target in planned:
+        for component, target in resolved:
             self.update_status(context, f"restoring {target.app}")
             results.append(self._restore_one(component, target, context))
 

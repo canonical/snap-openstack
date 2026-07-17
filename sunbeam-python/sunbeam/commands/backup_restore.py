@@ -20,7 +20,6 @@ from sunbeam.steps.backup_restore import (
     DEFAULT_BACKUP_TIMEOUT,
     DEFAULT_RESTORE_TIMEOUT,
     RESTORE_TIME_FORMAT,
-    ActionTarget,
     BackupInventory,
     BackupResult,
     DiscoverBackupApplicationsStep,
@@ -41,28 +40,36 @@ EXIT_SUCCESS = 0
 EXIT_PARTIAL = 1
 EXIT_FAILURE = 2
 
+CONTINUE_BACKUP_QUESTION = ConfirmQuestion(
+    "Continue and back up the remaining components?",
+    default_value=False,
+    description=(
+        "Some discovered applications were skipped because they are not"
+        " ready for backup."
+    ),
+)
 
-def backup_questions() -> dict[str, Question]:
-    """Confirmation questions for the backup/restore commands."""
-    return {
-        "continue_backup": ConfirmQuestion(
-            "Continue and back up the remaining components?",
-            default_value=False,
-            description=(
-                "Some discovered applications were skipped because they are not"
-                " ready for backup."
-            ),
-        ),
-        "continue_restore": ConfirmQuestion(
-            "Continue and restore the remaining components?",
-            default_value=False,
-            description=(
-                "Some discovered applications were skipped because they are not"
-                " ready for restore. Partial restores may result in "
-                "dangling OpenStack objects. "
-            ),
-        ),
-    }
+CONTINUE_RESTORE_READY_QUESTION = ConfirmQuestion(
+    "Continue and restore the remaining components?",
+    default_value=False,
+    description=(
+        "Some discovered applications were skipped because they are not"
+        " ready for restore. Partial restores may result in "
+        "dangling OpenStack objects. "
+    ),
+)
+
+CONTINUE_RESTORE_FILTER_QUESTION = ConfirmQuestion(
+    "Continue and restore the remaining components?",
+    default_value=False,
+    description=(
+        "Some discovered applications have missing or failed backups.\n"
+        "- Applications without successful backups will be skipped.\n"
+        "- Applications with mixed backup results will restore from successful "
+        "backups only.\n"
+        "Partial restores may result in dangling OpenStack objects."
+    ),
+)
 
 
 def _confirm_or_abort(question: Question, no_prompt: bool) -> None:
@@ -91,9 +98,12 @@ def _validate_apps(
     jhelper,
     discovered: dict[str, list[str]],
     model: str,
+    force: bool,
 ) -> tuple[dict[str, list[str]], bool]:
     """Run the validation step and warn on every skipped application."""
-    results = run_plan([ValidateStep(jhelper, discovered, model=model)], console)
+    results = run_plan(
+        [ValidateStep(jhelper, discovered, model=model, force=force)], console
+    )
     outcome = get_step_message(results, ValidateStep)
     valid = outcome["valid"]
     failures = outcome["failures"]
@@ -108,29 +118,42 @@ def _validate_apps(
     return valid, bool(failures)
 
 
-def _resolve_action_targets(
-    jhelper,
-    discovered: dict[str, list[str]],
-    model: str,
-) -> list[ActionTarget]:
-    """Resolve leader targets for generic actions (e.g. list-backups)."""
-    results = run_plan(
-        [ResolveActionTargetsStep(jhelper, discovered, model=model)], console
-    )
-    return get_step_message(results, ResolveActionTargetsStep)
-
-
 def _list_backup_inventory(
     jhelper,
-    targets: list[ActionTarget],
+    discovered: dict[str, list[str]],
     model: str,
     timeout: int,
 ) -> list[BackupInventory]:
     """List available backups for the given targets."""
     results = run_plan(
-        [ListBackupsStep(jhelper, targets, timeout=timeout, model=model)], console
+        [ResolveActionTargetsStep(jhelper, discovered, model=model)], console
     )
-    return get_step_message(results, ListBackupsStep)
+    resolved = get_step_message(results, ResolveActionTargetsStep)
+    targets = resolved["targets"]
+    unresolved_targets = resolved["unresolved"]
+
+    results = run_plan(
+        [
+            ListBackupsStep(
+                jhelper,
+                targets,
+                timeout=timeout,
+                model=model,
+            )
+        ],
+        console,
+    )
+    inventories = get_step_message(results, ListBackupsStep)
+    for unresolved in unresolved_targets:
+        inventories.append(
+            BackupInventory(
+                app=unresolved["app"],
+                unit="-",
+                component=unresolved["component"],
+                error="Could not resolve target.",
+            )
+        )
+    return inventories
 
 
 def _print_inventory(results: list[BackupInventory]) -> None:
@@ -184,46 +207,61 @@ def _print_backup_summary(results: list[BackupResult]) -> None:
 
 
 def _filter_restore_targets(
-    targets: list[ActionTarget],
+    discovered: dict[str, list[str]],
     inventory: list[BackupInventory],
-) -> list[ActionTarget]:
+) -> tuple[dict[str, list[str]], bool]:
     """Warn on missing inventory and keep only restorable targets."""
-    inventory_by_app = {entry.app: entry for entry in inventory}
-    failed_inventory = sorted(
-        (
-            entry
-            for entry in inventory
-            if not entry.backups or not any(b.success is True for b in entry.backups)
-        ),
-        key=lambda entry: entry.app,
-    )
-    for entry in failed_inventory:
-        if entry.error:
+    partially_failed_apps = {
+        entry.app
+        for entry in inventory
+        if entry.backups
+        and any(b.success is True for b in entry.backups)
+        and any(b.success is False for b in entry.backups)
+    }
+
+    failed_inventory_by_app: dict[str, BackupInventory] = {
+        entry.app: entry
+        for entry in inventory
+        if entry.error is not None
+        or not entry.backups
+        or not any(b.success is True for b in entry.backups)
+    }
+
+    for entry, inv in failed_inventory_by_app.items():
+        if inv.error:
             console.print(
                 "[yellow]Warning:[/yellow] Failed to list backups for "
-                f"{entry.app}: {entry.error}"
+                f"{entry}: {inv.error}"
             )
-        elif not entry.backups:
+        elif not inv.backups:
             console.print(
-                f"[yellow]Warning:[/yellow] No backups available for {entry.app}."
+                f"[yellow]Warning:[/yellow] No backups available for {entry}."
+            )
+        elif any(b.success is False for b in inv.backups):
+            console.print(
+                f"[yellow]Warning:[/yellow] Some backups failed for {entry}."
+                f" No successful backups are available for restore."
             )
         else:
             console.print(
                 f"[yellow]Warning:[/yellow] No successful backups available for"
-                f" {entry.app}."
+                f" {entry}."
             )
 
-    restorable = []
-    for target in targets:
-        target_inventory = inventory_by_app.get(target.app)
-        if (
-            target_inventory is not None
-            and target_inventory.error is None
-            and target_inventory.backups
-            and any(b.success is True for b in target_inventory.backups)
-        ):
-            restorable.append(target)
-    return restorable
+    for app in sorted(partially_failed_apps):
+        console.print(
+            f"[yellow]Warning:[/yellow] Some backups for {app} failed."
+            " Only successful backups will be considered for restore"
+            " (possible out-of-band state)."
+        )
+
+    restorable: dict[str, list[str]] = {}
+    for component, apps in discovered.items():
+        for app in apps:
+            if app in failed_inventory_by_app:
+                continue
+            restorable.setdefault(component, []).append(app)
+    return restorable, bool(failed_inventory_by_app) or bool(partially_failed_apps)
 
 
 def _validate_restore_to_time(
@@ -276,9 +314,9 @@ def backup(ctx: click.Context, force: bool, timeout: int, no_prompt: bool) -> No
         console.print("No applications found to back up. Exiting.")
         sys.exit(EXIT_FAILURE)
 
-    discovered, was_filtered = _validate_apps(jhelper, discovered, model)
+    discovered, was_filtered = _validate_apps(jhelper, discovered, model, force=force)
     if was_filtered:
-        _confirm_or_abort(backup_questions()["continue_backup"], no_prompt)
+        _confirm_or_abort(CONTINUE_BACKUP_QUESTION, no_prompt)
 
     if not any(discovered.values()):
         console.print("No applications remain to back up after validation. Exiting.")
@@ -349,16 +387,14 @@ def list_backups(ctx: click.Context, timeout: int) -> None:
     )
 
     discovered = _discover_apps(jhelper, model)
-    discovered, _ = _validate_apps(jhelper, discovered, model)
+    discovered, _ = _validate_apps(jhelper, discovered, model, force=False)
 
     if not any(discovered.values()):
         console.print("No applications found to list backups from. Exiting.")
         sys.exit(EXIT_FAILURE)
 
-    targets = _resolve_action_targets(jhelper, discovered, model)
-
     listed_at = datetime.now(timezone.utc).strftime(RESTORE_TIME_FORMAT)
-    inventory = _list_backup_inventory(jhelper, targets, model, timeout)
+    inventory = _list_backup_inventory(jhelper, discovered, model, timeout)
 
     failed_inventory = sorted(
         (entry for entry in inventory if entry.error),
@@ -431,27 +467,27 @@ def restore(
         console.print("No applications found to restore. Exiting.")
         sys.exit(EXIT_FAILURE)
 
-    discovered, was_filtered = _validate_apps(jhelper, discovered, model)
+    discovered, was_filtered = _validate_apps(jhelper, discovered, model, force=force)
     if was_filtered:
-        _confirm_or_abort(backup_questions()["continue_restore"], no_prompt)
+        _confirm_or_abort(CONTINUE_RESTORE_READY_QUESTION, no_prompt)
 
-    targets = _resolve_action_targets(jhelper, discovered, model)
-    if not targets:
-        console.print("No restore targets could be resolved. Exiting.")
-        sys.exit(EXIT_FAILURE)
+    inventory = _list_backup_inventory(jhelper, discovered, model, timeout)
+    _print_inventory(inventory)
 
-    inventory = _list_backup_inventory(jhelper, targets, model, timeout)
-    targets = _filter_restore_targets(targets, inventory)
+    discovered, was_filtered = _filter_restore_targets(discovered, inventory)
 
-    if not targets:
-        console.print("No backups were found to restore from. Exiting.")
+    if was_filtered:
+        _confirm_or_abort(CONTINUE_RESTORE_FILTER_QUESTION, no_prompt)
+
+    if not any(discovered.values()):
+        console.print("No applications remain to restore after validation. Exiting.")
         sys.exit(EXIT_FAILURE)
 
     restore_results = run_plan(
         [
             RestoreStep(
                 jhelper,
-                targets,
+                discovered,
                 restore_to_time=restore_to_time,
                 timeout=timeout,
                 model=model,

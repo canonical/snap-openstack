@@ -8,6 +8,7 @@ import pytest
 from click.testing import CliRunner
 
 from sunbeam.commands.backup_restore import list_backups
+from sunbeam.core.juju import LeaderNotFoundException
 
 
 def _app_status(charm_name):
@@ -148,3 +149,37 @@ class TestListBackupsCommand:
         assert "Failed to list backups for" in result.output
         assert "keystone-mysql" in result.output
         assert "vault" in result.output
+
+    def test_unresolved_targets_exit_2_with_warning(self, deployment, jhelper):
+        mysql = _s3_related(_app_status("mysql-k8s"))
+        vault = _s3_related(_app_status("vault-k8s"))
+        jhelper.get_model_status.return_value = _model_status(
+            {"keystone-mysql": mysql, "vault": vault}
+        )
+
+        def _leader(app, model):
+            if app == "vault":
+                raise LeaderNotFoundException("no leader")
+            return f"{app}/0"
+
+        def _run_action(unit, model, action, params=None, timeout=None):
+            if unit == "keystone-mysql/0":
+                return {
+                    "backups": (
+                        "backup-id | backup-type | backup-status\n"
+                        "---------------------------------------\n"
+                        "2026-07-15T00:00:00Z | physical | finished"
+                    )
+                }
+            return {}
+
+        jhelper.get_leader_unit.side_effect = _leader
+        jhelper.run_action.side_effect = _run_action
+
+        result = CliRunner().invoke(list_backups, obj=deployment)
+
+        assert result.exit_code == 2, result.output
+        assert (
+            "Failed to list backups for vault: Could not resolve target."
+            in result.output
+        )
