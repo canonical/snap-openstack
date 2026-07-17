@@ -63,7 +63,7 @@ class TestGuardedSteps:
             {},
         ]
         target = ActionTarget(
-            "keystone-mysql", "keystone-mysql/0", MYSQL_CHARM, "restore", 3
+            "keystone-mysql", "keystone-mysql/0", MYSQL_CHARM, "restore"
         )
         result = _RestoreAppStep(jhelper, _mysql_component(), target).run(step_context)
 
@@ -77,10 +77,10 @@ class TestGuardedSteps:
         jhelper = Mock()
         jhelper.get_leader_unit.return_value = "keystone-mysql/0"
         component = dataclasses.replace(
-            _mysql_component(), supports_restore_to_time=True
+            _mysql_component(), restore_to_time_param="restore-to-time"
         )
         target = ActionTarget(
-            "keystone-mysql", "keystone-mysql/0", MYSQL_CHARM, "restore", 3
+            "keystone-mysql", "keystone-mysql/0", MYSQL_CHARM, "restore"
         )
 
         result = _RestoreAppStep(
@@ -106,7 +106,7 @@ class TestGuardedSteps:
             {"backup-ids": '["vault-backup-openstack-2026-07-15-00-03-28"]'},
             {},
         ]
-        target = ActionTarget("vault", "vault/0", VAULT_CHARM, "restore-backup", 1)
+        target = ActionTarget("vault", "vault/0", VAULT_CHARM, "restore-backup")
 
         result = _RestoreAppStep(jhelper, _vault_component(), target).run(step_context)
 
@@ -156,13 +156,9 @@ class TestRestoreStepWrapper:
         jhelper.get_application_actions.return_value = []  # no pause/resume
         jhelper.run_action.side_effect = _finished_backup_action
 
-        targets = [
-            ActionTarget(
-                "keystone-mysql", "keystone-mysql/0", MYSQL_CHARM, "restore", 2
-            )
-        ]
+        discovered = {MYSQL_CHARM: ["keystone-mysql"]}
 
-        result = RestoreStep(jhelper, targets).run(step_context)
+        result = RestoreStep(jhelper, discovered).run(step_context)
 
         assert result.result_type == ResultType.FAILED
         assert "pause/resume" in result.message
@@ -183,11 +179,9 @@ class TestRestoreStepWrapper:
 
         jhelper.run_action.side_effect = _run_action
 
-        targets = [
-            ActionTarget("vault", "vault/0", VAULT_CHARM, "restore-backup", 1),
-        ]
+        discovered = {VAULT_CHARM: ["vault"]}
 
-        result = RestoreStep(jhelper, targets).run(step_context)
+        result = RestoreStep(jhelper, discovered).run(step_context)
 
         assert result.result_type == ResultType.COMPLETED
         assert result.message[0].success is True
@@ -215,13 +209,9 @@ class TestRestoreStepWrapper:
 
         jhelper.run_action.side_effect = _run_action
 
-        targets = [
-            ActionTarget(
-                "keystone-mysql", "keystone-mysql/0", MYSQL_CHARM, "restore", 2
-            )
-        ]
+        discovered = {MYSQL_CHARM: ["keystone-mysql"]}
 
-        result = RestoreStep(jhelper, targets).run(step_context)
+        result = RestoreStep(jhelper, discovered).run(step_context)
 
         assert result.result_type == ResultType.COMPLETED
         outcome = result.message[0]

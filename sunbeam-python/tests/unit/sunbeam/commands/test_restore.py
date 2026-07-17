@@ -8,7 +8,7 @@ import pytest
 from click.testing import CliRunner
 
 from sunbeam.commands.backup_restore import restore
-from sunbeam.core.juju import JujuException
+from sunbeam.core.juju import JujuException, LeaderNotFoundException
 from sunbeam.core.openstack import OPENSTACK_MODEL
 
 
@@ -181,7 +181,10 @@ class TestRestoreCommand:
         result = CliRunner().invoke(restore, ["--no-prompt"], obj=deployment)
 
         assert result.exit_code == 2, result.output
-        assert "No restore targets could be resolved. Exiting." in result.output
+        assert (
+            "No applications remain to restore after validation. Exiting."
+            in result.output
+        )
 
     def test_unrelated_vault_is_skipped_and_restore_continues(
         self, deployment, jhelper
@@ -237,7 +240,89 @@ class TestRestoreCommand:
         result = CliRunner().invoke(restore, ["--no-prompt"], obj=deployment)
 
         assert result.exit_code == 2, result.output
-        assert "No backups were found to restore from. Exiting." in result.output
+        assert (
+            "No applications remain to restore after validation. Exiting."
+            in result.output
+        )
+
+    def test_warns_when_some_backups_failed_but_restore_continues(
+        self, deployment, jhelper
+    ):
+        def _run_action(unit, model, action, params=None, timeout=None):
+            if action == "get-cluster-status":
+                return {
+                    "status": {
+                        "defaultreplicaset": {
+                            "topology": {"mysql-0": {"memberrole": "PRIMARY"}}
+                        }
+                    }
+                }
+            if action == "list-backups" and unit.startswith("keystone-mysql"):
+                return {
+                    "backups": (
+                        "backup-id | backup-type | backup-status\n"
+                        "---------------------------------------\n"
+                        "2026-07-15T00:00:00Z | physical | failed\n"
+                        "2026-07-14T00:00:00Z | physical | finished"
+                    )
+                }
+            if action == "list-backups" and unit.startswith("vault"):
+                return {
+                    "backup-ids": json.dumps(
+                        ["vault-backup-openstack-2026-07-15-00-03-28"]
+                    )
+                }
+            return {}
+
+        jhelper.run_action.side_effect = _run_action
+
+        result = CliRunner().invoke(restore, ["--no-prompt"], obj=deployment)
+
+        assert result.exit_code == 0, result.output
+        assert "Some backups for keystone-mysql failed." in result.output
+        assert "Only successful backups will be" in result.output
+        assert "considered for restore" in result.output
+
+    def test_partial_backup_failures_prompt_and_decline_aborts(
+        self, deployment, jhelper, monkeypatch
+    ):
+        def _run_action(unit, model, action, params=None, timeout=None):
+            if action == "get-cluster-status":
+                return {
+                    "status": {
+                        "defaultreplicaset": {
+                            "topology": {"mysql-0": {"memberrole": "PRIMARY"}}
+                        }
+                    }
+                }
+            if action == "list-backups" and unit.startswith("keystone-mysql"):
+                return {
+                    "backups": (
+                        "backup-id | backup-type | backup-status\n"
+                        "---------------------------------------\n"
+                        "2026-07-15T00:00:00Z | physical | failed\n"
+                        "2026-07-14T00:00:00Z | physical | finished"
+                    )
+                }
+            if action == "list-backups" and unit.startswith("vault"):
+                return {
+                    "backup-ids": json.dumps(
+                        ["vault-backup-openstack-2026-07-15-00-03-28"]
+                    )
+                }
+            return {}
+
+        jhelper.run_action.side_effect = _run_action
+
+        monkeypatch.setattr(
+            "sunbeam.commands.backup_restore.ConfirmQuestion.ask",
+            lambda self, *a, **k: False,
+        )
+
+        result = CliRunner().invoke(restore, obj=deployment)
+
+        assert result.exit_code == 1, result.output
+        assert "Aborted" in result.output
 
     def test_inventory_lookup_failures_are_reported_and_exit_2(
         self, deployment, jhelper
@@ -261,6 +346,95 @@ class TestRestoreCommand:
 
         assert result.exit_code == 2, result.output
         assert "Failed to list backups for" in result.output
+
+    def test_force_proceeds_when_target_app_is_inactive(self, deployment, jhelper):
+        mysql = _s3_related(_app_status("mysql-k8s"))
+        mysql.app_status.current = "blocked"
+        jhelper.get_model_status.return_value = _model_status({"keystone-mysql": mysql})
+
+        def _run_action(unit, model, action, params=None, timeout=None):
+            if action == "get-cluster-status":
+                return {
+                    "status": {
+                        "defaultreplicaset": {
+                            "topology": {"mysql-0": {"memberrole": "PRIMARY"}}
+                        }
+                    }
+                }
+            if action == "list-backups":
+                return {
+                    "backups": (
+                        "backup-id | backup-type | backup-status\n"
+                        "---------------------------------------\n"
+                        "2026-07-15T00:00:00Z | physical | finished"
+                    )
+                }
+            return {}
+
+        jhelper.run_action.side_effect = _run_action
+
+        result = CliRunner().invoke(restore, ["--force", "--no-prompt"], obj=deployment)
+
+        assert result.exit_code == 0, result.output
+        restore_calls = [
+            call
+            for call in jhelper.run_action.call_args_list
+            if call.args[2] == "restore"
+        ]
+        assert restore_calls
+
+    def test_force_does_not_bypass_inventory_target_resolution_failure(
+        self, deployment, jhelper
+    ):
+        mysql = _s3_related(_app_status("mysql-k8s"))
+        jhelper.get_model_status.return_value = _model_status({"keystone-mysql": mysql})
+
+        leader_calls = {"keystone-mysql": 0}
+
+        def _leader(app, model):
+            if app != "keystone-mysql":
+                return f"{app}/0"
+            leader_calls[app] += 1
+            if leader_calls[app] == 1:
+                raise LeaderNotFoundException("temporary leader lookup failure")
+            return "keystone-mysql/0"
+
+        def _run_action(unit, model, action, params=None, timeout=None):
+            if action == "get-cluster-status":
+                return {
+                    "status": {
+                        "defaultreplicaset": {
+                            "topology": {"mysql-0": {"memberrole": "PRIMARY"}}
+                        }
+                    }
+                }
+            if action == "list-backups":
+                return {
+                    "backups": (
+                        "backup-id | backup-type | backup-status\n"
+                        "---------------------------------------\n"
+                        "2026-07-15T00:00:00Z | physical | finished"
+                    )
+                }
+            return {}
+
+        jhelper.get_leader_unit.side_effect = _leader
+        jhelper.run_action.side_effect = _run_action
+
+        result = CliRunner().invoke(restore, ["--force", "--no-prompt"], obj=deployment)
+
+        assert result.exit_code == 2, result.output
+        assert (
+            "Failed to list backups for keystone-mysql: Could not resolve target."
+            in result.output
+        )
+        assert (
+            "No applications remain to restore after validation. Exiting."
+            in result.output
+        )
+        assert not any(
+            call.args[2] == "restore" for call in jhelper.run_action.call_args_list
+        )
 
     def test_non_active_target_app_is_skipped(self, deployment, jhelper):
         mysql = _s3_related(_app_status("mysql-k8s"))

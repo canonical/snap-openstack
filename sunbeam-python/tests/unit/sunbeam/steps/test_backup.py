@@ -32,6 +32,7 @@ from sunbeam.steps.backup_restore import (
     _build_vault_backup_plan,
     _build_vault_restore_plan,
     _component_for,
+    _parse_backup,
     _parse_mysql_backups,
     _parse_vault_backups,
     _resolve_mysql_backup_target,
@@ -101,7 +102,6 @@ class TestResolveMySQLTarget:
         assert target is not None
         assert target.unit == "keystone-mysql/1"
         assert target.component == MYSQL_CHARM
-        assert target.scale == 2
 
     def test_falls_back_to_leader_when_no_secondary(self):
         jhelper = Mock()
@@ -123,7 +123,6 @@ class TestResolveMySQLTarget:
 
         assert target is not None
         assert target.unit == "cinder-mysql/0"
-        assert target.scale == 1
 
     def test_skips_on_action_failure_without_force(self):
         jhelper = Mock()
@@ -153,7 +152,6 @@ class TestResolveMySQLTarget:
 
         assert target is not None
         assert target.unit == "keystone-mysql/0"
-        assert target.scale == 1
 
     def test_skips_when_no_leader(self):
         jhelper = Mock()
@@ -181,7 +179,6 @@ class TestResolveVaultTarget:
         assert target is not None
         assert target.unit == "vault/0"
         assert target.component == VAULT_CHARM
-        assert target.scale == 1
 
     def test_skips_when_no_leader(self):
         jhelper = Mock()
@@ -251,9 +248,12 @@ class TestResolveActionTargetsStep:
         result = ResolveActionTargetsStep(jhelper, discovered).run(step_context)
 
         assert result.result_type == ResultType.COMPLETED
-        apps = {t.app for t in result.message}
+        apps = {t.app for t in result.message["targets"]}
         assert apps == {"keystone-mysql", "vault"}
-        assert all(t.unit.endswith("/0") for t in result.message)
+        assert all(t.unit.endswith("/0") for t in result.message["targets"])
+        assert result.message["unresolved"] == [
+            {"app": "broken-mysql", "component": MYSQL_CHARM}
+        ]
 
 
 class TestValidateStep:
@@ -299,7 +299,7 @@ class TestBackupAppStep:
         jhelper.run_action.return_value = {"backup-id": "id-1"}
         component = _component_for(MYSQL_CHARM)
         target = ActionTarget(
-            "keystone-mysql", "keystone-mysql/1", MYSQL_CHARM, "create-backup", 2
+            "keystone-mysql", "keystone-mysql/1", MYSQL_CHARM, "create-backup"
         )
 
         step = _BackupAppStep(jhelper, component, target)
@@ -318,7 +318,7 @@ class TestBackupAppStep:
         )
         component = _component_for(MYSQL_CHARM)
         target = ActionTarget(
-            "nova-mysql", "nova-mysql/0", MYSQL_CHARM, "create-backup", 2
+            "nova-mysql", "nova-mysql/0", MYSQL_CHARM, "create-backup"
         )
 
         step = _BackupAppStep(jhelper, component, target)
@@ -328,16 +328,6 @@ class TestBackupAppStep:
         assert step.result.error is not None
         assert step.result.backup is not None
         assert step.result.backup.success is None
-
-    def test_force_only_applies_when_supported(self, step_context):
-        jhelper = Mock()
-        jhelper.run_action.return_value = {"backup-id": "id"}
-        component = _component_for(VAULT_CHARM)  # supports_force is False
-        target = ActionTarget("vault", "vault/0", VAULT_CHARM, "create-backup", 1)
-
-        _BackupAppStep(jhelper, component, target, force=True).run(step_context)
-
-        assert jhelper.run_action.call_args.args[3] is None
 
 
 class TestRunBackupsStep:
@@ -401,7 +391,8 @@ class TestRunBackupsStep:
             if call.args[2] == "create-backup"
         }
         assert params_by_unit["keystone-mysql/0"] == {"force": True}
-        assert params_by_unit["vault/0"] is None
+        # vault does not support force, but we still pass it as a param ignored by Juju
+        assert params_by_unit["vault/0"] == {"force": True}
 
     def test_timeout_is_marked_as_in_progress(self, step_context):
         jhelper = Mock()
@@ -492,9 +483,9 @@ class TestListBackupsStep:
         jhelper.run_action.side_effect = _run_action
         targets = [
             ActionTarget(
-                "keystone-mysql", "keystone-mysql/0", MYSQL_CHARM, "list-backups", 2
+                "keystone-mysql", "keystone-mysql/0", MYSQL_CHARM, "list-backups"
             ),
-            ActionTarget("vault", "vault/0", VAULT_CHARM, "list-backups", 1),
+            ActionTarget("vault", "vault/0", VAULT_CHARM, "list-backups"),
         ]
 
         result = ListBackupsStep(jhelper, targets).run(step_context)
@@ -515,7 +506,7 @@ class TestListBackupsStep:
         jhelper.run_action.side_effect = Exception("boom")
         targets = [
             ActionTarget(
-                "keystone-mysql", "keystone-mysql/0", MYSQL_CHARM, "list-backups", 2
+                "keystone-mysql", "keystone-mysql/0", MYSQL_CHARM, "list-backups"
             )
         ]
 
@@ -591,12 +582,13 @@ class TestExtensibility:
         self, step_context, monkeypatch
     ):
         def _resolve_fake(jhelper, app, model, force):
-            return ActionTarget(app, f"{app}/0", "fake-charm", "create-backup", 1)
+            return ActionTarget(app, f"{app}/0", "fake-charm", "create-backup")
 
         fake = BackupComponent(
             name="fake-charm",
             resolve_backup_target=_resolve_fake,
             parse_backup_list=_parse_vault_backups,
+            parse_backup=_parse_backup,
             build_backup_plan=_build_vault_backup_plan,
             build_restore_plan=_build_vault_restore_plan,
         )
