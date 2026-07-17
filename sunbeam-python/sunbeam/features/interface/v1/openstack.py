@@ -166,13 +166,28 @@ class OpenStackControlPlaneFeature(EnableDisableFeature, typing.Generic[ConfigTy
             [
                 TerraformInitStep(deployment.get_tfhelper(self.tfplan)),
                 EnableOpenStackApplicationStep(
-                    deployment, config, tfhelper, jhelper, self
+                    deployment,
+                    config,
+                    tfhelper,
+                    jhelper,
+                    self,
+                    overlay=self.get_app_status_overlay_on_enable(deployment),
                 ),
             ]
         )
 
         run_plan(plan, console, show_hints)
         click.echo(f"OpenStack {self.display_name} application enabled.")
+
+    def get_app_status_overlay_on_enable(
+        self, deployment: Deployment
+    ) -> dict[str, ApplicationStatusOverlay]:
+        """Set per-app status overlay while waiting on enable.
+
+        Features can override this to accept additional workload statuses for
+        specific apps during enablement.
+        """
+        return {}
 
     def pre_disable(self, deployment: Deployment, show_hints: bool) -> None:
         """Handler to perform tasks before disabling the feature."""
