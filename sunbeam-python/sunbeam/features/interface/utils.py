@@ -221,6 +221,28 @@ def decode_base64_as_string(data: str) -> str | None:
         return None
 
 
+def cert_and_csr_public_key_match(cert_b64: str, csr: str) -> bool:
+    """Return True if the public key in the certificate matches the one in the CSR.
+
+    Returns False if either cannot be decoded.
+    """
+    try:
+        cert = x509.load_pem_x509_certificate(base64.b64decode(cert_b64))
+        req = x509.load_pem_x509_csr(bytes(csr, "utf-8"))
+        cert_pub = cert.public_key()
+        csr_pub = req.public_key()
+        if hasattr(cert_pub, "public_numbers") and hasattr(csr_pub, "public_numbers"):
+            return cert_pub.public_numbers() == csr_pub.public_numbers()
+        if hasattr(cert_pub, "public_bytes_raw") and hasattr(
+            csr_pub, "public_bytes_raw"
+        ):
+            return cert_pub.public_bytes_raw() == csr_pub.public_bytes_raw()
+        return False
+    except (binascii.Error, TypeError, ValueError) as e:
+        LOG.debug("Failed to compare public keys: %r", e)
+        return False
+
+
 def cert_and_key_match(certificate: bytes, key: bytes) -> bool:
     """Checks if the supplied cert is derived from the supplied key."""
     crt = x509.load_pem_x509_certificate(certificate, backends.default_backend())

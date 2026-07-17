@@ -38,6 +38,7 @@ from sunbeam.core.manifest import (
 )
 from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.features.interface.utils import (
+    cert_and_csr_public_key_match,
     encode_base64_as_string,
     generate_ca_chain,
     get_cn_from_cert,
@@ -799,20 +800,31 @@ class ReapplyTLSCertificatesStep(ConfigureTLSCertificatesStep):
                 LOG.warning("Skipping CSR with no CN for unit %s", unit_name)
                 continue
 
-            # Find a stored certificate whose CN matches the CSR's CN
+            # Find a stored certificate whose CN and public key match the CSR
             # and that has not yet expired.
             stored_cert = None
             for stored_data in stored_certs.values():
                 cert_b64 = stored_data.get("certificate")
-                if cert_b64 and get_cn_from_cert(cert_b64) == cn:
-                    if is_cert_expired(cert_b64):
-                        LOG.warning(
-                            "Stored certificate for CN %s has expired; skipping.",
-                            cn,
-                        )
-                        continue
-                    stored_cert = cert_b64
-                    break
+                if not cert_b64:
+                    continue
+                if get_cn_from_cert(cert_b64) != cn:
+                    continue
+                if not cert_and_csr_public_key_match(cert_b64, csr):
+                    LOG.warning(
+                        "Stored certificate CN matches but public key differs "
+                        "for CSR (app=%s, cn=%s); skipping.",
+                        app,
+                        cn,
+                    )
+                    continue
+                if is_cert_expired(cert_b64):
+                    LOG.warning(
+                        "Stored certificate for CN %s has expired; skipping.",
+                        cn,
+                    )
+                    continue
+                stored_cert = cert_b64
+                break
 
             if not stored_cert:
                 LOG.warning(
