@@ -15,7 +15,7 @@ variable "enable-disaster-recovery" {
 variable "s3-integrator-channel" {
   description = "Channel to use for deployment of s3-integrator charm"
   type        = string
-  default     = "latest/stable"
+  default     = "2/stable"
 }
 
 variable "s3-integrator-revision" {
@@ -26,7 +26,13 @@ variable "s3-integrator-revision" {
 
 variable "s3-integrator-config" {
   description = "Operator config for s3-integrator deployment"
-  type        = map(string)
+  type        = map(map(string))
+  default     = {}
+}
+
+variable "s3-integrator-secret-data" {
+  description = "Per-app secret payload for s3-integrator credentials"
+  type        = map(map(string))
   default     = {}
 }
 
