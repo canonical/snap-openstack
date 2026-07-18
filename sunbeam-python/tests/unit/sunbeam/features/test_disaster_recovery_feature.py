@@ -1,11 +1,15 @@
 # SPDX-FileCopyrightText: 2026 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
+
+import click
+import pytest
 
 from sunbeam.core.manifest import FeatureConfig, TerraformManifest
 from sunbeam.features.disaster_recovery.feature import (
     DisasterRecoveryFeature,
+    DisasterRecoveryFeatureConfig,
     S3Integration,
 )
 from sunbeam.features.interface.v1.openstack import TerraformPlanLocation
@@ -71,6 +75,8 @@ class TestDisasterRecoveryFeature:
         assert feature.set_tfvars_on_enable(deployment, FeatureConfig()) == {
             "enable-disaster-recovery": True,
             "openstack-model-uuid": "openstack-uuid",
+            "s3-integrator-config": {},
+            "s3-integrator-secret-data": {},
             "s3-integrator-apps": [
                 "keystone-s3-integrator",
                 "vault-s3-integrator",
@@ -89,6 +95,8 @@ class TestDisasterRecoveryFeature:
         assert feature.set_tfvars_on_disable(deployment) == {
             "enable-disaster-recovery": False,
             "openstack-model-uuid": "openstack-uuid",
+            "s3-integrator-config": {},
+            "s3-integrator-secret-data": {},
             "s3-integrator-apps": [
                 "keystone-s3-integrator",
                 "vault-s3-integrator",
@@ -104,6 +112,156 @@ class TestDisasterRecoveryFeature:
                 },
             },
         }
+
+    def test_set_tfvars_on_enable_includes_per_app_s3_config(self):
+        feature = DisasterRecoveryFeature()
+        deployment = Mock()
+        deployment.get_client.return_value.cluster.get_config.return_value = "{}"
+        jhelper = deployment.get_juju_helper.return_value
+        jhelper.get_model_uuid.return_value = "openstack-uuid"
+        status = Mock()
+        status.apps = {
+            "keystone-mysql": Mock(charm_name="mysql-k8s"),
+            "vault": Mock(charm_name="vault-k8s"),
+        }
+        jhelper.get_model_status.return_value = status
+        jhelper.get_relation_map.return_value = {}
+
+        config = DisasterRecoveryFeatureConfig(
+            configure_managed_s3_integrators=True,
+            bucket="openstack-backups",
+            path="backups",
+            region="us-east-2",
+            endpoint="https://s3.us-east-2.amazonaws.com",
+            access_key="AKIA...",
+            secret_key="secret",
+        )
+
+        tfvars = feature.set_tfvars_on_enable(deployment, config)
+
+        assert tfvars["s3-integrator-config"] == {
+            "keystone-s3-integrator": {
+                "bucket": "openstack-backups",
+                "path": "backups/keystone-mysql",
+                "region": "us-east-2",
+                "endpoint": "https://s3.us-east-2.amazonaws.com",
+            },
+            "vault-s3-integrator": {
+                "bucket": "openstack-backups",
+                "path": "backups/vault",
+                "region": "us-east-2",
+                "endpoint": "https://s3.us-east-2.amazonaws.com",
+            },
+        }
+        assert tfvars["s3-integrator-secret-data"] == {
+            "keystone-s3-integrator": {
+                "access-key": "AKIA...",
+                "secret-key": "secret",
+            },
+            "vault-s3-integrator": {
+                "access-key": "AKIA...",
+                "secret-key": "secret",
+            },
+        }
+
+    def test_prompt_s3_configuration_without_targets_skips_prompt(self):
+        feature = DisasterRecoveryFeature()
+        deployment = Mock()
+        feature._s3_integrations = Mock(return_value=[])
+        feature._ask_prompt = Mock()
+        feature._ask_password = Mock()
+        config = feature._prompt_s3_configuration(deployment, show_hints=False)
+
+        feature._ask_prompt.assert_not_called()
+        feature._ask_password.assert_not_called()
+        assert isinstance(config, DisasterRecoveryFeatureConfig)
+        assert config.configure_s3_integrators is False
+
+    def test_prompt_s3_configuration_accepted_returns_config(self):
+        feature = DisasterRecoveryFeature()
+        deployment = Mock()
+        feature._s3_integrations = Mock(
+            return_value=[
+                S3Integration(
+                    app_name="keystone-mysql",
+                    integrator_app="keystone-s3-integrator",
+                    target_endpoint=S3_ENDPOINT,
+                )
+            ]
+        )
+        feature._ask_prompt = Mock(
+            side_effect=[
+                "openstack-backups",
+                "backups",
+                "us-east-2",
+                "https://s3.us-east-2.amazonaws.com",
+            ]
+        )
+        feature._ask_password = Mock(return_value="secret")
+        feature._validate_s3_config = Mock()
+        feature.enable_feature = Mock()
+
+        from sunbeam.features.disaster_recovery import feature as dr_feature
+
+        confirm_mock = Mock()
+        confirm_mock.ask.return_value = True
+        with patch.object(dr_feature, "ConfirmQuestion", return_value=confirm_mock):
+            config = feature._prompt_s3_configuration(deployment, show_hints=True)
+
+        assert isinstance(config, DisasterRecoveryFeatureConfig)
+        assert config.configure_s3_integrators is True
+        assert config.bucket == "openstack-backups"
+        assert config.path == "backups"
+        assert config.region == "us-east-2"
+        assert config.endpoint == "https://s3.us-east-2.amazonaws.com"
+        assert config.access_key == "secret"
+        assert config.secret_key == "secret"
+
+    def test_validate_prompted_s3_config_requires_bucket_access_secret(self):
+        feature = DisasterRecoveryFeature()
+
+        bad_bucket = DisasterRecoveryFeatureConfig(
+            configure_s3_integrators=True,
+            bucket="",
+            access_key="AKIA",
+            secret_key="secret",
+            endpoint="https://s3.us-east-2.amazonaws.com",
+        )
+        with pytest.raises(click.ClickException):
+            feature._validate_s3_config(bad_bucket)
+
+        bad_access = DisasterRecoveryFeatureConfig(
+            configure_s3_integrators=True,
+            bucket="bucket",
+            access_key="",
+            secret_key="secret",
+            endpoint="https://s3.us-east-2.amazonaws.com",
+        )
+        with pytest.raises(click.ClickException):
+            feature._validate_s3_config(bad_access)
+
+        bad_secret = DisasterRecoveryFeatureConfig(
+            configure_s3_integrators=True,
+            bucket="bucket",
+            access_key="AKIA",
+            secret_key="",
+            endpoint="https://s3.us-east-2.amazonaws.com",
+        )
+        with pytest.raises(click.ClickException):
+            feature._validate_s3_config(bad_secret)
+
+    def test_validate_prompted_s3_config_rejects_bad_endpoint(self):
+        feature = DisasterRecoveryFeature()
+        config = DisasterRecoveryFeatureConfig(
+            configure_s3_integrators=True,
+            bucket="bucket",
+            access_key="AKIA",
+            secret_key="secret",
+            endpoint="s3.us-east-2.amazonaws.com",
+        )
+
+        with pytest.raises(click.ClickException):
+            feature._validate_s3_config(config)
 
     def test_integrator_app_name_uses_service_prefix_for_mysql(self):
         feature = DisasterRecoveryFeature()
