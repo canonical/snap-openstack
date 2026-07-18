@@ -27,7 +27,26 @@ resource "juju_application" "s3_integrator" {
     revision = var.s3-integrator-revision
   }
 
-  config = var.s3-integrator-config
+  config = contains(keys(var.s3-integrator-secret-data), each.value) ? merge(
+    lookup(var.s3-integrator-config, each.value, {}),
+    { credentials = juju_secret.s3_credentials[each.value].secret_uri }
+  ) : lookup(var.s3-integrator-config, each.value, {})
+}
+
+resource "juju_secret" "s3_credentials" {
+  for_each   = var.enable-disaster-recovery ? var.s3-integrator-secret-data : {}
+  model_uuid = data.juju_model.openstack_model.uuid
+  name       = "${each.key}-credentials"
+  value      = each.value
+}
+
+resource "juju_access_secret" "s3_credentials_access" {
+  for_each     = var.enable-disaster-recovery ? var.s3-integrator-secret-data : {}
+  model_uuid   = data.juju_model.openstack_model.uuid
+  secret_id    = juju_secret.s3_credentials[each.key].secret_id
+  applications = [each.key]
+
+  depends_on = [juju_application.s3_integrator]
 }
 
 resource "juju_integration" "s3_integrations" {
@@ -43,4 +62,6 @@ resource "juju_integration" "s3_integrations" {
     name     = each.key
     endpoint = each.value.target_endpoint
   }
+
+  depends_on = [juju_access_secret.s3_credentials_access]
 }

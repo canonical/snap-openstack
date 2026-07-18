@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import click
+import pydantic
 from jubilant.statustypes import AppStatus
 from packaging.version import Version
 from rich.console import Console
@@ -19,6 +20,11 @@ from sunbeam.core.manifest import (
     TerraformManifest,
 )
 from sunbeam.core.openstack import OPENSTACK_MODEL
+from sunbeam.core.questions import (
+    ConfirmQuestion,
+    PasswordPromptQuestion,
+    PromptQuestion,
+)
 from sunbeam.features.interface.v1.openstack import (
     OpenStackControlPlaneFeature,
     TerraformPlanLocation,
@@ -33,6 +39,9 @@ from sunbeam.utils import click_option_show_hints, pass_method_obj
 from sunbeam.versions import S3_INTEGRATOR_CHANNEL
 
 _MANAGED_S3_KEY = "managed-s3-integrations"  # {target_app: integrator_app}
+DEFAULT_S3_PATH = "/"
+DEFAULT_S3_REGION = "us-east-2"
+DEFAULT_S3_ENDPOINT = "https://s3.us-east-2.amazonaws.com"
 
 console = Console()
 LOG = logging.getLogger(__name__)
@@ -47,6 +56,24 @@ class S3Integration:
     target_endpoint: str
 
 
+class DisasterRecoveryFeatureConfig(FeatureConfig):
+    configure_s3_integrators: bool = pydantic.Field(
+        default=False,
+        alias="configure-managed-s3-integrators",
+        validation_alias="configure_managed_s3_integrators",
+    )
+    bucket: str = ""
+    path: str = DEFAULT_S3_PATH
+    region: str = DEFAULT_S3_REGION
+    endpoint: str = DEFAULT_S3_ENDPOINT
+    access_key: str = pydantic.Field(
+        default="", alias="access-key", validation_alias="access_key"
+    )
+    secret_key: str = pydantic.Field(
+        default="", alias="secret-key", validation_alias="secret_key"
+    )
+
+
 class DisasterRecoveryFeature(OpenStackControlPlaneFeature):
     version = Version("0.0.1")
 
@@ -55,6 +82,10 @@ class DisasterRecoveryFeature(OpenStackControlPlaneFeature):
     tf_plan_location = TerraformPlanLocation.FEATURE_REPO
 
     _s3_integrations_cache: list["S3Integration"] | None = None
+
+    def config_type(self) -> type[DisasterRecoveryFeatureConfig]:
+        """Return manifest config type for disaster-recovery feature."""
+        return DisasterRecoveryFeatureConfig
 
     def default_software_overrides(self) -> SoftwareConfig:
         """Feature software configuration."""
@@ -95,9 +126,16 @@ class DisasterRecoveryFeature(OpenStackControlPlaneFeature):
         jhelper = deployment.get_juju_helper()
         model_uuid = jhelper.get_model_uuid(OPENSTACK_MODEL)
         integrations = self._s3_integrations(deployment)
+        dr_config = self._as_dr_config(config)
         return {
             "enable-disaster-recovery": True,
             "openstack-model-uuid": model_uuid,
+            "s3-integrator-config": self._s3_integrator_config_tfvar(
+                dr_config, integrations
+            ),
+            "s3-integrator-secret-data": self._s3_integrator_secret_data_tfvar(
+                dr_config, integrations
+            ),
             "s3-integrator-apps": sorted(
                 {integration.integrator_app for integration in integrations}
             ),
@@ -118,6 +156,8 @@ class DisasterRecoveryFeature(OpenStackControlPlaneFeature):
         return {
             "enable-disaster-recovery": False,
             "openstack-model-uuid": model_uuid,
+            "s3-integrator-config": {},
+            "s3-integrator-secret-data": {},
             "s3-integrator-apps": sorted(
                 {integration.integrator_app for integration in integrations}
             ),
@@ -158,7 +198,8 @@ class DisasterRecoveryFeature(OpenStackControlPlaneFeature):
     def enable_cmd(self, deployment: Deployment, show_hints: bool) -> None:
         """Enable disaster recovery service."""
         self._s3_integrations_cache = None
-        self.enable_feature(deployment, FeatureConfig(), show_hints)
+        config = self._prompt_s3_configuration(deployment, show_hints)
+        self.enable_feature(deployment, config, show_hints)
 
     @click.command()
     @click_option_show_hints
@@ -207,9 +248,9 @@ class DisasterRecoveryFeature(OpenStackControlPlaneFeature):
             if not owned and (is_related or expected_integrator in apps):
                 console.print(
                     (
-                        f"[yellow]Warning:[/yellow] Skipping disaster recovery for "
-                        f"{app_name}: existing S3 setup is not managed by "
-                        "disaster recovery."
+                        f"[yellow]Warning:[/yellow] Skipping disaster recovery "
+                        f"configuration for {app_name}: "
+                        "existing S3 setup is managed externally."
                     )
                 )
                 continue
@@ -263,6 +304,115 @@ class DisasterRecoveryFeature(OpenStackControlPlaneFeature):
         """Return per-application s3-integrator app name for a target app."""
         service_name = app_name.removesuffix("-mysql")
         return f"{service_name}-s3-integrator"
+
+    def _as_dr_config(self, config: FeatureConfig) -> DisasterRecoveryFeatureConfig:
+        """Cast generic feature config to DR-specific config with defaults."""
+        if isinstance(config, DisasterRecoveryFeatureConfig):
+            return config
+        return DisasterRecoveryFeatureConfig()
+
+    def _prompt_s3_configuration(
+        self, deployment: Deployment, show_hints: bool
+    ) -> DisasterRecoveryFeatureConfig:
+        """Prompt for managed s3-integrator configuration."""
+        config = DisasterRecoveryFeatureConfig()
+        if not self._s3_integrations(deployment):
+            return config
+
+        configure = ConfirmQuestion(
+            "Configure all s3-integrators?",
+            default_value=False,
+            description=(
+                "Configure bucket, endpoint, region, and credentials for all "
+                "s3-integrator apps."
+            ),
+        )
+        configure.console = console
+        configure.show_hint = show_hints
+        if not configure.ask():
+            return config
+
+        config.configure_s3_integrators = True
+        config.bucket = self._ask_prompt("S3 bucket", show_hints)
+        config.path = self._ask_prompt(
+            "S3 path prefix", show_hints, default=DEFAULT_S3_PATH
+        )
+        config.region = self._ask_prompt(
+            "S3 region", show_hints, default=DEFAULT_S3_REGION
+        )
+        config.endpoint = self._ask_prompt(
+            "S3 endpoint", show_hints, default=DEFAULT_S3_ENDPOINT
+        )
+        config.access_key = self._ask_password("S3 access key", show_hints)
+        config.secret_key = self._ask_password("S3 secret key", show_hints)
+        self._validate_s3_config(config)
+        return config
+
+    def _ask_prompt(self, question: str, show_hints: bool, default: str = "") -> str:
+        prompt: PromptQuestion[str] = PromptQuestion(question, default_value=default)
+        prompt.console = console
+        prompt.show_hint = show_hints
+        value = prompt.ask() or ""
+        return value.strip()
+
+    def _ask_password(self, question: str, show_hints: bool) -> str:
+        prompt: PasswordPromptQuestion[str] = PasswordPromptQuestion(
+            question, password=True
+        )
+        prompt.console = console
+        prompt.show_hint = show_hints
+        value = prompt.ask() or ""
+        return value.strip()
+
+    def _validate_s3_config(self, config: DisasterRecoveryFeatureConfig) -> None:
+        """Validate prompted S3 configuration."""
+        if not config.bucket:
+            raise click.ClickException("S3 bucket is required.")
+        if not config.access_key:
+            raise click.ClickException("S3 access key is required.")
+        if not config.secret_key:
+            raise click.ClickException("S3 secret key is required.")
+        if not config.endpoint.startswith(("http://", "https://")):
+            raise click.ClickException(
+                "S3 endpoint must start with http:// or https://."
+            )
+
+    def _s3_integrator_config_tfvar(
+        self,
+        config: DisasterRecoveryFeatureConfig,
+        integrations: list[S3Integration],
+    ) -> dict[str, dict[str, str]]:
+        """Build per-integrator s3-integrator charm config tfvar."""
+        if not config.configure_s3_integrators:
+            return {}
+
+        base_path = config.path.strip("/") or "backups"
+        return {
+            integration.integrator_app: {
+                "bucket": config.bucket,
+                "path": f"{base_path}/{integration.app_name}",
+                "region": config.region,
+                "endpoint": config.endpoint,
+            }
+            for integration in integrations
+        }
+
+    def _s3_integrator_secret_data_tfvar(
+        self,
+        config: DisasterRecoveryFeatureConfig,
+        integrations: list[S3Integration],
+    ) -> dict[str, dict[str, str]]:
+        """Build per-integrator secret payload for juju_secret resources."""
+        if not config.configure_s3_integrators:
+            return {}
+
+        return {
+            integration.integrator_app: {
+                "access-key": config.access_key,
+                "secret-key": config.secret_key,
+            }
+            for integration in integrations
+        }
 
     def _s3_load_managed_integrations(self, deployment: Deployment) -> dict[str, str]:
         info = self.get_feature_info(deployment.get_client())
