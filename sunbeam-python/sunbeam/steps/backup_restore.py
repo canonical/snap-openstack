@@ -17,6 +17,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+import tenacity
 import yaml
 from snaphelpers import Snap
 
@@ -51,6 +52,8 @@ BACKUP_MANIFEST_DIR = SHARE_PATH / "backups"
 PAUSE_ACTION = "pause"
 RESUME_ACTION = "resume"
 RESTORE_TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
+RESTORE_ACTION_ATTEMPTS = 3
+RESTORE_ACTION_RETRY_DELAY = 15
 
 
 @dataclass
@@ -519,6 +522,7 @@ class _RestoreAppStep(BaseStep):
         component: "BackupComponent",
         target: ActionTarget,
         restore_to_time: str | None = None,
+        expected_status: list[str] | None = None,
         force: bool = False,
         timeout: int = DEFAULT_RESTORE_TIMEOUT,
         model: str = OPENSTACK_MODEL,
@@ -531,6 +535,7 @@ class _RestoreAppStep(BaseStep):
         self.model = model
         self.timeout = timeout
         self.force = force
+        self.expected_status = expected_status or ["active"]
 
     def run(self, context: StepContext) -> Result:
         """Restore an app using latest backup or restore-to-time."""
@@ -564,15 +569,25 @@ class _RestoreAppStep(BaseStep):
             params[self.component.backup_id_param] = latest
 
         try:
-            self.jhelper.run_action(
+            tenacity.Retrying(
+                reraise=True,
+                stop=tenacity.stop_after_attempt(RESTORE_ACTION_ATTEMPTS),
+                wait=tenacity.wait_fixed(RESTORE_ACTION_RETRY_DELAY),
+                retry=tenacity.retry_if_exception_type(ActionFailedException),
+            )(
+                self.jhelper.run_action,
                 leader,
                 self.model,
                 self.component.restore_action,
                 params,
                 timeout=self.timeout,
             )
-            self.jhelper.wait_until_active(
-                self.model, apps=[self.target.app], timeout=self.timeout
+            self.jhelper.wait_until_desired_status(
+                self.model,
+                apps=[self.target.app],
+                status=self.expected_status,
+                agent_status=["idle"],
+                timeout=self.timeout,
             )
         except (ActionFailedException, JujuException) as e:
             return Result(ResultType.FAILED, str(e))
@@ -761,6 +776,7 @@ def _build_mysql_restore_plan(
             component,
             target,
             restore_to_time=restore_to_time,
+            expected_status=["active", "blocked"],
             force=force,
             timeout=timeout,
             model=model,

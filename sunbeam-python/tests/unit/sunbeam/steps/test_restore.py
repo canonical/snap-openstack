@@ -5,7 +5,7 @@ import dataclasses
 from unittest.mock import Mock
 
 from sunbeam.core.common import ResultType
-from sunbeam.core.juju import JujuException
+from sunbeam.core.juju import ActionFailedException, JujuException
 from sunbeam.steps.backup_restore import (
     MYSQL_CHARM,
     VAULT_CHARM,
@@ -164,6 +164,24 @@ class TestGuardedSteps:
         assert jhelper.run_action.call_args_list[1].args[3] == {
             "backup-id": "vault-backup-openstack-2026-07-15-00-03-28"
         }
+
+    def test_restore_retries_action_failures_three_times(self, step_context):
+        jhelper = Mock()
+        jhelper.get_leader_unit.return_value = "vault/0"
+        jhelper.run_action.side_effect = [
+            {"backup-ids": '["vault-backup-openstack-2026-07-15-00-03-28"]'},
+            ActionFailedException("transient restore failure"),
+            ActionFailedException("transient restore failure"),
+            {},
+        ]
+        target = ActionTarget("vault", "vault/0", VAULT_CHARM, "restore-backup")
+
+        result = _RestoreAppStep(jhelper, _vault_component(), target).run(step_context)
+
+        assert result.result_type == ResultType.COMPLETED
+        assert jhelper.run_action.call_args_list[1].args[2] == "restore-backup"
+        assert jhelper.run_action.call_args_list[2].args[2] == "restore-backup"
+        assert jhelper.run_action.call_args_list[3].args[2] == "restore-backup"
 
 
 class TestScaleMySQLStep:
