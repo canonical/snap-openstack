@@ -11,6 +11,7 @@ from sunbeam.steps.backup_restore import (
     VAULT_CHARM,
     ActionTarget,
     RestoreStep,
+    _ActionStep,
     _component_for,
     _PauseAppStep,
     _RestoreAppStep,
@@ -28,26 +29,74 @@ def _vault_component():
 
 
 class TestGuardedSteps:
-    def test_pause_dispatches_action_without_is_skip_check(self, step_context):
+    def test_action_step_default_runs_on_leader(self, step_context):
         jhelper = Mock()
         jhelper.get_leader_unit.return_value = "keystone-k8s/0"
+
+        step = _ActionStep(
+            jhelper,
+            name="Action",
+            description="Run action",
+            app="keystone-k8s",
+            action_name="pause",
+        )
+        result = step.run(step_context)
+
+        assert result.result_type == ResultType.COMPLETED
+        jhelper.get_application.assert_not_called()
+        jhelper.run_action.assert_called_once_with(
+            "keystone-k8s/0",
+            "openstack",
+            "pause",
+            timeout=120,
+        )
+
+    def test_pause_dispatches_action_on_all_units(self, step_context):
+        jhelper = Mock()
+        jhelper.get_application.return_value = Mock(
+            units={"keystone-k8s/0": Mock(), "keystone-k8s/1": Mock()}
+        )
 
         step = _PauseAppStep(jhelper, app="keystone-k8s")
         result = step.run(step_context)
 
         assert result.result_type == ResultType.COMPLETED
         jhelper.get_application_actions.assert_not_called()
-        jhelper.run_action.assert_called_once()
+        jhelper.get_leader_unit.assert_not_called()
+        assert jhelper.run_action.call_count == 2
+        assert jhelper.run_action.call_args_list[0].args == (
+            "keystone-k8s/0",
+            "openstack",
+            "pause",
+        )
+        assert jhelper.run_action.call_args_list[1].args == (
+            "keystone-k8s/1",
+            "openstack",
+            "pause",
+        )
 
-    def test_resume_dispatches_action(self, step_context):
+    def test_resume_dispatches_action_on_all_units(self, step_context):
         jhelper = Mock()
-        jhelper.get_leader_unit.return_value = "keystone-k8s/0"
+        jhelper.get_application.return_value = Mock(
+            units={"keystone-k8s/0": Mock(), "keystone-k8s/1": Mock()}
+        )
 
         step = _ResumeAppStep(jhelper, app="keystone-k8s")
         result = step.run(step_context)
 
         assert result.result_type == ResultType.COMPLETED
-        jhelper.run_action.assert_called_once()
+        jhelper.get_leader_unit.assert_not_called()
+        assert jhelper.run_action.call_count == 2
+        assert jhelper.run_action.call_args_list[0].args == (
+            "keystone-k8s/0",
+            "openstack",
+            "resume",
+        )
+        assert jhelper.run_action.call_args_list[1].args == (
+            "keystone-k8s/1",
+            "openstack",
+            "resume",
+        )
 
     def test_restore_mysql_uses_latest_backup_id(self, step_context):
         jhelper = Mock()

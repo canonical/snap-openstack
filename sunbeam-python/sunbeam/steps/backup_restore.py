@@ -369,7 +369,7 @@ def _resolve_vault_backup_target(
 # Atomic action steps
 # ---------------------------------------------------------------------------
 class _ActionStep(BaseStep):
-    """Dispatch an action on an application's leader."""
+    """Dispatch an action on an application's leader or all units."""
 
     def __init__(
         self,
@@ -378,6 +378,8 @@ class _ActionStep(BaseStep):
         description: str,
         app: str,
         action_name: str,
+        run_on_all_units: bool = False,
+        expected_status: list[str] | None = None,
         force: bool = False,
         timeout: int = DEFAULT_ACTION_TIMEOUT,
         model: str = OPENSTACK_MODEL,
@@ -387,24 +389,31 @@ class _ActionStep(BaseStep):
         self.model = model
         self.app = app
         self.action_name = action_name
+        self.run_on_all_units = run_on_all_units
         self.force = force
         self.timeout = timeout
+        self.expected_status = expected_status or ["active"]
 
     def run(self, context: StepContext) -> Result:
-        """Run action on the application's leader."""
+        """Run action on the application's leader or all units."""
         try:
-            leader = self.jhelper.get_leader_unit(self.app, self.model)
-            self.jhelper.run_action(
-                leader,
-                self.model,
-                self.action_name,
-                timeout=self.timeout,
-            )
+            if self.run_on_all_units:
+                units = list(self.jhelper.get_application(self.app, self.model).units)
+            else:
+                units = [self.jhelper.get_leader_unit(self.app, self.model)]
+
+            for unit in units:
+                self.jhelper.run_action(
+                    unit,
+                    self.model,
+                    self.action_name,
+                    timeout=self.timeout,
+                )
             if not self.force:
                 self.jhelper.wait_until_desired_status(
                     self.model,
                     apps=[self.app],
-                    status=[],
+                    status=self.expected_status,
                     agent_status=["idle"],
                     timeout=self.timeout,
                 )
@@ -436,6 +445,8 @@ class _PauseAppStep(_ActionStep):
             "Pause API container services",
             app,
             PAUSE_ACTION,
+            run_on_all_units=True,
+            expected_status=["maintenance"],
             force=force,
             timeout=timeout,
             model=model,
@@ -459,6 +470,8 @@ class _ResumeAppStep(_ActionStep):
             "Resume API container services",
             app,
             RESUME_ACTION,
+            run_on_all_units=True,
+            expected_status=["active"],
             force=force,
             timeout=timeout,
             model=model,
@@ -557,6 +570,9 @@ class _RestoreAppStep(BaseStep):
                 self.component.restore_action,
                 params,
                 timeout=self.timeout,
+            )
+            self.jhelper.wait_until_active(
+                self.model, apps=[self.target.app], timeout=self.timeout
             )
         except (ActionFailedException, JujuException) as e:
             return Result(ResultType.FAILED, str(e))
