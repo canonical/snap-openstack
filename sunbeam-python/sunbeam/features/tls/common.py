@@ -738,6 +738,45 @@ class ReapplyTLSCertificatesStep(ConfigureTLSCertificatesStep):
         """This step never prompts the user."""
         return False
 
+    def _find_matching_stored_cert(
+        self,
+        stored_certs: dict,
+        csr: str,
+        cn: str,
+        app: str | None,
+    ) -> str | None:
+        """Return a stored certificate matching the CSR, if any.
+
+        A stored certificate matches when its CN and public key match the
+        CSR and it has not yet expired.
+        """
+        for stored_data in stored_certs.values():
+            cert_b64 = stored_data.get("certificate")
+            if not cert_b64:
+                continue
+            if (cert_cn := get_cn_from_cert(cert_b64)) and cert_cn != cn:
+                LOG.warning(
+                    "Stored certificate CN doesn't match CSR: %s != %s",
+                    cert_cn,
+                    cn,
+                )
+            if not cert_and_csr_public_key_match(cert_b64, csr):
+                LOG.warning(
+                    "Stored certificate CN matches but public key differs "
+                    "for CSR (app=%s, cn=%s); skipping.",
+                    app,
+                    cn,
+                )
+                continue
+            if is_cert_expired(cert_b64):
+                LOG.warning(
+                    "Stored certificate for CN %s has expired; skipping.",
+                    cn,
+                )
+                continue
+            return cert_b64
+        return None
+
     def is_skip(self, context: StepContext) -> Result:
         """Collect outstanding CSRs and match them to stored certificates.
 
@@ -802,29 +841,7 @@ class ReapplyTLSCertificatesStep(ConfigureTLSCertificatesStep):
 
             # Find a stored certificate whose CN and public key match the CSR
             # and that has not yet expired.
-            stored_cert = None
-            for stored_data in stored_certs.values():
-                cert_b64 = stored_data.get("certificate")
-                if not cert_b64:
-                    continue
-                if get_cn_from_cert(cert_b64) != cn:
-                    continue
-                if not cert_and_csr_public_key_match(cert_b64, csr):
-                    LOG.warning(
-                        "Stored certificate CN matches but public key differs "
-                        "for CSR (app=%s, cn=%s); skipping.",
-                        app,
-                        cn,
-                    )
-                    continue
-                if is_cert_expired(cert_b64):
-                    LOG.warning(
-                        "Stored certificate for CN %s has expired; skipping.",
-                        cn,
-                    )
-                    continue
-                stored_cert = cert_b64
-                break
+            stored_cert = self._find_matching_stored_cert(stored_certs, csr, cn, app)
 
             if not stored_cert:
                 LOG.warning(
@@ -834,9 +851,10 @@ class ReapplyTLSCertificatesStep(ConfigureTLSCertificatesStep):
                     cn,
                 )
                 continue
-                
+
             LOG.debug(
-                "Re-providing stored certificate for outstanding CSR (app=%s, cn=%s, cert=%s)",
+                "Re-providing stored certificate for outstanding CSR "
+                "(app=%s, cn=%s, cert=%s)",
                 app,
                 cn,
                 stored_cert,
