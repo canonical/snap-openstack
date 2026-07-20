@@ -39,7 +39,6 @@ LOG = logging.getLogger(__name__)
 CONFIG_KEY = "TerraformVarsMicroovnPlan"
 CONFIG_DISKS_KEY = "TerraformVarsMicroovn"
 APPLICATION = "microovn"
-ARM64_APPLICATION = "microovn-arm64"
 MICROOVN_APP_TIMEOUT = 1200
 MICROOVN_UNIT_TIMEOUT = 1200
 AGENT_APP = "openstack-network-agents"
@@ -425,7 +424,12 @@ class RemoveMicroOVNUnitsStep(RemoveMachineUnitsStep):
             _microovn_application_name(node.get("arch") or ovn.DEFAULT_ARCHITECTURE)
             for node in filtered_nodes
         }
-        applications.update((APPLICATION, ARM64_APPLICATION))
+        applications.update(
+            (
+                _microovn_application_name(ovn.DEFAULT_ARCHITECTURE),
+                _microovn_application_name(ovn.ARM64_ARCHITECTURE),
+            )
+        )
 
         for application in sorted(applications):
             try:
