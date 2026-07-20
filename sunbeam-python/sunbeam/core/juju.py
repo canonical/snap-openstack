@@ -861,7 +861,7 @@ class JujuHelper:
         """Return action names available for an application in a model."""
         with self._model(model) as juju:
             try:
-                response = self.cli(
+                actions = self.cli(
                     "actions",
                     application,
                     include_controller=False,
@@ -870,7 +870,6 @@ class JujuHelper:
             except jubilant.CLIError as e:
                 raise JujuException(str(e)) from e
 
-        actions = response.get(application)
         if not isinstance(actions, dict):
             return []
         return sorted(actions.keys())

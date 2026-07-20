@@ -71,6 +71,11 @@ CONTINUE_RESTORE_FILTER_QUESTION = ConfirmQuestion(
     ),
 )
 
+START_RESTORE_QUESTION = ConfirmQuestion(
+    "Start restore?",
+    default_value=False,
+)
+
 
 def _confirm_or_abort(question: Question, no_prompt: bool) -> None:
     """Ask a confirmation question, aborting the command if declined."""
@@ -482,6 +487,16 @@ def restore(
     if not any(discovered.values()):
         console.print("No applications remain to restore after validation. Exiting.")
         sys.exit(EXIT_FAILURE)
+
+    if restore_to_time:
+        START_RESTORE_QUESTION.description = (
+            f"Restore will be performed to the point-in-time {restore_to_time} UTC."
+        )
+    else:
+        START_RESTORE_QUESTION.description = (
+            "Restore will be performed to the latest available backup."
+        )
+    _confirm_or_abort(START_RESTORE_QUESTION, no_prompt)
 
     restore_results = run_plan(
         [
