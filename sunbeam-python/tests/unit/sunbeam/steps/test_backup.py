@@ -4,9 +4,13 @@
 import json
 from unittest.mock import Mock
 
+import pytest
+
 from sunbeam.core.common import ResultType
 from sunbeam.core.juju import (
     ActionFailedException,
+    ApplicationNotFoundException,
+    JujuException,
     LeaderNotFoundException,
     ModelNotFoundException,
 )
@@ -23,20 +27,15 @@ from sunbeam.steps.backup_restore import (
     BackupResult,
     DiscoverBackupApplicationsStep,
     ListBackupsStep,
+    MySQLBackupComponent,
     ResolveActionTargetsStep,
-    RunBackupsStep,
+    RunBackupStep,
     ValidateStep,
+    VaultBackupComponent,
     WriteBackupInventoryManifestStep,
     WriteBackupManifestStep,
     _BackupAppStep,
-    _build_vault_backup_plan,
-    _build_vault_restore_plan,
     _component_for,
-    _parse_backup,
-    _parse_mysql_backups,
-    _parse_vault_backups,
-    _resolve_mysql_backup_target,
-    _resolve_vault_backup_target,
 )
 
 
@@ -75,6 +74,15 @@ class TestBackupResult:
         assert result.backup is None
 
 
+class TestCurrentScale:
+    def test_raises_on_read_failure(self):
+        jhelper = Mock()
+        jhelper.get_application.side_effect = ApplicationNotFoundException("missing")
+
+        with pytest.raises(JujuException):
+            MySQLBackupComponent._current_scale(jhelper, "keystone-mysql", "openstack")
+
+
 class TestRegistry:
     def test_registry_contains_mysql_and_vault(self):
         names = {c.name for c in BACKUP_COMPONENTS}
@@ -83,6 +91,14 @@ class TestRegistry:
     def test_components_have_restore_plans(self):
         for component in BACKUP_COMPONENTS:
             assert component.build_restore_plan is not None
+
+    def test_registry_contains_explicit_component_types(self):
+        assert isinstance(_component_for(MYSQL_CHARM), MySQLBackupComponent)
+        assert isinstance(_component_for(VAULT_CHARM), VaultBackupComponent)
+
+    def test_component_pitr_contracts_are_explicit(self):
+        assert MySQLBackupComponent().restore_to_time_param == "restore-to-time"
+        assert VaultBackupComponent().restore_to_time_param is None
 
 
 class TestResolveMySQLTarget:
@@ -95,7 +111,7 @@ class TestResolveMySQLTarget:
         )
         jhelper.get_application.return_value = app
 
-        target = _resolve_mysql_backup_target(
+        target = MySQLBackupComponent().resolve_backup_target(
             jhelper, "keystone-mysql", "openstack", force=False
         )
 
@@ -117,7 +133,7 @@ class TestResolveMySQLTarget:
             "mysql-k8s", units={"cinder-mysql/0": Mock()}
         )
 
-        target = _resolve_mysql_backup_target(
+        target = MySQLBackupComponent().resolve_backup_target(
             jhelper, "cinder-mysql", "openstack", force=False
         )
 
@@ -132,7 +148,7 @@ class TestResolveMySQLTarget:
         )
         jhelper.run_action.side_effect = ActionFailedException("failed")
 
-        target = _resolve_mysql_backup_target(
+        target = MySQLBackupComponent().resolve_backup_target(
             jhelper, "keystone-mysql", "openstack", force=False
         )
 
@@ -146,7 +162,7 @@ class TestResolveMySQLTarget:
         )
         jhelper.run_action.side_effect = ActionFailedException("failed")
 
-        target = _resolve_mysql_backup_target(
+        target = MySQLBackupComponent().resolve_backup_target(
             jhelper, "keystone-mysql", "openstack", force=True
         )
 
@@ -157,7 +173,7 @@ class TestResolveMySQLTarget:
         jhelper = Mock()
         jhelper.get_leader_unit.side_effect = LeaderNotFoundException("no leader")
 
-        target = _resolve_mysql_backup_target(
+        target = MySQLBackupComponent().resolve_backup_target(
             jhelper, "keystone-mysql", "openstack", force=True
         )
 
@@ -172,7 +188,7 @@ class TestResolveVaultTarget:
             "vault-k8s", units={"vault/0": Mock()}
         )
 
-        target = _resolve_vault_backup_target(
+        target = VaultBackupComponent().resolve_backup_target(
             jhelper, "vault", "openstack", force=False
         )
 
@@ -184,7 +200,7 @@ class TestResolveVaultTarget:
         jhelper = Mock()
         jhelper.get_leader_unit.side_effect = LeaderNotFoundException("no leader")
 
-        target = _resolve_vault_backup_target(
+        target = VaultBackupComponent().resolve_backup_target(
             jhelper, "vault", "openstack", force=False
         )
 
@@ -245,12 +261,21 @@ class TestResolveActionTargetsStep:
             MYSQL_CHARM: ["keystone-mysql", "broken-mysql"],
             VAULT_CHARM: ["vault"],
         }
-        result = ResolveActionTargetsStep(jhelper, discovered).run(step_context)
+        result = ResolveActionTargetsStep(
+            jhelper,
+            discovered,
+            action=lambda component: component.restore_action,
+        ).run(step_context)
 
         assert result.result_type == ResultType.COMPLETED
         apps = {t.app for t in result.message["targets"]}
         assert apps == {"keystone-mysql", "vault"}
         assert all(t.unit.endswith("/0") for t in result.message["targets"])
+        actions = {t.app: t.action for t in result.message["targets"]}
+        assert actions == {
+            "keystone-mysql": "restore",
+            "vault": "restore-backup",
+        }
         assert result.message["unresolved"] == [
             {"app": "broken-mysql", "component": MYSQL_CHARM}
         ]
@@ -311,9 +336,25 @@ class TestBackupAppStep:
         assert step.result.backup.success is True
         assert step.result.backup.backup_id == "id-1"
 
-    def test_timeout_is_marked_in_progress(self, step_context):
+    def test_missing_backup_id_marks_step_failed(self, step_context):
         jhelper = Mock()
-        jhelper.run_action.side_effect = Exception(
+        jhelper.run_action.return_value = {}
+        component = _component_for(MYSQL_CHARM)
+        target = ActionTarget(
+            "keystone-mysql", "keystone-mysql/1", MYSQL_CHARM, "create-backup"
+        )
+
+        step = _BackupAppStep(jhelper, component, target)
+        result = step.run(step_context)
+
+        assert result.result_type == ResultType.FAILED
+        assert step.result is not None
+        assert step.result.backup is None
+        assert step.result.error == "Backup action completed without backup id."
+
+    def test_failed_backup_action_records_error(self, step_context):
+        jhelper = Mock()
+        jhelper.run_action.side_effect = ActionFailedException(
             "timed out waiting for results from: unit nova-mysql/0"
         )
         component = _component_for(MYSQL_CHARM)
@@ -322,12 +363,12 @@ class TestBackupAppStep:
         )
 
         step = _BackupAppStep(jhelper, component, target)
-        step.run(step_context)
+        result = step.run(step_context)
 
+        assert result.result_type == ResultType.FAILED
         assert step.result is not None
         assert step.result.error is not None
-        assert step.result.backup is not None
-        assert step.result.backup.success is None
+        assert step.result.backup is None
 
 
 class TestRunBackupsStep:
@@ -351,7 +392,7 @@ class TestRunBackupsStep:
             VAULT_CHARM: ["vault"],
         }
 
-        result = RunBackupsStep(jhelper, discovered).run(step_context)
+        result = RunBackupStep(jhelper, discovered).run(step_context)
 
         assert result.result_type == ResultType.COMPLETED
         by_app = {r.app: r for r in result.message}
@@ -362,7 +403,7 @@ class TestRunBackupsStep:
         assert by_app["vault"].backup is not None
         assert by_app["vault"].backup.success is True
 
-    def test_force_passes_force_param_only_to_mysql(self, step_context):
+    def test_force_does_not_inject_action_params(self, step_context):
         jhelper = Mock()
         jhelper.get_leader_unit.side_effect = lambda app, model: f"{app}/0"
         jhelper.get_application.side_effect = lambda app, model: _app_status(
@@ -383,18 +424,14 @@ class TestRunBackupsStep:
         jhelper.run_action.side_effect = _run_action
         discovered = {MYSQL_CHARM: ["keystone-mysql"], VAULT_CHARM: ["vault"]}
 
-        RunBackupsStep(jhelper, discovered, force=True).run(step_context)
+        RunBackupStep(jhelper, discovered, force=True).run(step_context)
 
-        params_by_unit = {
-            call.args[0]: call.args[3]
-            for call in jhelper.run_action.call_args_list
-            if call.args[2] == "create-backup"
-        }
-        assert params_by_unit["keystone-mysql/0"] == {"force": True}
-        # vault does not support force, but we still pass it as a param ignored by Juju
-        assert params_by_unit["vault/0"] == {"force": True}
+        for call in jhelper.run_action.call_args_list:
+            if call.args[2] != "create-backup":
+                continue
+            assert len(call.args) == 3
 
-    def test_timeout_is_marked_as_in_progress(self, step_context):
+    def test_failed_backup_action_returns_error(self, step_context):
         jhelper = Mock()
         jhelper.get_leader_unit.side_effect = lambda app, model: f"{app}/0"
         jhelper.get_application.side_effect = lambda app, model: _app_status(
@@ -410,18 +447,41 @@ class TestRunBackupsStep:
                         }
                     }
                 }
-            raise Exception("timed out waiting for results from: unit nova-mysql/0")
+            raise ActionFailedException(
+                "timed out waiting for results from: unit nova-mysql/0"
+            )
 
         jhelper.run_action.side_effect = _run_action
         discovered = {MYSQL_CHARM: ["nova-mysql"]}
 
-        result = RunBackupsStep(jhelper, discovered).run(step_context)
+        result = RunBackupStep(jhelper, discovered).run(step_context)
 
         assert result.result_type == ResultType.COMPLETED
         backup_result = result.message[0]
         assert backup_result.error is not None
-        assert backup_result.backup is not None
-        assert backup_result.backup.success is None
+        assert backup_result.backup is None
+
+    def test_resolve_target_failure_is_recorded(self, step_context):
+        jhelper = Mock()
+        jhelper.get_leader_unit.side_effect = lambda app, model: f"{app}/0"
+        jhelper.get_application.side_effect = lambda app, model: _app_status(
+            "mysql-k8s", units={f"{app}/0": Mock()}
+        )
+
+        def _run_action(unit, model, action, params=None, timeout=None):
+            if action == "get-cluster-status":
+                raise ActionFailedException("cluster status unavailable")
+            return {"backup-id": "id"}
+
+        jhelper.run_action.side_effect = _run_action
+        discovered = {MYSQL_CHARM: ["nova-mysql"]}
+
+        result = RunBackupStep(jhelper, discovered).run(step_context)
+
+        assert result.result_type == ResultType.COMPLETED
+        assert len(result.message) == 1
+        assert result.message[0].app == "nova-mysql"
+        assert result.message[0].error == "Could not resolve backup target."
 
 
 class TestListBackupsParsing:
@@ -435,7 +495,7 @@ class TestListBackupsParsing:
             )
         }
 
-        backups = _parse_mysql_backups(action_result)
+        backups = MySQLBackupComponent().parse_backup_list(action_result)
 
         assert [b.backup_id for b in backups] == [
             "2026-07-15T00:00:00Z",
@@ -453,7 +513,7 @@ class TestListBackupsParsing:
             )
         }
 
-        backups = _parse_vault_backups(action_result)
+        backups = VaultBackupComponent().parse_backup_list(action_result)
 
         assert [b.backup_id for b in backups] == [
             "vault-backup-openstack-2026-07-15-00-03-28",
@@ -503,7 +563,7 @@ class TestListBackupsStep:
 
     def test_collects_errors_without_raising(self, step_context):
         jhelper = Mock()
-        jhelper.run_action.side_effect = Exception("boom")
+        jhelper.run_action.side_effect = ActionFailedException("boom")
         targets = [
             ActionTarget(
                 "keystone-mysql", "keystone-mysql/0", MYSQL_CHARM, "list-backups"
@@ -576,22 +636,29 @@ class TestWriteBackupInventoryManifestStep:
 
 
 class TestExtensibility:
-    """Adding a component is a registration change, not a code change (FR-021)."""
+    """Adding a component requires an explicit workflow subclass."""
 
     def test_new_component_flows_through_generic_pipeline(
         self, step_context, monkeypatch
     ):
-        def _resolve_fake(jhelper, app, model, force):
-            return ActionTarget(app, f"{app}/0", "fake-charm", "create-backup")
+        class FakeBackupComponent(BackupComponent):
+            name = "fake-charm"
 
-        fake = BackupComponent(
-            name="fake-charm",
-            resolve_backup_target=_resolve_fake,
-            parse_backup_list=_parse_vault_backups,
-            parse_backup=_parse_backup,
-            build_backup_plan=_build_vault_backup_plan,
-            build_restore_plan=_build_vault_restore_plan,
-        )
+            def resolve_backup_target(self, jhelper, app, model, force):
+                return ActionTarget(app, f"{app}/0", self.name, self.backup_action)
+
+            def parse_backup_list(self, action_result):
+                return []
+
+            def restore_params(self, jhelper, target, restore_to_time, timeout, model):
+                return {}
+
+            def build_restore_plan(
+                self, jhelper, target, restore_to_time, timeout, model
+            ):
+                return []
+
+        fake = FakeBackupComponent()
         components = BACKUP_COMPONENTS + [fake]
         monkeypatch.setattr(
             "sunbeam.steps.backup_restore.BACKUP_COMPONENTS", components
@@ -608,7 +675,7 @@ class TestExtensibility:
         )
         assert discover.message["fake-charm"] == ["my-fake"]
 
-        run = RunBackupsStep(jhelper, {"fake-charm": ["my-fake"]}).run(step_context)
+        run = RunBackupStep(jhelper, {"fake-charm": ["my-fake"]}).run(step_context)
         assert run.message[0].component == "fake-charm"
         assert run.message[0].backup is not None
         assert run.message[0].backup.success is True

@@ -8,7 +8,11 @@ import pytest
 from click.testing import CliRunner
 
 from sunbeam.commands.backup_restore import restore
-from sunbeam.core.juju import JujuException, LeaderNotFoundException
+from sunbeam.core.juju import (
+    ActionFailedException,
+    JujuException,
+    LeaderNotFoundException,
+)
 from sunbeam.core.openstack import OPENSTACK_MODEL
 
 
@@ -22,6 +26,27 @@ def _app_status(charm_name):
 
 
 def _model_status(apps):
+    apps = dict(apps)
+    for app_name, app_status in list(apps.items()):
+        if app_status.charm_name != "mysql-k8s" or not app_name.endswith("-mysql"):
+            continue
+        api_app = app_name.removesuffix("-mysql")
+        router_app = f"{api_app}-mysql-router"
+        app_status.relations["database"] = [
+            Mock(interface="mysql_client", related_app=router_app)
+        ]
+        apps.setdefault(
+            router_app,
+            Mock(
+                charm_name="mysql-router-k8s",
+                relations={
+                    "database": [
+                        Mock(interface="mysql_client", related_app=app_name),
+                        Mock(interface="mysql_client", related_app=api_app),
+                    ]
+                },
+            ),
+        )
     status = Mock()
     status.apps = apps
     return status
@@ -204,7 +229,9 @@ class TestRestoreCommand:
         assert result.exit_code == 0, result.output
         assert "vault is not ready for backup" in result.output
 
-    def test_warns_on_pitr_for_vault(self, deployment, jhelper):
+    def test_pitr_falls_back_to_latest_for_components_without_pitr_support(
+        self, deployment, jhelper
+    ):
         result = CliRunner().invoke(
             restore,
             ["--restore-to-time", "2026-07-15 00:00:00", "--no-prompt"],
@@ -212,6 +239,18 @@ class TestRestoreCommand:
         )
 
         assert result.exit_code == 0, result.output
+        assert "vault does not support --restore-to-time." in result.output
+        assert "Restoring latest available" in result.output
+        assert "backup instead." in result.output
+        restore_calls = [
+            call
+            for call in jhelper.run_action.call_args_list
+            if len(call.args) > 2 and call.args[2] == "restore-backup"
+        ]
+        assert len(restore_calls) == 1
+        assert restore_calls[0].args[3] == {
+            "backup-id": "vault-backup-openstack-2026-07-15-00-03-28"
+        }
 
     def test_no_backups_found(self, deployment, jhelper):
         def _run_action(unit, model, action, params=None, timeout=None):
@@ -337,7 +376,7 @@ class TestRestoreCommand:
                     }
                 }
             if action == "list-backups":
-                raise Exception("list failed")
+                raise ActionFailedException("list failed")
             return {}
 
         jhelper.run_action.side_effect = _run_action
@@ -424,17 +463,46 @@ class TestRestoreCommand:
         result = CliRunner().invoke(restore, ["--force", "--no-prompt"], obj=deployment)
 
         assert result.exit_code == 2, result.output
-        assert (
-            "Failed to list backups for keystone-mysql: Could not resolve target."
-            in result.output
-        )
-        assert (
-            "No applications remain to restore after validation. Exiting."
-            in result.output
-        )
+        assert "Could not resolve restore target for keystone-mysql" in result.output
         assert not any(
             call.args[2] == "restore" for call in jhelper.run_action.call_args_list
         )
+
+    def test_mixed_unresolved_target_stops_restore(self, deployment, jhelper):
+        mysql = _s3_related(_app_status("mysql-k8s"))
+        vault = _s3_related(_app_status("vault-k8s"))
+        jhelper.get_model_status.return_value = _model_status(
+            {"keystone-mysql": mysql, "vault": vault}
+        )
+
+        def _leader(app, model):
+            if app == "vault":
+                raise LeaderNotFoundException("no vault leader")
+            return f"{app}/0"
+
+        jhelper.get_leader_unit.side_effect = _leader
+        jhelper.run_action.side_effect = _default_run_action
+
+        result = CliRunner().invoke(restore, ["--no-prompt"], obj=deployment)
+
+        assert result.exit_code == 2, result.output
+        assert "Could not resolve restore target for vault" in result.output
+        jhelper.scale_application.assert_not_called()
+        assert not any(
+            call.args[2] in {"restore", "restore-backup"}
+            for call in jhelper.run_action.call_args_list
+        )
+
+    def test_force_does_not_bypass_missing_pause_resume_actions(
+        self, deployment, jhelper
+    ):
+        jhelper.get_application_actions.return_value = []
+
+        result = CliRunner().invoke(restore, ["--force", "--no-prompt"], obj=deployment)
+
+        assert result.exit_code == 1, result.output
+        assert "pause/resume" in result.output
+        jhelper.scale_application.assert_not_called()
 
     def test_non_active_target_app_is_skipped(self, deployment, jhelper):
         mysql = _s3_related(_app_status("mysql-k8s"))
@@ -480,8 +548,9 @@ class TestRestoreCommand:
         assert result.exit_code == 2, result.output
         assert "keystone-mysql" in result.output
         assert "restore failed" in result.output
-        # scale down to 1 then revert back up to 2
-        assert jhelper.scale_application.call_args_list == [
-            ((OPENSTACK_MODEL, "keystone-mysql", 1),),
-            ((OPENSTACK_MODEL, "keystone-mysql", 2),),
+        assert [call.args for call in jhelper.scale_application.call_args_list] == [
+            (OPENSTACK_MODEL, "keystone-mysql-router", 0),
+            (OPENSTACK_MODEL, "keystone-mysql", 1),
+            (OPENSTACK_MODEL, "keystone-mysql", 2),
+            (OPENSTACK_MODEL, "keystone-mysql-router", 2),
         ]

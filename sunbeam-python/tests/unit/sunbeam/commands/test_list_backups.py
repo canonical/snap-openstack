@@ -8,7 +8,7 @@ import pytest
 from click.testing import CliRunner
 
 from sunbeam.commands.backup_restore import list_backups
-from sunbeam.core.juju import LeaderNotFoundException
+from sunbeam.core.juju import ActionFailedException, LeaderNotFoundException
 
 
 def _app_status(charm_name):
@@ -138,7 +138,7 @@ class TestListBackupsCommand:
 
         def _run_action(unit, model, action, params=None, timeout=None):
             if action == "list-backups":
-                raise Exception("list failed")
+                raise ActionFailedException("list failed")
             return {}
 
         jhelper.run_action.side_effect = _run_action
