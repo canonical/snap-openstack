@@ -120,11 +120,14 @@ resource "juju_application" "microovn_arm64" {
   endpoint_bindings = var.endpoint_bindings
 }
 
+moved {
+  from = juju_application.sunbeam-ovn-proxy[0]
+  to   = juju_application.sunbeam-ovn-proxy
+}
+
 resource "juju_application" "sunbeam-ovn-proxy" {
   name       = "sunbeam-ovn-proxy"
   model_uuid = data.juju_model.machine_model.uuid
-  # Only deploy when microovn is the SDN provider
-  count = var.ovn-relay-offer-url == null ? 1 : 0
   # Deploy on same machine as token distributor
   machines = length(var.token_distributor_machine_ids) == 0 ? null : toset(var.token_distributor_machine_ids)
   units    = length(var.token_distributor_machine_ids) == 0 ? 1 : null
@@ -164,20 +167,6 @@ resource "juju_integration" "microovn-certs" {
 
   application {
     offer_url = var.ca-offer-url
-  }
-}
-
-resource "juju_integration" "microovn-ovsdb-cms" {
-  count      = (var.ovn-relay-offer-url != null) ? 1 : 0
-  model_uuid = data.juju_model.machine_model.uuid
-
-  application {
-    name     = juju_application.microovn.name
-    endpoint = "ovsdb-external"
-  }
-
-  application {
-    offer_url = var.ovn-relay-offer-url
   }
 }
 
@@ -272,25 +261,10 @@ resource "juju_integration" "microovn_arm64_certs" {
   }
 }
 
-resource "juju_integration" "microovn_arm64_ovsdb_cms" {
-  count      = (var.ovn-relay-offer-url != null && length(local.microovn_arm64_machine_ids) > 0) ? 1 : 0
-  model_uuid = data.juju_model.machine_model.uuid
-
-  application {
-    name     = juju_application.microovn_arm64[0].name
-    endpoint = "ovsdb-external"
-  }
-
-  application {
-    offer_url = var.ovn-relay-offer-url
-  }
-}
-
 resource "juju_integration" "microovn_arm64_to_ovn_proxy" {
   count = (
     length(local.microovn_arm64_machine_ids) > 0
     && length(local.microovn_machine_ids) == 0
-    && length(juju_application.sunbeam-ovn-proxy.*.name) > 0
   ) ? 1 : 0
   model_uuid = data.juju_model.machine_model.uuid
 
@@ -300,18 +274,15 @@ resource "juju_integration" "microovn_arm64_to_ovn_proxy" {
   }
 
   application {
-    name     = juju_application.sunbeam-ovn-proxy[0].name
+    name     = juju_application.sunbeam-ovn-proxy.name
     endpoint = "ovsdb"
   }
 }
 
 resource "juju_integration" "microovn-to-ovn-proxy" {
   count = (
-    length(juju_application.sunbeam-ovn-proxy.*.name) > 0
-    && (
-      length(local.microovn_machine_ids) > 0
-      || length(local.microovn_arm64_machine_ids) == 0
-    )
+    length(local.microovn_machine_ids) > 0
+    || length(local.microovn_arm64_machine_ids) == 0
   ) ? 1 : 0
   model_uuid = data.juju_model.machine_model.uuid
 
@@ -321,15 +292,19 @@ resource "juju_integration" "microovn-to-ovn-proxy" {
   }
 
   application {
-    name     = juju_application.sunbeam-ovn-proxy[0].name
+    name     = juju_application.sunbeam-ovn-proxy.name
     endpoint = "ovsdb"
   }
 }
 
+moved {
+  from = juju_offer.ovsdb-cms[0]
+  to   = juju_offer.ovsdb-cms
+}
+
 resource "juju_offer" "ovsdb-cms" {
-  count            = length(juju_application.sunbeam-ovn-proxy.*.name) > 0 ? 1 : 0
   model_uuid       = data.juju_model.machine_model.uuid
-  application_name = juju_application.sunbeam-ovn-proxy[0].name
+  application_name = juju_application.sunbeam-ovn-proxy.name
   endpoints        = ["ovsdb-cms"]
 }
 
@@ -342,5 +317,5 @@ output "microovn-arm64-application-name" {
 }
 
 output "ovsdb-cms-offer" {
-  value = try(juju_offer.ovsdb-cms[0].url, null)
+  value = juju_offer.ovsdb-cms.url
 }

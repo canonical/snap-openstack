@@ -43,7 +43,6 @@ from sunbeam.steps.configure import (
     CLOUD_CONFIG_SECTION,
     BaseUserQuestions,
     OpenstackNetworkAgentsUnitGetterMixin,
-    PrincipalUnitGetterMixin,
     SetExternalNetworkUnitsOptionsStep,
     physical_network_question,
     user_questions,
@@ -298,19 +297,6 @@ class LocalSetExternalNetworkUnitsOptionsStep(SetExternalNetworkUnitsOptionsStep
             self.bridge_mappings[host] = self._build_bridge_mapping(
                 self.prompt_for_nics(console, physnets=physnets)
             )
-
-
-class LocalSetHypervisorUnitsOptionsStep(
-    LocalSetExternalNetworkUnitsOptionsStep, PrincipalUnitGetterMixin
-):
-    APP = hypervisor.APPLICATION
-    DISPLAY_NAME = "hypervisor"
-    ACTION = "set-hypervisor-local-settings"
-
-    def _fetch_nics(self) -> dict:
-        return nic_utils.fetch_nics(
-            self.client, self.names[0], self.jhelper, self.model
-        )
 
 
 class LocalSetOpenStackNetworkAgentsStep(

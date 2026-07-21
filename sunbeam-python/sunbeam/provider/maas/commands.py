@@ -27,7 +27,6 @@ from sunbeam.commands.configure import (
 )
 from sunbeam.commands.dashboard import retrieve_dashboard_url
 from sunbeam.commands.proxy import PromptForProxyStep
-from sunbeam.core import ovn
 from sunbeam.core.checks import (
     Check,
     DiagnosticResultType,
@@ -108,7 +107,6 @@ from sunbeam.provider.maas.steps import (
     MaasSaveClusterdCredentialsStep,
     MaasSaveControllerStep,
     MaasScaleJujuStep,
-    MaasSetHypervisorUnitsOptionsStep,
     MaasSetOpenStackNetworkAgentsStep,
     MaasUserQuestions,
     MachineComputeNicCheck,
@@ -157,7 +155,6 @@ from sunbeam.steps.juju import (
 from sunbeam.steps.k8s import (
     AddK8SCloudStep,
     CheckMysqlK8SDistributionStep,
-    CheckOvnK8SDistributionStep,
     CheckRabbitmqK8SDistributionStep,
     CordonK8SUnitStep,
     DestroyK8SApplicationStep,
@@ -183,7 +180,6 @@ from sunbeam.steps.microovn import (
     ReapplyMicroOVNOptionalIntegrationsStep,
     ReapplyMicroOVNTerraformPlanStep,
     RemoveMicroOVNUnitsStep,
-    SetOvnProviderStep,
 )
 from sunbeam.steps.openstack import (
     DeployControlPlaneStep,
@@ -507,10 +503,8 @@ def bootstrap(
         sys.exit(1)
 
     client = deployment.get_client()
-    snap = Snap()
     plan3: list[BaseStep] = []
     plan3.append(AddManifestStep(client, manifest_path))
-    plan3.append(SetOvnProviderStep(client, snap))
     plan3.append(MaasAddMachinesToClusterdStep(client, maas_client))
     if not juju_controller:
         plan3.append(
@@ -953,7 +947,7 @@ def deploy(
             deployment.openstack_machines_model,
         )
     )
-    plan2.append(OpenStackPatchLoadBalancerServicesIPStep(client, ovn_manager))
+    plan2.append(OpenStackPatchLoadBalancerServicesIPStep(client))
 
     if nb_compute:
         plan2.append(TerraformInitStep(tfhelper_hypervisor_deploy))
@@ -1075,19 +1069,16 @@ def configure_cmd(
     network = list(
         map(_name_mapper, client.cluster.list_nodes_by_role(RoleTags.NETWORK.value))
     )
-    ovn_manager = deployment.get_ovn_manager()
-    network_agents_names = network
-    if ovn_manager.get_provider() == ovn.OvnProvider.MICROOVN:
-        # All nodes with MicroOVN network agents need the action called. Only
-        # network nodes get enable-chassis-as-gw=true; compute-only and
-        # control-only nodes get enable-chassis-as-gw=false.
-        control = list(
-            map(
-                _name_mapper,
-                client.cluster.list_nodes_by_role(RoleTags.CONTROL.value),
-            )
+    # All nodes with MicroOVN network agents need the action called. Only
+    # network nodes get enable-chassis-as-gw=true; compute-only and
+    # control-only nodes get enable-chassis-as-gw=false.
+    control = list(
+        map(
+            _name_mapper,
+            client.cluster.list_nodes_by_role(RoleTags.CONTROL.value),
         )
-        network_agents_names = list(dict.fromkeys(network + compute + control))
+    )
+    network_agents_names = list(dict.fromkeys(network + compute + control))
     plan = [
         AddManifestStep(client, manifest_path),
         JujuLoginStep(deployment.juju_account),
@@ -1128,19 +1119,6 @@ def configure_cmd(
             manifest,
         ),
     ]
-    if ovn_manager.get_provider() == ovn.OvnProvider.OVN_K8S:
-        # In OVN_K8S mode, dataplane is managed by hypervisor units
-        plan.append(
-            MaasSetHypervisorUnitsOptionsStep(
-                client,
-                maas_client,
-                compute,
-                jhelper,
-                deployment.openstack_machines_model,
-                manifest,
-            ),
-        )
-
     run_plan(plan, console, show_hints)
     dashboard_url = retrieve_dashboard_url(jhelper)
     console.print("The cloud has been configured for sample usage.")
@@ -1698,13 +1676,6 @@ def remove_node(ctx: click.Context, name: str, force: bool, show_hints: bool) ->
             force=force,
         ),
         CheckMysqlK8SDistributionStep(
-            client,
-            name,
-            jhelper,
-            deployment.openstack_machines_model,
-            force=force,
-        ),
-        CheckOvnK8SDistributionStep(
             client,
             name,
             jhelper,

@@ -16,7 +16,6 @@ from sunbeam.commands.configure import (
     get_dpdk_config,
     get_pci_whitelist_config,
 )
-from sunbeam.core import ovn
 from sunbeam.core.common import (
     BaseStep,
     Result,
@@ -94,7 +93,6 @@ class DeployHypervisorApplicationStep(DeployMachineApplicationStep):
         )
         self.openstack_tfhelper = openstack_tfhelper
         self.cinder_volume_tfhelper = cinder_volume_tfhelper
-        self.ovn_manager = deployment.get_ovn_manager()
 
     def extra_tfvars(self) -> dict:
         """Extra terraform vars to pass to terraform apply."""
@@ -115,8 +113,6 @@ class DeployHypervisorApplicationStep(DeployMachineApplicationStep):
             "ca-offer-url",
             "nova-offer-url",
         }
-        if self.ovn_manager.get_provider() == ovn.OvnProvider.OVN_K8S:
-            juju_offers.add("ovn-relay-offer-url")
         extra_tfvars = {offer: openstack_tf_output.get(offer) for offer in juju_offers}
 
         if len(storage_nodes) > 0:

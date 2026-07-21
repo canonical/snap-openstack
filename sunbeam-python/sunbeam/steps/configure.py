@@ -472,15 +472,6 @@ class UnitGetterMixin(abc.ABC):
         raise NotImplementedError
 
 
-class PrincipalUnitGetterMixin(UnitGetterMixin):
-    def get_unit(self, name: str) -> str:
-        """Get the juju unit for the given machine name."""
-        node = self.client.cluster.get_node_info(name)
-        machine_id = str(node.get("machineid"))
-        unit = self.jhelper.get_unit_from_machine(self.APP, machine_id, self.model)
-        return unit
-
-
 class OpenstackNetworkAgentsUnitGetterMixin(UnitGetterMixin, JujuStepHelper):
     def get_unit(self, name: str) -> str:
         """Get the juju unit for the given network agent name."""
