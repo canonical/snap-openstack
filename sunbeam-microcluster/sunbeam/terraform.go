@@ -98,6 +98,23 @@ func GetTerraformLock(ctx context.Context, s state.State, name string) (string, 
 
 // UpdateTerraformLock updates the terraform lock record in the database
 func UpdateTerraformLock(ctx context.Context, s state.State, name string, lock string) (apitypes.Lock, error) {
+	tflockKey := tflockPrefix + name
+	return updateTerraformLock(
+		lock,
+		func() (string, error) {
+			return GetConfig(ctx, s, tflockKey)
+		},
+		func(lock string) error {
+			return CreateConfig(ctx, s, tflockKey, lock)
+		},
+	)
+}
+
+func updateTerraformLock(
+	lock string,
+	getLock func() (string, error),
+	createLock func(string) error,
+) (apitypes.Lock, error) {
 	var reqLock apitypes.Lock
 	var dbLock apitypes.Lock
 
@@ -106,22 +123,31 @@ func UpdateTerraformLock(ctx context.Context, s state.State, name string, lock s
 		return dbLock, err
 	}
 
-	tflockKey := tflockPrefix + name
-	lockInDb, err := GetConfig(ctx, s, tflockKey)
+	lockInDb, err := getLock()
 	if err != nil {
-		if err, ok := err.(api.StatusError); ok {
-			// No Lock exists, add lock details in DB
-			if err.Status() == http.StatusNotFound {
-				j, err := json.Marshal(reqLock)
-				if err != nil {
-					return dbLock, err
-				}
-
-				err = UpdateConfig(ctx, s, tflockKey, string(j))
-				return dbLock, err
-			}
+		if !api.StatusErrorCheck(err, http.StatusNotFound) {
+			return dbLock, err
 		}
-		return dbLock, err
+
+		j, err := json.Marshal(reqLock)
+		if err != nil {
+			return dbLock, err
+		}
+
+		createErr := createLock(string(j))
+		if createErr == nil {
+			return dbLock, nil
+		}
+		if !api.StatusErrorCheck(createErr, http.StatusConflict) {
+			return dbLock, createErr
+		}
+
+		// Another request may have created the lock after GetConfig.
+		// Read that lock and use the identity checks below.
+		lockInDb, err = getLock()
+		if err != nil {
+			return dbLock, err
+		}
 	}
 
 	err = json.Unmarshal([]byte(lockInDb), &dbLock)

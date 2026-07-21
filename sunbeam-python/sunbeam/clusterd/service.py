@@ -28,6 +28,12 @@ class ClusterServiceUnavailableException(RemoteException):
     pass
 
 
+class TerraformPlanLockConflictException(RemoteException):
+    """Raised when another operation holds a Terraform plan lock."""
+
+    pass
+
+
 class ConfigItemNotFoundException(RemoteException):
     """Raise when ConfigItem cannot be found on the remote."""
 
@@ -167,6 +173,8 @@ class BaseService(ABC):
         except HTTPError as e:
             # Do some nice translating to sunbeamdexceptions
             error = response.json().get("error")
+            if not isinstance(error, str):
+                raise
             if "remote with name" in error:
                 raise NodeAlreadyExistsException(
                     "Already node exists in the sunbeam cluster"
