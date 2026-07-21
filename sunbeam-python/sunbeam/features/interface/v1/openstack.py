@@ -5,7 +5,7 @@ import logging
 import queue
 import typing
 from abc import abstractmethod
-from enum import Enum
+from enum import Enum, StrEnum
 from pathlib import Path
 
 import click
@@ -78,6 +78,13 @@ class TerraformPlanLocation(Enum):
 
     SUNBEAM_TERRAFORM_REPO = 1
     FEATURE_REPO = 2
+
+
+class DatabaseTopology(StrEnum):
+    """Database deployment topology."""
+
+    SINGLE = "single"
+    MULTI = "multi"
 
 
 class OpenStackControlPlaneFeature(EnableDisableFeature, typing.Generic[ConfigType]):
@@ -220,12 +227,12 @@ class OpenStackControlPlaneFeature(EnableDisableFeature, typing.Generic[ConfigTy
         else:
             return f"TerraformVars{self.app_name}"
 
-    def get_database_topology(self, deployment: Deployment) -> str:
+    def get_database_topology(self, deployment: Deployment) -> DatabaseTopology:
         """Returns the database topology of the cluster."""
         # Database topology can be set only during bootstrap and cannot be changed.
         client = deployment.get_client()
         topology = read_config(client, TOPOLOGY_KEY)
-        return topology["database"]
+        return DatabaseTopology(topology["database"])
 
     def get_cluster_topology(self, deployment: Deployment) -> str:
         """Returns the cluster topology of the cluster."""
