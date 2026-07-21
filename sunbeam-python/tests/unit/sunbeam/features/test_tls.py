@@ -41,6 +41,30 @@ def get_subject_from_csr():
 
 
 @pytest.fixture()
+def get_cn_from_csr():
+    with patch.object(tls, "get_cn_from_csr") as p:
+        yield p
+
+
+@pytest.fixture()
+def get_cn_from_cert():
+    with patch.object(tls, "get_cn_from_cert") as p:
+        yield p
+
+
+@pytest.fixture()
+def cert_and_csr_public_key_match():
+    with patch.object(tls, "cert_and_csr_public_key_match", return_value=True) as p:
+        yield p
+
+
+@pytest.fixture()
+def is_cert_expired():
+    with patch.object(tls, "is_cert_expired", return_value=False) as p:
+        yield p
+
+
+@pytest.fixture()
 def is_certificate_valid():
     with patch.object(tls, "is_certificate_valid") as p:
         yield p
@@ -569,13 +593,29 @@ class TestReapplyTLSCertificatesStep:
         load_answers.assert_not_called()
 
     @pytest.mark.parametrize(
-        "stored,csr_subject",
+        "stored,cn,public_key_match,expired",
         [
-            pytest.param({}, None, id="no_stored_certificates"),
+            pytest.param({}, "subject1", True, False, id="no_stored_certificates"),
             pytest.param(
-                {"certificates": {"subject-old": {"certificate": "stored-cert"}}},
-                "subject-new",
-                id="subject_mismatch",
+                {"certificates": {"subject1": {"certificate": "stored-cert"}}},
+                "subject1",
+                False,
+                False,
+                id="public_key_mismatch",
+            ),
+            pytest.param(
+                {"certificates": {"subject1": {"certificate": "stored-cert"}}},
+                "subject1",
+                True,
+                True,
+                id="certificate_expired",
+            ),
+            pytest.param(
+                {"certificates": {"subject1": {"certificate": "stored-cert"}}},
+                None,
+                True,
+                False,
+                id="csr_without_cn",
             ),
         ],
     )
@@ -585,15 +625,23 @@ class TestReapplyTLSCertificatesStep:
         jhelper,
         step_context,
         load_answers,
-        get_subject_from_csr,
+        get_cn_from_csr,
+        get_cn_from_cert,
+        cert_and_csr_public_key_match,
+        is_cert_expired,
         stored,
-        csr_subject,
+        cn,
+        public_key_match,
+        expired,
     ):
         self._outstanding(
             jhelper, [{"unit_name": "traefik/0", "csr": "csr", "relation_id": 1}]
         )
         load_answers.return_value = stored
-        get_subject_from_csr.return_value = csr_subject
+        get_cn_from_csr.return_value = cn
+        get_cn_from_cert.return_value = cn
+        cert_and_csr_public_key_match.return_value = public_key_match
+        is_cert_expired.return_value = expired
         jhelper.get_relation_map.return_value = {"certificates:1": "traefik"}
         step = tls.ReapplyTLSCertificatesStep(cclient, jhelper, "fake-cert")
 
@@ -603,12 +651,21 @@ class TestReapplyTLSCertificatesStep:
         assert step.process_certs == {}
 
     def test_is_skip_matches_stored_certificate(
-        self, cclient, jhelper, step_context, load_answers, get_subject_from_csr
+        self,
+        cclient,
+        jhelper,
+        step_context,
+        load_answers,
+        get_cn_from_csr,
+        get_cn_from_cert,
+        cert_and_csr_public_key_match,
+        is_cert_expired,
     ):
         self._outstanding(
             jhelper, [{"unit_name": "traefik/0", "csr": "csr", "relation_id": 1}]
         )
-        get_subject_from_csr.return_value = "subject1"
+        get_cn_from_csr.return_value = "subject1"
+        get_cn_from_cert.return_value = "subject1"
         load_answers.return_value = {
             "certificates": {"subject1": {"certificate": "stored-cert"}}
         }
@@ -640,12 +697,21 @@ class TestReapplyTLSCertificatesStep:
         load_answers.assert_not_called()
 
     def test_run_reprovides_matched_certificate(
-        self, cclient, jhelper, step_context, load_answers, get_subject_from_csr
+        self,
+        cclient,
+        jhelper,
+        step_context,
+        load_answers,
+        get_cn_from_csr,
+        get_cn_from_cert,
+        cert_and_csr_public_key_match,
+        is_cert_expired,
     ):
         self._outstanding(
             jhelper, [{"unit_name": "traefik/0", "csr": "csr", "relation_id": 1}]
         )
-        get_subject_from_csr.return_value = "subject1"
+        get_cn_from_csr.return_value = "subject1"
+        get_cn_from_cert.return_value = "subject1"
         load_answers.return_value = {
             "certificates": {"subject1": {"certificate": "stored-cert"}}
         }
