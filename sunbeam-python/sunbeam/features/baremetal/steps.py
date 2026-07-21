@@ -58,6 +58,22 @@ class RunSetTempUrlSecretStep(BaseStep, JujuStepHelper):
         self.model = OPENSTACK_MODEL
         self.apps = apps
 
+    def is_skip(self, context: StepContext) -> Result:
+        """Skip the temp-url-secret action when Glance uses external S3.
+
+        With an S3-backed Glance, ironic-conductor serves deploy images from the
+        S3 backend through its local HTTP server and does not rely on Ceph
+        RadosGW Swift temporary URLs, so no temp-url secret is required.
+        """
+        from sunbeam.steps.openstack import is_glance_s3_storage_enabled
+
+        if is_glance_s3_storage_enabled(self.deployment.get_client()):
+            return Result(
+                ResultType.SKIPPED,
+                "Glance uses external S3 storage; temp-url secret not required.",
+            )
+        return Result(ResultType.COMPLETED)
+
     def run(self, context: StepContext) -> Result:
         """Run the set-temp-url-secret action on ironic-conductor apps."""
         try:
