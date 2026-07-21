@@ -27,7 +27,7 @@ from sunbeam.steps.backup_restore import (
     ResolveActionTargetsStep,
     RestoreResult,
     RestoreStep,
-    RunBackupsStep,
+    RunBackupStep,
     ValidateStep,
     WriteBackupInventoryManifestStep,
     WriteBackupManifestStep,
@@ -131,7 +131,15 @@ def _list_backup_inventory(
 ) -> list[BackupInventory]:
     """List available backups for the given targets."""
     results = run_plan(
-        [ResolveActionTargetsStep(jhelper, discovered, model=model)], console
+        [
+            ResolveActionTargetsStep(
+                jhelper,
+                discovered,
+                action=lambda component: component.list_action,
+                model=model,
+            )
+        ],
+        console,
     )
     resolved = get_step_message(results, ResolveActionTargetsStep)
     targets = resolved["targets"]
@@ -269,6 +277,28 @@ def _filter_restore_targets(
     return restorable, bool(failed_inventory_by_app) or bool(partially_failed_apps)
 
 
+def _warn_restore_to_time_fallback_targets(
+    discovered: dict[str, list[str]],
+    restore_to_time: str | None,
+) -> list[str]:
+    """When PITR is requested, report apps that will fall back to latest backup."""
+    if restore_to_time is None:
+        return []
+
+    supports_restore_to_time = {
+        component.name: component.restore_to_time_param is not None
+        for component in BACKUP_COMPONENTS
+    }
+
+    fallback_apps: list[str] = []
+    for component, apps in discovered.items():
+        if supports_restore_to_time.get(component, False):
+            continue
+        fallback_apps.extend(apps)
+
+    return sorted(fallback_apps)
+
+
 def _validate_restore_to_time(
     ctx: click.Context, param: click.Parameter, value: str | None
 ) -> str | None:
@@ -330,14 +360,10 @@ def backup(ctx: click.Context, force: bool, timeout: int, no_prompt: bool) -> No
     dispatched_at = datetime.now(timezone.utc).strftime(RESTORE_TIME_FORMAT)
     console.print(f"Dispatching backups at {dispatched_at} UTC...")
     backup_results = run_plan(
-        [
-            RunBackupsStep(
-                jhelper, discovered, force=force, timeout=timeout, model=model
-            )
-        ],
+        [RunBackupStep(jhelper, discovered, force=force, timeout=timeout, model=model)],
         console,
     )
-    results: list[BackupResult] = get_step_message(backup_results, RunBackupsStep)
+    results: list[BackupResult] = get_step_message(backup_results, RunBackupStep)
 
     if not results:
         console.print(
@@ -479,6 +505,18 @@ def restore(
     inventory = _list_backup_inventory(jhelper, discovered, model, timeout)
     _print_inventory(inventory)
 
+    unresolved_restore_targets = [
+        entry
+        for entry in inventory
+        if entry.unit == "-" and entry.error == "Could not resolve target."
+    ]
+    if unresolved_restore_targets:
+        for entry in unresolved_restore_targets:
+            console.print(
+                f"[red]Error:[/red] Could not resolve restore target for {entry.app}."
+            )
+        sys.exit(EXIT_FAILURE)
+
     discovered, was_filtered = _filter_restore_targets(discovered, inventory)
 
     if was_filtered:
@@ -487,6 +525,15 @@ def restore(
     if not any(discovered.values()):
         console.print("No applications remain to restore after validation. Exiting.")
         sys.exit(EXIT_FAILURE)
+
+    fallback_for_restore_to_time = _warn_restore_to_time_fallback_targets(
+        discovered, restore_to_time
+    )
+    for app in fallback_for_restore_to_time:
+        console.print(
+            f"[yellow]Warning:[/yellow] {app} does not support"
+            " --restore-to-time. Restoring latest available backup instead."
+        )
 
     if restore_to_time:
         START_RESTORE_QUESTION.description = (
@@ -515,9 +562,14 @@ def restore(
     for result in results:
         if not result.success:
             reverted = " Reverted." if result.reverted else ""
+            rollback_failed = (
+                f" Rollback failed: {result.rollback_error}."
+                if result.rollback_error
+                else ""
+            )
             console.print(
                 f"[red]Error:[/red] {result.app} restore failed:"
-                f" {result.error}.{reverted}"
+                f" {result.error}.{reverted}{rollback_failed}"
             )
 
     succeeded = sum(1 for r in results if r.success)

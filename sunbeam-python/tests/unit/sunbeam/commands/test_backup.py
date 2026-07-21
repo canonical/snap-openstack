@@ -7,6 +7,7 @@ import pytest
 from click.testing import CliRunner
 
 from sunbeam.commands.backup_restore import backup
+from sunbeam.core.juju import ActionFailedException
 
 
 def _app_status(charm_name):
@@ -97,7 +98,7 @@ class TestBackupCommand:
                     }
                 }
             if unit == "keystone-mysql/0":
-                raise Exception("backup failed")
+                raise ActionFailedException("backup failed")
             return {"backup-id": "backup-vault-0"}
 
         jhelper.run_action.side_effect = _run_action
@@ -122,7 +123,7 @@ class TestBackupCommand:
                         }
                     }
                 }
-            raise Exception("backup failed")
+            raise ActionFailedException("backup failed")
 
         jhelper.run_action.side_effect = _run_action
 
