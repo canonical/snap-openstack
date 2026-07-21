@@ -58,6 +58,7 @@ from sunbeam.provider.maas.steps import (
     ZonesCheck,
 )
 from sunbeam.steps.juju import RemoveJujuMachineStep
+from sunbeam.steps.microovn import ReapplyMicroOVNTerraformPlanStep
 from sunbeam.steps.role_distributor import (
     ReapplyRoleDistributorApplicationStep,
     RemoveRoleDistributorUnitsStep,
@@ -1288,10 +1289,10 @@ class TestMaasDeployMachinesStep:
         self, maas_deploy_machines_step, step_context
     ):
         maas_deploy_machines_step.client.cluster.list_nodes.return_value = [
-            {"name": "test_node", "machineid": 1}
+            {"name": "test_node", "machineid": 1, "systemid": "abc"}
         ]
         maas_deploy_machines_step.jhelper.get_machines.return_value = {
-            "2": Mock(hostname="test_node")
+            "2": Mock(hostname="test_node", instance_id="abc")
         }
         result = maas_deploy_machines_step.is_skip(step_context)
         assert result.result_type == ResultType.FAILED
@@ -1300,6 +1301,29 @@ class TestMaasDeployMachinesStep:
             " expected the id 1."
         )
         assert result.message == msg
+
+    def test_is_skip_matches_dpu_by_system_id_when_hostname_differs(
+        self, maas_deploy_machines_step, step_context
+    ):
+        maas_deploy_machines_step.client.cluster.list_nodes.return_value = [
+            {
+                "name": "pc8a-rb3-n4-dpu",
+                "machineid": -1,
+                "systemid": "8fhqbs",
+                "is_dpu": True,
+            }
+        ]
+        maas_deploy_machines_step.jhelper.get_machines.return_value = {
+            "54": Mock(
+                hostname="packer-ubuntu",
+                instance_id="8fhqbs",
+                display_name="pc8a-rb3-n4-dpu",
+            )
+        }
+        result = maas_deploy_machines_step.is_skip(step_context)
+        assert result.result_type == ResultType.COMPLETED
+        assert maas_deploy_machines_step.nodes_to_deploy == []
+        assert len(maas_deploy_machines_step.nodes_to_update) == 1
 
     def test_is_skip_with_nodes_to_deploy(
         self, maas_deploy_machines_step, step_context
@@ -2524,6 +2548,40 @@ class TestRemoveNodeRoleDistributor:
     @patch("sunbeam.provider.maas.commands.JujuHelper")
     @patch("sunbeam.provider.maas.commands.run_preflight_checks")
     @patch("sunbeam.provider.maas.commands.run_plan")
+    def test_remove_reapplies_microovn_terraform_plan_after_cluster_removal(
+        self,
+        run_plan_cmd,
+        run_preflight,
+        juju_helper,
+    ):
+        deployment = Mock()
+        deployment.openstack_machines_model = "openstack-machines"
+        deployment.get_manifest.return_value = Mock()
+        deployment.get_tfhelper.return_value = Mock()
+        deployment.get_ovn_manager.return_value.get_machines.return_value = ["1"]
+
+        runner = CliRunner()
+        result = runner.invoke(remove_node, ["node-1"], obj=deployment)
+
+        assert result.exit_code == 0, result.output
+
+        plan = run_plan_cmd.call_args_list[1][0][0]
+        clusterd_remove_idx = next(
+            i
+            for i, step in enumerate(plan)
+            if isinstance(step, MaasRemoveMachineFromClusterdStep)
+        )
+        microovn_reapply_idx = next(
+            i
+            for i, step in enumerate(plan)
+            if isinstance(step, ReapplyMicroOVNTerraformPlanStep)
+        )
+
+        assert clusterd_remove_idx < microovn_reapply_idx
+
+    @patch("sunbeam.provider.maas.commands.JujuHelper")
+    @patch("sunbeam.provider.maas.commands.run_preflight_checks")
+    @patch("sunbeam.provider.maas.commands.run_plan")
     def test_remove_skips_role_distributor_when_microovn_has_no_machines(
         self,
         run_plan_cmd,
@@ -2547,6 +2605,9 @@ class TestRemoveNodeRoleDistributor:
         )
         assert not any(
             isinstance(step, ReapplyRoleDistributorApplicationStep) for step in plan
+        )
+        assert not any(
+            isinstance(step, ReapplyMicroOVNTerraformPlanStep) for step in plan
         )
 
 

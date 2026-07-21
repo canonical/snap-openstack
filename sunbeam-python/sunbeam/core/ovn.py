@@ -26,6 +26,8 @@ class OvnConfig(pydantic.BaseModel):
 
 
 DEFAULT_PROVIDER = OvnProvider.OVN_K8S
+DEFAULT_ARCHITECTURE = "amd64"
+ARM64_ARCHITECTURE = "arm64"
 
 
 def load_provider_config(client: Client) -> OvnConfig:
@@ -106,21 +108,66 @@ class OvnManager:
         else:
             return nb_network > 0
 
-    def get_machines(self) -> list[str]:
-        """Get the list of machine IDs for the OVN provider.
-
-        :return: list of machine IDs as strings
-        """
+    def _list_microovn_nodes(self) -> list[dict]:
+        """Collect cluster nodes that should run MicroOVN."""
         nodes = self.client.cluster.list_nodes_by_role("network")
         if self.get_provider() == OvnProvider.MICROOVN:
             nodes += self.client.cluster.list_nodes_by_role("compute")
             nodes += self.client.cluster.list_nodes_by_role("control")
-        machine_ids = {
-            str(node.get("machineid"))
-            for node in nodes
-            if node.get("machineid") not in (-1, None)
-        }
+        return nodes
+
+    def get_token_distributor_machines(
+        self, provider: OvnProvider | None = None
+    ) -> list[str]:
+        """Get machine IDs for MicroOVN helper applications."""
+        provider = provider or self.get_provider()
+        roles = [Role.NETWORK]
+        if provider == OvnProvider.MICROOVN:
+            roles = [Role.CONTROL, Role.COMPUTE, Role.NETWORK]
+
+        for role in roles:
+            machine_ids: set[str] = set()
+            for node in self.client.cluster.list_nodes_by_role(role.name.lower()):
+                machineid = node.get("machineid")
+                if machineid in (-1, None):
+                    continue
+                arch = node.get("arch") or DEFAULT_ARCHITECTURE
+                if arch == DEFAULT_ARCHITECTURE:
+                    machine_ids.add(str(machineid))
+            if machine_ids:
+                return sorted(machine_ids)
+
+        return []
+
+    def get_machines(self, architecture: str | None = None) -> list[str]:
+        """Get machine IDs for MicroOVN, optionally filtered by architecture.
+
+        :param architecture: if set, only return machines with this arch
+        :return: list of machine IDs as strings
+        """
+        machine_ids: set[str] = set()
+        for node in self._list_microovn_nodes():
+            machineid = node.get("machineid")
+            if machineid in (-1, None):
+                continue
+            arch = node.get("arch") or DEFAULT_ARCHITECTURE
+            if architecture is None or arch == architecture:
+                machine_ids.add(str(machineid))
         return sorted(machine_ids)
+
+    def get_machines_by_architecture(self) -> dict[str, list[str]]:
+        """Get MicroOVN machine IDs grouped by architecture."""
+        machine_ids_by_arch: dict[str, set[str]] = {}
+        for node in self._list_microovn_nodes():
+            machineid = node.get("machineid")
+            if machineid in (-1, None):
+                continue
+            arch = node.get("arch") or DEFAULT_ARCHITECTURE
+            machine_ids_by_arch.setdefault(arch, set()).add(str(machineid))
+        return {
+            arch: sorted(machine_ids)
+            for arch, machine_ids in machine_ids_by_arch.items()
+        }
 
     def get_control_plane_tfvars(
         self, deployment: Deployment, jhelper: JujuHelper

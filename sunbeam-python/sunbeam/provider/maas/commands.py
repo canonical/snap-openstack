@@ -181,6 +181,7 @@ from sunbeam.steps.microceph import (
 from sunbeam.steps.microovn import (
     DeployMicroOVNApplicationStep,
     ReapplyMicroOVNOptionalIntegrationsStep,
+    ReapplyMicroOVNTerraformPlanStep,
     RemoveMicroOVNUnitsStep,
     SetOvnProviderStep,
 )
@@ -1791,6 +1792,7 @@ def remove_node(ctx: click.Context, name: str, force: bool, show_hints: bool) ->
     if microovn_machine_ids:
         manifest = deployment.get_manifest()
         role_distributor_tfhelper = deployment.get_tfhelper("role-distributor-plan")
+        microovn_tfhelper = deployment.get_tfhelper("microovn-plan")
         cordon_k8s_unit_index = next(
             i for i, step in enumerate(plan) if isinstance(step, CordonK8SUnitStep)
         )
@@ -1812,6 +1814,15 @@ def remove_node(ctx: click.Context, name: str, force: bool, show_hints: bool) ->
                 jhelper,
                 manifest,
                 deployment.openstack_machines_model,
+            ),
+            TerraformInitStep(microovn_tfhelper),
+            ReapplyMicroOVNTerraformPlanStep(
+                client,
+                microovn_tfhelper,
+                jhelper,
+                manifest,
+                deployment.openstack_machines_model,
+                deployment.get_ovn_manager(),
             ),
         ]
 
