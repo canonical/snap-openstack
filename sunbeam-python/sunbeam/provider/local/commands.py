@@ -1561,6 +1561,7 @@ def join(  # noqa: C901
                 jhelper,
                 deployment.openstack_machines_model,
                 name,
+                reconcile_existing=True,
             ),
         )
         plan4.append(
