@@ -26,19 +26,20 @@ from sunbeam.core.questions import (
     PromptQuestion,
 )
 from sunbeam.features.interface.v1.openstack import (
+    DatabaseTopology,
     OpenStackControlPlaneFeature,
     TerraformPlanLocation,
 )
 from sunbeam.steps.backup_restore import (
     BACKUP_COMPONENTS,
     S3_ENDPOINT,
-    S3_INTEGRATOR_CHARM,
     S3_RELATION_VALIDATION_CHECK,
 )
 from sunbeam.utils import click_option_show_hints, pass_method_obj
 from sunbeam.versions import S3_INTEGRATOR_CHANNEL
 
 _MANAGED_S3_KEY = "managed-s3-integrations"  # {target_app: integrator_app}
+S3_INTEGRATOR_CHARM = "s3-integrator"
 DEFAULT_S3_PATH = "/"
 DEFAULT_S3_REGION = "us-east-2"
 DEFAULT_S3_ENDPOINT = "https://s3.us-east-2.amazonaws.com"
@@ -222,7 +223,10 @@ class DisasterRecoveryFeature(OpenStackControlPlaneFeature):
         jhelper = deployment.get_juju_helper()
         apps = jhelper.get_model_status(OPENSTACK_MODEL).apps
         managed = self._s3_load_managed_integrations(deployment)
-        integrations = self._s3_build_integrations(jhelper, apps, managed)
+        database_topology = self.get_database_topology(deployment)
+        integrations = self._s3_build_integrations(
+            jhelper, apps, managed, database_topology
+        )
         self._s3_integrations_cache = integrations
         return integrations
 
@@ -231,8 +235,9 @@ class DisasterRecoveryFeature(OpenStackControlPlaneFeature):
         jhelper: JujuHelper,
         apps: dict[str, AppStatus],
         managed_integrators: dict[str, str] | None = None,
+        database_topology: DatabaseTopology | None = None,
     ) -> list[S3Integration]:
-        targets = self._s3_discover_relation_targets(apps)
+        targets = self._s3_discover_relation_targets(apps, database_topology)
         managed_integrators = managed_integrators or {}
         integrations: list[S3Integration] = []
 
@@ -264,13 +269,22 @@ class DisasterRecoveryFeature(OpenStackControlPlaneFeature):
             )
         return integrations
 
-    def _s3_discover_relation_targets(self, apps: dict[str, AppStatus]) -> list[str]:
+    def _s3_discover_relation_targets(
+        self,
+        apps: dict[str, AppStatus],
+        database_topology: DatabaseTopology | None = None,
+    ) -> list[str]:
         """Return applications eligible for DR S3 integration."""
         target_charms = set(self._s3_relation_target_components().keys())
         targets: list[str] = []
         for app_name, app_status in apps.items():
             if app_status.charm_name not in target_charms:
                 continue
+            if app_status.charm_name == "mysql-k8s":
+                if database_topology == DatabaseTopology.SINGLE and app_name != "mysql":
+                    continue
+                if database_topology == DatabaseTopology.MULTI and app_name == "mysql":
+                    continue
             targets.append(app_name)
         return targets
 

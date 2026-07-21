@@ -12,7 +12,10 @@ from sunbeam.features.disaster_recovery.feature import (
     DisasterRecoveryFeatureConfig,
     S3Integration,
 )
-from sunbeam.features.interface.v1.openstack import TerraformPlanLocation
+from sunbeam.features.interface.v1.openstack import (
+    DatabaseTopology,
+    TerraformPlanLocation,
+)
 from sunbeam.steps.backup_restore import S3_ENDPOINT
 
 
@@ -27,7 +30,9 @@ class TestDisasterRecoveryFeature:
     def test_set_application_names_is_per_target_app(self):
         feature = DisasterRecoveryFeature()
         deployment = Mock()
-        deployment.get_client.return_value.cluster.get_config.return_value = "{}"
+        deployment.get_client.return_value.cluster.get_config.return_value = (
+            '{"database": "multi"}'
+        )
         jhelper = deployment.get_juju_helper.return_value
         status = Mock()
         status.apps = {
@@ -46,7 +51,9 @@ class TestDisasterRecoveryFeature:
     def test_set_application_names_skips_existing_s3_relation(self):
         feature = DisasterRecoveryFeature()
         deployment = Mock()
-        deployment.get_client.return_value.cluster.get_config.return_value = "{}"
+        deployment.get_client.return_value.cluster.get_config.return_value = (
+            '{"database": "multi"}'
+        )
         jhelper = deployment.get_juju_helper.return_value
         status = Mock()
         status.apps = {
@@ -58,10 +65,52 @@ class TestDisasterRecoveryFeature:
 
         assert feature.set_application_names(deployment) == ["vault-s3-integrator"]
 
-    def test_enable_disable_tfvars(self):
+    def test_single_database_topology_uses_only_shared_mysql(self):
         feature = DisasterRecoveryFeature()
         deployment = Mock()
         deployment.get_client.return_value.cluster.get_config.return_value = "{}"
+        jhelper = deployment.get_juju_helper.return_value
+        status = Mock()
+        status.apps = {
+            "mysql": Mock(charm_name="mysql-k8s"),
+            "keystone-mysql": Mock(charm_name="mysql-k8s"),
+            "vault": Mock(charm_name="vault-k8s"),
+        }
+        jhelper.get_model_status.return_value = status
+        jhelper.get_relation_map.return_value = {}
+        feature.get_database_topology = Mock(return_value=DatabaseTopology.SINGLE)
+
+        assert feature.set_application_names(deployment) == [
+            "mysql-s3-integrator",
+            "vault-s3-integrator",
+        ]
+
+    def test_multi_database_topology_uses_only_service_mysql(self):
+        feature = DisasterRecoveryFeature()
+        deployment = Mock()
+        deployment.get_client.return_value.cluster.get_config.return_value = "{}"
+        jhelper = deployment.get_juju_helper.return_value
+        status = Mock()
+        status.apps = {
+            "mysql": Mock(charm_name="mysql-k8s"),
+            "keystone-mysql": Mock(charm_name="mysql-k8s"),
+            "vault": Mock(charm_name="vault-k8s"),
+        }
+        jhelper.get_model_status.return_value = status
+        jhelper.get_relation_map.return_value = {}
+        feature.get_database_topology = Mock(return_value=DatabaseTopology.MULTI)
+
+        assert feature.set_application_names(deployment) == [
+            "keystone-s3-integrator",
+            "vault-s3-integrator",
+        ]
+
+    def test_enable_disable_tfvars(self):
+        feature = DisasterRecoveryFeature()
+        deployment = Mock()
+        deployment.get_client.return_value.cluster.get_config.return_value = (
+            '{"database": "multi"}'
+        )
         jhelper = deployment.get_juju_helper.return_value
         jhelper.get_model_uuid.return_value = "openstack-uuid"
         status = Mock()
@@ -116,7 +165,9 @@ class TestDisasterRecoveryFeature:
     def test_set_tfvars_on_enable_includes_per_app_s3_config(self):
         feature = DisasterRecoveryFeature()
         deployment = Mock()
-        deployment.get_client.return_value.cluster.get_config.return_value = "{}"
+        deployment.get_client.return_value.cluster.get_config.return_value = (
+            '{"database": "multi"}'
+        )
         jhelper = deployment.get_juju_helper.return_value
         jhelper.get_model_uuid.return_value = "openstack-uuid"
         status = Mock()

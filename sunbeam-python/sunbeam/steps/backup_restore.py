@@ -36,7 +36,6 @@ from sunbeam.core.openstack import OPENSTACK_MODEL
 
 LOG = logging.getLogger(__name__)
 
-S3_INTEGRATOR_CHARM = "s3-integrator"
 MYSQL_CHARM = "mysql-k8s"
 VAULT_CHARM = "vault-k8s"
 BACKUP_ACTION = "create-backup"
