@@ -20,6 +20,32 @@ from sunbeam.steps.backup_restore import S3_ENDPOINT
 
 
 class TestDisasterRecoveryFeature:
+    @pytest.mark.parametrize(
+        ("path", "expected_path"),
+        [
+            ("/", "/mysql"),
+            ("/backups", "/backups/mysql"),
+            ("backups", "/backups/mysql"),
+        ],
+    )
+    def test_s3_integrator_config_normalizes_mysql_paths(self, path, expected_path):
+        feature = DisasterRecoveryFeature()
+        config = DisasterRecoveryFeatureConfig(
+            configure_managed_s3_integrators=True,
+            path=path,
+        )
+        integrations = [
+            S3Integration(
+                app_name="mysql",
+                integrator_app="mysql-s3-integrator",
+                target_endpoint=S3_ENDPOINT,
+            )
+        ]
+
+        tfvar = feature._s3_integrator_config_tfvar(config, integrations)
+
+        assert tfvar["mysql-s3-integrator"]["path"] == expected_path
+
     def test_feature_metadata(self):
         feature = DisasterRecoveryFeature()
 
@@ -193,13 +219,13 @@ class TestDisasterRecoveryFeature:
         assert tfvars["s3-integrator-config"] == {
             "keystone-s3-integrator": {
                 "bucket": "openstack-backups",
-                "path": "backups/keystone-mysql",
+                "path": "/backups/keystone-mysql",
                 "region": "us-east-2",
                 "endpoint": "https://s3.us-east-2.amazonaws.com",
             },
             "vault-s3-integrator": {
                 "bucket": "openstack-backups",
-                "path": "backups/vault",
+                "path": "/backups/vault",
                 "region": "us-east-2",
                 "endpoint": "https://s3.us-east-2.amazonaws.com",
             },
