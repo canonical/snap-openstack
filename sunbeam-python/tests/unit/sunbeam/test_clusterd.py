@@ -327,6 +327,90 @@ class TestClusterService:
         cs = ClusterService(mock_session, "http+unix://mock")
         cs.bootstrap_cluster("node-1", "10.10.1.10:7000")
 
+    def test_lock_terraform_plan(self):
+        json_data = {
+            "type": "sync",
+            "status": "Success",
+            "status_code": 200,
+            "operation": "",
+            "error_code": 0,
+            "error": "",
+            "metadata": {},
+        }
+        mock_response = self._mock_response(status=200, json_data=json_data)
+        mock_session = MagicMock()
+        mock_session.request.return_value = mock_response
+        lock = {
+            "ID": "test-id",
+            "Operation": "Cilium reconciliation",
+            "Who": "node-1",
+        }
+
+        cs = ClusterService(mock_session, "http+unix://mock")
+        cs.lock_terraform_plan("k8s-plan", lock)
+
+        mock_session.request.assert_called_once_with(
+            method="put",
+            url="http+unix://mock/1.0/terraformlock/k8s-plan",
+            cert=None,
+            timeout=None,
+            data=json.dumps(lock),
+        )
+
+    def test_lock_terraform_plan_accepts_same_lock(self):
+        lock = {
+            "ID": "test-id",
+            "Operation": "Cilium reconciliation",
+            "Who": "node-1",
+        }
+        mock_response = self._mock_response(status=423, json_data=lock)
+        http_error = HTTPError("Locked", response=mock_response)
+        mock_response.raise_for_status.side_effect = http_error
+        mock_session = MagicMock()
+        mock_session.request.return_value = mock_response
+
+        cs = ClusterService(mock_session, "http+unix://mock")
+        cs.lock_terraform_plan("k8s-plan", lock)
+
+        mock_session.request.assert_called_once()
+
+    def test_lock_terraform_plan_reports_conflict(self):
+        lock = {
+            "ID": "test-id",
+            "Operation": "Cilium reconciliation",
+            "Who": "node-1",
+        }
+        existing_lock = {**lock, "ID": "other-id"}
+        mock_response = self._mock_response(status=409, json_data=existing_lock)
+        http_error = HTTPError("Conflict", response=mock_response)
+        mock_response.raise_for_status.side_effect = http_error
+        mock_session = MagicMock()
+        mock_session.request.return_value = mock_response
+
+        cs = ClusterService(mock_session, "http+unix://mock")
+
+        with pytest.raises(service.TerraformPlanLockConflictException):
+            cs.lock_terraform_plan("k8s-plan", lock)
+
+    def test_lock_terraform_plan_preserves_unexpected_error(self):
+        lock = {
+            "ID": "test-id",
+            "Operation": "Cilium reconciliation",
+            "Who": "node-1",
+        }
+        mock_response = self._mock_response(status=500, json_data=lock)
+        http_error = HTTPError("Internal Error", response=mock_response)
+        mock_response.raise_for_status.side_effect = http_error
+        mock_session = MagicMock()
+        mock_session.request.return_value = mock_response
+
+        cs = ClusterService(mock_session, "http+unix://mock")
+
+        with pytest.raises(HTTPError) as exc_info:
+            cs.lock_terraform_plan("k8s-plan", lock)
+
+        assert exc_info.value is http_error
+
     def test_bootstrap_when_node_already_exists(self):
         json_data = {
             "type": "error",

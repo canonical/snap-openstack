@@ -220,6 +220,23 @@ class ExtendedAPIService(service.BaseService):
         lock = self._get(f"/1.0/terraformlock/{plan}")
         return json.loads(lock)
 
+    def lock_terraform_plan(self, plan: str, lock: dict) -> None:
+        """Lock a Terraform plan."""
+        try:
+            self._put(f"/1.0/terraformlock/{plan}", data=json.dumps(lock))
+        except HTTPError as e:
+            if e.response is None:
+                raise
+            if e.response.status_code == codes.locked:
+                # Clusterd returns 423 when the stored lock has the same
+                # ID, operation, and owner as this request.
+                return
+            if e.response.status_code == codes.conflict:
+                raise service.TerraformPlanLockConflictException(
+                    f"Terraform plan {plan} is locked"
+                ) from e
+            raise
+
     def unlock_terraform_plan(self, plan: str, lock: dict) -> None:
         """Unlock plan."""
         self._put(f"/1.0/terraformunlock/{plan}", data=json.dumps(lock))

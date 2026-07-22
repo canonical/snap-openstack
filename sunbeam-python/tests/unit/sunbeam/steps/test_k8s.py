@@ -13,8 +13,11 @@ import tenacity
 from lightkube import ApiError
 from lightkube.types import PatchType
 
-from sunbeam.clusterd.service import ConfigItemNotFoundException
-from sunbeam.core.common import ResultType
+from sunbeam.clusterd.service import (
+    ConfigItemNotFoundException,
+    TerraformPlanLockConflictException,
+)
+from sunbeam.core.common import Result, ResultType
 from sunbeam.core.deployment import Networks
 from sunbeam.core.juju import (
     ActionFailedException,
@@ -1461,33 +1464,38 @@ class TestEnsureCiliumDeviceByHostStep:
         kubeconfig_mocker.stop()
         kube_mocker.stop()
 
-    def test_is_skip_no_changes(self, step, step_context):
+    def test_run_no_changes(self, step, step_context):
         step._get_outdated_resources = Mock(return_value=([], []))
-        result = step.is_skip(step_context)
+        result = step.run(step_context)
         assert result.result_type == ResultType.SKIPPED
+        step.client.cluster.lock_terraform_plan.assert_called_once()
+        step.client.cluster.unlock_terraform_plan.assert_called_once()
 
-    def test_is_skip_outdated_device(self, step, step_context):
+    def test_run_outdated_device(self, step, step_context):
         step._get_outdated_resources = Mock(return_value=(["node1"], []))
-        result = step.is_skip(step_context)
+        step._run = Mock(return_value=Result(ResultType.COMPLETED))
+        result = step.run(step_context)
         assert result.result_type == ResultType.COMPLETED
         assert len(step.to_update) == 1
         assert step.to_update[0]["name"] == "node1"
 
-    def test_is_skip_missing_config(self, step, step_context):
+    def test_run_missing_config(self, step, step_context):
         step._get_outdated_resources = Mock(return_value=(["node1", "node2"], []))
-        result = step.is_skip(step_context)
+        step._run = Mock(return_value=Result(ResultType.COMPLETED))
+        result = step.run(step_context)
         assert result.result_type == ResultType.COMPLETED
         assert len(step.to_update) == 2
 
-    def test_is_skip_deleted_node(self, step, step_context):
+    def test_run_deleted_node(self, step, step_context):
         """Deleted nodes (not in control_nodes) are scheduled for cleanup."""
         step._get_outdated_resources = Mock(return_value=([], ["departed-node"]))
-        result = step.is_skip(step_context)
+        step._run = Mock(return_value=Result(ResultType.COMPLETED))
+        result = step.run(step_context)
         assert result.result_type == ResultType.COMPLETED
         assert len(step.to_delete) == 1
         assert step.to_delete[0]["name"] == "departed-node"
 
-    def test_is_skip_stale_machine_skipped(self, step, jhelper, step_context):
+    def test_run_stale_machine_skipped(self, step, jhelper, step_context):
         """Nodes whose machines are gone from juju are skipped, not deleted.
 
         This avoids accidentally deleting cilium configs for nodes that are
@@ -1497,10 +1505,10 @@ class TestEnsureCiliumDeviceByHostStep:
         # node2's machine (id=2) is no longer in juju
         jhelper.get_machines.return_value = {"1": Mock()}
         step._get_outdated_resources = Mock(return_value=([], []))
-        result = step.is_skip(step_context)
+        result = step.run(step_context)
         assert result.result_type == ResultType.SKIPPED
 
-    def test_is_skip_single_node_fqdn(self, deployment, client, jhelper, step_context):
+    def test_run_single_node_fqdn(self, deployment, client, jhelper, step_context):
         node_info = {"name": "node1", "machineid": "1", "role": ["control"]}
         client.cluster.get_node_info = Mock(return_value=node_info)
         step = EnsureCiliumDeviceByHostStep(
@@ -1508,12 +1516,13 @@ class TestEnsureCiliumDeviceByHostStep:
         )
         step.kube = Mock()
         step._get_outdated_resources = Mock(return_value=(["node1"], []))
+        step._run = Mock(return_value=Result(ResultType.COMPLETED))
         with patch("sunbeam.steps.k8s.get_kube_client", return_value=step.kube):
-            result = step.is_skip(step_context)
+            result = step.run(step_context)
         assert result.result_type == ResultType.COMPLETED
         assert step.control_nodes == [node_info]
 
-    def test_is_skip_single_node_fqdn_preserves_other_configs(
+    def test_run_single_node_fqdn_preserves_other_configs(
         self, deployment, client, jhelper, step_context
     ):
         """When fqdn is set, configs for other nodes must not be deleted.
@@ -1531,12 +1540,96 @@ class TestEnsureCiliumDeviceByHostStep:
         step.kube = Mock()
         # node2 needs an update; node1 reported as deleted (not in working set)
         step._get_outdated_resources = Mock(return_value=(["node2"], ["node1"]))
+        step._run = Mock(return_value=Result(ResultType.COMPLETED))
         with patch("sunbeam.steps.k8s.get_kube_client", return_value=step.kube):
-            result = step.is_skip(step_context)
+            result = step.run(step_context)
         assert result.result_type == ResultType.COMPLETED
         assert len(step.to_update) == 1
         assert step.to_update[0]["name"] == "node2"
         assert step.to_delete == []
+
+    def test_run_join_reconciles_existing_control_nodes(
+        self, deployment, client, jhelper, control_nodes, step_context
+    ):
+        concurrent_node = {"name": "node3", "machineid": "3"}
+        client.cluster.list_nodes_by_role.return_value = [
+            *control_nodes,
+            concurrent_node,
+        ]
+        joining_node = {**control_nodes[1], "role": ["control"]}
+        client.cluster.get_node_info.return_value = joining_node
+        jhelper.get_machines.return_value["3"] = Mock()
+        step = EnsureCiliumDeviceByHostStep(
+            deployment,
+            client,
+            jhelper,
+            "test-model",
+            fqdn="node2.maas",
+            reconcile_existing=True,
+        )
+        step.kube = Mock()
+        step._get_outdated_resources = Mock(
+            return_value=(["node1", "node2", "node3"], ["departed-node"])
+        )
+        step._run = Mock(return_value=Result(ResultType.COMPLETED))
+        tagged_k8s_nodes = [
+            _to_kube_object({"labels": {"sunbeam/hostname": node["name"]}})
+            for node in control_nodes
+        ]
+
+        with (
+            patch("sunbeam.steps.k8s.get_kube_client", return_value=step.kube),
+            patch("sunbeam.steps.k8s.list_nodes", return_value=tagged_k8s_nodes),
+        ):
+            result = step.run(step_context)
+
+        assert result.result_type == ResultType.COMPLETED
+        assert len(step.control_nodes) == 2
+        assert {node["name"] for node in step.control_nodes} == {"node1", "node2"}
+        assert {node["name"] for node in step.to_update} == {"node1", "node2"}
+        assert step.to_delete == []
+
+    def test_is_skip_defers_reconciliation_to_run(self, step, client, step_context):
+        step._get_outdated_resources = Mock(return_value=(["node1"], []))
+
+        result = step.is_skip(step_context)
+
+        assert result.result_type == ResultType.COMPLETED
+        step._get_outdated_resources.assert_not_called()
+        client.cluster.lock_terraform_plan.assert_not_called()
+        client.cluster.unlock_terraform_plan.assert_not_called()
+
+    def test_reconciliation_lock_retries_conflict(self, step, client):
+        client.cluster.lock_terraform_plan.side_effect = [
+            TerraformPlanLockConflictException("plan is locked"),
+            None,
+        ]
+        step._acquire_reconciliation_lock.retry.wait = tenacity.wait_none()
+
+        step._acquire_reconciliation_lock()
+
+        assert client.cluster.lock_terraform_plan.call_count == 2
+
+    def test_reconciliation_lock_released_when_run_raises(
+        self, step, client, step_context
+    ):
+        step._get_outdated_resources = Mock(return_value=(["node1"], []))
+
+        with (
+            patch("sunbeam.steps.k8s.get_kube_client", return_value=step.kube),
+            patch.object(
+                EnsureCiliumDeviceByHostStep,
+                "_run",
+                side_effect=KeyboardInterrupt,
+            ),
+            pytest.raises(KeyboardInterrupt),
+        ):
+            step.run(step_context)
+
+        client.cluster.unlock_terraform_plan.assert_called_once_with(
+            "k8s-plan",
+            step._reconciliation_lock,
+        )
 
     def test_is_skip_wrong_node_selector(self, step, control_nodes, jhelper):
         jhelper.get_machine_interfaces.return_value = {
@@ -1587,7 +1680,7 @@ class TestEnsureCiliumDeviceByHostStep:
         step.kube.list = Mock(side_effect=list_side_effect)
         step.kube.delete = Mock()
 
-        result = step.run(None)
+        result = step._run(None)
 
         step.kube.apply.assert_called_once()
         step.kube.patch.assert_called_once_with(
@@ -1646,7 +1739,7 @@ class TestEnsureCiliumDeviceByHostStep:
         step.kube.list = Mock(side_effect=list_side_effect)
         step.kube.delete = Mock()
 
-        result = step.run(None)
+        result = step._run(None)
 
         assert step.kube.apply.call_count == 2
         assert step.kube.patch.call_count == 2  # clears restart-pending on both
@@ -1676,7 +1769,7 @@ class TestEnsureCiliumDeviceByHostStep:
 
         step.kube.list = Mock(side_effect=list_side_effect)
 
-        result = step.run(None)
+        result = step._run(None)
 
         assert step.kube.delete.call_count == 2  # config + pod
         assert result.result_type == ResultType.COMPLETED
@@ -1689,7 +1782,7 @@ class TestEnsureCiliumDeviceByHostStep:
         api_error.status = Mock(code=500)
         step.kube.apply = Mock(side_effect=api_error)
 
-        result = step.run(None)
+        result = step._run(None)
 
         assert result.result_type == ResultType.FAILED
         assert "Failed to apply CiliumNodeConfig for node1" in result.message
@@ -1699,7 +1792,7 @@ class TestEnsureCiliumDeviceByHostStep:
         step.to_delete = []
         step._get_interface = Mock(side_effect=MachineNotFoundException("not found"))
 
-        result = step.run(None)
+        result = step._run(None)
 
         assert result.result_type == ResultType.FAILED
 
@@ -1711,7 +1804,7 @@ class TestEnsureCiliumDeviceByHostStep:
         step.kube.apply = Mock()
         step.kube.list = Mock(return_value=[])
 
-        result = step.run(None)
+        result = step._run(None)
 
         assert result.result_type == ResultType.FAILED
         assert "No cilium pod found on node node1" in result.message
@@ -1747,7 +1840,7 @@ class TestEnsureCiliumDeviceByHostStep:
             patch("sunbeam.steps.k8s.time.monotonic", side_effect=[0.0, 301.0]),
             patch("sunbeam.steps.k8s.time.sleep"),
         ):
-            result = step.run(None)
+            result = step._run(None)
 
         assert result.result_type == ResultType.FAILED
         assert "did not become Ready" in result.message
@@ -1787,7 +1880,7 @@ class TestEnsureCiliumDeviceByHostStep:
 
         with patch("sunbeam.steps.k8s.time.monotonic", side_effect=[0.0, 1.0, 2.0]):
             with patch("sunbeam.steps.k8s.time.sleep"):
-                result = step.run(None)
+                result = step._run(None)
 
         assert result.result_type == ResultType.COMPLETED
 
@@ -1866,7 +1959,7 @@ class TestEnsureCiliumDeviceByHostStep:
         step.kube.delete = Mock()
 
         with patch("sunbeam.steps.k8s.list_nodes", return_value=[k8s_node]):
-            result = step.run(None)
+            result = step._run(None)
 
         step.kube.apply.assert_called_once()
         step.kube.patch.assert_called_once()
@@ -1909,7 +2002,7 @@ class TestEnsureCiliumDeviceByHostStep:
         step.kube.delete = Mock()
 
         with patch("sunbeam.steps.k8s.list_nodes", return_value=[]):
-            result = step.run(None)
+            result = step._run(None)
 
         # Config deletion should still happen
         step.kube.delete.assert_called_once()
