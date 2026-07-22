@@ -64,7 +64,6 @@ from sunbeam.steps.clusterd import APPLICATION as CLUSTERD_APPLICATION
 from sunbeam.steps.configure import (
     BaseUserQuestions,
     OpenstackNetworkAgentsUnitGetterMixin,
-    PrincipalUnitGetterMixin,
     SetExternalNetworkUnitsOptionsStep,
 )
 from sunbeam.steps.juju import (
@@ -2243,16 +2242,6 @@ class MaasSetExternalNetworkUnitsOptionsStep(SetExternalNetworkUnitsOptionsStep)
 
         self.bridge_mappings = bridge_mappings
         return Result(ResultType.COMPLETED)
-
-
-class MaasSetHypervisorUnitsOptionsStep(
-    MaasSetExternalNetworkUnitsOptionsStep, PrincipalUnitGetterMixin
-):
-    """Configure hypervisor settings on the machines."""
-
-    APP = "openstack-hypervisor"
-    DISPLAY_NAME = "hypervisor"
-    ACTION = "set-hypervisor-local-settings"
 
 
 class MaasSetOpenStackNetworkAgentsStep(

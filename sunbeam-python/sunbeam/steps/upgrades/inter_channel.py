@@ -35,7 +35,6 @@ from sunbeam.versions import (
     MISC_CHARMS_K8S,
     MYSQL_CHARMS_K8S,
     OPENSTACK_CHARMS_K8S,
-    OVN_CHARMS_K8S,
 )
 
 LOG = logging.getLogger(__name__)
@@ -188,11 +187,7 @@ class UpgradeControlPlane(BaseUpgrade):
 
         # Step 2: Upgrade all openstack core charms
         LOG.debug("Upgrading OpenStack core charms")
-        charms = (
-            list(MISC_CHARMS_K8S.keys())
-            + list(OVN_CHARMS_K8S.keys())
-            + list(OPENSTACK_CHARMS_K8S.keys())
-        )
+        charms = list(MISC_CHARMS_K8S.keys()) + list(OPENSTACK_CHARMS_K8S.keys())
         apps = self.get_apps_filter_by_charms(self.model, charms)
         result = self.upgrade_applications(
             apps,

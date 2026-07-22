@@ -66,13 +66,6 @@ variable "ca-offer-url" {
   default     = null
 }
 
-# Mandatory relation, no defaults
-variable "ovn-relay-offer-url" {
-  description = "Offer URL for ovn relay service"
-  type        = string
-  default     = null
-}
-
 variable "ceilometer-offer-url" {
   description = "Offer URL for openstack ceilometer"
   type        = string

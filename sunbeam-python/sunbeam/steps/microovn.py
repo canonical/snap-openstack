@@ -5,7 +5,6 @@ import logging
 from typing import Any
 
 import tenacity
-from snaphelpers import Snap, UnknownConfigKey
 
 from sunbeam import versions
 from sunbeam.clusterd.client import Client
@@ -80,12 +79,9 @@ def _role_distributor_application_name(jhelper: JujuHelper, model: str) -> str |
     return ROLE_DISTRIBUTOR_APP
 
 
-def _microovn_accepted_statuses(ovn_manager: ovn.OvnManager) -> list[str]:
+def _microovn_accepted_statuses() -> list[str]:
     """Return statuses accepted while waiting for MicroOVN."""
-    statuses = ["active", "unknown"]
-    if ovn_manager.get_provider() == ovn.OvnProvider.OVN_K8S:
-        statuses.append("blocked")
-    return statuses
+    return ["active", "unknown"]
 
 
 def _openstack_network_agents_tfvars(
@@ -151,26 +147,21 @@ class DeployMicroOVNApplicationStep(DeployMachineApplicationStep):
 
     def get_accepted_application_status(self) -> list[str]:
         """Accepted status to pass wait_application_ready function."""
-        return _microovn_accepted_statuses(self.ovn_manager)
+        return _microovn_accepted_statuses()
 
     def extra_tfvars(self) -> dict:
         """Extra terraform vars to pass to terraform apply."""
         openstack_tfhelper = self.deployment.get_tfhelper("openstack-plan")
         openstack_tf_output = openstack_tfhelper.output()
 
-        juju_offers = {
-            "ca-offer-url",
-            "ovn-relay-offer-url",
-        }
+        juju_offers = {"ca-offer-url"}
         extra_tfvars: dict[str, Any] = {
             offer: openstack_tf_output.get(offer) for offer in juju_offers
         }
 
         machines_by_arch = self.ovn_manager.get_machines_by_architecture()
         extra_tfvars["microovn_machine_ids_by_architecture"] = machines_by_arch
-        distributor_ids = self.ovn_manager.get_token_distributor_machines(
-            ovn.OvnProvider.MICROOVN
-        )
+        distributor_ids = self.ovn_manager.get_token_distributor_machines()
         extra_tfvars["token_distributor_machine_ids"] = distributor_ids[:1]
 
         # Juju does not resolve per-arch revisions for subordinates, so pin the
@@ -277,11 +268,9 @@ class ReapplyMicroOVNOptionalIntegrationsStep(DeployMicroOVNApplicationStep):
         extra_args = [
             "-target=juju_integration.microovn-microcluster-token-distributor",
             "-target=juju_integration.microovn-certs",
-            "-target=juju_integration.microovn-ovsdb-cms",
             "-target=juju_integration.microovn-openstack-network-agents",
             "-target=juju_integration.microovn_arm64_microcluster_token_distributor",
             "-target=juju_integration.microovn_arm64_certs",
-            "-target=juju_integration.microovn_arm64_ovsdb_cms",
         ]
         if _role_distributor_application_name(self.jhelper, self.model):
             extra_args.append("-target=juju_integration.role-distributor-microovn")
@@ -352,7 +341,7 @@ class ReapplyMicroOVNTerraformPlanStep(BaseStep):
                 network_configs
             )
 
-        statuses = _microovn_accepted_statuses(self.ovn_manager)
+        statuses = _microovn_accepted_statuses()
         try:
             self.tfhelper.update_tfvars_and_apply_tf(
                 self.client,
@@ -536,88 +525,4 @@ class EnableMicroOVNStep(BaseStep, JujuStepHelper):
         if not self.unit:
             return Result(ResultType.FAILED, "Unit not found on machine")
 
-        return Result(ResultType.COMPLETED)
-
-
-class SetOvnProviderStep(BaseStep):
-    """Set OVN provider in the deployment configuration."""
-
-    def __init__(self, client: Client, snap: Snap):
-        super().__init__(
-            "Set OVN provider",
-            "Setting OVN provider in deployment configuration",
-        )
-        self.client = client
-        self.snap = snap
-        self.wanted_provider: ovn.OvnProvider | None = None
-
-    def get_config_from_snap(self, snap: Snap) -> ovn.OvnProvider:
-        """Get OVN provider from snap configuration.
-
-        Returns MICROOVN only when the provider config 'ovn.provider' is set
-        to 'microovn'.
-
-        :param snap: the snap instance
-        :return: the OVN provider
-        """
-        try:
-            provider_value = snap.config.get(ovn.SNAP_PROVIDER_CONFIG_KEY)
-            if provider_value:
-                # Check if it's a valid OvnProvider value
-                try:
-                    parsed_provider = ovn.OvnProvider(provider_value)
-                    if parsed_provider == ovn.OvnProvider.MICROOVN:
-                        return ovn.OvnProvider.MICROOVN
-                except ValueError:
-                    # Invalid provider value - raise error to fail fast
-                    valid_values = ", ".join([p.value for p in ovn.OvnProvider])
-                    raise ValueError(
-                        f"Invalid value '{provider_value}' for "
-                        f"{ovn.SNAP_PROVIDER_CONFIG_KEY}. "
-                        f"Valid values are: {valid_values}"
-                    )
-        except UnknownConfigKey:
-            # fallback to default
-            pass
-        return ovn.DEFAULT_PROVIDER
-
-    def is_skip(self, context: StepContext) -> Result:
-        """Determines if the step should be skipped or not.
-
-        :return: ResultType.SKIPPED if the Step should be skipped,
-                ResultType.COMPLETED or ResultType.FAILED otherwise
-        """
-        try:
-            snap_value = self.get_config_from_snap(self.snap)
-        except ValueError as e:
-            return Result(
-                ResultType.FAILED,
-                str(e),
-            )
-
-        config = ovn.load_provider_config(self.client)
-        configured_provider = config.provider
-        if configured_provider == snap_value:
-            LOG.debug(
-                "OVN provider is already set to %s in deployment configuration",
-                snap_value,
-            )
-            return Result(ResultType.SKIPPED)
-
-        already_bootstrapped = self.client.cluster.check_sunbeam_bootstrapped()
-        if already_bootstrapped and configured_provider != snap_value:
-            LOG.debug(
-                "OVN provider change detected after bootstrap, which is not supported"
-            )
-            return Result(ResultType.FAILED, "Changing OVN provider is not supported.")
-        self.wanted_provider = snap_value
-        return Result(ResultType.COMPLETED)
-
-    def run(self, context: StepContext) -> Result:
-        """Set OVN provider in deployment configuration to the desired provider."""
-        if self.wanted_provider is None:
-            return Result(ResultType.FAILED, "Invalid state, wanted_provider is None")
-        config = ovn.load_provider_config(self.client)
-        config.provider = self.wanted_provider
-        ovn.write_provider_config(self.client, config)
         return Result(ResultType.COMPLETED)

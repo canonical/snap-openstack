@@ -13,7 +13,6 @@ from lightkube import ApiError
 from maas.client.bones import CallError
 
 import sunbeam.provider.maas.steps as maas_steps
-from sunbeam.core import ovn
 from sunbeam.core.checks import DiagnosticResultType
 from sunbeam.core.deployment import Networks
 from sunbeam.core.deployments import DeploymentsConfig
@@ -66,22 +65,10 @@ from sunbeam.steps.role_distributor import (
 
 
 class TestMaasConfigureCommand:
-    @pytest.mark.parametrize(
-        "provider,expected_names",
-        [
-            (ovn.OvnProvider.OVN_K8S, ["net-1"]),
-            (
-                ovn.OvnProvider.MICROOVN,
-                ["net-1", "compute-1", "control-1"],
-            ),
-        ],
-    )
-    def test_network_agents_match_ovn_provider(
+    def test_network_agents_include_all_microovn_nodes(
         self,
         mocker,
         tmp_path,
-        provider,
-        expected_names,
     ):
         client = Mock()
         nodes_by_role = {
@@ -95,14 +82,10 @@ class TestMaasConfigureCommand:
         tfhelper.env = {}
         tfhelper.path = tmp_path
 
-        ovn_manager = Mock()
-        ovn_manager.get_provider.return_value = provider
-
         deployment = Mock()
         deployment.get_client.return_value = client
         deployment.get_manifest.return_value = Mock(core={}, features={})
         deployment.get_tfhelper.return_value = tfhelper
-        deployment.get_ovn_manager.return_value = ovn_manager
         deployment.juju_controller = "controller"
         deployment.juju_account = "account"
         deployment.openstack_machines_model = "openstack-machines"
@@ -138,7 +121,7 @@ class TestMaasConfigureCommand:
             for step in plan
             if isinstance(step, maas_steps.MaasSetOpenStackNetworkAgentsStep)
         )
-        assert network_agents_step.names == expected_names
+        assert network_agents_step.names == ["net-1", "compute-1", "control-1"]
 
 
 class TestAddMaasDeployment:

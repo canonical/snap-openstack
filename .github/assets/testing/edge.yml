@@ -28,10 +28,6 @@ core:
         channel: 2026.1/edge
         config:
           snap-channel: 2026.1/edge
-      ovn-central-k8s:
-        channel: 26.03/edge
-      ovn-relay-k8s:
-        channel: 26.03/edge
       placement-k8s:
         channel: 2026.1/edge
       sunbeam-clusterd:

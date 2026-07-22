@@ -14,7 +14,6 @@ from rich.console import Console
 import sunbeam.steps.microceph as microceph
 from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import ConfigItemNotFoundException
-from sunbeam.core import ovn
 from sunbeam.core.common import (
     RAM_32_GB_IN_KB,
     BaseStep,
@@ -110,15 +109,6 @@ def remove_blocked_apps_from_features(jhelper: JujuHelper, model: str) -> list[s
     return apps_to_remove
 
 
-def remove_blocked_apps_from_ovn_provider(
-    ovn_manager: "ovn.OvnManager",
-) -> list[str]:
-    """Juju apps that are in blocked state because of the OVN provider."""
-    if ovn_manager.get_provider() == ovn.OvnProvider.MICROOVN:
-        return ["neutron"]
-    return []
-
-
 def remove_blocked_apps_from_role(
     external_keystone_model: str | None,
     is_region_controller: bool,
@@ -160,8 +150,6 @@ def remove_blocked_apps_from_role(
             "nova-api-mysql-router",
             "nova-cell-mysql",
             "nova-cell-mysql-router",
-            "ovn-relay",
-            "ovn-central",
             "placement",
             "placement-mysql",
             "placement-mysql-router",
@@ -683,10 +671,6 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
         """Apps that are in blocked state from features."""
         return remove_blocked_apps_from_features(self.jhelper, self.model)
 
-    def remove_blocked_apps_from_ovn_provider(self) -> list:
-        """Juju apps that are in blocked state because of the OVN provider."""
-        return remove_blocked_apps_from_ovn_provider(self.ovn_manager)
-
     def remove_blocked_apps_from_role(self) -> list:
         """Juju apps that are in blocked state because of the node role."""
         return remove_blocked_apps_from_role(
@@ -846,7 +830,8 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
             apps.remove("cinder")
         apps = list(set(apps) - set(self.remove_blocked_apps_from_features()))
         apps = list(set(apps) - set(self.remove_blocked_apps_from_role()))
-        apps = list(set(apps) - set(self.remove_blocked_apps_from_ovn_provider()))
+        # Neutron remains blocked until the MicroOVN relation is established.
+        apps = list(set(apps) - {"neutron"})
 
         LOG.debug("Applications monitored for readiness: %s", apps)
         status_queue: queue.Queue[str] = queue.Queue()
@@ -869,24 +854,9 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
 
 
 class OpenStackPatchLoadBalancerServicesIPStep(PatchLoadBalancerServicesIPStep):
-    def __init__(
-        self,
-        client: Client,
-        ovn_manager: ovn.OvnManager,
-    ):
-        super().__init__(client)
-        self.ovn_manager = ovn_manager
-
     def services(self):
         """List of services to patch."""
         services = ["traefik", "traefik-public", "rabbitmq"]
-        if not (
-            self.client.cluster.list_nodes_by_role("region_controller")
-            or self.ovn_manager.get_provider() == ovn.OvnProvider.MICROOVN
-        ):
-            # The region controller cluster is not expected to have ovn-relay.
-            # Microovn based deployments do not use ovn-relay.
-            services.append("ovn-relay")
         if self.client.cluster.list_nodes_by_role("storage"):
             services.append("traefik-rgw")
         return services
@@ -937,7 +907,6 @@ class ReapplyOpenStackTerraformPlanStep(BaseStep, JujuStepHelper):
         self.deployment = deployment
         self.client = client
         self.storage_manager = deployment.get_storage_manager()
-        self.ovn_manager = deployment.get_ovn_manager()
         self.tfhelper = tfhelper
         self.jhelper = jhelper
         self.manifest = manifest
@@ -1029,9 +998,8 @@ class ReapplyOpenStackTerraformPlanStep(BaseStep, JujuStepHelper):
                 )
             )
         )
-        apps = list(
-            set(apps) - set(remove_blocked_apps_from_ovn_provider(self.ovn_manager))
-        )
+        # Neutron remains blocked until the MicroOVN relation is established.
+        apps = list(set(apps) - {"neutron"})
         LOG.debug("Application monitored for readiness: %s", apps)
         pre_status: dict[str, str] = {}
         try:

@@ -8,7 +8,6 @@ import pytest
 import tenacity
 
 from sunbeam.clusterd.service import ConfigItemNotFoundException
-from sunbeam.core import ovn
 from sunbeam.core.common import ResultType
 from sunbeam.core.juju import (
     ApplicationNotFoundException,
@@ -46,7 +45,6 @@ from sunbeam.steps.openstack import (
     get_database_storage_dict,
     get_rabbitmq_storage_tfvars,
     remove_blocked_apps_from_features,
-    remove_blocked_apps_from_ovn_provider,
     remove_blocked_apps_from_role,
 )
 
@@ -364,14 +362,6 @@ class TestDeployControlPlaneStep:
         assert "rabbitmq-storage" in result.message
 
 
-@pytest.fixture
-def ovn_manager():
-    """Ovn manager mock."""
-    ovn_manager = Mock()
-    ovn_manager.get_provider.return_value = ovn.OvnProvider.OVN_K8S
-    yield ovn_manager
-
-
 class PatchLoadBalancerServicesIPStepTest:
     @pytest.fixture
     def patch_client(self):
@@ -386,7 +376,6 @@ class PatchLoadBalancerServicesIPStepTest:
         read_config_patch,
         snap_patch,
         snap_mock,
-        ovn_manager,
         step_context,
     ):
         snap_mock().config.get.return_value = "k8s"
@@ -404,7 +393,7 @@ class PatchLoadBalancerServicesIPStepTest:
                 )
             ),
         ):
-            step = OpenStackPatchLoadBalancerServicesIPStep(patch_client, ovn_manager)
+            step = OpenStackPatchLoadBalancerServicesIPStep(patch_client)
             result = step.is_skip(step_context)
         assert result.result_type == ResultType.SKIPPED
 
@@ -414,7 +403,6 @@ class PatchLoadBalancerServicesIPStepTest:
         read_config_patch,
         snap_patch,
         snap_mock,
-        ovn_manager,
         step_context,
     ):
         snap_mock().config.get.return_value = "k8s"
@@ -426,7 +414,7 @@ class PatchLoadBalancerServicesIPStepTest:
                 )
             ),
         ):
-            step = OpenStackPatchLoadBalancerServicesIPStep(patch_client, ovn_manager)
+            step = OpenStackPatchLoadBalancerServicesIPStep(patch_client)
             result = step.is_skip(step_context)
         assert result.result_type == ResultType.COMPLETED
 
@@ -435,7 +423,6 @@ class PatchLoadBalancerServicesIPStepTest:
         patch_client,
         snap_patch,
         snap_mock,
-        ovn_manager,
         step_context,
     ):
         snap_mock().config.get.return_value = "k8s"
@@ -443,7 +430,7 @@ class PatchLoadBalancerServicesIPStepTest:
             "sunbeam.core.steps.read_config",
             new=Mock(side_effect=ConfigItemNotFoundException),
         ):
-            step = OpenStackPatchLoadBalancerServicesIPStep(patch_client, ovn_manager)
+            step = OpenStackPatchLoadBalancerServicesIPStep(patch_client)
             result = step.is_skip(step_context)
         assert result.result_type == ResultType.FAILED
 
@@ -453,7 +440,6 @@ class PatchLoadBalancerServicesIPStepTest:
         read_config_patch,
         snap_patch,
         snap_mock,
-        ovn_manager,
         step_context,
     ):
         snap_mock().config.get.return_value = "k8s"
@@ -472,7 +458,7 @@ class PatchLoadBalancerServicesIPStepTest:
                 )
             ),
         ):
-            step = OpenStackPatchLoadBalancerServicesIPStep(patch_client, ovn_manager)
+            step = OpenStackPatchLoadBalancerServicesIPStep(patch_client)
             step.is_skip(step_context)
             result = step.run(step_context)
         assert result.result_type == ResultType.COMPLETED
@@ -490,7 +476,7 @@ class TestPatchLoadBalancerServicesIPStaleAnnotation:
 
     @pytest.fixture
     def patch_client(self):
-        """Client mock; returns node-1 for any role so ovn-relay is excluded."""
+        """Client mock returning node-1 for any role."""
         client = Mock()
         client.cluster.list_nodes_by_role.return_value = ["node-1"]
         return client
@@ -520,7 +506,6 @@ class TestPatchLoadBalancerServicesIPStaleAnnotation:
         read_config_patch,
         snap_patch,
         snap_mock,
-        ovn_manager,
         step_context,
     ):
         """is_skip should return COMPLETED when a service has a stale IP annotation.
@@ -545,7 +530,7 @@ class TestPatchLoadBalancerServicesIPStaleAnnotation:
             "sunbeam.core.steps.l_client.Client",
             new=Mock(return_value=Mock(get=get_mock)),
         ):
-            step = OpenStackPatchLoadBalancerServicesIPStep(patch_client, ovn_manager)
+            step = OpenStackPatchLoadBalancerServicesIPStep(patch_client)
             result = step.is_skip(step_context)
 
         assert result.result_type == ResultType.COMPLETED
@@ -556,7 +541,6 @@ class TestPatchLoadBalancerServicesIPStaleAnnotation:
         read_config_patch,
         snap_patch,
         snap_mock,
-        ovn_manager,
         step_context,
     ):
         """run() should remove a stale IP annotation from a pending service.
@@ -588,7 +572,7 @@ class TestPatchLoadBalancerServicesIPStaleAnnotation:
             "sunbeam.core.steps.l_client.Client",
             new=Mock(return_value=Mock(get=get_mock)),
         ):
-            step = OpenStackPatchLoadBalancerServicesIPStep(patch_client, ovn_manager)
+            step = OpenStackPatchLoadBalancerServicesIPStep(patch_client)
             step.is_skip(step_context)
             result = step.run(step_context)
 
@@ -1165,25 +1149,6 @@ def test_remove_blocked_apps_from_features_mixed():
     jhelper.get_application.side_effect = _get_app
     result = remove_blocked_apps_from_features(jhelper, "test-model")
     assert result == ["barbican"]
-
-
-# ---------------------------------------------------------------------------
-# remove_blocked_apps_from_ovn_provider
-# ---------------------------------------------------------------------------
-
-
-def test_remove_blocked_apps_from_ovn_provider_microovn():
-    ovn_manager = Mock()
-    ovn_manager.get_provider.return_value = ovn.OvnProvider.MICROOVN
-    result = remove_blocked_apps_from_ovn_provider(ovn_manager)
-    assert result == ["neutron"]
-
-
-def test_remove_blocked_apps_from_ovn_provider_non_microovn():
-    ovn_manager = Mock()
-    ovn_manager.get_provider.return_value = ovn.OvnProvider.OVN_K8S
-    result = remove_blocked_apps_from_ovn_provider(ovn_manager)
-    assert result == []
 
 
 # ---------------------------------------------------------------------------
