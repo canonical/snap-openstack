@@ -400,11 +400,12 @@ class DisasterRecoveryFeature(OpenStackControlPlaneFeature):
         if not config.configure_s3_integrators:
             return {}
 
-        base_path = config.path.strip("/") or "backups"
+        base_path = (config.path or DEFAULT_S3_PATH).strip("/")
+        path_prefix = f"/{base_path}" if base_path else ""
         return {
             integration.integrator_app: {
                 "bucket": config.bucket,
-                "path": f"{base_path}/{integration.app_name}",
+                "path": f"{path_prefix}/{integration.app_name}",
                 "region": config.region,
                 "endpoint": config.endpoint,
             }
