@@ -196,6 +196,62 @@ def whitelist_sriov_nic(
         )
 
 
+def whitelist_remote_managed_vf(
+    node_name: str,
+    vf_nic: dict,
+    pci_whitelist: list[dict],
+    excluded_devices: dict[str, list],
+    physnet: str | None,
+):
+    """Whitelist a DPU-backed SR-IOV virtual function as a remote-managed device.
+
+    For off-path SmartNIC DPUs the networking control plane runs on the DPU,
+    while Nova on the hypervisor host claims the virtual functions (VFs). Nova
+    matches these VFs by PCI ``address``, ``vendor_id``/``product_id`` and
+    requires the ``remote_managed`` tag. The MAAS physnet tag only selects the
+    PF; remote-managed VF specs always use a null physical network.
+
+    https://docs.openstack.org/neutron/2024.1/admin/ovn/smartnic_dpu.html
+    """
+    LOG.debug(
+        "Whitelisting remote-managed VF: %s %s",
+        vf_nic.get("name"),
+        vf_nic.get("pci_address"),
+    )
+    pci_address = vf_nic["pci_address"]
+
+    node_excluded_devices = excluded_devices.get(node_name) or []
+    if pci_address in node_excluded_devices:
+        LOG.debug(
+            "Removing remote-managed VF from the exclusion list: %s %s",
+            vf_nic.get("name"),
+            pci_address,
+        )
+        node_excluded_devices.remove(pci_address)
+
+    physnet = None
+
+    new_dev_spec = {
+        "address": pci_address,
+        "vendor_id": vf_nic["vendor_id"].replace("0x", ""),
+        "product_id": vf_nic["product_id"].replace("0x", ""),
+        "physical_network": physnet,
+        "remote_managed": "true",
+    }
+
+    # Avoid exact duplicates if the same VF is encountered more than once.
+    if new_dev_spec in pci_whitelist:
+        LOG.debug(
+            "Remote-managed VF spec already whitelisted: %s/%s (physnet: %s)",
+            new_dev_spec["vendor_id"],
+            new_dev_spec["product_id"],
+            physnet,
+        )
+        return
+
+    pci_whitelist.append(new_dev_spec)
+
+
 def exclude_sriov_nic(
     node_name: str,
     nic: dict,
