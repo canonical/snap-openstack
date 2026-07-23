@@ -1978,6 +1978,7 @@ def remove(ctx: click.Context, name: str, force: bool, show_hints: bool) -> None
     if microovn_machine_ids:
         manifest = deployment.get_manifest()
         role_distributor_tfhelper = deployment.get_tfhelper("role-distributor-plan")
+        microovn_tfhelper = deployment.get_tfhelper("microovn-plan")
         remove_k8s_unit_index = next(
             i for i, step in enumerate(plan) if isinstance(step, CordonK8SUnitStep)
         )
@@ -1997,6 +1998,15 @@ def remove(ctx: click.Context, name: str, force: bool, show_hints: bool) -> None
                     jhelper,
                     manifest,
                     deployment.openstack_machines_model,
+                ),
+                TerraformInitStep(microovn_tfhelper),
+                ReapplyMicroOVNTerraformPlanStep(
+                    client,
+                    microovn_tfhelper,
+                    jhelper,
+                    manifest,
+                    deployment.openstack_machines_model,
+                    deployment.get_ovn_manager(),
                 ),
             ]
         )

@@ -48,6 +48,12 @@ core:
           snap-channel: squid/edge
       microovn:
         channel: 26.03/edge
+      sunbeam-ovn-proxy:
+        channel: 2026.1/edge
+      openstack-network-agents:
+        channel: 2026.1/edge
+        config:
+          snap-channel: 2026.1/edge
       rabbitmq-k8s:
         channel: 3.12/edge
         storage:

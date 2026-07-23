@@ -3,7 +3,7 @@
 
 variable "charm_microovn_channel" {
   type    = string
-  default = "25.03/stable"
+  default = "26.03/stable"
 }
 
 variable "charm_microovn_revision" {

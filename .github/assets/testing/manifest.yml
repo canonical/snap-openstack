@@ -80,6 +80,12 @@ core:
           snap-channel: MICROCEPH_SNAP
       microovn:
         channel: MICROOVN_CHARM
+      sunbeam-ovn-proxy:
+        channel: OS_CHARM
+      openstack-network-agents:
+        channel: OS_CHARM
+        config:
+          snap-channel: OS_CHARM
       rabbitmq-k8s:
         channel: RABBITMQ_CHARM
         storage:

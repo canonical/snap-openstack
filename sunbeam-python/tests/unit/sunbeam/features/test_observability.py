@@ -794,7 +794,7 @@ class TestRemoveRemoteCosOffersStep:
             Mock(
                 apps={
                     "opentelemetry-collector": Mock(
-                        relations={"logging-consumer": "loki:loki_push_api"}
+                        relations={"send-loki-logs": "loki:loki_push_api"}
                     )
                 }
             ),
@@ -849,7 +849,7 @@ class TestRemoveRemoteCosOffersStep:
             Mock(
                 apps={
                     "opentelemetry-collector": Mock(
-                        relations={"logging-consumer": "loki:loki_push_api"}
+                        relations={"send-loki-logs": "loki:loki_push_api"}
                     )
                 }
             ),
@@ -928,6 +928,53 @@ class TestRemoveRemoteCosOffersStep:
         # wait_application_ready called for 2 models only
         assert jhelper.wait_application_ready.call_count == 2
         assert result.result_type == ResultType.COMPLETED
+
+
+class TestExternalObservabilityEnablePlans:
+    """Test enablement plans for ExternalObservabilityFeature."""
+
+    def _run_enable_plans(self, feature, deployment, run_plan_obs, is_maas):
+        feature._manifest = Mock()
+        with patch(
+            "sunbeam.features.observability.feature.is_maas_deployment",
+            return_value=is_maas,
+        ):
+            feature.run_enable_plans(deployment, Mock(), False)
+
+        return [step for call in run_plan_obs.call_args_list for step in call.args[0]]
+
+    def test_maas_infra_agent_step_accepts_blocked(
+        self, deployment, run_plan_obs, juju_helper_obs
+    ):
+        """External COS: infra agent is blocked until offers are integrated.
+
+        With an external COS, integrations are only created by
+        IntegrateRemoteCosOffersStep after all agents are deployed, so the
+        infra agent deploy step must accept 'blocked' status (LP#2159965).
+        """
+        feature = observability_feature.ExternalObservabilityFeature()
+        steps = self._run_enable_plans(feature, deployment, run_plan_obs, is_maas=True)
+
+        infra_steps = [
+            step
+            for step in steps
+            if isinstance(step, observability_feature.DeployObservabilityAgentInfraStep)
+        ]
+        assert len(infra_steps) == 1
+        assert "blocked" in infra_steps[0].accepted_app_status
+        assert "active" in infra_steps[0].accepted_app_status
+
+    def test_maas_integrate_offers_runs_after_infra_agent(
+        self, deployment, run_plan_obs, juju_helper_obs
+    ):
+        """Offers are integrated only after the infra agent is deployed."""
+        feature = observability_feature.ExternalObservabilityFeature()
+        steps = self._run_enable_plans(feature, deployment, run_plan_obs, is_maas=True)
+
+        step_types = [type(step) for step in steps]
+        assert step_types.index(
+            observability_feature.IntegrateRemoteCosOffersStep
+        ) > step_types.index(observability_feature.DeployObservabilityAgentInfraStep)
 
 
 class TestObservabilityFeatureTimeouts:

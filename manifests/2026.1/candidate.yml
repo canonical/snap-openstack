@@ -40,7 +40,7 @@ core:
         config:
           snap-channel: squid/stable
       microovn:
-        channel: 25.03/stable
+        channel: 26.03/stable
       openstack-network-agents:
         channel: 2026.1/candidate
         config:
