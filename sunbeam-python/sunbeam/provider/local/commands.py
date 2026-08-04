@@ -609,7 +609,7 @@ def deploy_and_migrate_juju_controller(
     default=["control", "compute", "network"],
     callback=validate_roles,
     help="Specify additional roles for the bootstrap node. "
-    "Possible values: compute, storage, network, region_controller. "
+    "Possible values: compute, storage, network, control. "
     "Defaults to the compute role. Can be repeated and comma separated.",
 )
 @click_option_topology
