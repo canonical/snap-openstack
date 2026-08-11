@@ -17,6 +17,7 @@ from sunbeam.core.checks import DiagnosticResultType
 from sunbeam.core.deployment import Networks
 from sunbeam.core.deployments import DeploymentsConfig
 from sunbeam.core.juju import ControllerNotFoundException
+from sunbeam.provider.maas.client import _convert_raw_machine
 from sunbeam.provider.maas.commands import (
     validate_deployment_cmd,
     validate_machine_cmd,
@@ -54,6 +55,26 @@ from sunbeam.provider.maas.steps import (
     ZoneBalanceCheck,
     ZonesCheck,
 )
+
+
+class TestConvertRawMachine:
+    def test_preserves_fqdn(self):
+        machine_raw = {
+            "system_id": "sysid",
+            "hostname": "cloud-4",
+            "fqdn": "cloud-4.maas",
+            "tag_names": [],
+            "blockdevice_set": [],
+            "interface_set": [],
+            "zone": {"name": "default"},
+            "status_name": "Ready",
+            "cpu_count": 4,
+            "memory": 8192,
+        }
+
+        machine = _convert_raw_machine(machine_raw, None)
+
+        assert machine["fqdn"] == "cloud-4.maas"
 
 
 class TestAddMaasDeployment:
