@@ -57,6 +57,11 @@ from sunbeam.provider.maas.steps import (
     ZoneBalanceCheck,
     ZonesCheck,
 )
+from sunbeam.steps.cinder_volume import (
+    DisableCinderVolumeServicesStep,
+    RemoveCinderVolumeServicesStep,
+    RemoveCinderVolumeUnitsStep,
+)
 from sunbeam.steps.hypervisor import (
     RemoveHypervisorReferencesStep,
     RemoveHypervisorUnitStep,
@@ -2565,6 +2570,23 @@ class TestRemoveNodeRoleDistributor:
         assert references._hostnames == ("node-1", "node-1.maas")
         assert references.force is False
         assert microovn_index < references_index
+
+        disable_index = next(
+            i
+            for i, step in enumerate(plan)
+            if isinstance(step, DisableCinderVolumeServicesStep)
+        )
+        cinder_units_index = next(
+            i
+            for i, step in enumerate(plan)
+            if isinstance(step, RemoveCinderVolumeUnitsStep)
+        )
+        cinder_services_index = next(
+            i
+            for i, step in enumerate(plan)
+            if isinstance(step, RemoveCinderVolumeServicesStep)
+        )
+        assert disable_index < cinder_units_index < cinder_services_index
 
     @patch("sunbeam.provider.maas.commands.JujuHelper")
     @patch("sunbeam.provider.maas.commands.run_preflight_checks")

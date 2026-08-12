@@ -238,6 +238,24 @@ def test_run_cmd_on_unit_payload_cli_error(jhelper, juju):
     assert result["err"] == "fail"
 
 
+@pytest.mark.parametrize(
+    "stdout",
+    ["", "{}", json.dumps({"app/0": {}})],
+)
+def test_run_cmd_on_unit_payload_normalizes_invalid_result(jhelper, juju, stdout):
+    juju._cli.return_value = (stdout, "")
+
+    with pytest.raises(jujulib.ExecFailedException):
+        jhelper.run_cmd_on_unit_payload("app/0", "test-model", "ls", "container")
+
+
+def test_run_cmd_on_unit_payload_normalizes_invalid_cli_error(jhelper, juju):
+    juju._cli.side_effect = jubilant.CLIError(1, ["exec"], "", "unit unavailable")
+
+    with pytest.raises(jujulib.ExecFailedException):
+        jhelper.run_cmd_on_unit_payload("app/0", "test-model", "ls", "container")
+
+
 def test_set_model_config(jhelper, juju):
     jhelper.set_model_config("test-model", {"app": "bar"})
     juju.model_config.assert_called()

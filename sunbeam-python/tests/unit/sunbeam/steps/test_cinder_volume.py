@@ -4,12 +4,19 @@
 from unittest.mock import MagicMock, Mock, patch
 
 import pytest
+from keystoneauth1.exceptions.catalog import EndpointNotFound
+from keystoneauth1.exceptions.connection import ConnectFailure
 
+from sunbeam.core.common import ResultType
+from sunbeam.core.juju import ExecFailedException, JujuException
 from sunbeam.steps.cinder_volume import (
     CINDER_VOLUME_APP_TIMEOUT,
     CINDER_VOLUME_UNIT_TIMEOUT,
     DeployCinderVolumeApplicationStep,
+    DisableCinderVolumeServicesStep,
+    RemoveCinderVolumeServicesStep,
     RemoveCinderVolumeUnitsStep,
+    get_cinder_volume_services,
 )
 
 
@@ -361,3 +368,344 @@ class TestRemoveCinderVolumeUnitsStep:
             remove_cinder_volume_units_step.get_unit_timeout()
             == CINDER_VOLUME_UNIT_TIMEOUT
         )
+
+
+class TestCinderVolumeServiceCleanup:
+    @pytest.fixture
+    def connection(self):
+        return Mock()
+
+    @pytest.fixture
+    def services(self):
+        return [
+            Mock(binary="cinder-volume", host="cloud-4@backend-a", status="enabled"),
+            Mock(
+                binary="cinder-volume", host="cloud-4.maas@backend-b", status="disabled"
+            ),
+        ]
+
+    def test_get_cinder_volume_services_matches_exact_hosts(self):
+        matching_short = Mock(binary="cinder-volume", host="cloud-4@backend-a")
+        matching_fqdn = Mock(binary="cinder-volume", host="cloud-4.maas@backend-b")
+        unrelated = Mock(binary="cinder-volume", host="cloud-40@backend-a")
+        conn = Mock()
+        conn.block_storage.services.return_value = [
+            unrelated,
+            matching_fqdn,
+            matching_short,
+        ]
+
+        services = get_cinder_volume_services(conn, "cloud-4", "cloud-4.maas")
+
+        conn.block_storage.services.assert_called_once_with(binary="cinder-volume")
+        assert services == [matching_fqdn, matching_short]
+
+    def test_disable_enabled_services(
+        self,
+        mocker,
+        basic_jhelper,
+        basic_deployment,
+        connection,
+        services,
+        step_context,
+    ):
+        mocker.patch(
+            "sunbeam.steps.cinder_volume.get_admin_connection",
+            return_value=connection,
+        )
+        mocker.patch(
+            "sunbeam.steps.cinder_volume.get_cinder_volume_services",
+            return_value=services,
+        )
+        step = DisableCinderVolumeServicesStep(
+            basic_jhelper, basic_deployment, "cloud-4", "cloud-4.maas"
+        )
+
+        assert step.is_skip(step_context).result_type == ResultType.COMPLETED
+        assert step.run(step_context).result_type == ResultType.COMPLETED
+        connection.block_storage.disable_service.assert_called_once_with(
+            services[0], reason="Removing node from cluster"
+        )
+
+    def test_discovery_fails_on_keystoneauth_error(
+        self,
+        mocker,
+        basic_jhelper,
+        basic_deployment,
+        step_context,
+    ):
+        mocker.patch(
+            "sunbeam.steps.cinder_volume.get_admin_connection",
+            side_effect=EndpointNotFound("volume endpoint missing"),
+        )
+        step = DisableCinderVolumeServicesStep(
+            basic_jhelper, basic_deployment, "cloud-4", "cloud-4.maas"
+        )
+
+        result = step.is_skip(step_context)
+
+        assert result.result_type == ResultType.FAILED
+
+    def test_disable_fails_on_keystoneauth_error(
+        self,
+        mocker,
+        basic_jhelper,
+        basic_deployment,
+        connection,
+        services,
+        step_context,
+    ):
+        connection.block_storage.disable_service.side_effect = ConnectFailure(
+            "volume endpoint unavailable"
+        )
+        mocker.patch(
+            "sunbeam.steps.cinder_volume.get_admin_connection",
+            return_value=connection,
+        )
+        mocker.patch(
+            "sunbeam.steps.cinder_volume.get_cinder_volume_services",
+            return_value=services,
+        )
+        step = DisableCinderVolumeServicesStep(
+            basic_jhelper, basic_deployment, "cloud-4", "cloud-4.maas"
+        )
+
+        assert step.is_skip(step_context).result_type == ResultType.COMPLETED
+        assert step.run(step_context).result_type == ResultType.FAILED
+
+    def test_remove_prefers_healthy_nonleader_when_leader_unhealthy(
+        self,
+        mocker,
+        basic_jhelper,
+        basic_deployment,
+        connection,
+        services,
+        step_context,
+    ):
+        unhealthy_leader = Mock(
+            workload_status=Mock(current="blocked"),
+            juju_status=Mock(current="idle"),
+            leader=True,
+        )
+        healthy_unit = Mock(
+            workload_status=Mock(current="active"),
+            juju_status=Mock(current="idle"),
+            leader=False,
+        )
+        application = Mock(
+            units={"cinder/0": unhealthy_leader, "cinder/1": healthy_unit}
+        )
+        basic_jhelper.get_application.return_value = application
+        basic_jhelper.run_cmd_on_unit_payload.return_value = {"return-code": 0}
+        mocker.patch(
+            "sunbeam.steps.cinder_volume.get_admin_connection",
+            return_value=connection,
+        )
+        mocker.patch(
+            "sunbeam.steps.cinder_volume.get_cinder_volume_services",
+            side_effect=[services, []],
+        )
+        step = RemoveCinderVolumeServicesStep(
+            basic_jhelper, basic_deployment, "cloud-4", "cloud-4.maas"
+        )
+
+        assert step.is_skip(step_context).result_type == ResultType.COMPLETED
+        assert step.run(step_context).result_type == ResultType.COMPLETED
+        assert all(
+            call.args[0] == "cinder/1"
+            for call in basic_jhelper.run_cmd_on_unit_payload.call_args_list
+        )
+
+    def test_remove_succeeds_when_ambiguous_command_error_has_no_records(
+        self,
+        mocker,
+        basic_jhelper,
+        basic_deployment,
+        connection,
+        services,
+        step_context,
+    ):
+        unit = Mock(
+            workload_status=Mock(current="active"),
+            juju_status=Mock(current="idle"),
+            leader=True,
+        )
+        basic_jhelper.get_application.return_value = Mock(units={"cinder/0": unit})
+        basic_jhelper.run_cmd_on_unit_payload.side_effect = JujuException("unknown")
+        mocker.patch(
+            "sunbeam.steps.cinder_volume.get_admin_connection",
+            return_value=connection,
+        )
+        mocker.patch(
+            "sunbeam.steps.cinder_volume.get_cinder_volume_services",
+            side_effect=[services, []],
+        )
+        step = RemoveCinderVolumeServicesStep(
+            basic_jhelper, basic_deployment, "cloud-4", "cloud-4.maas"
+        )
+
+        assert step.is_skip(step_context).result_type == ResultType.COMPLETED
+        assert step.run(step_context).result_type == ResultType.COMPLETED
+        basic_jhelper.run_cmd_on_unit_payload.assert_called_once()
+
+    def test_remove_falls_back_when_first_unit_disappears(
+        self,
+        mocker,
+        basic_jhelper,
+        basic_deployment,
+        connection,
+        services,
+        step_context,
+    ):
+        healthy_units = {
+            name: Mock(
+                workload_status=Mock(current="active"),
+                juju_status=Mock(current="idle"),
+                leader=False,
+            )
+            for name in ("cinder/0", "cinder/1")
+        }
+        service = services[0]
+        basic_jhelper.get_application.return_value = Mock(units=healthy_units)
+        basic_jhelper.run_cmd_on_unit_payload.side_effect = [
+            ExecFailedException("unit disappeared"),
+            {"return-code": 0},
+        ]
+        mocker.patch(
+            "sunbeam.steps.cinder_volume.get_admin_connection",
+            return_value=connection,
+        )
+        mocker.patch(
+            "sunbeam.steps.cinder_volume.get_cinder_volume_services",
+            side_effect=[[service], [service], []],
+        )
+        step = RemoveCinderVolumeServicesStep(
+            basic_jhelper, basic_deployment, "cloud-4", "cloud-4.maas"
+        )
+
+        assert step.is_skip(step_context).result_type == ResultType.COMPLETED
+        assert step.run(step_context).result_type == ResultType.COMPLETED
+        assert [
+            call.args[0]
+            for call in basic_jhelper.run_cmd_on_unit_payload.call_args_list
+        ] == ["cinder/0", "cinder/1"]
+
+    def test_remove_fails_on_keystoneauth_error(
+        self,
+        mocker,
+        basic_jhelper,
+        basic_deployment,
+        connection,
+        services,
+        step_context,
+    ):
+        unit = Mock(
+            workload_status=Mock(current="active"),
+            juju_status=Mock(current="idle"),
+            leader=True,
+        )
+        basic_jhelper.get_application.return_value = Mock(units={"cinder/0": unit})
+        basic_jhelper.run_cmd_on_unit_payload.return_value = {"return-code": 0}
+        mocker.patch(
+            "sunbeam.steps.cinder_volume.get_admin_connection",
+            return_value=connection,
+        )
+        mocker.patch(
+            "sunbeam.steps.cinder_volume.get_cinder_volume_services",
+            side_effect=[
+                services,
+                ConnectFailure("volume endpoint unavailable"),
+            ],
+        )
+        step = RemoveCinderVolumeServicesStep(
+            basic_jhelper, basic_deployment, "cloud-4", "cloud-4.maas"
+        )
+
+        assert step.is_skip(step_context).result_type == ResultType.COMPLETED
+        assert step.run(step_context).result_type == ResultType.FAILED
+
+    def test_remove_fails_without_healthy_units(
+        self,
+        mocker,
+        basic_jhelper,
+        basic_deployment,
+        connection,
+        services,
+        step_context,
+    ):
+        unhealthy = Mock(
+            workload_status=Mock(current="blocked"),
+            juju_status=Mock(current="idle"),
+            leader=True,
+        )
+        basic_jhelper.get_application.return_value = Mock(units={"cinder/0": unhealthy})
+        mocker.patch(
+            "sunbeam.steps.cinder_volume.get_admin_connection",
+            return_value=connection,
+        )
+        mocker.patch(
+            "sunbeam.steps.cinder_volume.get_cinder_volume_services",
+            return_value=services,
+        )
+        step = RemoveCinderVolumeServicesStep(
+            basic_jhelper, basic_deployment, "cloud-4", "cloud-4.maas"
+        )
+
+        assert step.is_skip(step_context).result_type == ResultType.COMPLETED
+        assert step.run(step_context).result_type == ResultType.FAILED
+        basic_jhelper.run_cmd_on_unit_payload.assert_not_called()
+
+    def test_remove_fails_after_healthy_candidates_leave_records(
+        self,
+        mocker,
+        basic_jhelper,
+        basic_deployment,
+        connection,
+        services,
+        step_context,
+    ):
+        healthy_units = {
+            name: Mock(
+                workload_status=Mock(current="active"),
+                juju_status=Mock(current="idle"),
+                leader=False,
+            )
+            for name in ("cinder/0", "cinder/1")
+        }
+        basic_jhelper.get_application.return_value = Mock(units=healthy_units)
+        basic_jhelper.run_cmd_on_unit_payload.return_value = {"return-code": 1}
+        mocker.patch(
+            "sunbeam.steps.cinder_volume.get_admin_connection",
+            return_value=connection,
+        )
+        mocker.patch(
+            "sunbeam.steps.cinder_volume.get_cinder_volume_services",
+            return_value=services,
+        )
+        step = RemoveCinderVolumeServicesStep(
+            basic_jhelper, basic_deployment, "cloud-4", "cloud-4.maas"
+        )
+
+        assert step.is_skip(step_context).result_type == ResultType.COMPLETED
+        assert step.run(step_context).result_type == ResultType.FAILED
+        assert [
+            call.args[0]
+            for call in basic_jhelper.run_cmd_on_unit_payload.call_args_list
+        ] == ["cinder/0", "cinder/1"]
+
+    def test_remove_skips_when_no_records(
+        self, mocker, basic_jhelper, basic_deployment, connection, step_context
+    ):
+        mocker.patch(
+            "sunbeam.steps.cinder_volume.get_admin_connection",
+            return_value=connection,
+        )
+        mocker.patch(
+            "sunbeam.steps.cinder_volume.get_cinder_volume_services", return_value=[]
+        )
+        step = RemoveCinderVolumeServicesStep(
+            basic_jhelper, basic_deployment, "cloud-4", "cloud-4.maas"
+        )
+
+        assert step.is_skip(step_context).result_type == ResultType.SKIPPED
+        basic_jhelper.get_application.assert_not_called()
