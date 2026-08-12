@@ -34,7 +34,12 @@ from sunbeam.core.juju import (
     JujuStepHelper,
 )
 from sunbeam.core.manifest import Manifest
-from sunbeam.core.openstack_api import remove_hypervisor
+from sunbeam.core.openstack_api import (
+    get_admin_connection,
+    remove_compute_service,
+    remove_hypervisor,
+    remove_network_service,
+)
 from sunbeam.core.steps import (
     DeployMachineApplicationStep,
     DestroyMachineApplicationStep,
@@ -49,7 +54,9 @@ from sunbeam.steps.configure import get_external_network_configs
 
 if typing.TYPE_CHECKING:
     import openstack
+    from keystoneauth1 import exceptions as keystoneauth_exceptions
 else:
+    keystoneauth_exceptions = LazyImport("keystoneauth1.exceptions")
     openstack = LazyImport("openstack")
 
 LOG = logging.getLogger(__name__)
@@ -60,6 +67,8 @@ HYPERVISOR_DESTROY_TIMEOUT = 600
 HYPERVISOR_UNIT_TIMEOUT = (
     1800  # 30 minutes, adding / removing units can take a long time
 )
+HYPERVISOR_REFERENCES_TIMEOUT = 300
+HYPERVISOR_REFERENCES_POLL_INTERVAL = 10
 
 
 class DeployHypervisorApplicationStep(DeployMachineApplicationStep):
@@ -326,6 +335,76 @@ class RemoveHypervisorUnitStep(BaseStep, JujuStepHelper):
                 )
             else:
                 return Result(ResultType.FAILED, str(e))
+
+        return Result(ResultType.COMPLETED)
+
+
+class RemoveHypervisorReferencesStep(BaseStep):
+    """Remove Nova and Neutron references to a hypervisor."""
+
+    def __init__(
+        self,
+        jhelper: JujuHelper,
+        deployment: Deployment,
+        hostname: str,
+        fqdn: str,
+        force: bool = False,
+    ):
+        super().__init__(
+            "Remove openstack-hypervisor references",
+            "Remove openstack-hypervisor references from the control plane",
+        )
+        self.jhelper = jhelper
+        self.deployment = deployment
+        self.force = force
+        self._hostnames = tuple(dict.fromkeys((hostname, fqdn)))
+
+    def _remove_references(self) -> None:
+        """Remove references and raise while records remain."""
+        conn = get_admin_connection(self.jhelper, self.deployment)
+        for hostname in self._hostnames:
+            remove_compute_service(hostname, conn)
+            remove_network_service(hostname, conn)
+        remaining_hosts = []
+        for hostname in self._hostnames:
+            compute_services = list(conn.compute.services(host=hostname))
+            network_agents = list(conn.network.agents(host=hostname))
+            if compute_services or network_agents:
+                remaining_hosts.append(hostname)
+        if remaining_hosts:
+            raise tenacity.TryAgain(
+                f"Hypervisor references remain for {', '.join(remaining_hosts)}"
+            )
+
+    def run(self, context: StepContext) -> Result:
+        """Remove references until Nova and Neutron report none remain."""
+        client_exceptions = (
+            openstack.exceptions.SDKException,
+            keystoneauth_exceptions.ClientException,
+        )
+        retry_exceptions: tuple[type[BaseException], ...] = (tenacity.TryAgain,)
+        if not self.force:
+            retry_exceptions += client_exceptions
+        try:
+            for attempt in tenacity.Retrying(
+                stop=tenacity.stop_after_delay(HYPERVISOR_REFERENCES_TIMEOUT),
+                wait=tenacity.wait_fixed(HYPERVISOR_REFERENCES_POLL_INTERVAL),
+                retry=tenacity.retry_if_exception_type(retry_exceptions),
+                reraise=True,
+            ):
+                with attempt:
+                    self._remove_references()
+        except client_exceptions as e:
+            LOG.error("Failed to remove hypervisor references from control plane")
+            if self.force:
+                LOG.warning(
+                    "Force mode set, ignoring following exceptions", exc_info=True
+                )
+                return Result(ResultType.COMPLETED)
+            return Result(ResultType.FAILED, str(e))
+        except tenacity.TryAgain as e:
+            LOG.error("Failed to remove hypervisor references from control plane")
+            return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.COMPLETED)
 
