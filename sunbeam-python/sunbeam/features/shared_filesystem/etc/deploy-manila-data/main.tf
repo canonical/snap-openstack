@@ -31,7 +31,8 @@ resource "juju_application" "manila-data" {
   }
 
   config = merge({
-    snap-channel = var.manila-data-channel
+    snap-channel                   = var.manila-data-channel
+    enable-telemetry-notifications = var.enable-telemetry-notifications
   }, var.charm-manila-data-config)
   endpoint_bindings = var.endpoint_bindings
 }

@@ -24,6 +24,9 @@ from sunbeam.features.interface.v1.openstack import (
     OpenStackControlPlaneFeature,
     TerraformPlanLocation,
 )
+from sunbeam.features.shared_filesystem.manila_data import (
+    DeployManilaDataApplicationStep,
+)
 from sunbeam.steps.cinder_volume import DeployCinderVolumeApplicationStep
 from sunbeam.steps.hypervisor import ReapplyHypervisorTerraformPlanStep
 from sunbeam.steps.juju import RemoveSaasApplicationsStep
@@ -204,6 +207,25 @@ class TelemetryFeature(OpenStackControlPlaneFeature):
             if len(plan3) > 1:  # More than just TerraformInitStep
                 run_plan(plan3, console, show_hints)
 
+        # Reapply manila-data if shared-filesystem feature is enabled
+        feature_manager = deployment.get_feature_manager()
+        if feature_manager.is_feature_enabled(deployment, "shared-filesystem"):
+            tfhelper_manila_data = deployment.get_tfhelper("manila-data-plan")
+            extra_tfvars_manila_data = {"enable-telemetry-notifications": True}
+            manila_data_plan: list[BaseStep] = [
+                TerraformInitStep(tfhelper_manila_data),
+                DeployManilaDataApplicationStep(
+                    deployment,
+                    deployment.get_client(),
+                    tfhelper_manila_data,
+                    jhelper,
+                    self.manifest,
+                    deployment.openstack_machines_model,
+                    extra_tfvars=extra_tfvars_manila_data,
+                ),
+            ]
+            run_plan(manila_data_plan, console, show_hints)
+
         click.echo(f"OpenStack {self.display_name} application enabled.")
 
     def run_disable_plans(self, deployment: Deployment, show_hints: bool) -> None:
@@ -315,6 +337,25 @@ class TelemetryFeature(OpenStackControlPlaneFeature):
 
             if len(plan2) > 1:  # More than just TerraformInitStep
                 run_plan(plan2, console, show_hints)
+
+        # Reapply manila-data if shared-filesystem feature is enabled
+        feature_manager = deployment.get_feature_manager()
+        if feature_manager.is_feature_enabled(deployment, "shared-filesystem"):
+            tfhelper_manila_data = deployment.get_tfhelper("manila-data-plan")
+            extra_tfvars_manila_data = {"enable-telemetry-notifications": False}
+            manila_data_plan: list[BaseStep] = [
+                TerraformInitStep(tfhelper_manila_data),
+                DeployManilaDataApplicationStep(
+                    deployment,
+                    deployment.get_client(),
+                    tfhelper_manila_data,
+                    jhelper,
+                    self.manifest,
+                    deployment.openstack_machines_model,
+                    extra_tfvars=extra_tfvars_manila_data,
+                ),
+            ]
+            run_plan(manila_data_plan, console, show_hints)
 
         click.echo(f"OpenStack {self.display_name} application disabled.")
 
