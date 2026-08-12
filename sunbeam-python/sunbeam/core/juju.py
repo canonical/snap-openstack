@@ -825,7 +825,12 @@ class JujuHelper:
                 stdout, _ = juju._cli(*args, "--", *(cmd.split()), log=False)
             except jubilant.CLIError as e:
                 stdout = e.stdout
-        return json.loads(stdout)[name]["results"]
+        try:
+            return json.loads(stdout)[name]["results"]
+        except (json.JSONDecodeError, KeyError, TypeError) as e:
+            raise ExecFailedException(
+                f"Failed to parse command result for unit {name!r}"
+            ) from e
 
     def run_action(
         self,
