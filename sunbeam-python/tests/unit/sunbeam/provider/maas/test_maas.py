@@ -57,8 +57,15 @@ from sunbeam.provider.maas.steps import (
     ZoneBalanceCheck,
     ZonesCheck,
 )
+from sunbeam.steps.hypervisor import (
+    RemoveHypervisorReferencesStep,
+    RemoveHypervisorUnitStep,
+)
 from sunbeam.steps.juju import RemoveJujuMachineStep
-from sunbeam.steps.microovn import ReapplyMicroOVNTerraformPlanStep
+from sunbeam.steps.microovn import (
+    ReapplyMicroOVNTerraformPlanStep,
+    RemoveMicroOVNUnitsStep,
+)
 from sunbeam.steps.role_distributor import (
     ReapplyRoleDistributorApplicationStep,
     RemoveRoleDistributorUnitsStep,
@@ -2505,6 +2512,60 @@ class TestMaasDeploymentProperties:
 
 
 class TestRemoveNodeRoleDistributor:
+    @pytest.fixture(autouse=True)
+    def mock_maas_machine(self, mocker):
+        maas_client = mocker.patch(
+            "sunbeam.provider.maas.commands.MaasClient.from_deployment"
+        ).return_value
+        get_machine = mocker.patch(
+            "sunbeam.provider.maas.commands.get_machine",
+            return_value={"hostname": "node-1", "fqdn": "node-1.maas"},
+        )
+        return maas_client, get_machine
+
+    @patch("sunbeam.provider.maas.commands.JujuHelper")
+    @patch("sunbeam.provider.maas.commands.run_preflight_checks")
+    @patch("sunbeam.provider.maas.commands.run_plan")
+    def test_remove_orders_cleanup_steps(
+        self,
+        run_plan_cmd,
+        run_preflight,
+        juju_helper,
+        mock_maas_machine,
+    ):
+        maas_client, get_machine = mock_maas_machine
+        deployment = Mock()
+        deployment.openstack_machines_model = "openstack-machines"
+        deployment.get_ovn_manager.return_value.get_machines.return_value = []
+
+        result = CliRunner().invoke(remove_node, ["node-1"], obj=deployment)
+
+        assert result.exit_code == 0, result.output
+        get_machine.assert_called_once_with(maas_client, "node-1")
+        plan = run_plan_cmd.call_args_list[1][0][0]
+        hypervisor_unit_index = next(
+            i
+            for i, step in enumerate(plan)
+            if isinstance(step, RemoveHypervisorUnitStep)
+        )
+        microovn_index = next(
+            i
+            for i, step in enumerate(plan)
+            if isinstance(step, RemoveMicroOVNUnitsStep)
+        )
+        references_index = next(
+            i
+            for i, step in enumerate(plan)
+            if isinstance(step, RemoveHypervisorReferencesStep)
+        )
+        hypervisor_unit = plan[hypervisor_unit_index]
+        references = plan[references_index]
+
+        assert hypervisor_unit.deployment is None
+        assert references._hostnames == ("node-1", "node-1.maas")
+        assert references.force is False
+        assert microovn_index < references_index
+
     @patch("sunbeam.provider.maas.commands.JujuHelper")
     @patch("sunbeam.provider.maas.commands.run_preflight_checks")
     @patch("sunbeam.provider.maas.commands.run_plan")
@@ -2612,7 +2673,6 @@ class TestRemoveNodeRoleDistributor:
         assert not any(
             isinstance(step, ReapplyMicroOVNTerraformPlanStep) for step in plan
         )
-
 
 class TestIsMaasDeployment:
     """Test is_maas_deployment TypeGuard function."""
