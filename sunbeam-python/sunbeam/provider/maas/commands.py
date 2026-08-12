@@ -125,6 +125,8 @@ from sunbeam.steps.cinder_volume import (
     CheckCinderVolumeDistributionStep,
     DeployCinderVolumeApplicationStep,
     DestroyCinderVolumeApplicationStep,
+    DisableCinderVolumeServicesStep,
+    RemoveCinderVolumeServicesStep,
     RemoveCinderVolumeUnitsStep,
 )
 from sunbeam.steps.clusterd import APPLICATION as CLUSTERD_APPLICATION
@@ -1710,8 +1712,20 @@ def remove_node(ctx: click.Context, name: str, force: bool, show_hints: bool) ->
             deployment.openstack_machines_model,
             force,
         ),
+        DisableCinderVolumeServicesStep(
+            jhelper,
+            deployment,
+            machine["hostname"],
+            machine["fqdn"],
+        ),
         RemoveCinderVolumeUnitsStep(
             client, name, jhelper, deployment.openstack_machines_model
+        ),
+        RemoveCinderVolumeServicesStep(
+            jhelper,
+            deployment,
+            machine["hostname"],
+            machine["fqdn"],
         ),
         RemoveMicrocephUnitsStep(
             client, name, jhelper, deployment.openstack_machines_model

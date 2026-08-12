@@ -820,12 +820,19 @@ class JujuHelper:
         if env:
             args.extend(f"--env={k}={v}" for k, v in env.items())
 
+        stderr = ""
         with self._model(model) as juju:
             try:
                 stdout, _ = juju._cli(*args, "--", *(cmd.split()), log=False)
             except jubilant.CLIError as e:
-                stdout = e.stdout
-        return json.loads(stdout)[name]["results"]
+                stdout, stderr = e.stdout, e.stderr or ""
+        try:
+            return json.loads(stdout)[name]["results"]
+        except (json.JSONDecodeError, KeyError, TypeError) as e:
+            raise ExecFailedException(
+                f"Failed to parse command result for unit {name!r}: "
+                f"{stderr.strip() or e}"
+            ) from e
 
     def run_action(
         self,
