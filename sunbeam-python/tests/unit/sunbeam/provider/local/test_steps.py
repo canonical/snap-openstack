@@ -12,10 +12,7 @@ import sunbeam.provider.local.steps as local_steps
 from sunbeam.core.common import ResultType
 from sunbeam.provider.common import nic_utils
 
-from ...steps.test_configure import (
-    BaseTestSetHypervisorUnitsOptionsStep,
-    BaseTestUserQuestions,
-)
+from ...steps.test_configure import BaseTestUserQuestions
 
 
 @pytest.fixture()
@@ -101,252 +98,23 @@ class TestLocalUserQuestions(BaseTestUserQuestions):
         self.check_not_remote_questions(net_bank_mock)
 
 
-class TestLocalSetHypervisorUnitsOptionsStep(BaseTestSetHypervisorUnitsOptionsStep):
-    __test__ = True
+def test_network_agents_prompt_skips_compute_only_host(cclient, jhelper, load_answers):
+    load_answers.return_value = {"user": {"remote_access_location": "remote"}}
+    cclient.cluster.get_node_info.return_value = {
+        "role": ["compute"],
+    }
+    step = local_steps.LocalSetOpenStackNetworkAgentsStep(
+        cclient,
+        "maas0.local",
+        jhelper,
+        "test-model",
+    )
 
-    @pytest.fixture(autouse=True)
-    def setup_local(self, fetch_nics):
-        self.fetch_nics = fetch_nics
-
-    @pytest.fixture
-    def physical_network_question(self):
-        with patch("sunbeam.provider.local.steps.physical_network_question") as p:
-            yield p
-
-    def get_step(self, join_mode=False):
-        return local_steps.LocalSetHypervisorUnitsOptionsStep(
-            self.cclient, "maas0.local", self.jhelper, "test-model", join_mode=join_mode
-        )
-
-    def mock_physnet_qs(self, physical_network_question):
-        physnet_name_mock = Mock()
-        physnet_name_mock.ask.return_value = "physnet1"
-        configure_more_mock = Mock()
-        configure_more_mock.ask.return_value = False
-
-        physnet_qs = {
-            "physnet_name": physnet_name_mock,
-            "configure_more": configure_more_mock,
-        }
-        physical_network_question.return_value = physnet_qs
-
-    def test_prompt_remote(self, fetch_nics, physical_network_question):
-        self.load_answers.return_value = {"user": {"remote_access_location": "remote"}}
-        # Mock no network nodes in cluster
-        self.cclient.cluster.list_nodes_by_role.return_value = []
-        local_hypervisor_bank_mock = Mock()
-        self.question_bank.return_value = local_hypervisor_bank_mock
-        local_hypervisor_bank_mock.nics.ask.return_value = "eth2"
-        local_hypervisor_bank_mock.nics.question = "Select interface"
-
-        self.mock_physnet_qs(physical_network_question)
-
-        step = self.get_step()
-        nics_result = {
-            "nics": [
-                {"name": "eth2", "up": True, "connected": True, "configured": False}
-            ],
-            "candidates": ["eth2"],
-        }
-        fetch_nics.return_value = nics_result
-        step.prompt()
-        assert step.bridge_mappings["maas0.local"] == "br-physnet1:physnet1:eth2"
-
-    def test_prompt_remote_join(self, fetch_nics, physical_network_question):
-        self.load_answers.return_value = {"user": {"remote_access_location": "remote"}}
-        # Mock no network nodes in cluster
-        self.cclient.cluster.list_nodes_by_role.return_value = []
-        local_hypervisor_bank_mock = Mock()
-        self.question_bank.return_value = local_hypervisor_bank_mock
-        local_hypervisor_bank_mock.nics.ask.return_value = "eth2"
-        local_hypervisor_bank_mock.nics.question = "Select interface"
-
-        self.mock_physnet_qs(physical_network_question)
-
-        step = self.get_step(join_mode=True)
-        nics_result = {
-            "nics": [
-                {"name": "eth2", "up": True, "connected": True, "configured": False}
-            ],
-            "candidates": ["eth2"],
-        }
-        fetch_nics.return_value = nics_result
-        step.prompt()
-        assert step.bridge_mappings["maas0.local"] == "br-physnet1:physnet1:eth2"
-
-    def mock_candidates(self, candidates: list[str]):
-        # Construct the return value expected by nic_utils.fetch_nics
-        nics_result = {
-            "nics": [
-                {"name": c, "up": True, "connected": True, "configured": False}
-                for c in candidates
-            ],
-            "candidates": candidates,
-        }
-        self.fetch_nics.return_value = nics_result
-
-    def test_prompt(self, physical_network_question):
-        self.load_answers.return_value = {"user": {"remote_access_location": "remote"}}
-        # Mock no network nodes in cluster
-        self.cclient.cluster.list_nodes_by_role.return_value = []
-
-        hypervisor_bank_mock = Mock()
-        self.question_bank.return_value = hypervisor_bank_mock
-        hypervisor_bank_mock.nics.ask.return_value = "eth2"
-        hypervisor_bank_mock.nics.question = "Select interface"
-
-        self.mock_physnet_qs(physical_network_question)
-
-        step = self.get_step()
-
-        self.mock_candidates(["eth2"])
-
+    with patch.object(nic_utils, "fetch_nics_from_subordinate") as fetch_nics:
         step.prompt()
 
-        machine_name = self.get_machine_name()
-        assert step.bridge_mappings[machine_name] == "br-physnet1:physnet1:eth2"
-
-    def test_prompt_local(self):
-        """Test specific to Local provider: local access mode."""
-        self.load_answers.return_value = {"user": {"remote_access_location": "local"}}
-        local_hypervisor_bank_mock = Mock()
-        self.question_bank.return_value = local_hypervisor_bank_mock
-        local_hypervisor_bank_mock.nics.ask.return_value = "eth12"
-        local_hypervisor_bank_mock.nics.question = "Select interface"
-        step = self.get_step()
-        step.prompt()
-        assert len(step.bridge_mappings) == 0
-
-    def test_prompt_local_join(self, physical_network_question):
-        """Test specific to Local provider: local access mode with join."""
-        self.load_answers.return_value = {"user": {"remote_access_location": "local"}}
-        # Mock no network nodes in cluster
-        self.cclient.cluster.list_nodes_by_role.return_value = []
-        local_hypervisor_bank_mock = Mock()
-        self.question_bank.return_value = local_hypervisor_bank_mock
-        local_hypervisor_bank_mock.nics.ask.return_value = "eth2"
-        local_hypervisor_bank_mock.nics.question = "Select interface"
-
-        self.mock_physnet_qs(physical_network_question)
-
-        step = self.get_step(join_mode=True)
-        self.mock_candidates(["eth2"])
-
-        step.prompt()
-        assert step.bridge_mappings["maas0.local"] == "br-physnet1:physnet1:eth2"
-
-    def test_prompt_join_mode(self, physical_network_question):
-        self.load_answers.return_value = {"user": {"remote_access_location": "remote"}}
-        # Mock no network nodes in cluster
-        self.cclient.cluster.list_nodes_by_role.return_value = []
-
-        hypervisor_bank_mock = Mock()
-        self.question_bank.return_value = hypervisor_bank_mock
-        hypervisor_bank_mock.nics.ask.return_value = "eth2"
-        hypervisor_bank_mock.nics.question = "Select interface"
-
-        self.mock_physnet_qs(physical_network_question)
-
-        step = self.get_step(join_mode=True)
-
-        self.mock_candidates(["eth2"])
-
-        step.prompt()
-
-        machine_name = self.get_machine_name()
-        assert step.bridge_mappings[machine_name] == "br-physnet1:physnet1:eth2"
-
-    def test_prompt_with_deprecated_nic_field_in_manifest(self):
-        """Test that deprecated 'nic' field in manifest is used without prompting."""
-        from sunbeam.core.manifest import Manifest
-
-        # Load answers with remote access to trigger manifest reading
-        self.load_answers.return_value = {"user": {"remote_access_location": "remote"}}
-
-        # Create a manifest with deprecated nic field
-        manifest_dict = {
-            "core": {
-                "config": {
-                    "external-network": {
-                        "nic": "eth1",  # Deprecated field
-                        "cidr": "10.0.0.0/24",
-                    }
-                }
-            }
-        }
-        manifest = Manifest.model_validate(manifest_dict)
-
-        step = local_steps.LocalSetHypervisorUnitsOptionsStep(
-            self.cclient,
-            "maas0.local",
-            self.jhelper,
-            "test-model",
-            join_mode=False,
-            manifest=manifest,
-        )
-
-        # Call prompt - it should NOT prompt user since manifest has nic
-        step.prompt()
-
-        # Verify bridge_mappings is set from manifest
-        machine_name = self.get_machine_name()
-        assert step.bridge_mappings[machine_name] == "br-physnet1:physnet1:eth1"
-
-    def test_prompt_with_new_nics_field_in_manifest(self):
-        """Test that new 'nics' field in manifest is used without prompting."""
-        from sunbeam.core.manifest import Manifest
-
-        # Load answers with remote access to trigger manifest reading
-        self.load_answers.return_value = {"user": {"remote_access_location": "remote"}}
-
-        # Create a manifest with new nics field
-        manifest_dict = {
-            "core": {
-                "config": {
-                    "external-networks": {
-                        "physnet1": {
-                            "nics": {"maas0.local": "ens1f0"},
-                            "cidr": "10.0.0.0/24",
-                        }
-                    }
-                }
-            }
-        }
-        manifest = Manifest.model_validate(manifest_dict)
-
-        step = local_steps.LocalSetHypervisorUnitsOptionsStep(
-            self.cclient,
-            "maas0.local",
-            self.jhelper,
-            "test-model",
-            join_mode=False,
-            manifest=manifest,
-        )
-
-        # Call prompt - it should NOT prompt user since manifest has nics
-        step.prompt()
-
-        # Verify bridge_mappings is set from manifest
-        machine_name = self.get_machine_name()
-        assert step.bridge_mappings[machine_name] == "br-physnet1:physnet1:ens1f0"
-
-    def test_network_agents_prompt_skips_compute_only_host(self):
-        self.load_answers.return_value = {"user": {"remote_access_location": "remote"}}
-        self.cclient.cluster.get_node_info.return_value = {
-            "role": ["compute"],
-        }
-        step = local_steps.LocalSetOpenStackNetworkAgentsStep(
-            self.cclient,
-            "maas0.local",
-            self.jhelper,
-            "test-model",
-        )
-
-        with patch.object(nic_utils, "fetch_nics_from_subordinate") as fetch_nics:
-            step.prompt()
-
-        assert step.bridge_mappings["maas0.local"] is None
-        fetch_nics.assert_not_called()
+    assert step.bridge_mappings["maas0.local"] is None
+    fetch_nics.assert_not_called()
 
 
 class TestLocalClusterStatusStep:

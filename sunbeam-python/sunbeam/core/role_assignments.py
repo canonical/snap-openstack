@@ -19,8 +19,6 @@ def build_microovn_role_mapping(
     client: Client,
     model_name: str,
     machine_ids: Iterable[str],
-    *,
-    assign_central_roles: bool,
 ) -> RoleMapping:
     """Build the role-distributor mapping for MicroOVN."""
     machine_roles: dict[str, list[str]] = {}
@@ -35,10 +33,7 @@ def build_microovn_role_mapping(
             if machine_id_str not in microovn_machine_ids:
                 continue
             node_roles = set(node.get("role", []))
-            machine_roles[machine_id_str] = _microovn_roles_for_node(
-                node_roles,
-                assign_central_roles,
-            )
+            machine_roles[machine_id_str] = _microovn_roles_for_node(node_roles)
 
     return _build_mapping(
         model_name,
@@ -71,12 +66,11 @@ def _build_mapping(
 
 def _microovn_roles_for_node(
     node_roles: Iterable[str],
-    assign_central_roles: bool,
 ) -> list[str]:
     role_set = set(node_roles)
     roles = ["chassis"]
 
-    if assign_central_roles and "control" in role_set:
+    if "control" in role_set:
         roles.append("central")
     if "network" in role_set:
         roles.append("gateway")

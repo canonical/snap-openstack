@@ -23,7 +23,6 @@ SUPPORTED_RELEASE = "noble"
 JUJU_CHANNEL = "3.6/stable"
 JUJU_BASE = "ubuntu@24.04"
 OPENSTACK_CHANNEL = f"{determine_version()}/stable"
-OVN_CHANNEL = "26.03/stable"
 RABBITMQ_CHANNEL = "3.12/stable"
 TRAEFIK_CHANNEL = "latest/stable"
 MICROCEPH_CHANNEL = "squid/stable"
@@ -59,10 +58,6 @@ OPENSTACK_CHARMS_K8S = {
     "nova-k8s": OPENSTACK_CHANNEL,
     "placement-k8s": OPENSTACK_CHANNEL,
 }
-OVN_CHARMS_K8S = {
-    "ovn-central-k8s": OVN_CHANNEL,
-    "ovn-relay-k8s": OVN_CHANNEL,
-}
 MYSQL_CHARMS_K8S = {
     "mysql-k8s": MYSQL_CHANNEL,
     "mysql-router-k8s": MYSQL_CHANNEL,
@@ -92,7 +87,6 @@ MACHINE_CHARMS = {
 
 K8S_CHARMS: dict[str, str] = {}
 K8S_CHARMS |= OPENSTACK_CHARMS_K8S
-K8S_CHARMS |= OVN_CHARMS_K8S
 K8S_CHARMS |= MYSQL_CHARMS_K8S
 K8S_CHARMS |= MISC_CHARMS_K8S
 

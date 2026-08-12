@@ -14,7 +14,6 @@ from sunbeam.steps.microovn import (
     EnableMicroOVNStep,
     ReapplyMicroOVNOptionalIntegrationsStep,
     ReapplyMicroOVNTerraformPlanStep,
-    SetOvnProviderStep,
 )
 
 
@@ -60,20 +59,7 @@ class TestDeployMicroOVNApplicationStep:
         timeout = deploy_microovn_step.get_application_timeout()
         assert timeout == 1200
 
-    def test_get_accepted_application_status_allows_blocked_for_ovn_k8s(
-        self, deploy_microovn_step, ovn_manager
-    ):
-        ovn_manager.get_provider.return_value = ovn.OvnProvider.OVN_K8S
-
-        statuses = deploy_microovn_step.get_accepted_application_status()
-
-        assert statuses == ["active", "unknown", "blocked"]
-
-    def test_get_accepted_application_status_excludes_blocked_for_microovn_provider(
-        self, deploy_microovn_step, ovn_manager
-    ):
-        ovn_manager.get_provider.return_value = ovn.OvnProvider.MICROOVN
-
+    def test_get_accepted_application_status(self, deploy_microovn_step):
         statuses = deploy_microovn_step.get_accepted_application_status()
 
         assert statuses == ["active", "unknown"]
@@ -292,11 +278,9 @@ class TestReapplyMicroOVNOptionalIntegrationsStep:
         expected_args = [
             "-target=juju_integration.microovn-microcluster-token-distributor",
             "-target=juju_integration.microovn-certs",
-            "-target=juju_integration.microovn-ovsdb-cms",
             "-target=juju_integration.microovn-openstack-network-agents",
             "-target=juju_integration.microovn_arm64_microcluster_token_distributor",
             "-target=juju_integration.microovn_arm64_certs",
-            "-target=juju_integration.microovn_arm64_ovsdb_cms",
             "-target=juju_integration.role-distributor-microovn",
             "-target=juju_integration.role-distributor-microovn-arm64",
         ]
@@ -315,11 +299,9 @@ class TestReapplyMicroOVNOptionalIntegrationsStep:
         assert extra_args == [
             "-target=juju_integration.microovn-microcluster-token-distributor",
             "-target=juju_integration.microovn-certs",
-            "-target=juju_integration.microovn-ovsdb-cms",
             "-target=juju_integration.microovn-openstack-network-agents",
             "-target=juju_integration.microovn_arm64_microcluster_token_distributor",
             "-target=juju_integration.microovn_arm64_certs",
-            "-target=juju_integration.microovn_arm64_ovsdb_cms",
         ]
 
 
@@ -530,39 +512,12 @@ class TestReapplyMicroOVNTerraformPlanStep:
             == "10.0.0.1/24"
         )
 
-    def test_run_allows_blocked_status_for_ovn_k8s(
+    def test_run_uses_microovn_accepted_statuses(
         self,
         reapply_microovn_terraform_step,
         basic_jhelper,
         step_context,
     ):
-        reapply_microovn_terraform_step.ovn_manager.get_provider.return_value = (
-            ovn.OvnProvider.OVN_K8S
-        )
-
-        with patch(
-            "sunbeam.steps.microovn.get_external_network_configs", return_value={}
-        ):
-            result = reapply_microovn_terraform_step.run(step_context)
-
-        assert result.result_type == ResultType.COMPLETED
-        basic_jhelper.wait_application_ready.assert_called_once_with(
-            "microovn",
-            "test-model",
-            accepted_status=["active", "unknown", "blocked"],
-            timeout=1200,
-        )
-
-    def test_run_excludes_blocked_status_for_microovn_provider(
-        self,
-        reapply_microovn_terraform_step,
-        basic_jhelper,
-        step_context,
-    ):
-        reapply_microovn_terraform_step.ovn_manager.get_provider.return_value = (
-            ovn.OvnProvider.MICROOVN
-        )
-
         with patch(
             "sunbeam.steps.microovn.get_external_network_configs", return_value={}
         ):
@@ -575,111 +530,3 @@ class TestReapplyMicroOVNTerraformPlanStep:
             accepted_status=["active", "unknown"],
             timeout=1200,
         )
-
-
-class TestSetOvnProviderStep:
-    def test_get_config_from_snap_provider_not_set(self, basic_client):
-        """Test get_config_from_snap when no provider is configured."""
-        mock_snap = Mock()
-        mock_snap.config.get.return_value = None
-        step = SetOvnProviderStep(basic_client, mock_snap)
-
-        result = step.get_config_from_snap(mock_snap)
-
-        assert result == ovn.DEFAULT_PROVIDER
-        mock_snap.config.get.assert_called_once_with(ovn.SNAP_PROVIDER_CONFIG_KEY)
-
-    def test_get_config_from_snap_provider_microovn(self, basic_client):
-        """Test get_config_from_snap when provider is set to microovn."""
-        mock_snap = Mock()
-        mock_snap.config.get.return_value = ovn.OvnProvider.MICROOVN
-        step = SetOvnProviderStep(basic_client, mock_snap)
-
-        result = step.get_config_from_snap(mock_snap)
-
-        assert result == ovn.OvnProvider.MICROOVN
-        mock_snap.config.get.assert_called_once_with(ovn.SNAP_PROVIDER_CONFIG_KEY)
-
-    def test_get_config_from_snap_unknown_config_key(self, basic_client):
-        """Test get_config_from_snap when snap config key doesn't exist."""
-        from snaphelpers import UnknownConfigKey
-
-        mock_snap = Mock()
-        mock_snap.config.get.side_effect = UnknownConfigKey("ovn.provider")
-        step = SetOvnProviderStep(basic_client, mock_snap)
-
-        result = step.get_config_from_snap(mock_snap)
-
-        assert result == ovn.DEFAULT_PROVIDER
-
-    def test_get_config_from_snap_invalid_provider_value(self, basic_client):
-        """Test get_config_from_snap with invalid provider value raises error."""
-        mock_snap = Mock()
-        mock_snap.config.get.return_value = "invalid-provider"
-        step = SetOvnProviderStep(basic_client, mock_snap)
-
-        with pytest.raises(ValueError) as exc_info:
-            step.get_config_from_snap(mock_snap)
-        assert "Invalid value 'invalid-provider'" in str(exc_info.value)
-        assert "ovn.provider" in str(exc_info.value)
-        assert "Valid values are:" in str(exc_info.value)
-
-    def test_is_skip(self, basic_client, step_context):
-        """Test is_skip method."""
-        step = SetOvnProviderStep(basic_client, Mock())
-        with patch.object(step, "get_config_from_snap") as mock_get_config:
-            mock_get_config.return_value = ovn.OvnProvider.OVN_K8S
-            with patch("sunbeam.core.ovn.load_provider_config") as mock_load:
-                mock_load.return_value = ovn.OvnConfig(provider=ovn.OvnProvider.OVN_K8S)
-                result = step.is_skip(step_context)
-                assert result.result_type == ResultType.SKIPPED
-
-    def test_is_skip_not_bootstrapped(self, basic_client, step_context):
-        step = SetOvnProviderStep(basic_client, Mock())
-        with patch.object(step, "get_config_from_snap") as mock_get_config:
-            mock_get_config.return_value = ovn.OvnProvider.MICROOVN
-            with patch("sunbeam.core.ovn.load_provider_config") as mock_load:
-                mock_load.return_value = ovn.OvnConfig(provider=ovn.OvnProvider.OVN_K8S)
-                with patch.object(
-                    basic_client.cluster, "check_sunbeam_bootstrapped"
-                ) as mock_bootstrapped:
-                    mock_bootstrapped.return_value = False
-                    result = step.is_skip(step_context)
-                    assert result.result_type == ResultType.COMPLETED
-
-    def test_is_skip_bootstrapped_change_provider(self, basic_client, step_context):
-        step = SetOvnProviderStep(basic_client, Mock())
-        with patch.object(step, "get_config_from_snap") as mock_get_config:
-            mock_get_config.return_value = ovn.OvnProvider.MICROOVN
-            with patch("sunbeam.core.ovn.load_provider_config") as mock_load:
-                mock_load.return_value = ovn.OvnConfig(provider=ovn.OvnProvider.OVN_K8S)
-                with patch.object(
-                    basic_client.cluster, "check_sunbeam_bootstrapped"
-                ) as mock_bootstrapped:
-                    mock_bootstrapped.return_value = True
-                    result = step.is_skip(step_context)
-                    assert result.result_type == ResultType.FAILED
-
-    def test_is_skip_invalid_provider(self, basic_client, step_context):
-        """Test is_skip returns FAILED when invalid provider is configured."""
-        step = SetOvnProviderStep(basic_client, Mock())
-        with patch.object(step, "get_config_from_snap") as mock_get_config:
-            mock_get_config.side_effect = ValueError(
-                "Invalid value 'bad-provider' for ovn.provider. Valid values are: ovn-k8s, microovn"
-            )
-            result = step.is_skip(step_context)
-            assert result.result_type == ResultType.FAILED
-            assert "Invalid value 'bad-provider'" in result.message
-
-    def test_run(self, basic_client, step_context):
-        """Test run method."""
-        step = SetOvnProviderStep(basic_client, Mock())
-        step.wanted_provider = ovn.OvnProvider.OVN_K8S
-        with patch("sunbeam.core.ovn.load_provider_config") as mock_load:
-            mock_config = ovn.OvnConfig(provider=None)
-            mock_load.return_value = mock_config
-            with patch("sunbeam.core.ovn.write_provider_config") as mock_write:
-                result = step.run(step_context)
-                assert result.result_type == ResultType.COMPLETED
-                mock_write.assert_called_once_with(basic_client, mock_config)
-                assert mock_config.provider == ovn.OvnProvider.OVN_K8S

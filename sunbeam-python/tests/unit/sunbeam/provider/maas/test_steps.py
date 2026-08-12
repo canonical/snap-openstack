@@ -8,10 +8,7 @@ import pytest
 import sunbeam.core.questions
 import sunbeam.provider.maas.steps as maas_steps
 
-from ...steps.test_configure import (
-    BaseTestSetHypervisorUnitsOptionsStep,
-    BaseTestUserQuestions,
-)
+from ...steps.test_configure import BaseTestUserQuestions
 
 
 @pytest.fixture()
@@ -44,27 +41,3 @@ class TestMaasUserQuestions(BaseTestUserQuestions):
 
     def get_step(self):
         return maas_steps.MaasUserQuestions(self.cclient, self.maas_client)
-
-
-class TestMaasSetHypervisorUnitsOptionsStep(BaseTestSetHypervisorUnitsOptionsStep):
-    __test__ = True
-
-    @pytest.fixture(autouse=True)
-    def setup_maas(self):
-        self.maas_client = Mock()
-        with patch("sunbeam.provider.maas.steps.maas_deployment") as p:
-            self.maas_deployment = p
-            yield
-
-    def test_has_prompts(self):
-        step = self.get_step()
-        assert not step.has_prompts()
-
-    def get_step(self, join_mode=False):
-        return maas_steps.MaasSetHypervisorUnitsOptionsStep(
-            self.cclient,
-            self.maas_client,
-            ["machine1.maas", "machine2.maas"],
-            self.jhelper,
-            "test-model",
-        )

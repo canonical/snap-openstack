@@ -5,7 +5,6 @@ from unittest.mock import Mock
 
 import yaml
 
-from sunbeam.core import ovn
 from sunbeam.core.common import ResultType
 from sunbeam.steps.role_distributor import (
     DeployRoleDistributorApplicationStep,
@@ -62,43 +61,6 @@ class TestDeployRoleDistributorApplicationStep:
             "2": {"roles": ["chassis", "gateway"]},
         }
         assert extra_tfvars["role_distributor_machine_ids"] == ["0"]
-
-    def test_extra_tfvars_does_not_assign_central_for_ovn_k8s(
-        self,
-        basic_deployment,
-        basic_client,
-        basic_tfhelper,
-        basic_jhelper,
-        basic_manifest,
-        test_model,
-    ):
-        basic_deployment.get_ovn_manager.return_value.get_machines.return_value = ["0"]
-        basic_deployment.get_ovn_manager.return_value.get_provider.return_value = (
-            ovn.OvnProvider.OVN_K8S
-        )
-        basic_client.cluster.list_nodes_by_role.side_effect = lambda role: {
-            "control": [{"machineid": "0", "role": ["control", "network"]}],
-            "compute": [],
-            "network": [{"machineid": "0", "role": ["control", "network"]}],
-        }.get(role, [])
-
-        step = DeployRoleDistributorApplicationStep(
-            basic_deployment,
-            basic_client,
-            basic_tfhelper,
-            basic_jhelper,
-            basic_manifest,
-            "openstack-machines",
-        )
-
-        extra_tfvars = step.extra_tfvars()
-
-        role_mapping = yaml.safe_load(
-            extra_tfvars["charm_role_distributor_config"]["role-mapping"]
-        )
-        assert role_mapping["openstack-machines"]["microovn"]["machines"] == {
-            "0": {"roles": ["chassis", "gateway"]},
-        }
 
     def test_get_accepted_application_status_allows_waiting(
         self,

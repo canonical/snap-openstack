@@ -62,10 +62,6 @@ core:
         channel: OS_CHARM
       watcher-k8s:
         channel: OS_CHARM
-      ovn-central-k8s:
-        channel: OVN_CHARM
-      ovn-relay-k8s:
-        channel: OVN_CHARM
       placement-k8s:
         channel: OS_CHARM
       sunbeam-clusterd:

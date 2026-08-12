@@ -1093,11 +1093,6 @@ class CheckRabbitmqK8SDistributionStep(CheckApplicationK8SDistributionStep):
     _SUBSTRATE = APPLICATION
 
 
-class CheckOvnK8SDistributionStep(CheckApplicationK8SDistributionStep):
-    _CHARM = "ovn-central-k8s"
-    _SUBSTRATE = APPLICATION
-
-
 class CordonK8SUnitStep(BaseStep, _CommonK8SStepMixin):
     _SUBSTRATE: str = APPLICATION
 

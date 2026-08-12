@@ -22,7 +22,6 @@ def test_microovn_role_mapping_keeps_gateways_on_network_nodes():
         client,
         model_name="openstack-machines",
         machine_ids=["0", "1", "2"],
-        assign_central_roles=True,
     )
 
     assert mapping["openstack-machines"]["microovn"]["machines"] == {
@@ -45,7 +44,6 @@ def test_microovn_role_mapping_filters_to_actual_microovn_machines():
         client,
         model_name="openstack-machines",
         machine_ids=["2"],
-        assign_central_roles=True,
     )
 
     assert mapping["openstack-machines"]["microovn"]["machines"] == {
@@ -53,7 +51,7 @@ def test_microovn_role_mapping_filters_to_actual_microovn_machines():
     }
 
 
-def test_microovn_role_mapping_can_disable_central_roles():
+def test_microovn_role_mapping_allows_central_and_gateway_on_same_node():
     client = _client_with_nodes(
         {
             "control": [{"machineid": "0", "role": ["control", "network"]}],
@@ -66,28 +64,6 @@ def test_microovn_role_mapping_can_disable_central_roles():
         client,
         model_name="openstack-machines",
         machine_ids=["0"],
-        assign_central_roles=False,
-    )
-
-    assert mapping["openstack-machines"]["microovn"]["machines"] == {
-        "0": {"roles": ["chassis", "gateway"]},
-    }
-
-
-def test_microovn_role_mapping_allows_central_and_gateway_for_provider_microovn():
-    client = _client_with_nodes(
-        {
-            "control": [{"machineid": "0", "role": ["control", "network"]}],
-            "compute": [],
-            "network": [{"machineid": "0", "role": ["control", "network"]}],
-        }
-    )
-
-    mapping = build_microovn_role_mapping(
-        client,
-        model_name="openstack-machines",
-        machine_ids=["0"],
-        assign_central_roles=True,
     )
 
     assert mapping["openstack-machines"]["microovn"]["machines"] == {

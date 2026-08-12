@@ -19,7 +19,6 @@ from sunbeam.core.common import (
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import JujuHelper
 from sunbeam.core.manifest import CharmManifest, Manifest
-from sunbeam.core.ovn import OvnProvider
 from sunbeam.core.role_assignments import (
     build_microovn_role_mapping,
     dump_role_mapping,
@@ -67,9 +66,6 @@ def _role_distributor_extra_tfvars(
         client,
         model,
         microovn_machine_ids,
-        assign_central_roles=(
-            deployment.get_ovn_manager().get_provider() == OvnProvider.MICROOVN
-        ),
     )
 
     config = _manifest_config(manifest)

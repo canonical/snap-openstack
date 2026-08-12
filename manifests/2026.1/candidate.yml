@@ -23,10 +23,6 @@ core:
         channel: 2026.1/candidate
         config:
           snap-channel: 2026.1/candidate
-      ovn-central-k8s:
-        channel: 26.03/candidate
-      ovn-relay-k8s:
-        channel: 26.03/candidate
       placement-k8s:
         channel: 2026.1/candidate
       sunbeam-clusterd:

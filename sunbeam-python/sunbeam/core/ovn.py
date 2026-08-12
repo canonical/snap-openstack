@@ -1,75 +1,27 @@
 # SPDX-FileCopyrightText: 2025 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
-import enum
 from collections.abc import Iterable
-
-import pydantic
 
 from sunbeam.clusterd.client import Client
 from sunbeam.core.common import Role
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import JujuHelper
-from sunbeam.core.questions import load_answers, write_answers
 
-CLUSTERD_CONFIG_KEY = "OvnConfig"
-SNAP_PROVIDER_CONFIG_KEY = "ovn.provider"
-
-
-class OvnProvider(enum.StrEnum):
-    OVN_K8S = "ovn-k8s"
-    MICROOVN = "microovn"
-
-
-class OvnConfig(pydantic.BaseModel):
-    provider: OvnProvider | None = None
-
-
-DEFAULT_PROVIDER = OvnProvider.OVN_K8S
 DEFAULT_ARCHITECTURE = "amd64"
 ARM64_ARCHITECTURE = "arm64"
-
-
-def load_provider_config(client: Client) -> OvnConfig:
-    """Load the OVN provider configuration from the cluster deployment answers.
-
-    :param client: the Sunbeam client
-    :return: the OVN provider configuration
-    """
-    answers = load_answers(client, CLUSTERD_CONFIG_KEY)
-    return OvnConfig.model_validate(answers)
-
-
-def write_provider_config(client: Client, config: OvnConfig) -> None:
-    """Write the OVN provider configuration to the cluster deployment answers.
-
-    :param client: the Sunbeam client
-    :param config: the OVN provider configuration
-    """
-    write_answers(client, CLUSTERD_CONFIG_KEY, config.model_dump())
 
 
 class OvnManager:
     def __init__(self, client: Client):
         self.client = client
 
-    def get_provider(self) -> OvnProvider:
-        """Get the OVN provider from the configuration."""
-        config = load_provider_config(self.client)
-        if config.provider is None:
-            return DEFAULT_PROVIDER
-        return config.provider
-
     def get_roles_for_microovn(self) -> set[Role]:
         """Get list of roles where microovn is necessary.
 
         :return: set of roles
         """
-        provider = self.get_provider()
-        roles = {Role.NETWORK}
-        if provider == OvnProvider.MICROOVN:
-            roles |= {Role.COMPUTE, Role.CONTROL}
-        return roles
+        return {Role.CONTROL, Role.COMPUTE, Role.NETWORK}
 
     def is_microovn_necessary(self, roles: Iterable[Role]) -> bool:
         """Check if microovn is necessary for the given roles.
@@ -78,19 +30,6 @@ class OvnManager:
         :return: True if microovn is necessary, False otherwise
         """
         return len(self.get_roles_for_microovn().intersection(roles)) > 0
-
-    def is_network_agent_dataplane_node(self, roles: Iterable[Role]) -> bool:
-        """Check whether the node is a network agent dataplane node.
-
-        :param roles: iterable of roles
-        :return: True if the role is managed by openstack-network-agents,
-            False otherwise
-        """
-        provider = self.get_provider()
-        dataplane_roles = {Role.NETWORK}
-        if provider == OvnProvider.MICROOVN:
-            dataplane_roles.add(Role.COMPUTE)
-        return len(dataplane_roles.intersection(roles)) > 0
 
     def is_microovn_necessary_maas(
         self, nb_network: int, nb_compute: int, nb_control: int
@@ -102,30 +41,19 @@ class OvnManager:
         :param nb_control: number of control nodes
         :return: True if microovn is necessary, False otherwise
         """
-        provider = self.get_provider()
-        if provider == OvnProvider.MICROOVN:
-            return (nb_network + nb_compute + nb_control) > 0
-        else:
-            return nb_network > 0
+        return (nb_network + nb_compute + nb_control) > 0
 
     def _list_microovn_nodes(self) -> list[dict]:
         """Collect cluster nodes that should run MicroOVN."""
-        nodes = self.client.cluster.list_nodes_by_role("network")
-        if self.get_provider() == OvnProvider.MICROOVN:
-            nodes += self.client.cluster.list_nodes_by_role("compute")
-            nodes += self.client.cluster.list_nodes_by_role("control")
-        return nodes
+        return (
+            self.client.cluster.list_nodes_by_role("control")
+            + self.client.cluster.list_nodes_by_role("compute")
+            + self.client.cluster.list_nodes_by_role("network")
+        )
 
-    def get_token_distributor_machines(
-        self, provider: OvnProvider | None = None
-    ) -> list[str]:
+    def get_token_distributor_machines(self) -> list[str]:
         """Get machine IDs for MicroOVN helper applications."""
-        provider = provider or self.get_provider()
-        roles = [Role.NETWORK]
-        if provider == OvnProvider.MICROOVN:
-            roles = [Role.CONTROL, Role.COMPUTE, Role.NETWORK]
-
-        for role in roles:
+        for role in (Role.CONTROL, Role.COMPUTE, Role.NETWORK):
             machine_ids: set[str] = set()
             for node in self.client.cluster.list_nodes_by_role(role.name.lower()):
                 machineid = node.get("machineid")
@@ -176,11 +104,7 @@ class OvnManager:
 
         :return: dict of Terraform variables
         """
-        provider = self.get_provider()
-        tfvars = {}
-        if provider == OvnProvider.MICROOVN:
-            model_name = jhelper.get_model_name_with_owner(
-                deployment.openstack_machines_model
-            )
-            tfvars["external-ovsdb-cms-offer-url"] = model_name + ".sunbeam-ovn-proxy"
-        return tfvars
+        model_name = jhelper.get_model_name_with_owner(
+            deployment.openstack_machines_model
+        )
+        return {"external-ovsdb-cms-offer-url": model_name + ".sunbeam-ovn-proxy"}

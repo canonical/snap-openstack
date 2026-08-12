@@ -23,10 +23,6 @@ core:
         channel: 2026.1/stable
         config:
           snap-channel: 2026.1/stable
-      ovn-central-k8s:
-        channel: 26.03/stable
-      ovn-relay-k8s:
-        channel: 26.03/stable
       placement-k8s:
         channel: 2026.1/stable
       sunbeam-clusterd:
