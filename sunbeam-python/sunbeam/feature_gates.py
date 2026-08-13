@@ -238,7 +238,7 @@ FEATURE_GATES: dict[str, dict[str, bool | list[str]]] = {
         "requires": ["feature.microovn-sdn"],
     },
     "feature.loadbalancer-amphora": {
-        "generally_available": False,  # TODO: Set to True when Amphora support is GA
+        "generally_available": True,
         "requires": ["feature.microovn-sdn"],
     },
 }
