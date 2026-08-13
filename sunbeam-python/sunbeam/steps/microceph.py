@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ast
+import json
 import logging
 from typing import Any
 
@@ -24,6 +25,7 @@ from sunbeam.core.deployment import Deployment, Networks
 from sunbeam.core.juju import (
     ActionFailedException,
     ApplicationNotFoundException,
+    ExecFailedException,
     JujuHelper,
     LeaderNotFoundException,
     UnitNotFoundException,
@@ -229,6 +231,273 @@ class RemoveMicrocephUnitsStep(RemoveMachineUnitsStep):
     def get_unit_timeout(self) -> int:
         """Return unit timeout in seconds."""
         return MICROCEPH_UNIT_TIMEOUT
+
+
+class RemoveMicrocephOSDsStep(BaseStep):
+    """Remove a node's MicroCeph OSDs before removing its unit."""
+
+    _OSD_REMOVE_TIMEOUT = 1800
+    _COMMAND_TIMEOUT = _OSD_REMOVE_TIMEOUT + 60
+
+    def __init__(
+        self,
+        client: Client,
+        name: str,
+        jhelper: JujuHelper,
+        model: str,
+        force: bool = False,
+    ):
+        super().__init__(
+            "Remove MicroCeph OSDs",
+            "Removing MicroCeph OSDs",
+        )
+        self.client = client
+        self.node = name
+        self.jhelper = jhelper
+        self.model = model
+        self.force = force
+        self.unit: str | None = None
+        self._units: list[str] = []
+
+    def _prepare(self) -> Result:
+        """Find a unit that can run cleanup before the target is removed."""
+        self.unit = None
+        self._units = []
+        try:
+            node_info = self.client.cluster.get_node_info(self.node)
+        except NodeNotExistInClusterException:
+            node_info = None
+
+        machines = self.jhelper.get_machines(self.model)
+        target_machine_ids: set[str] = set()
+        if node_info is not None:
+            machine_id = node_info.get("machineid")
+            if machine_id is not None and str(machine_id) not in {"", "-1"}:
+                target_machine_ids.add(str(machine_id))
+        target_machine_ids.update(
+            str(machine_id)
+            for machine_id, machine in machines.items()
+            if machine.hostname == self.node
+        )
+        try:
+            app = self.jhelper.get_application(APPLICATION, self.model)
+        except ApplicationNotFoundException:
+            LOG.debug("Failed to get application", exc_info=True)
+            return Result(
+                ResultType.SKIPPED,
+                f"Application {APPLICATION} has not been deployed yet",
+            )
+
+        units = app.units
+        if not units:
+            if self.force:
+                return Result(ResultType.SKIPPED)
+            return Result(
+                ResultType.FAILED,
+                f"No MicroCeph unit is available to clean up {self.node}",
+            )
+
+        known_machine_ids = {str(machine_id) for machine_id in machines}
+        target_units: list[str] = []
+        surviving_units: list[str] = []
+        for unit_name, unit in units.items():
+            machine_id = str(unit.machine)
+            if machine_id in target_machine_ids:
+                target_units.append(unit_name)
+            elif machine_id in known_machine_ids:
+                surviving_units.append(unit_name)
+
+        if not (target_units or surviving_units):
+            return Result(
+                ResultType.FAILED,
+                f"Unable to identify a MicroCeph unit for {self.node}",
+            )
+
+        def unit_sort_key(unit_name: str) -> tuple[bool, bool, str]:
+            unit = units[unit_name]
+            healthy = (
+                unit.workload_status.current == "active"
+                and unit.juju_status.current == "idle"
+            )
+            return not healthy, unit_name in target_units, unit_name
+
+        self._units = sorted(surviving_units + target_units, key=unit_sort_key)
+        self.unit = self._units[0]
+
+        return Result(ResultType.COMPLETED)
+
+    def is_skip(self, context: StepContext) -> Result:
+        """Determine whether cleanup can run and whether it is needed."""
+        return self._prepare()
+
+    def _run_command(self, command: str, *, allow_fallback: bool) -> str:
+        """Run a MicroCeph command and fail on transport or command errors."""
+        if self.unit is None:
+            raise SunbeamException("MicroCeph cleanup unit is not available")
+
+        candidates = [self.unit]
+        if allow_fallback:
+            candidates.extend(unit for unit in self._units if unit != self.unit)
+        for index, unit in enumerate(candidates):
+            try:
+                result = self.jhelper.run_cmd_on_machine_unit_payload(
+                    unit,
+                    self.model,
+                    command,
+                    timeout=self._COMMAND_TIMEOUT,
+                )
+            except ExecFailedException as e:
+                if index < len(candidates) - 1:
+                    LOG.warning(
+                        "Failed to run MicroCeph command on %s: %r; "
+                        "trying another unit",
+                        unit,
+                        e,
+                    )
+                    continue
+                raise SunbeamException(f"Failed to run {command!r}: {e}") from e
+            self.unit = unit
+            break
+
+        return result.stdout
+
+    @staticmethod
+    def _parse_configured_disks(stdout: Any) -> list[dict[str, Any]]:
+        """Parse MicroCeph's configured disk records."""
+        if not isinstance(stdout, str):
+            raise ValueError("Configured disk listing output is not text")
+        payload = json.loads(stdout)
+        if not isinstance(payload, dict) or "ConfiguredDisks" not in payload:
+            raise ValueError("Configured disk listing has no ConfiguredDisks")
+        configured_disks = payload["ConfiguredDisks"]
+        if not isinstance(configured_disks, list):
+            raise ValueError("ConfiguredDisks is not a list")
+
+        required_fields = {"osd", "location"}
+        disks: list[dict[str, Any]] = []
+        for disk in configured_disks:
+            if not isinstance(disk, dict) or not required_fields <= set(disk):
+                raise ValueError("Configured disk has an invalid schema")
+            if type(disk["osd"]) is not int or disk["osd"] < 0:
+                raise ValueError("Configured disk has an invalid OSD ID")
+            if not isinstance(disk["location"], str):
+                raise ValueError("Configured disk has an invalid location")
+            disks.append(disk)
+        return disks
+
+    @staticmethod
+    def _parse_crush_tree(stdout: Any) -> list[dict[str, Any]]:
+        """Parse the JSON nodes returned by the Ceph OSD tree command."""
+        if not isinstance(stdout, str):
+            raise ValueError("CRUSH tree output is not text")
+        tree = json.loads(stdout)
+        if not isinstance(tree, dict) or not isinstance(tree.get("nodes"), list):
+            raise ValueError("CRUSH tree output has no nodes list")
+
+        nodes = tree["nodes"]
+        for node in nodes:
+            if not isinstance(node, dict):
+                raise ValueError("CRUSH tree node is not an object")
+            if not isinstance(node.get("name"), str) or not isinstance(
+                node.get("type"), str
+            ):
+                raise ValueError("CRUSH tree node has an invalid schema")
+            if node.get("type") == "host" and not isinstance(
+                node.get("children"), list
+            ):
+                raise ValueError("CRUSH host has no children list")
+            if "children" in node and not isinstance(node["children"], list):
+                raise ValueError("CRUSH tree node children is not a list")
+        return nodes
+
+    def _list_configured_osd_ids(self) -> list[int]:
+        """Return target OSD IDs that still exist in the MicroCeph database."""
+        try:
+            disks = self._parse_configured_disks(
+                self._run_command("microceph disk list --json", allow_fallback=True)
+            )
+        except ValueError as e:
+            raise SunbeamException(
+                f"Failed to parse configured disk listing: {e}"
+            ) from e
+        return sorted({disk["osd"] for disk in disks if disk["location"] == self.node})
+
+    def _list_crush_osd_ids(self) -> list[int]:
+        """Return OSD IDs under the target CRUSH host."""
+        try:
+            nodes = self._parse_crush_tree(
+                self._run_command(
+                    "microceph.ceph osd tree --format json", allow_fallback=True
+                )
+            )
+        except ValueError as e:
+            raise SunbeamException(f"Failed to parse CRUSH tree: {e}") from e
+
+        host = next(
+            (
+                node
+                for node in nodes
+                if node["name"] == self.node and node["type"] == "host"
+            ),
+            None,
+        )
+        if host is None:
+            return []
+        children = host["children"]
+        if any(type(child) is not int or child < 0 for child in children):
+            raise SunbeamException("CRUSH host has an invalid OSD ID")
+        return sorted(set(children))
+
+    def _list_target_osds(self) -> tuple[list[int], list[int]]:
+        """Read both target OSD sources before changing either source."""
+        return self._list_configured_osd_ids(), self._list_crush_osd_ids()
+
+    def run(self, context: StepContext) -> Result:
+        """Remove DB-backed OSDs and verify both MicroCeph and CRUSH state."""
+        if self.unit is None:
+            preparation = self._prepare()
+            if preparation.result_type != ResultType.COMPLETED:
+                return preparation
+
+        try:
+            configured_osds, crush_osds = self._list_target_osds()
+            crush_only_osds = sorted(set(crush_osds) - set(configured_osds))
+            if crush_only_osds:
+                return Result(
+                    ResultType.FAILED,
+                    f"CRUSH-only OSDs for {self.node}: {crush_only_osds}",
+                )
+
+            for osd_id in configured_osds:
+                command = (
+                    f"microceph disk remove osd.{osd_id} "
+                    f"--timeout {self._OSD_REMOVE_TIMEOUT}"
+                )
+                if self.force:
+                    command += (
+                        " --confirm-failure-domain-downgrade --bypass-safety-checks"
+                    )
+                self._run_command(command, allow_fallback=False)
+
+            if not configured_osds:
+                return Result(ResultType.COMPLETED)
+
+            remaining_configured, remaining_crush = self._list_target_osds()
+            if remaining_configured:
+                return Result(
+                    ResultType.FAILED,
+                    f"Configured OSDs remain for {self.node}: {remaining_configured}",
+                )
+            if remaining_crush:
+                return Result(
+                    ResultType.FAILED,
+                    f"CRUSH OSDs remain for {self.node}: {remaining_crush}",
+                )
+        except SunbeamException as e:
+            LOG.debug("Failed to clean up MicroCeph OSDs", exc_info=True)
+            return Result(ResultType.FAILED, str(e))
+
+        return Result(ResultType.COMPLETED)
 
 
 class ConfigureMicrocephOSDStep(BaseStep):
