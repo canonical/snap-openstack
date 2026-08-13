@@ -230,7 +230,7 @@ FEATURE_GATES: dict[str, dict[str, bool | list[str]]] = {
         "generally_available": False,  # TODO: Set to True when multi-region is GA
     },
     "feature.loadbalancer-amphora": {
-        "generally_available": False,  # TODO: Set to True when Amphora support is GA
+        "generally_available": True,
     },
 }
 
