@@ -208,6 +208,21 @@ def test_run_cmd_on_machine_unit_payload_success(jhelper, juju):
     assert result.results["result"] == "ok"
 
 
+@pytest.mark.parametrize(
+    "error",
+    [
+        TimeoutError("timed out"),
+        jubilant.CLIError(1, ["exec"], "", "controller unavailable"),
+        ValueError("unit has no result"),
+    ],
+)
+def test_run_cmd_on_machine_unit_payload_normalizes_exec_errors(jhelper, juju, error):
+    juju.exec.side_effect = error
+
+    with pytest.raises(jujulib.ExecFailedException):
+        jhelper.run_cmd_on_machine_unit_payload("app/0", "test-model", "ls")
+
+
 def test_run_action_success(jhelper, juju):
     juju.run = Mock(return_value=Mock(success=True, results={"app": "bar"}))
 
