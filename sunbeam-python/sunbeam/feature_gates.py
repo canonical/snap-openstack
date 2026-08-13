@@ -239,6 +239,9 @@ FEATURE_GATES: dict[str, dict[str, bool | list[str]]] = {
     },
     "feature.loadbalancer-amphora": {
         "generally_available": True,
+        # Amphora requires MicroOVN as the SDN provider. Enforced at use-time
+        # (sunbeam/features/loadbalancer/feature.py) so a default deployment
+        # without microovn-sdn enabled is not blocked at CLI startup.
         "requires": ["feature.microovn-sdn"],
     },
 }
@@ -329,6 +332,11 @@ def validate_feature_gate_config(snap: Optional[Snap] = None) -> None:
     violations: list[str] = []
 
     for gate_key, gate_config in FEATURE_GATES.items():
+        # GA gates' `requires` are enforced at use-time, not at startup/config
+        # validation. Otherwise a GA gate requiring a still-gated feature would
+        # block every default CLI run where that feature is off by default.
+        if gate_config.get("generally_available"):
+            continue
         dep_keys = gate_config.get("requires", [])
         if not isinstance(dep_keys, list) or not dep_keys:
             continue

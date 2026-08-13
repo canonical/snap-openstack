@@ -1800,6 +1800,14 @@ class LoadbalancerFeature(OpenStackControlPlaneFeature):
             run_plan(plan, console, show_hints)
             click.echo("Octavia Amphora provider disabled.")
         else:
+            # Enforce amphora's requires at use-time: amphora needs MicroOVN as
+            # the SDN provider. Declared in FEATURE_GATES but not checked at
+            # startup (GA gate), so verify here before deploying anything.
+            if not is_feature_gate_enabled("feature.microovn-sdn"):
+                raise click.ClickException(
+                    "Octavia Amphora provider requires the MicroOVN SDN feature. "
+                    "Enable it with: snap set openstack feature.microovn-sdn=true"
+                )
             # Enable path: credentials are only needed here
             # (OpenStack resource creation).
             jhelper_keystone = deployment.get_juju_helper(keystone=True)
