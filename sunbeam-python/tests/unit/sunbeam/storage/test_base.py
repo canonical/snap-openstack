@@ -283,6 +283,12 @@ class TestStorageBackendBase(BaseStorageBackendTests):
     def test_build_terraform_vars(self, backend, mock_deployment, mock_manifest):
         """Test Terraform variables generation."""
         backend_name = "test-backend"
+        charm_manifest = Mock(channel="latest/edge", revision=None)
+        backend_manifest = Mock()
+        backend_manifest.software.charms = {backend.charm_name: charm_manifest}
+        mock_manifest.storage.root = {
+            backend.backend_type: Mock(root={backend_name: backend_manifest})
+        }
         config = backend.config_type().model_validate(
             {
                 "required-field": "test",
@@ -298,7 +304,7 @@ class TestStorageBackendBase(BaseStorageBackendTests):
         assert tfvars["principal_application"] == backend.principal_application
         assert "charm_name" in tfvars
         assert tfvars["charm_name"] == backend.charm_name
-        assert "charm_channel" in tfvars
+        assert tfvars["charm_channel"] == "latest/edge"
         assert "charm_base" in tfvars
         assert "endpoint_bindings" in tfvars
         assert "charm_config" in tfvars
