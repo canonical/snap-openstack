@@ -303,7 +303,8 @@ class BaseStorageBackendDeployStep(BaseStep):
                 if crt := backends.root.get(self.backend_name):
                     # Since question generation depends on field name,
                     # do not dump by alias
-                    preseed = crt.model_dump(by_alias=False)["config"]
+                    if crt.config is not None:
+                        preseed = crt.config.model_dump(by_alias=False)
 
         # Preseed from user is higher priority than manifest
         preseed.update(self.preseed)

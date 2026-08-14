@@ -12,6 +12,7 @@ from sunbeam.core.questions import PasswordPromptQuestion, PromptQuestion
 from sunbeam.core.steps import DeployMachineApplicationStep
 from sunbeam.storage.models import SecretDictField
 from sunbeam.storage.steps import (
+    BaseStorageBackendDeployStep,
     DeploySpecificCinderVolumeStep,
     basemodel_validator,
     generate_questions_from_config,
@@ -101,6 +102,98 @@ class TestGenerateQuestionsFromConfig:
         optional_question.validation_function(5)  # type: ignore[arg-type]
         with pytest.raises(ValueError):
             optional_question.validation_function(-1)  # type: ignore[arg-type]
+
+
+class TestBaseStorageBackendDeployStep:
+    """Tests for the base storage backend deployment step."""
+
+    @pytest.fixture
+    def deploy_step(
+        self,
+        basic_deployment,
+        basic_client,
+        basic_tfhelper,
+        basic_jhelper,
+        basic_manifest,
+        mock_backend,
+        test_model,
+    ):
+        """Create a base storage backend deployment step."""
+        return BaseStorageBackendDeployStep(
+            basic_deployment,
+            basic_client,
+            basic_tfhelper,
+            basic_jhelper,
+            basic_manifest,
+            {
+                "required_field": "cli-value",
+                "secret_field": "cli-secret",
+            },
+            "test-backend",
+            mock_backend,
+            test_model,
+        )
+
+    def test_prompt_without_manifest_config(
+        self, deploy_step, basic_manifest, mock_backend
+    ):
+        """CLI configuration is used when manifest config is absent."""
+        backend_manifest = Mock(config=None)
+        basic_manifest.storage.root = {
+            mock_backend.backend_type: Mock(
+                root={deploy_step.backend_name: backend_manifest}
+            )
+        }
+
+        with (
+            patch("sunbeam.storage.steps.load_answers", return_value={}),
+            patch("sunbeam.storage.steps.QuestionBank") as question_bank,
+            patch("sunbeam.storage.steps.ConfirmQuestion") as confirm_question,
+            patch("sunbeam.storage.steps.write_answers"),
+        ):
+            question_bank.return_value.questions = {}
+            confirm_question.return_value.ask.return_value = False
+
+            deploy_step.prompt()
+
+        assert question_bank.call_args.kwargs["preseed"] == {
+            "required_field": "cli-value",
+            "secret_field": "cli-secret",
+        }
+
+    def test_prompt_cli_config_overrides_manifest_config(
+        self, deploy_step, basic_manifest, mock_backend
+    ):
+        """CLI configuration takes precedence over manifest configuration."""
+        manifest_config = mock_backend.config_type().model_validate(
+            {
+                "required-field": "manifest-value",
+                "secret-field": "manifest-secret",
+                "optional-field": "manifest-optional",
+            }
+        )
+        backend_manifest = Mock(config=manifest_config)
+        basic_manifest.storage.root = {
+            mock_backend.backend_type: Mock(
+                root={deploy_step.backend_name: backend_manifest}
+            )
+        }
+
+        with (
+            patch("sunbeam.storage.steps.load_answers", return_value={}),
+            patch("sunbeam.storage.steps.QuestionBank") as question_bank,
+            patch("sunbeam.storage.steps.ConfirmQuestion") as confirm_question,
+            patch("sunbeam.storage.steps.write_answers"),
+        ):
+            question_bank.return_value.questions = {}
+            confirm_question.return_value.ask.return_value = False
+
+            deploy_step.prompt()
+
+        preseed = question_bank.call_args.kwargs["preseed"]
+        assert preseed["required_field"] == "cli-value"
+        assert preseed["secret_field"] == "cli-secret"
+        assert preseed["optional_field"] == "manifest-optional"
 
 
 class TestDeploySpecificCinderVolumeStep:
