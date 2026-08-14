@@ -29,6 +29,7 @@ from sunbeam.features.interface.v1.base import is_maas_deployment
 from sunbeam.steps.horizon import AttachHorizonThemeStep
 from sunbeam.steps.k8s import DeployK8SApplicationStep
 from sunbeam.steps.k8s_upgrade import K8SCharmUpgradeStep
+from sunbeam.steps.manual_tls import ManualTLSCharmUpgradeStep
 from sunbeam.steps.upgrades.base import UpgradeCoordinator
 from sunbeam.steps.upgrades.inter_channel import ChannelUpgradeCoordinator
 from sunbeam.steps.upgrades.intra_channel import (
@@ -419,3 +420,53 @@ def refresh_k8s(
     if message:
         click.echo(message)
     click.echo("k8s refresh complete.")
+
+
+@refresh.command("manual-tls-certificates-operator")
+@click.option(
+    "-m",
+    "--manifest",
+    "manifest_path",
+    help="Manifest file.",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+)
+@click_option_show_hints
+@click.pass_context
+def refresh_manual_tls_certificates(
+    ctx: click.Context,
+    manifest_path: Path | None = None,
+    show_hints: bool = False,
+) -> None:
+    """Upgrade manual-tls-certificates charm to latest channel/revision."""
+    deployment: Deployment = ctx.obj
+    client = deployment.get_client()
+    jhelper = JujuHelper(deployment.juju_controller)
+    tfhelper = deployment.get_tfhelper("openstack-plan")
+
+    manifest = None
+    if manifest_path:
+        manifest = deployment.get_manifest(manifest_path)
+        run_plan([AddManifestStep(client, manifest_path)], console, show_hints)
+
+    if not manifest:
+        LOG.debug("Getting latest manifest from cluster db")
+        manifest = deployment.get_manifest()
+
+    plan_results = run_plan(
+        [
+            ManualTLSCharmUpgradeStep(
+                deployment,
+                client,
+                manifest,
+                jhelper,
+                tfhelper,
+            )
+        ],
+        console,
+        show_hints,
+    )
+
+    message = get_step_message(plan_results, ManualTLSCharmUpgradeStep)
+    if message:
+        click.echo(message)
+    click.echo("manual-tls-certificates refresh complete.")
