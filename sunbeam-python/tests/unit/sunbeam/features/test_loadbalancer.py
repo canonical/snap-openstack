@@ -1103,6 +1103,66 @@ class TestRunConfigurePlansEarlyExit:
 
 
 # ---------------------------------------------------------------------------
+# run_configure_plans — use-time check for amphora's microovn-sdn requirement
+# ---------------------------------------------------------------------------
+
+
+class TestRunConfigurePlansMicroovnCheck:
+    """Amphora's requires:["feature.microovn-sdn"] is enforced at use-time.
+
+    Amphora is GA, so its `requires` is not checked at startup/config
+    validation (validate_feature_gate_config skips GA gates). Instead it is
+    enforced here, in the enable path of run_configure_plans, before any
+    amphora infrastructure is deployed.
+    """
+
+    def _run_configure_plans(self, amphora_enabled=True, microovn_enabled=True):
+        from unittest.mock import PropertyMock
+
+        feature = LoadbalancerFeature()
+        deployment = Mock()
+
+        answers_sequence = [
+            {_AMPHORA_ENABLED_KEY: True},  # previous state
+            {_AMPHORA_ENABLED_KEY: amphora_enabled},  # after AmphoraConfigStep
+        ]
+        load_answers_iter = iter(answers_sequence)
+
+        with (
+            patch.object(
+                type(feature), "manifest", new_callable=PropertyMock, return_value=None
+            ),
+            patch(
+                "sunbeam.features.loadbalancer.feature.questions.load_answers",
+                side_effect=lambda *_: dict(next(load_answers_iter)),
+            ),
+            patch("sunbeam.features.loadbalancer.feature.run_preflight_checks"),
+            patch("sunbeam.features.loadbalancer.feature.run_plan"),
+            patch("sunbeam.features.loadbalancer.feature.JujuHelper"),
+            patch("sunbeam.features.loadbalancer.feature.is_feature_gate_enabled") as m,
+            patch("sunbeam.features.loadbalancer.feature.retrieve_admin_credentials"),
+            patch("click.echo"),
+        ):
+            m.side_effect = lambda key, snap=None: (
+                key == "feature.microovn-sdn" and microovn_enabled
+            )
+            feature.run_configure_plans(deployment, show_hints=False)
+
+    def test_enable_raises_when_microovn_sdn_disabled(self):
+        """Enable path raises if feature.microovn-sdn is not enabled."""
+        with pytest.raises(click.ClickException, match="MicroOVN SDN feature"):
+            self._run_configure_plans(amphora_enabled=True, microovn_enabled=False)
+
+    def test_enable_proceeds_when_microovn_sdn_enabled(self):
+        """Enable path does not raise when feature.microovn-sdn is enabled."""
+        self._run_configure_plans(amphora_enabled=True, microovn_enabled=True)
+
+    def test_disable_does_not_check_microovn_sdn(self):
+        """Disable path doesn't require microovn-sdn (only enabling does)."""
+        self._run_configure_plans(amphora_enabled=False, microovn_enabled=False)
+
+
+# ---------------------------------------------------------------------------
 # RemoveCNIInfraStep
 # ---------------------------------------------------------------------------
 
