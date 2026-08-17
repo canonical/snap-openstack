@@ -18,14 +18,13 @@ from sunbeam.core import questions
 from sunbeam.core.common import (
     FORMAT_TABLE,
     FORMAT_YAML,
+    ResultType,
+    get_step_result,
     read_config,
     run_plan,
     str_presenter,
 )
 from sunbeam.core.deployment import Deployment
-from sunbeam.core.juju import (
-    JujuHelper,
-)
 from sunbeam.core.manifest import (
     AddManifestStep,
     FeatureConfig,
@@ -45,6 +44,7 @@ from sunbeam.features.tls.common import (
     CERTIFICATE_FEATURE_KEY,
     INGRESS_CHANGE_APPLICATION_TIMEOUT,
     ConfigureTLSCertificatesStep,
+    ReapplyTLSCertificatesStep,
     TlsFeature,
     TlsFeatureConfig,
     certificate_questions,
@@ -180,6 +180,16 @@ class CaTlsFeature(TlsFeature):
         """Set terraform variables to resize the application."""
         return {}
 
+    def _local_apps_to_monitor(self, deployment: Deployment) -> list[str]:
+        """Local applications to monitor after a TLS certificate change."""
+        client = deployment.get_client()
+        apps = ["traefik", "traefik-public"]
+        if not deployment.external_keystone_model:
+            apps.append("keystone")
+        if client.cluster.list_nodes_by_role("storage"):
+            apps.append("traefik-rgw")
+        return apps
+
     @click.group()
     def ca_group(self) -> None:
         """Manage CA."""
@@ -242,9 +252,7 @@ class CaTlsFeature(TlsFeature):
         if (ca := manifest.get_feature(self.name.split(".")[-1])) and ca.config:
             preseed = ca.config.model_dump(by_alias=True)
         model = OPENSTACK_MODEL
-        apps_to_monitor = ["traefik", "traefik-public", "keystone"]
-        if client.cluster.list_nodes_by_role("storage"):
-            apps_to_monitor.append("traefik-rgw")
+        apps_to_monitor = self._local_apps_to_monitor(deployment)
 
         try:
             config = read_config(client, CERTIFICATE_FEATURE_KEY)
@@ -256,7 +264,7 @@ class CaTlsFeature(TlsFeature):
         if ca is None:
             raise click.ClickException("CA is not configured")
 
-        jhelper = JujuHelper(deployment.juju_controller)
+        jhelper = deployment.get_juju_helper()
         plan = [
             AddManifestStep(client, manifest_path),
             ConfigureTLSCertificatesStep(
@@ -275,6 +283,52 @@ class CaTlsFeature(TlsFeature):
         ]
         run_plan(plan, console, show_hints)
         click.echo("CA certs configured")
+
+    def reapply_certificates(
+        self, deployment: Deployment, show_hints: bool = False
+    ) -> None:
+        """Re-provide stored certificates for any outstanding CSRs.
+
+        Used to recover a deployment after a charm refresh (e.g. the traefik
+        charm crossing revision 308) leaves applications with outstanding
+        certificate requests. Reuses the certificates already stored in
+        clusterd; never prompts. No-op when there are no outstanding CSRs or
+        none match a stored certificate.
+        """
+        client = deployment.get_client()
+        try:
+            config = read_config(client, CERTIFICATE_FEATURE_KEY)
+        except ConfigItemNotFoundException:
+            config = {}
+        ca = config.get("ca")
+        ca_chain = config.get("chain")
+
+        if ca is None:
+            raise click.ClickException("CA is not configured")
+
+        model = OPENSTACK_MODEL
+        apps_to_monitor = self._local_apps_to_monitor(deployment)
+
+        jhelper = deployment.get_juju_helper()
+        rerun_provide_certificates_plan = [
+            ReapplyTLSCertificatesStep(client, jhelper, ca, ca_chain)
+        ]
+        results = run_plan(rerun_provide_certificates_plan, console, show_hints)
+
+        reapply_result = get_step_result(results, ReapplyTLSCertificatesStep)
+        if reapply_result.result_type != ResultType.SKIPPED:
+            run_plan(
+                [
+                    WaitForApplicationsStep(
+                        jhelper,
+                        apps_to_monitor,
+                        model,
+                        INGRESS_CHANGE_APPLICATION_TIMEOUT,
+                    )
+                ],
+                console,
+                show_hints,
+            )
 
     def enabled_commands(self) -> dict[str, list[dict]]:
         """Dict of clickgroup along with commands.

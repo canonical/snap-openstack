@@ -41,6 +41,30 @@ def get_subject_from_csr():
 
 
 @pytest.fixture()
+def get_cn_from_csr():
+    with patch.object(tls, "get_cn_from_csr") as p:
+        yield p
+
+
+@pytest.fixture()
+def get_cn_from_cert():
+    with patch.object(tls, "get_cn_from_cert") as p:
+        yield p
+
+
+@pytest.fixture()
+def cert_and_csr_public_key_match():
+    with patch.object(tls, "cert_and_csr_public_key_match", return_value=True) as p:
+        yield p
+
+
+@pytest.fixture()
+def is_cert_expired():
+    with patch.object(tls, "is_cert_expired", return_value=False) as p:
+        yield p
+
+
+@pytest.fixture()
 def is_certificate_valid():
     with patch.object(tls, "is_certificate_valid") as p:
         yield p
@@ -544,6 +568,167 @@ class TestConfigureTLSCertificatesStep:
 
         jhelper.run_action.assert_called_once()
         assert result.result_type == ResultType.COMPLETED
+
+
+class TestReapplyTLSCertificatesStep:
+    def _outstanding(self, jhelper, certs):
+        jhelper.run_action.return_value = {
+            "return-code": 0,
+            "result": json.dumps(certs),
+        }
+
+    def test_has_no_prompts(self, cclient, jhelper):
+        step = tls.ReapplyTLSCertificatesStep(cclient, jhelper, "fake-cert")
+        assert step.has_prompts() is False
+
+    def test_is_skip_when_no_outstanding_requests(
+        self, cclient, jhelper, step_context, load_answers
+    ):
+        self._outstanding(jhelper, [])
+        step = tls.ReapplyTLSCertificatesStep(cclient, jhelper, "fake-cert")
+
+        result = step.is_skip(step_context)
+
+        assert result.result_type == ResultType.SKIPPED
+        load_answers.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "stored,cn,public_key_match,expired",
+        [
+            pytest.param({}, "subject1", True, False, id="no_stored_certificates"),
+            pytest.param(
+                {"certificates": {"subject1": {"certificate": "stored-cert"}}},
+                "subject1",
+                False,
+                False,
+                id="public_key_mismatch",
+            ),
+            pytest.param(
+                {"certificates": {"subject1": {"certificate": "stored-cert"}}},
+                "subject1",
+                True,
+                True,
+                id="certificate_expired",
+            ),
+            pytest.param(
+                {"certificates": {"subject1": {"certificate": "stored-cert"}}},
+                None,
+                True,
+                False,
+                id="csr_without_cn",
+            ),
+        ],
+    )
+    def test_is_skip_when_no_cert_can_be_matched(
+        self,
+        cclient,
+        jhelper,
+        step_context,
+        load_answers,
+        get_cn_from_csr,
+        get_cn_from_cert,
+        cert_and_csr_public_key_match,
+        is_cert_expired,
+        stored,
+        cn,
+        public_key_match,
+        expired,
+    ):
+        self._outstanding(
+            jhelper, [{"unit_name": "traefik/0", "csr": "csr", "relation_id": 1}]
+        )
+        load_answers.return_value = stored
+        get_cn_from_csr.return_value = cn
+        get_cn_from_cert.return_value = cn
+        cert_and_csr_public_key_match.return_value = public_key_match
+        is_cert_expired.return_value = expired
+        jhelper.get_relation_map.return_value = {"certificates:1": "traefik"}
+        step = tls.ReapplyTLSCertificatesStep(cclient, jhelper, "fake-cert")
+
+        result = step.is_skip(step_context)
+
+        assert result.result_type == ResultType.SKIPPED
+        assert step.process_certs == {}
+
+    def test_is_skip_matches_stored_certificate(
+        self,
+        cclient,
+        jhelper,
+        step_context,
+        load_answers,
+        get_cn_from_csr,
+        get_cn_from_cert,
+        cert_and_csr_public_key_match,
+        is_cert_expired,
+    ):
+        self._outstanding(
+            jhelper, [{"unit_name": "traefik/0", "csr": "csr", "relation_id": 1}]
+        )
+        get_cn_from_csr.return_value = "subject1"
+        get_cn_from_cert.return_value = "subject1"
+        load_answers.return_value = {
+            "certificates": {"subject1": {"certificate": "stored-cert"}}
+        }
+        jhelper.get_relation_map.return_value = {"certificates:1": "traefik"}
+        step = tls.ReapplyTLSCertificatesStep(cclient, jhelper, "fake-cert")
+
+        result = step.is_skip(step_context)
+
+        assert result.result_type == ResultType.COMPLETED
+        assert step.process_certs == {
+            "subject1": {
+                "app": "traefik",
+                "unit": "traefik/0",
+                "relation_id": 1,
+                "csr": "csr",
+                "certificate": "stored-cert",
+            }
+        }
+
+    def test_is_skip_when_action_returns_failed_return_code(
+        self, cclient, jhelper, step_context, load_answers
+    ):
+        jhelper.run_action.return_value = {"return-code": 2}
+        step = tls.ReapplyTLSCertificatesStep(cclient, jhelper, "fake-cert")
+
+        result = step.is_skip(step_context)
+
+        assert result.result_type == ResultType.FAILED
+        load_answers.assert_not_called()
+
+    def test_run_reprovides_matched_certificate(
+        self,
+        cclient,
+        jhelper,
+        step_context,
+        load_answers,
+        get_cn_from_csr,
+        get_cn_from_cert,
+        cert_and_csr_public_key_match,
+        is_cert_expired,
+    ):
+        self._outstanding(
+            jhelper, [{"unit_name": "traefik/0", "csr": "csr", "relation_id": 1}]
+        )
+        get_cn_from_csr.return_value = "subject1"
+        get_cn_from_cert.return_value = "subject1"
+        load_answers.return_value = {
+            "certificates": {"subject1": {"certificate": "stored-cert"}}
+        }
+        jhelper.get_relation_map.return_value = {"certificates:1": "traefik"}
+        step = tls.ReapplyTLSCertificatesStep(cclient, jhelper, "fake-cert")
+
+        assert step.is_skip(step_context).result_type == ResultType.COMPLETED
+
+        jhelper.run_action.return_value = {"return-code": 0}
+        result = step.run(step_context)
+
+        assert result.result_type == ResultType.COMPLETED
+        action_name = jhelper.run_action.call_args.args[2]
+        action_params = jhelper.run_action.call_args.args[3]
+        assert action_name == "provide-certificate"
+        assert action_params["certificate"] == "stored-cert"
+        assert action_params["relation-id"] == 1
 
 
 class FakeUnit:
