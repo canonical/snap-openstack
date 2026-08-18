@@ -39,9 +39,9 @@ core:
       epa-orchestrator:
         channel: 2026.1/edge
       microceph:
-        channel: squid/edge
+        channel: tentacle/edge
         config:
-          snap-channel: squid/edge
+          snap-channel: tentacle/edge
       microovn:
         channel: 26.03/edge
       sunbeam-ovn-proxy:

@@ -34,9 +34,9 @@ core:
       epa-orchestrator:
         channel: 2026.1/edge
       microceph:
-        channel: squid/stable
+        channel: tentacle/stable
         config:
-          snap-channel: squid/stable
+          snap-channel: tentacle/stable
       microovn:
         channel: 26.03/stable
       openstack-network-agents:

@@ -4,7 +4,7 @@
 variable "charm_microceph_channel" {
   description = "Operator channel for microceph deployment"
   type        = string
-  default     = "squid/stable"
+  default     = "tentacle/stable"
 }
 
 variable "charm_microceph_revision" {
@@ -21,7 +21,7 @@ variable "charm_microceph_config" {
 
 variable "microceph_channel" {
   description = "K8S channel to deploy, not the operator channel"
-  default     = "squid/stable"
+  default     = "tentacle/stable"
 }
 
 variable "machine_ids" {
