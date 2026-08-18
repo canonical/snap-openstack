@@ -21,12 +21,12 @@ on:
       microceph-charm-channel:
         description: Specify microceph charms channel
         required: true
-        default: squid/beta
+        default: tentacle/beta
         type: string
       microceph-snap-channel:
         description: Specify microceph snap channel
         required: true
-        default: squid/beta
+        default: tentacle/beta
         type: string
       rabbitmq-charm-channel:
         description: Specify rabbitmq charms channel
