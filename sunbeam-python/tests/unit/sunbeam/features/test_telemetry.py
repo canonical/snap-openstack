@@ -17,6 +17,9 @@ def deployment():
     client = deploy.get_client.return_value
     client.cluster.list_nodes_by_role.return_value = [{"name": "node1", "machineid": 1}]
 
+    feature_manager = deploy.get_feature_manager.return_value
+    feature_manager.is_feature_enabled.return_value = False
+
     return deploy
 
 

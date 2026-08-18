@@ -59,3 +59,9 @@ variable "database-offer-url" {
   type        = string
   default     = null
 }
+
+variable "enable-telemetry-notifications" {
+  description = "Enable telemetry notifications for manila-data"
+  type        = bool
+  default     = false
+}

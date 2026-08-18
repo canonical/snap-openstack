@@ -52,6 +52,7 @@ class DeployManilaDataApplicationStep(DeployMachineApplicationStep):
         jhelper: JujuHelper,
         manifest: Manifest,
         model: str,
+        extra_tfvars: dict | None = None,
     ):
         super().__init__(
             deployment,
@@ -67,6 +68,7 @@ class DeployManilaDataApplicationStep(DeployMachineApplicationStep):
             "Deploying Manila Data",
         )
         self._offers: dict[str, str | None] = {}
+        self.override_tfvars: dict[str, Any] = extra_tfvars or {}
 
     def get_application_timeout(self) -> int:
         """Return application timeout in seconds."""
@@ -132,6 +134,15 @@ class DeployManilaDataApplicationStep(DeployMachineApplicationStep):
         }
 
         tfvars.update(self._get_offers())
+
+        feature_manager = self.deployment.get_feature_manager()
+        if feature_manager.is_feature_enabled(self.deployment, "telemetry"):
+            tfvars["enable-telemetry-notifications"] = True
+        else:
+            tfvars["enable-telemetry-notifications"] = False
+
+        # Any tfvars that needs override will take precedence from self.override_tfvars
+        tfvars.update(self.override_tfvars)
 
         return tfvars
 

@@ -140,6 +140,9 @@ class TestDeployManilaDataApplicationStep:
             Networks.INTERNAL: "internal",
         }[network]
 
+        feature_manager = basic_deployment.get_feature_manager.return_value
+        feature_manager.is_feature_enabled.return_value = False
+
         tfvars = deploy_manila_data_step.extra_tfvars()
 
         expected_tfvars = {
@@ -165,6 +168,7 @@ class TestDeployManilaDataApplicationStep:
             "keystone-offer-url": "keystone-offer",
             "database-offer-url": "database-offer",
             "amqp-offer-url": "amqp-offer",
+            "enable-telemetry-notifications": False,
         }
         print(tfvars)
         print(expected_tfvars)
