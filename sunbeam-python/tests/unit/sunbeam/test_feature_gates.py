@@ -884,7 +884,11 @@ class TestValidateFeatureGateConfig:
         },
     )
     def test_ga_gate_with_unmet_dep(self):
-        """GA gate with unmet dependency still raises."""
+        """GA gate with unmet dependency does not raise at validation.
+
+        GA gates' `requires` are enforced at use-time, not at startup/config
+        validation — otherwise a GA gate requiring a still-gated feature
+        would block every default CLI run where that feature is off.
+        """
         snap = self._mock_snap_with_gates({})
-        with pytest.raises(FeatureGateError, match="feature.x.*requires.*feature.y"):
-            validate_feature_gate_config(snap)
+        validate_feature_gate_config(snap)
