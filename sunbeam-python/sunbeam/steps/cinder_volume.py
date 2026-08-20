@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
+import typing
 from typing import Any
 
 import sunbeam.steps.microceph as microceph
@@ -10,19 +11,37 @@ from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import (
     NodeNotExistInClusterException,
 )
-from sunbeam.core.common import BaseStep, Result, ResultType, Role, StepContext
+from sunbeam.core.common import (
+    BaseStep,
+    Result,
+    ResultType,
+    Role,
+    StepContext,
+    SunbeamException,
+)
 from sunbeam.core.deployment import Deployment, Networks
 from sunbeam.core.juju import (
     ApplicationNotFoundException,
+    JujuException,
     JujuHelper,
 )
 from sunbeam.core.manifest import CharmManifest, Manifest
+from sunbeam.core.openstack import OPENSTACK_MODEL
+from sunbeam.core.openstack_api import get_admin_connection
 from sunbeam.core.steps import (
     DeployMachineApplicationStep,
     DestroyMachineApplicationStep,
     RemoveMachineUnitsStep,
 )
 from sunbeam.core.terraform import TerraformException, TerraformHelper
+from sunbeam.lazy import LazyImport
+
+if typing.TYPE_CHECKING:
+    import openstack
+    from keystoneauth1 import exceptions as keystoneauth_exceptions
+else:
+    keystoneauth_exceptions = LazyImport("keystoneauth1.exceptions")
+    openstack = LazyImport("openstack")
 
 LOG = logging.getLogger(__name__)
 CONFIG_KEY = "TerraformVarsCinderVolumePlan"
@@ -31,6 +50,27 @@ CINDER_VOLUME_APP_TIMEOUT = 1200
 CINDER_VOLUME_UNIT_TIMEOUT = (
     1800  # 30 minutes, adding / removing units can take a long time
 )
+CINDER_APPLICATION = "cinder"
+CINDER_API_CONTAINER = "cinder-api"
+CINDER_VOLUME_BINARY = "cinder-volume"
+CINDER_SERVICE_REMOVE_REASON = "Removing node from cluster"
+CINDER_SERVICE_REMOVE_TIMEOUT = 1800
+
+
+def get_cinder_volume_services(
+    conn: "openstack.connection.Connection",
+    hostname: str,
+    fqdn: str,
+) -> list[Any]:
+    """Return cinder-volume services for the exact node hostnames."""
+    expected_hosts = {hostname, fqdn}
+
+    services = []
+    for service in conn.block_storage.services(binary=CINDER_VOLUME_BINARY):
+        if service.host.split("@", 1)[0] in expected_hosts:
+            services.append(service)
+
+    return sorted(services, key=lambda service: service.host)
 
 
 def get_mandatory_control_plane_offers(
@@ -229,6 +269,187 @@ class RemoveCinderVolumeUnitsStep(RemoveMachineUnitsStep):
     def get_unit_timeout(self) -> int:
         """Return unit timeout in seconds."""
         return CINDER_VOLUME_UNIT_TIMEOUT
+
+
+class _CinderVolumeServiceStep(BaseStep):
+    """Shared service discovery for Cinder cleanup steps."""
+
+    def __init__(
+        self,
+        name: str,
+        description: str,
+        jhelper: JujuHelper,
+        deployment: Deployment,
+        hostname: str,
+        fqdn: str,
+    ):
+        super().__init__(name, description)
+        self.jhelper = jhelper
+        self.deployment = deployment
+        self.hostname = hostname
+        self.fqdn = fqdn
+        self.connection: Any | None = None
+        self.services: list[Any] = []
+
+    def _discover_services(self) -> Result:
+        """Discover Cinder service records for the target node."""
+        try:
+            self.connection = get_admin_connection(self.jhelper, self.deployment)
+            self.services = get_cinder_volume_services(
+                self.connection, self.hostname, self.fqdn
+            )
+        except (
+            openstack.exceptions.SDKException,
+            keystoneauth_exceptions.ClientException,
+        ) as e:
+            LOG.warning("Failed to discover Cinder volume services: %r", e)
+            return Result(ResultType.FAILED, str(e))
+
+        if not self.services:
+            return Result(ResultType.SKIPPED)
+        return Result(ResultType.COMPLETED)
+
+    def _current_services(self) -> list[Any]:
+        """Return matching Cinder service records."""
+        if self.connection is None:
+            raise SunbeamException("Cinder admin connection not found")
+        return get_cinder_volume_services(self.connection, self.hostname, self.fqdn)
+
+
+class DisableCinderVolumeServicesStep(_CinderVolumeServiceStep):
+    """Disable matching Cinder volume services before unit removal."""
+
+    def __init__(
+        self,
+        jhelper: JujuHelper,
+        deployment: Deployment,
+        hostname: str,
+        fqdn: str,
+    ):
+        super().__init__(
+            "Disable Cinder Volume services",
+            "Disabling Cinder Volume services",
+            jhelper,
+            deployment,
+            hostname,
+            fqdn,
+        )
+
+    def is_skip(self, context: StepContext) -> Result:
+        """Determine whether matching Cinder services exist."""
+        return self._discover_services()
+
+    def run(self, context: StepContext) -> Result:
+        """Disable each enabled matching Cinder volume service."""
+        if self.connection is None:
+            return Result(ResultType.FAILED, "Cinder admin connection not found")
+        try:
+            for service in self.services:
+                if service.status != "enabled":
+                    continue
+                LOG.info("Disabling %s on %s", service.binary, service.host)
+                self.connection.block_storage.disable_service(
+                    service, reason=CINDER_SERVICE_REMOVE_REASON
+                )
+        except (
+            openstack.exceptions.SDKException,
+            keystoneauth_exceptions.ClientException,
+        ) as e:
+            LOG.warning("Failed to disable Cinder volume service: %r", e)
+            return Result(ResultType.FAILED, str(e))
+
+        return Result(ResultType.COMPLETED)
+
+
+class RemoveCinderVolumeServicesStep(_CinderVolumeServiceStep):
+    """Remove matching Cinder volume service records after unit removal."""
+
+    def __init__(
+        self,
+        jhelper: JujuHelper,
+        deployment: Deployment,
+        hostname: str,
+        fqdn: str,
+    ):
+        super().__init__(
+            "Remove Cinder Volume services",
+            "Removing Cinder Volume services",
+            jhelper,
+            deployment,
+            hostname,
+            fqdn,
+        )
+
+    def is_skip(self, context: StepContext) -> Result:
+        """Determine whether matching Cinder services exist."""
+        return self._discover_services()
+
+    def _healthy_units(self) -> list[str]:
+        """Return healthy Cinder API units with a leader first."""
+        try:
+            application = self.jhelper.get_application(
+                CINDER_APPLICATION, OPENSTACK_MODEL
+            )
+        except JujuException as e:
+            LOG.warning("Failed to find Cinder control-plane units: %r", e)
+            return []
+
+        units = [
+            (name, unit)
+            for name, unit in application.units.items()
+            if unit.workload_status.current == "active"
+            and unit.juju_status.current == "idle"
+        ]
+        units.sort(key=lambda item: (not item[1].leader, item[0]))
+        return [name for name, _ in units]
+
+    def _remove_service(self, unit: str, service: Any) -> None:
+        """Remove one Cinder service record through a healthy unit."""
+        command = f"cinder-manage service remove {CINDER_VOLUME_BINARY} {service.host}"
+        result = self.jhelper.run_cmd_on_unit_payload(
+            unit,
+            OPENSTACK_MODEL,
+            command,
+            CINDER_API_CONTAINER,
+            timeout=CINDER_SERVICE_REMOVE_TIMEOUT,
+        )
+        if result.get("return-code") != 0:
+            raise JujuException(f"Failed to remove Cinder service {service.host}")
+
+    def run(self, context: StepContext) -> Result:
+        """Remove matching records and verify that none remain."""
+        if self.connection is None:
+            return Result(ResultType.FAILED, "Cinder admin connection not found")
+
+        try:
+            remaining = self.services
+            healthy_units = self._healthy_units()
+            if not healthy_units:
+                raise SunbeamException(
+                    "No healthy Cinder control-plane units available"
+                )
+
+            for unit in healthy_units:
+                for service in remaining:
+                    try:
+                        self._remove_service(unit, service)
+                    except JujuException as e:
+                        LOG.warning(
+                            "Failed to remove Cinder service on %s: %r", unit, e
+                        )
+                        break
+                remaining = self._current_services()
+                if not remaining:
+                    return Result(ResultType.COMPLETED)
+
+            raise SunbeamException("Cinder service records remain after removal")
+        except (
+            SunbeamException,
+            openstack.exceptions.SDKException,
+            keystoneauth_exceptions.ClientException,
+        ) as e:
+            LOG.warning("Failed to remove Cinder volume services: %r", e)
+            return Result(ResultType.FAILED, str(e))
 
 
 class CheckCinderVolumeDistributionStep(BaseStep):

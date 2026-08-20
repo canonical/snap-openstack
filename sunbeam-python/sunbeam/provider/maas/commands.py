@@ -125,6 +125,8 @@ from sunbeam.steps.cinder_volume import (
     CheckCinderVolumeDistributionStep,
     DeployCinderVolumeApplicationStep,
     DestroyCinderVolumeApplicationStep,
+    DisableCinderVolumeServicesStep,
+    RemoveCinderVolumeServicesStep,
     RemoveCinderVolumeUnitsStep,
 )
 from sunbeam.steps.clusterd import APPLICATION as CLUSTERD_APPLICATION
@@ -137,6 +139,7 @@ from sunbeam.steps.hypervisor import (
     DeployHypervisorApplicationStep,
     DestroyHypervisorApplicationStep,
     ReapplyHypervisorTerraformPlanStep,
+    RemoveHypervisorReferencesStep,
     RemoveHypervisorUnitStep,
 )
 from sunbeam.steps.juju import (
@@ -172,6 +175,7 @@ from sunbeam.steps.microceph import (
     CheckMicrocephDistributionStep,
     DeployMicrocephApplicationStep,
     DestroyMicrocephApplicationStep,
+    RemoveMicrocephOSDsStep,
     RemoveMicrocephUnitsStep,
     SetCephMgrPoolSizeStep,
 )
@@ -1693,6 +1697,9 @@ def remove_node(ctx: click.Context, name: str, force: bool, show_hints: bool) ->
 
     run_plan(check_plan, console, show_hints)
 
+    maas_client = MaasClient.from_deployment(deployment)
+    machine = get_machine(maas_client, name)
+
     plan = [
         MigrateK8SKubeconfigStep(
             client, name, jhelper, deployment.openstack_machines_model
@@ -1701,19 +1708,45 @@ def remove_node(ctx: click.Context, name: str, force: bool, show_hints: bool) ->
         RemoveHypervisorUnitStep(
             client,
             jhelper,
-            deployment,
+            None,
             name,
             deployment.openstack_machines_model,
             force,
         ),
+        DisableCinderVolumeServicesStep(
+            jhelper,
+            deployment,
+            machine["hostname"],
+            machine["fqdn"],
+        ),
         RemoveCinderVolumeUnitsStep(
             client, name, jhelper, deployment.openstack_machines_model
+        ),
+        RemoveCinderVolumeServicesStep(
+            jhelper,
+            deployment,
+            machine["hostname"],
+            machine["fqdn"],
+        ),
+        RemoveMicrocephOSDsStep(
+            client,
+            name,
+            jhelper,
+            deployment.openstack_machines_model,
+            force=force,
         ),
         RemoveMicrocephUnitsStep(
             client, name, jhelper, deployment.openstack_machines_model
         ),
         RemoveMicroOVNUnitsStep(
             client, name, jhelper, deployment.openstack_machines_model
+        ),
+        RemoveHypervisorReferencesStep(
+            jhelper,
+            deployment,
+            machine["hostname"],
+            machine["fqdn"],
+            force=force,
         ),
         CordonK8SUnitStep(client, name, jhelper, deployment.openstack_machines_model),
         DrainK8SUnitStep(
