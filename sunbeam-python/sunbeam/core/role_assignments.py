@@ -8,9 +8,7 @@ from collections.abc import Iterable
 import yaml
 
 from sunbeam.clusterd.client import Client
-
-MICROOVN_APPLICATION = "microovn"
-
+from sunbeam.core.ovn import microovn_application_name_for_node
 
 RoleMapping = dict[str, dict[str, dict[str, dict[str, dict[str, list[str]]]]]]
 
@@ -20,8 +18,13 @@ def build_microovn_role_mapping(
     model_name: str,
     machine_ids: Iterable[str],
 ) -> RoleMapping:
-    """Build the role-distributor mapping for MicroOVN."""
-    machine_roles: dict[str, list[str]] = {}
+    """Build the role-distributor mapping for MicroOVN.
+
+    Machines are grouped by the MicroOVN application their unit belongs to, so
+    the mapping keys line up with the deployed juju applications (microovn for
+    regular nodes, microovn-<arch> for DPUs).
+    """
+    machine_roles_by_app: dict[str, dict[str, list[str]]] = {}
     microovn_machine_ids = {str(machine_id) for machine_id in machine_ids}
 
     for role in ("control", "compute", "network"):
@@ -33,13 +36,12 @@ def build_microovn_role_mapping(
             if machine_id_str not in microovn_machine_ids:
                 continue
             node_roles = set(node.get("role", []))
-            machine_roles[machine_id_str] = _microovn_roles_for_node(node_roles)
+            application_name = microovn_application_name_for_node(node)
+            machine_roles_by_app.setdefault(application_name, {})[machine_id_str] = (
+                _microovn_roles_for_node(node_roles)
+            )
 
-    return _build_mapping(
-        model_name,
-        MICROOVN_APPLICATION,
-        machine_roles,
-    )
+    return _build_mapping(model_name, machine_roles_by_app)
 
 
 def dump_role_mapping(mapping: RoleMapping) -> str:
@@ -49,8 +51,7 @@ def dump_role_mapping(mapping: RoleMapping) -> str:
 
 def _build_mapping(
     model_name: str,
-    application_name: str,
-    machine_roles: dict[str, list[str]],
+    machine_roles_by_app: dict[str, dict[str, list[str]]],
 ) -> RoleMapping:
     return {
         model_name: {
@@ -60,6 +61,7 @@ def _build_mapping(
                     for machine_id, roles in sorted(machine_roles.items())
                 }
             }
+            for application_name, machine_roles in sorted(machine_roles_by_app.items())
         }
     }
 
