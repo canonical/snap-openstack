@@ -12,6 +12,7 @@ from rich.console import Console
 
 from sunbeam.core.manifest import StorageBackendConfig
 from sunbeam.storage.base import StorageBackendBase
+from sunbeam.storage.models import PEMCertificates
 
 LOG = logging.getLogger(__name__)
 console = Console()
@@ -43,7 +44,7 @@ class DellPowerVaultConfig(StorageBackendConfig):
 
     # Optional backend configuration
     driver_ssl_cert: Annotated[
-        str | None,
+        PEMCertificates | None,
         Field(
             description="PEM-encoded SSL certificate for HTTPS connections to the storage array."  # noqa: E501
         ),

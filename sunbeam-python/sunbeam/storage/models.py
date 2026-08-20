@@ -3,11 +3,48 @@
 
 """Storage backend models and exceptions."""
 
-from typing import Any, Dict
+import re
+from typing import TYPE_CHECKING, Annotated, Any, Dict
 
 import pydantic
 
 from sunbeam.core.common import SunbeamException
+from sunbeam.lazy import LazyImport
+
+if TYPE_CHECKING:
+    from cryptography import x509
+else:
+    x509 = LazyImport("cryptography.x509")
+
+
+def validate_pem_certificates(value: str) -> str:
+    """Validate raw PEM certificates or bundles without changing their content.
+
+    This checks encoding, not certificate trust, validity dates or hostnames.
+    Only certificate blocks and surrounding whitespace are accepted.
+    """
+    blocks = re.findall(
+        r"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----",
+        value,
+        flags=re.DOTALL,
+    )
+    remainder = re.sub(
+        r"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----",
+        "",
+        value,
+        flags=re.DOTALL,
+    )
+    if not blocks or remainder.strip():
+        raise ValueError("Expected PEM-encoded certificate content or CA bundle")
+    try:
+        for block in blocks:
+            x509.load_pem_x509_certificate(block.encode("utf-8"))
+    except ValueError as exc:
+        raise ValueError("Invalid PEM-encoded certificate or CA bundle") from exc
+    return value
+
+
+PEMCertificates = Annotated[str, pydantic.AfterValidator(validate_pem_certificates)]
 
 # =============================================================================
 # Exceptions
