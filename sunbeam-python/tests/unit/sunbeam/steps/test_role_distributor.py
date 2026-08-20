@@ -62,6 +62,62 @@ class TestDeployRoleDistributorApplicationStep:
         }
         assert extra_tfvars["role_distributor_machine_ids"] == ["0"]
 
+    def test_extra_tfvars_groups_dpu_nodes_under_dedicated_application(
+        self,
+        basic_deployment,
+        basic_client,
+        basic_tfhelper,
+        basic_jhelper,
+        basic_manifest,
+        test_model,
+    ):
+        # DPUs move to microovn-<arch>; the amd64 DPU must not fall back to microovn.
+        basic_deployment.get_ovn_manager.return_value.get_machines.return_value = [
+            "0",
+            "5",
+            "6",
+        ]
+        basic_client.cluster.list_nodes_by_role.side_effect = lambda role: {
+            "control": [{"machineid": "0", "role": ["control"]}],
+            "network": [
+                {
+                    "machineid": "5",
+                    "role": ["network"],
+                    "arch": "arm64",
+                    "is_dpu": True,
+                },
+                {
+                    "machineid": "6",
+                    "role": ["network"],
+                    "arch": "amd64",
+                    "is_dpu": True,
+                },
+            ],
+        }.get(role, [])
+
+        step = DeployRoleDistributorApplicationStep(
+            basic_deployment,
+            basic_client,
+            basic_tfhelper,
+            basic_jhelper,
+            basic_manifest,
+            "openstack-machines",
+        )
+
+        machines = yaml.safe_load(
+            step.extra_tfvars()["charm_role_distributor_config"]["role-mapping"]
+        )["openstack-machines"]
+
+        assert machines["microovn"]["machines"] == {
+            "0": {"roles": ["chassis", "central"]}
+        }
+        assert machines["microovn-arm64"]["machines"] == {
+            "5": {"roles": ["chassis", "gateway"]}
+        }
+        assert machines["microovn-amd64"]["machines"] == {
+            "6": {"roles": ["chassis", "gateway"]}
+        }
+
     def test_get_accepted_application_status_allows_waiting(
         self,
         basic_deployment,
@@ -112,9 +168,8 @@ class TestDeployRoleDistributorApplicationStep:
         config = step.extra_tfvars()["charm_role_distributor_config"]
 
         assert config["log-level"] == "DEBUG"
-        assert yaml.safe_load(config["role-mapping"]) == {
-            "openstack-machines": {"microovn": {"machines": {}}}
-        }
+        # No machines means no application blocks to emit.
+        assert yaml.safe_load(config["role-mapping"]) == {"openstack-machines": {}}
 
     def test_is_skip_skips_when_no_microovn_machines(
         self,

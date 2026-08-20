@@ -10,6 +10,21 @@ from sunbeam.core.juju import JujuHelper
 
 DEFAULT_ARCHITECTURE = "amd64"
 ARM64_ARCHITECTURE = "arm64"
+MICROOVN_APPLICATION = "microovn"
+
+
+def microovn_application_name_for_node(node: dict) -> str:
+    """Return the MicroOVN application a node's unit belongs to.
+
+    DPU nodes get their own per-architecture application (e.g. microovn-arm64);
+    everything else uses the default microovn application. We key off is_dpu
+    rather than arch so a DPU is never grouped with regular nodes of the same
+    architecture.
+    """
+    if not node.get("is_dpu", False):
+        return MICROOVN_APPLICATION
+    arch = node.get("arch") or DEFAULT_ARCHITECTURE
+    return f"{MICROOVN_APPLICATION}-{arch}"
 
 
 class OvnManager:
