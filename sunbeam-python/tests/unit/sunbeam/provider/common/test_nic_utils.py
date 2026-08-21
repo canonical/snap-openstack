@@ -15,11 +15,11 @@ class TestWhitelistRemoteManagedVf:
             "sriov_available": False,
         }
 
-    def test_builds_remote_managed_spec_with_vf_address_and_null_physnet(self):
+    def test_builds_remote_managed_spec_with_address_and_null_physnet(self):
         pci_whitelist: list[dict] = []
         excluded_devices: dict[str, list] = {}
 
-        nic_utils.whitelist_remote_managed_vf(
+        nic_utils.record_remote_managed_vf(
             "compute-1", self._vf(), pci_whitelist, excluded_devices, "physnet1"
         )
 
@@ -29,16 +29,16 @@ class TestWhitelistRemoteManagedVf:
                 "vendor_id": "15b3",
                 "product_id": "101e",
                 "physical_network": None,
-                "remote_managed": "true",
+                "remote_managed": True,
             }
         ]
 
-    def test_keeps_distinct_vf_addresses(self):
+    def test_keeps_one_spec_per_vf_address(self):
         pci_whitelist: list[dict] = []
         excluded_devices: dict[str, list] = {}
 
         for func in (3, 4, 5, 6):
-            nic_utils.whitelist_remote_managed_vf(
+            nic_utils.record_remote_managed_vf(
                 "compute-1",
                 self._vf(pci_address=f"0000:41:00.{func}"),
                 pci_whitelist,
@@ -57,7 +57,7 @@ class TestWhitelistRemoteManagedVf:
         pci_whitelist: list[dict] = []
         excluded_devices: dict[str, list] = {}
 
-        nic_utils.whitelist_remote_managed_vf(
+        nic_utils.record_remote_managed_vf(
             "compute-1", self._vf(), pci_whitelist, excluded_devices, "physnet1"
         )
 
@@ -67,7 +67,7 @@ class TestWhitelistRemoteManagedVf:
         pci_whitelist: list[dict] = []
         excluded_devices: dict[str, list] = {"compute-1": ["0000:41:00.3"]}
 
-        nic_utils.whitelist_remote_managed_vf(
+        nic_utils.record_remote_managed_vf(
             "compute-1", self._vf(), pci_whitelist, excluded_devices, "physnet1"
         )
 

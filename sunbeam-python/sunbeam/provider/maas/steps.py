@@ -2489,6 +2489,17 @@ class MaasConfigSRIOVStep(BaseStep):
                 }
         return sriov_nics
 
+    def _dpu_parent_system_ids(self) -> set[str]:
+        """Return system IDs of compute hosts that are the parent of a DPU."""
+        dpus = maas_client.list_machines(
+            self.maas_client, tags=maas_deployment.RoleTags.NETWORK.value
+        )
+        return {
+            dpu["parent_system_id"]
+            for dpu in dpus
+            if dpu.get("is_dpu") and dpu.get("parent_system_id")
+        }
+
     def _get_pci_config(
         self, compute_machines: list[dict]
     ) -> Tuple[list[dict], dict[str, list]]:
@@ -2504,10 +2515,20 @@ class MaasConfigSRIOVStep(BaseStep):
                 excluded_devices = copy.deepcopy(pci_config.excluded_devices)
                 LOG.debug("PCI exclude list from manifest: %s", excluded_devices)
 
+        dpu_parent_system_ids = self._dpu_parent_system_ids()
+
         for machine in compute_machines:
+            node_name = machine["hostname"]
+
+            # A DPU parent host claims the DPU's remote-managed VFs instead of
+            # doing regular SR-IOV whitelisting. The VF interfaces are reported by
+            # the host's own openstack-hypervisor (name contains "vf").
+            if machine.get("system_id") in dpu_parent_system_ids:
+                self._record_dpu_vfs(node_name, pci_whitelist, excluded_devices)
+                continue
+
             sriov_tagged_nics = self._get_sriov_nics_from_maas_tags(machine)
 
-            node_name = machine["hostname"]
             # nics reported by the compute-hypervisor snap.
             snap_nics = nic_utils.fetch_nics(
                 self.client, node_name, self.jhelper, self.model
@@ -2558,6 +2579,33 @@ class MaasConfigSRIOVStep(BaseStep):
                 )
 
         return pci_whitelist, excluded_devices
+
+    def _record_dpu_vfs(
+        self,
+        node_name: str,
+        pci_whitelist: list[dict],
+        excluded_devices: dict[str, list],
+    ) -> None:
+        """Record a DPU parent host's remote-managed VFs.
+
+        Off-path SmartNIC DPUs run the networking control plane while Nova on the
+        parent host claims the virtual functions. The VFs show up in the host's
+        openstack-hypervisor list-nics with "Virtual Function" in their
+        product_name; we record them as remote-managed device specs on the host.
+        """
+        snap_nics = nic_utils.fetch_nics(
+            self.client, node_name, self.jhelper, self.model
+        )
+
+        for snap_nic in snap_nics["nics"]:
+            if "virtual function" not in (snap_nic.get("product_name") or "").lower():
+                continue
+            if not (snap_nic.get("product_id") and snap_nic.get("vendor_id")):
+                LOG.debug("Ignoring DPU nic, not a PCI device: %s", snap_nic["name"])
+                continue
+            nic_utils.record_remote_managed_vf(
+                node_name, snap_nic, pci_whitelist, excluded_devices, None
+            )
 
     def run(self, context: StepContext) -> Result:
         """Apply individual hypervisor settings."""
