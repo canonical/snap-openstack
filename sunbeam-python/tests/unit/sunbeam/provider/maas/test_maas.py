@@ -37,6 +37,7 @@ from sunbeam.provider.maas.steps import (
     MaasAddMachinesToClusterdStep,
     MaasBootstrapJujuStep,
     MaasConfigDPDKStep,
+    MaasConfigSRIOVStep,
     MaasConfigureMicrocephOSDStep,
     MaasCreateLoadBalancerIPPoolsStep,
     MaasDeployInfraMachinesStep,
@@ -2648,3 +2649,80 @@ class TestParseImageNameFromTags:
 
         with pytest.raises(ValueError, match="image name is empty"):
             parse_image_name_from_tags(["network", "dpu-image-"])
+
+
+class TestMaasConfigSRIOVStepDPU:
+    def _step(self):
+        with patch.object(
+            maas_steps.maas_client.MaasClient, "from_deployment", return_value=Mock()
+        ):
+            step = MaasConfigSRIOVStep(
+                deployment=Mock(),
+                client=Mock(),
+                jhelper=Mock(),
+                model="openstack-machines",
+                manifest=None,
+            )
+        return step
+
+    def test_dpu_parent_host_whitelists_only_vf_nics_as_remote_managed(self):
+        step = self._step()
+        compute_machines = [{"system_id": "host-sid", "hostname": "compute-4"}]
+
+        dpu_machines = [
+            {"hostname": "dpu-1", "is_dpu": True, "parent_system_id": "host-sid"}
+        ]
+        # Only the VF (product_name has "Virtual Function") is remote-managed;
+        # the PF is ignored.
+        host_nics = {
+            "nics": [
+                {
+                    "name": "ens1f0np0",
+                    "pci_address": "0000:41:00.0",
+                    "vendor_id": "0x15b3",
+                    "product_id": "0xa2dc",
+                    "product_name": "BlueField-3 integrated ConnectX-7",
+                },
+                {
+                    "name": "ens1f0v0",
+                    "pci_address": "0000:41:00.3",
+                    "vendor_id": "0x15b3",
+                    "product_id": "0x101e",
+                    "product_name": "ConnectX Family mlx5Gen Virtual Function",
+                },
+            ]
+        }
+
+        with (
+            patch.object(
+                maas_steps.maas_client, "list_machines", return_value=dpu_machines
+            ),
+            patch.object(maas_steps.nic_utils, "fetch_nics", return_value=host_nics),
+        ):
+            pci_whitelist, _ = step._get_pci_config(compute_machines)
+
+        assert pci_whitelist == [
+            {
+                "address": "0000:41:00.3",
+                "vendor_id": "15b3",
+                "product_id": "101e",
+                "physical_network": None,
+                "remote_managed": True,
+            }
+        ]
+
+    def test_non_dpu_parent_uses_regular_sriov_path(self):
+        step = self._step()
+        compute_machines = [
+            {"system_id": "host-sid", "hostname": "compute-4", "nics": []}
+        ]
+
+        with (
+            patch.object(maas_steps.maas_client, "list_machines", return_value=[]),
+            patch.object(step, "_record_dpu_vfs") as dpu_path,
+            patch.object(maas_steps.nic_utils, "fetch_nics", return_value={"nics": []}),
+            patch.object(maas_steps.nic_utils, "fetch_gpus", return_value={"gpus": []}),
+        ):
+            step._get_pci_config(compute_machines)
+
+        dpu_path.assert_not_called()
