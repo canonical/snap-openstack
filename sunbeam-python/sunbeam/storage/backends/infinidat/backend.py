@@ -31,6 +31,14 @@ class InfinidatConfig(StorageBackendConfig):
     use_chap_auth: Annotated[
         bool | None, Field(description="Use CHAP authentication")
     ] = None
+    driver_use_ssl: Annotated[
+        bool | None,
+        Field(
+            description=(
+                "Use HTTPS for connections to the InfiniBox management interface."
+            )
+        ),
+    ] = None
 
     # Secrets
     san_login: Annotated[
