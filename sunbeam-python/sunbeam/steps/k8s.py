@@ -6,16 +6,20 @@ import logging
 import subprocess
 import time
 import typing
+import uuid
 
 import jubilant
 import tenacity
 import yaml
+from requests.models import HTTPError
 from rich.console import Console
 
 from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import (
+    ClusterServiceUnavailableException,
     ConfigItemNotFoundException,
     NodeNotExistInClusterException,
+    TerraformPlanLockConflictException,
 )
 from sunbeam.core.common import (
     BaseStep,
@@ -1303,6 +1307,10 @@ class _PerHostK8SResourceStep(BaseStep):
         """
         raise NotImplementedError
 
+    def _select_control_nodes(self, nodes: list[dict]) -> list[dict]:
+        """Return control nodes eligible for this resource."""
+        return nodes
+
     def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not."""
         self.to_update = []
@@ -1318,24 +1326,31 @@ class _PerHostK8SResourceStep(BaseStep):
         else:
             self.control_nodes = self.client.cluster.list_nodes_by_role(control)
 
-        # Skip control nodes whose machines are not yet in juju. This can
-        # happen during node removal (machine removed before clusterd cleanup)
-        # or during concurrent joins (machine not yet provisioned). Skipping
-        # is safe: stale resources are cleaned up later when the node is
-        # removed from clusterd, at which point it won't appear in
-        # control_nodes and _get_outdated_resources will report it as deleted.
         juju_machines = set(self.jhelper.get_machines(self.model).keys())
-        self.control_nodes = [
-            node
-            for node in self.control_nodes
-            if str(node.get("machineid", "")) in juju_machines
-        ]
 
         try:
             self.kube = get_kube_client(self.client, self.kube_namespace)
         except KubeClientError as e:
             LOG.debug("Failed to create k8s client", exc_info=True)
             return Result(ResultType.FAILED, str(e))
+
+        try:
+            self.control_nodes = self._select_control_nodes(self.control_nodes)
+        except K8SError as e:
+            LOG.debug("Failed to select K8S nodes", exc_info=True)
+            return Result(ResultType.FAILED, str(e))
+
+        # Skip control nodes whose machines are not yet in juju. This can
+        # happen during node removal (machine removed before clusterd cleanup)
+        # or during concurrent joins (machine not yet provisioned). Skipping
+        # is safe: stale resources are cleaned up later when the node is
+        # removed from clusterd, at which point it won't appear in
+        # control_nodes and _get_outdated_resources will report it as deleted.
+        self.control_nodes = [
+            node
+            for node in self.control_nodes
+            if str(node.get("machineid", "")) in juju_machines
+        ]
 
         try:
             outdated, deleted = self._get_outdated_resources(
@@ -1346,9 +1361,8 @@ class _PerHostK8SResourceStep(BaseStep):
             return Result(ResultType.FAILED, str(e))
 
         if self.fqdn:
-            # Single-node mode (join/bootstrap): only create/update for the
-            # target node.  Defer deletion of stale resources to full
-            # reconciliation (refresh, where fqdn is None).
+            # FQDN-scoped runs only update selected nodes. Full reconciliation
+            # removes stale resources.
             deleted = []
 
         if not (outdated or deleted):
@@ -1373,7 +1387,10 @@ class EnsureCiliumDeviceByHostStep(_PerHostK8SResourceStep):
     _CILIUM_NAMESPACE = "kube-system"
     _RESTART_TIMEOUT = 300
     _RESTART_POLL_INTERVAL = 5
+    _LOCK_TIMEOUT = 300
+    _LOCK_RETRY_INTERVAL = 5
     _RESTART_PENDING_ANNOTATION = "sunbeam/restart-pending"
+    _TERRAFORM_PLAN = "k8s-plan"
 
     def __init__(
         self,
@@ -1382,6 +1399,7 @@ class EnsureCiliumDeviceByHostStep(_PerHostK8SResourceStep):
         jhelper: JujuHelper,
         model: str,
         fqdn: str | None = None,
+        reconcile_existing: bool = False,
     ):
         super().__init__(
             "Ensure Cilium device config",
@@ -1394,9 +1412,107 @@ class EnsureCiliumDeviceByHostStep(_PerHostK8SResourceStep):
             kube_namespace=self._CILIUM_NAMESPACE,
             fqdn=fqdn,
         )
+        self._reconcile_existing = reconcile_existing
         self.cilium_node_config_resource = (
             K8SHelper.get_lightkube_cilium_node_config_resource()
         )
+        self._reconciliation_lock = {
+            "ID": str(uuid.uuid4()),
+            "Operation": "Cilium reconciliation",
+            "Who": fqdn or deployment.name,
+        }
+
+    @tenacity.retry(
+        wait=tenacity.wait_fixed(_LOCK_RETRY_INTERVAL),
+        stop=tenacity.stop_after_delay(_LOCK_TIMEOUT),
+        retry=tenacity.retry_if_exception_type(
+            (
+                ClusterServiceUnavailableException,
+                TerraformPlanLockConflictException,
+            )
+        ),
+        reraise=True,
+    )
+    def _acquire_reconciliation_lock(self) -> None:
+        self.client.cluster.lock_terraform_plan(
+            self._TERRAFORM_PLAN,
+            self._reconciliation_lock,
+        )
+
+    def _release_reconciliation_lock(self) -> bool:
+        try:
+            self.client.cluster.unlock_terraform_plan(
+                self._TERRAFORM_PLAN,
+                self._reconciliation_lock,
+            )
+        except (ClusterServiceUnavailableException, HTTPError):
+            LOG.debug("Failed to release Cilium reconciliation lock", exc_info=True)
+            return False
+        return True
+
+    def is_skip(self, context: StepContext) -> Result:
+        """Defer change detection until the k8s plan lock is held in run."""
+        return Result(ResultType.COMPLETED)
+
+    def _select_control_nodes(self, nodes: list[dict]) -> list[dict]:
+        """Include tagged control nodes when reconciling during join."""
+        if not (self.fqdn and self._reconcile_existing):
+            return nodes
+
+        target_node = nodes[0]
+        k8s_nodes = list_nodes(
+            self.kube,
+            labels={DEPLOYMENT_LABEL: self.deployment.name},
+        )
+        tagged_node_names = set()
+        for k8s_node in k8s_nodes:
+            if k8s_node.metadata and k8s_node.metadata.labels:
+                hostname = k8s_node.metadata.labels.get(HOSTNAME_LABEL)
+                if hostname:
+                    tagged_node_names.add(hostname)
+
+        eligible_nodes = [target_node]
+        for control_node in self.client.cluster.list_nodes_by_role(
+            Role.CONTROL.name.lower()
+        ):
+            name = control_node["name"]
+            if name == target_node["name"]:
+                continue
+            if name in tagged_node_names:
+                eligible_nodes.append(control_node)
+            else:
+                LOG.debug(
+                    "Skipping control node %s without %s label",
+                    name,
+                    HOSTNAME_LABEL,
+                )
+        return eligible_nodes
+
+    def run(self, context: StepContext) -> Result:
+        """Recalculate and apply Cilium changes under the k8s plan lock."""
+        try:
+            self._acquire_reconciliation_lock()
+        except (
+            ClusterServiceUnavailableException,
+            HTTPError,
+            TerraformPlanLockConflictException,
+        ) as e:
+            LOG.debug("Failed to acquire Cilium reconciliation lock", exc_info=True)
+            return Result(ResultType.FAILED, str(e))
+
+        try:
+            result = super().is_skip(context)
+            if result.result_type == ResultType.COMPLETED:
+                result = self._apply_changes(context)
+        finally:
+            lock_released = self._release_reconciliation_lock()
+
+        if not lock_released and result.result_type != ResultType.FAILED:
+            return Result(
+                ResultType.FAILED,
+                "Failed to release Cilium reconciliation lock",
+            )
+        return result
 
     def _cilium_node_config_name(self, hostname: str) -> str:
         return f"cilium-devices-{hostname}"
@@ -1589,7 +1705,7 @@ class EnsureCiliumDeviceByHostStep(_PerHostK8SResourceStep):
         self.kube.delete(core_v1.Pod, pod_name, namespace=self._CILIUM_NAMESPACE)
         self._wait_for_cilium_ready(k8s_node_name, deleted_pod_name=pod_name)
 
-    def run(self, context: StepContext) -> Result:
+    def _apply_changes(self, context: StepContext) -> Result:
         """Apply or delete CiliumNodeConfig resources and restart cilium pods."""
         for node in self.to_update:
             name = node["name"]
