@@ -202,6 +202,8 @@ def _build_nad_yaml(
 class _CertificateEntry(pydantic.BaseModel):
     """A single signed certificate plus its CA material, keyed by CSR subject."""
 
+    model_config = pydantic.ConfigDict(extra="forbid")
+
     certificate: str = ""
     ca_certificate: str = ""
     ca_chain: str = ""
