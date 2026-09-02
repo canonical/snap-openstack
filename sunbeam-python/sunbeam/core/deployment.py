@@ -332,6 +332,7 @@ class Deployment(pydantic.BaseModel):
 
     def parse_manifest(self, manifest_data: dict) -> Manifest:
         """Parse manifest data."""
+        manifest_data = copy.deepcopy(manifest_data)
         features = manifest_data.pop("features", {})
         storage = manifest_data.pop("storage", {})
         manifest = Manifest.model_validate(manifest_data)
@@ -357,10 +358,9 @@ class Deployment(pydantic.BaseModel):
         else:
             try:
                 client = self.get_client()
-                override_manifest = self.parse_manifest(
-                    yaml.safe_load(client.cluster.get_latest_manifest()["data"])
+                manifest_data = yaml.safe_load(
+                    client.cluster.get_latest_manifest()["data"]
                 )
-                LOG.debug("Manifest loaded from clusterd")
             except ClusterServiceUnavailableException:
                 LOG.debug(
                     "Failed to get manifest from clusterd, might not be bootstrapped,"
@@ -376,6 +376,9 @@ class Deployment(pydantic.BaseModel):
                     "Failed to get clusterd client, might no be bootstrapped,"
                     " consider empty manifest from database"
                 )
+            else:
+                override_manifest = self.parse_manifest(manifest_data)
+                LOG.debug("Manifest loaded from clusterd")
             if override_manifest is None:
                 # Only get manifest from embedded if manifest not present in clusterd
                 snap = Snap()

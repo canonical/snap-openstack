@@ -40,7 +40,36 @@ def embedded_manifest_path(snap: Snap, version: str, risk: str) -> Path:
     return snap.paths.snap / "etc" / "manifests" / version / f"{risk}.yml"
 
 
-class JujuManifest(pydantic.BaseModel):
+class ManifestModel(pydantic.BaseModel):
+    model_config = pydantic.ConfigDict(extra="forbid")
+
+    @pydantic.model_validator(mode="before")
+    @classmethod
+    def warn_unknown_keys(cls, data: Any) -> Any:
+        """Warn about and ignore keys outside the manifest schema."""
+        if not isinstance(data, dict):
+            return data
+
+        known_keys = set()
+        for name, field in cls.model_fields.items():
+            if isinstance(field.validation_alias, str):
+                known_keys.add(field.validation_alias)
+            elif isinstance(field.validation_alias, pydantic.AliasChoices):
+                known_keys.update(
+                    alias
+                    for alias in field.validation_alias.choices
+                    if isinstance(alias, str)
+                )
+            else:
+                known_keys.add(name)
+
+        for key in data.keys() - known_keys:
+            LOG.warning("Unknown manifest key: %s", key)
+
+        return {key: value for key, value in data.items() if key in known_keys}
+
+
+class JujuManifest(ManifestModel):
     # Setting Field alias not supported in pydantic 1.10.0
     # Old version of pydantic is used due to dependencies
     # with older version of paramiko from python-libjuju
@@ -86,7 +115,7 @@ class CharmManifest(pydantic.BaseModel):
     # )
 
 
-class TerraformManifest(pydantic.BaseModel):
+class TerraformManifest(ManifestModel):
     source: Path = Field(description="Path to Terraform plan")
 
     @pydantic.field_serializer("source")
@@ -94,7 +123,7 @@ class TerraformManifest(pydantic.BaseModel):
         return str(value)
 
 
-class SoftwareConfig(pydantic.BaseModel):
+class SoftwareConfig(ManifestModel):
     juju: JujuManifest = JujuManifest()
     charms: dict[str, CharmManifest] = {}
     terraform: dict[str, TerraformManifest] = {}
@@ -143,7 +172,7 @@ class SoftwareConfig(pydantic.BaseModel):
         return SoftwareConfig(juju=juju, charms=charms, terraform=terraform)
 
 
-class FeatureConfig(pydantic.BaseModel):
+class FeatureConfig(ManifestModel):
     pass
 
 
@@ -187,25 +216,25 @@ def _str_serialize(value: Any | None) -> str | None:
     return None
 
 
-class CoreConfig(pydantic.BaseModel):
-    class _ProxyConfig(pydantic.BaseModel):
+class CoreConfig(ManifestModel):
+    class _ProxyConfig(ManifestModel):
         proxy_required: bool | None = None
         http_proxy: str | None = None
         https_proxy: str | None = None
         no_proxy: str | None = None
 
-    class _BootstrapConfig(pydantic.BaseModel):
+    class _BootstrapConfig(ManifestModel):
         management_cidr: str | None = pydantic.Field(
             default=None, description="Management network CIDR"
         )
 
-    class _Addons(pydantic.BaseModel):
+    class _Addons(ManifestModel):
         metallb: str | None = None
 
-    class _K8sAddons(pydantic.BaseModel):
+    class _K8sAddons(ManifestModel):
         loadbalancer: str | None = None
 
-    class _User(pydantic.BaseModel):
+    class _User(ManifestModel):
         run_demo_setup: bool | None = None
         username: str | None = None
         password: str | None = None
@@ -216,7 +245,7 @@ class CoreConfig(pydantic.BaseModel):
         # Default physnet for user demo network
         physnet: str | None = None
 
-    class _ExternalNetwork(pydantic.BaseModel):
+    class _ExternalNetwork(ManifestModel):
         nic: str | None = pydantic.Field(
             None, deprecated="Deprecated. Use `nics` instead."
         )
@@ -229,7 +258,7 @@ class CoreConfig(pydantic.BaseModel):
         network_type: typing.Literal["vlan", "flat"] | None = None
         segmentation_id: int | None = None
 
-    class _HostMicroCephConfig(pydantic.BaseModel):
+    class _HostMicroCephConfig(ManifestModel):
         osd_devices: list[str] | None = None
         dangerous_i_acknowledge_i_will_lose_data_wipe_disks: bool = False
 
@@ -240,12 +269,12 @@ class CoreConfig(pydantic.BaseModel):
                 return v.split(",")
             return v
 
-    class _Identity(pydantic.BaseModel):
-        class _IdentitySAML2KeyAndCert(pydantic.BaseModel):
+    class _Identity(ManifestModel):
+        class _IdentitySAML2KeyAndCert(ManifestModel):
             certificate: str
             key: str
 
-        class _IdentityProfile(pydantic.BaseModel):
+        class _IdentityProfile(ManifestModel):
             provider: str
             protocol: str
             config: dict[str, str]
@@ -253,7 +282,7 @@ class CoreConfig(pydantic.BaseModel):
         profiles: dict[str, _IdentityProfile]
         saml2_x509: _IdentitySAML2KeyAndCert
 
-    class _PCI(pydantic.BaseModel):
+    class _PCI(ManifestModel):
         # Source: https://docs.openstack.org/nova/latest/configuration/config.html#pci.device_spec
         device_specs: list[dict[str, Any]] | None = None
         # https://docs.openstack.org/nova/latest/configuration/config.html#pci.alias
@@ -261,8 +290,8 @@ class CoreConfig(pydantic.BaseModel):
         # Excluded PCI addresses per node.
         excluded_devices: dict[str, list[str]] | None = None
 
-    class _HorizonConfig(pydantic.BaseModel):
-        class _Resources(pydantic.BaseModel):
+    class _HorizonConfig(ManifestModel):
+        class _Resources(ManifestModel):
             custom_theme: Path | None = None
 
             @pydantic.field_validator("custom_theme", mode="before")
@@ -274,8 +303,8 @@ class CoreConfig(pydantic.BaseModel):
 
         resources: _Resources | None = None
 
-    class _Endpoints(pydantic.BaseModel):
-        class _Endpoint(pydantic.BaseModel):
+    class _Endpoints(ManifestModel):
+        class _Endpoint(ManifestModel):
             hostname: str | None = None
             ip: pydantic.IPvAnyAddress | None = None
 
@@ -285,7 +314,7 @@ class CoreConfig(pydantic.BaseModel):
         ingress_public: _Endpoint | None = pydantic.Field(None, alias="ingress-public")
         ingress_rgw: _Endpoint | None = pydantic.Field(None, alias="ingress-rgw")
 
-    class _DPDK(pydantic.BaseModel):
+    class _DPDK(ManifestModel):
         enabled: bool = False
         datapath_cores: int = 0
         control_plane_cores: int = 0
@@ -321,7 +350,7 @@ class CoreConfig(pydantic.BaseModel):
     dpdk: _DPDK | None = None
 
 
-class CoreManifest(pydantic.BaseModel):
+class CoreManifest(ManifestModel):
     config: CoreConfig = CoreConfig()
     software: SoftwareConfig = pydantic.Field(default_factory=_default_software_config)
 
@@ -340,7 +369,7 @@ class CoreManifest(pydantic.BaseModel):
 T = typing.TypeVar("T", bound=pydantic.BaseModel)
 
 
-class _AddonManifest(pydantic.BaseModel, typing.Generic[T]):
+class _AddonManifest(ManifestModel, typing.Generic[T]):
     config: pydantic.SerializeAsAny[T] | None = None
     software: SoftwareConfig = SoftwareConfig()
 
@@ -410,7 +439,7 @@ class FeatureGroupManifest(pydantic.RootModel[dict[str, FeatureManifest]]):
                 )
 
 
-class Manifest(pydantic.BaseModel):
+class Manifest(ManifestModel):
     core: CoreManifest = pydantic.Field(default_factory=CoreManifest)
     features: dict[str, FeatureManifest | FeatureGroupManifest] = {}
     storage: StorageManifest = StorageManifest(root={})
