@@ -53,9 +53,11 @@ core:
         storage:
           rabbitmq-data: 1G
       mysql-k8s:
-        channel: 8.0/stable
+        channel: 8.0/candidate
         storage:
           database: 2G
+      mysql-router-k8s:
+        channel: 8.0/candidate
 features:
   baremetal:
     software:
