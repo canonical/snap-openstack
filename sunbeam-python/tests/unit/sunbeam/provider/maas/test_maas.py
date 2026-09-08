@@ -2594,6 +2594,8 @@ class TestRemoveNode:
             if isinstance(step, RemoveCinderVolumeServicesStep)
         )
         assert disable_index < cinder_units_index < cinder_services_index
+        assert plan[disable_index].force is force
+        assert plan[cinder_services_index].force is force
 
         osd_index = next(
             i

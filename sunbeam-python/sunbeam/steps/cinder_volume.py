@@ -282,14 +282,23 @@ class _CinderVolumeServiceStep(BaseStep):
         deployment: Deployment,
         hostname: str,
         fqdn: str,
+        force: bool = False,
     ):
         super().__init__(name, description)
         self.jhelper = jhelper
         self.deployment = deployment
         self.hostname = hostname
         self.fqdn = fqdn
+        self.force = force
         self.connection: Any | None = None
         self.services: list[Any] = []
+
+    def _client_error(self, error: Exception) -> Result:
+        """Skip OpenStack client errors in force mode."""
+        if self.force:
+            LOG.warning("Force mode set, skipping %s: %s", self.name, error)
+            return Result(ResultType.SKIPPED, str(error))
+        return Result(ResultType.FAILED, str(error))
 
     def _discover_services(self) -> Result:
         """Discover Cinder service records for the target node."""
@@ -303,7 +312,7 @@ class _CinderVolumeServiceStep(BaseStep):
             keystoneauth_exceptions.ClientException,
         ) as e:
             LOG.warning("Failed to discover Cinder volume services: %r", e)
-            return Result(ResultType.FAILED, str(e))
+            return self._client_error(e)
 
         if not self.services:
             return Result(ResultType.SKIPPED)
@@ -325,6 +334,7 @@ class DisableCinderVolumeServicesStep(_CinderVolumeServiceStep):
         deployment: Deployment,
         hostname: str,
         fqdn: str,
+        force: bool = False,
     ):
         super().__init__(
             "Disable Cinder Volume services",
@@ -333,6 +343,7 @@ class DisableCinderVolumeServicesStep(_CinderVolumeServiceStep):
             deployment,
             hostname,
             fqdn,
+            force=force,
         )
 
     def is_skip(self, context: StepContext) -> Result:
@@ -356,7 +367,7 @@ class DisableCinderVolumeServicesStep(_CinderVolumeServiceStep):
             keystoneauth_exceptions.ClientException,
         ) as e:
             LOG.warning("Failed to disable Cinder volume service: %r", e)
-            return Result(ResultType.FAILED, str(e))
+            return self._client_error(e)
 
         return Result(ResultType.COMPLETED)
 
@@ -370,6 +381,7 @@ class RemoveCinderVolumeServicesStep(_CinderVolumeServiceStep):
         deployment: Deployment,
         hostname: str,
         fqdn: str,
+        force: bool = False,
     ):
         super().__init__(
             "Remove Cinder Volume services",
@@ -378,6 +390,7 @@ class RemoveCinderVolumeServicesStep(_CinderVolumeServiceStep):
             deployment,
             hostname,
             fqdn,
+            force=force,
         )
 
     def is_skip(self, context: StepContext) -> Result:
@@ -443,13 +456,15 @@ class RemoveCinderVolumeServicesStep(_CinderVolumeServiceStep):
                     return Result(ResultType.COMPLETED)
 
             raise SunbeamException("Cinder service records remain after removal")
+        except SunbeamException as e:
+            LOG.warning("Failed to remove Cinder volume services: %r", e)
+            return Result(ResultType.FAILED, str(e))
         except (
-            SunbeamException,
             openstack.exceptions.SDKException,
             keystoneauth_exceptions.ClientException,
         ) as e:
             LOG.warning("Failed to remove Cinder volume services: %r", e)
-            return Result(ResultType.FAILED, str(e))
+            return self._client_error(e)
 
 
 class CheckCinderVolumeDistributionStep(BaseStep):
