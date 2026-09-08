@@ -1720,6 +1720,7 @@ def remove_node(ctx: click.Context, name: str, force: bool, show_hints: bool) ->
             deployment,
             machine["hostname"],
             machine["fqdn"],
+            force=force,
         ),
         RemoveCinderVolumeUnitsStep(
             client, name, jhelper, deployment.openstack_machines_model
@@ -1729,6 +1730,7 @@ def remove_node(ctx: click.Context, name: str, force: bool, show_hints: bool) ->
             deployment,
             machine["hostname"],
             machine["fqdn"],
+            force=force,
         ),
         RemoveMicrocephOSDsStep(
             client,
