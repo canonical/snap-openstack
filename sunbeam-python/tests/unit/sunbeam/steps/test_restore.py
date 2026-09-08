@@ -4,8 +4,9 @@
 from unittest.mock import Mock
 
 import pytest
+from jubilant import TaskError
 
-from sunbeam.core.common import ResultType
+from sunbeam.core.common import Result, ResultType
 from sunbeam.core.juju import (
     ActionFailedException,
     ApplicationNotFoundException,
@@ -105,9 +106,26 @@ class TestGuardedSteps:
             "resume",
         )
 
+    @pytest.mark.parametrize("error", [TaskError(Mock()), TimeoutError("timed out")])
+    def test_action_step_handles_action_errors(self, step_context, error):
+        jhelper = Mock()
+        jhelper.get_leader_unit.return_value = "keystone-k8s/0"
+        jhelper.run_action.side_effect = error
+        step = _ActionStep(
+            jhelper,
+            name="Action",
+            description="Run action",
+            app="keystone-k8s",
+            action_name="pause",
+        )
+
+        result = step.run(step_context)
+
+        assert result.result_type == ResultType.FAILED
+
     def test_restore_mysql_uses_latest_backup_id(self, step_context):
         jhelper = Mock()
-        jhelper.get_leader_unit.return_value = "keystone-mysql/0"
+        jhelper.get_leader_unit.return_value = "keystone-mysql/1"
         jhelper.run_action.side_effect = [
             {
                 "backups": (
@@ -124,6 +142,8 @@ class TestGuardedSteps:
         result = _RestoreAppStep(jhelper, _mysql_component(), target).run(step_context)
 
         assert result.result_type == ResultType.COMPLETED
+        assert jhelper.run_action.call_args_list[0].args[0] == "keystone-mysql/1"
+        assert jhelper.run_action.call_args_list[1].args[0] == "keystone-mysql/1"
         assert jhelper.run_action.call_args_list[1].args[2] == "restore"
         assert jhelper.run_action.call_args_list[1].args[3] == {
             "backup-id": "2026-07-15T00:00:00Z"
@@ -230,6 +250,17 @@ class TestGuardedSteps:
 
         assert result.result_type == ResultType.FAILED
         assert jhelper.run_action.call_count == 2
+
+    @pytest.mark.parametrize("error", [TaskError(Mock()), TimeoutError("timed out")])
+    def test_restore_handles_action_errors(self, step_context, error):
+        jhelper = Mock()
+        jhelper.get_leader_unit.return_value = "vault/0"
+        jhelper.run_action.side_effect = error
+        target = ActionTarget("vault", "vault/0", VAULT_CHARM, "restore-backup")
+
+        result = _RestoreAppStep(jhelper, _vault_component(), target).run(step_context)
+
+        assert result.result_type == ResultType.FAILED
 
 
 class TestScaleMySQLStep:
@@ -550,6 +581,20 @@ class TestMySQLRestorePlan:
 
 
 class TestRestoreStepWrapper:
+    @pytest.mark.parametrize("error", [TaskError(Mock()), TimeoutError("timed out")])
+    def test_revert_continues_after_action_error(self, step_context, error):
+        failed_step = Mock()
+        failed_step.run.side_effect = error
+        remaining_step = Mock()
+        remaining_step.run.return_value = Result(ResultType.COMPLETED)
+
+        errors = RestoreStep(Mock(), {})._run_revert_plan(
+            [failed_step, remaining_step], step_context
+        )
+
+        assert errors == [str(error)]
+        remaining_step.run.assert_called_once_with(step_context)
+
     def test_prechecks_all_before_any_restore_work(self, step_context):
         jhelper = Mock()
         _set_per_service_mysql_status(jhelper)

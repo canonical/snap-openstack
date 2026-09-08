@@ -14,11 +14,12 @@ import logging
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
+from jubilant import TaskError
 from jubilant.statustypes import AppStatus
 from snaphelpers import Snap
 
@@ -138,7 +139,7 @@ class BackupComponent(ABC):
 
     @property
     def validate_checks(self) -> list[ValidationCheck]:
-        """Return readiness checks applied before backup or restore."""
+        """Readiness checks applied before backup or restore."""
         return [APP_READY_VALIDATION_CHECK, S3_RELATION_VALIDATION_CHECK]
 
     @abstractmethod
@@ -345,6 +346,8 @@ class _ActionStep(BaseStep):
             LeaderNotFoundException,
             ModelNotFoundException,
             JujuException,
+            TaskError,
+            TimeoutError,
         ) as e:
             return Result(ResultType.FAILED, str(e))
 
@@ -469,14 +472,15 @@ class _RestoreAppStep(BaseStep):
             return Result(ResultType.FAILED, str(e))
 
         try:
+            target = replace(self.target, unit=leader)
             params = self.component.restore_params(
                 self.jhelper,
-                self.target,
+                target,
                 self.restore_to_time,
                 self.timeout,
                 self.model,
             )
-        except (ActionFailedException, JujuException) as e:
+        except (ActionFailedException, JujuException, TaskError, TimeoutError) as e:
             return Result(ResultType.FAILED, str(e))
 
         try:
@@ -494,7 +498,7 @@ class _RestoreAppStep(BaseStep):
                 agent_status=["idle"],
                 timeout=self.timeout,
             )
-        except (ActionFailedException, JujuException) as e:
+        except (ActionFailedException, JujuException, TaskError, TimeoutError) as e:
             return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.COMPLETED)
@@ -1316,6 +1320,8 @@ class RestoreStep(BaseStep):
                 ActionFailedException,
                 LeaderNotFoundException,
                 ModelNotFoundException,
+                TaskError,
+                TimeoutError,
             ) as e:
                 errors.append(str(e))
         return errors
@@ -1338,6 +1344,8 @@ class RestoreStep(BaseStep):
             ActionFailedException,
             LeaderNotFoundException,
             ModelNotFoundException,
+            TaskError,
+            TimeoutError,
         ) as e:
             revert_errors = self._run_revert_plan(prepared.revert_plan, context)
             rollback_error = "; ".join(revert_errors) or None
