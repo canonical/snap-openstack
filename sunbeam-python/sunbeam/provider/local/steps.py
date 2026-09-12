@@ -29,12 +29,15 @@ from sunbeam.core.common import (
     SunbeamException,
     parse_ip_range_or_cidr,
 )
+from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import (
     ActionFailedException,
+    JujuException,
     JujuHelper,
     UnitNotFoundException,
 )
 from sunbeam.core.manifest import Manifest
+from sunbeam.core.openstack_api import get_admin_connection, guests_on_hypervisor
 from sunbeam.provider.common import nic_utils
 from sunbeam.steps import hypervisor, microovn
 from sunbeam.steps.cluster_status import ClusterStatusStep
@@ -997,3 +1000,138 @@ class LocalConfigDPDKStep(BaseConfigDPDKStep):
             return Result(ResultType.FAILED, msg)
 
         return Result(ResultType.COMPLETED)
+
+
+ENCRYPTED_STORAGE_APP = "vaultlocker-hypervisor"
+HYPERVISOR_APP = "openstack-hypervisor"
+
+
+class LocalConfigureEncryptedStorageStep(BaseStep):
+    """Configure encrypted compute storage on the local compute host."""
+
+    def __init__(
+        self,
+        client: Client,
+        node_name: str,
+        jhelper: JujuHelper,
+        model: str,
+        deployment: Deployment,
+        config=None,
+    ):
+        """Initialise the step.
+
+        :param deployment: deployment used to obtain an OpenStack admin
+            connection for the "no instances remain" guard.
+        :param config: optional ``ComputeStorageConfig`` for non-interactive
+            invocation. When omitted the operator is prompted.
+        """
+        super().__init__(
+            "Configure encrypted compute storage",
+            "Configuring encrypted compute storage",
+        )
+        self.client = client
+        self.node_name = node_name
+        self.jhelper = jhelper
+        self.model = model
+        self.config = config
+        self.deployment = deployment
+        self.target: str | None = None
+        self.passphrase: str | None = None
+        self.existing_key_secret_id: str | None = None
+
+    def has_prompts(self) -> bool:
+        """Return True when the step can prompt for input."""
+        return True
+
+    def prompt(self, console: Console | None = None, show_hint: bool = False) -> None:
+        """Collect the storage target and credential after Vaultlocker deployment."""
+        if self.config is not None:
+            node = self.config.nodes.get(self.node_name)
+            if node is None:
+                raise SunbeamException(
+                    f"No encrypted compute-storage configuration for {self.node_name}"
+                )
+            self.target = node.target
+            self.existing_key_secret_id = node.existing_key_secret_id
+            return
+
+        if console is None:
+            return
+
+        self.target = sunbeam.core.questions.PromptQuestion(
+            "Encrypted compute storage target (persistent device path)"
+        ).ask()
+        self.passphrase = sunbeam.core.questions.PasswordPromptQuestion(
+            "Existing LUKS passphrase", password=True
+        ).ask()
+
+    def is_skip(self, context: StepContext) -> Result:
+        """Skip when no target could be determined."""
+        if self.target is None and self.config is None:
+            return Result(
+                ResultType.FAILED,
+                "Encrypted compute storage target is required",
+            )
+        return Result(ResultType.COMPLETED)
+
+    def run(self, context: StepContext) -> Result:
+        """Enroll the target and wait for the hypervisor action to complete."""
+        if self.target is None:
+            return Result(ResultType.FAILED, "Encrypted storage target is required")
+        self.update_status(context, "checking for instances on the host")
+        conn = get_admin_connection(self.jhelper, self.deployment)
+        guests = guests_on_hypervisor(self.node_name, conn)
+        if guests:
+            return Result(
+                ResultType.FAILED,
+                f"{len(guests)} instance(s) still assigned to {self.node_name}; "
+                "migrate or delete them first",
+            )
+
+        secret_name = None
+        secret_id = self.existing_key_secret_id
+        result = Result(ResultType.COMPLETED)
+        try:
+            if secret_id is None:
+                if not self.passphrase:
+                    return Result(
+                        ResultType.FAILED, "Existing LUKS passphrase is required"
+                    )
+                self.update_status(context, "creating temporary credential secret")
+                name = "compute-storage-{}".format(self.node_name.replace(".", "-"))
+                secret_id = self.jhelper.add_secret(
+                    self.model,
+                    name,
+                    {"passphrase": self.passphrase},
+                    "Temporary existing LUKS passphrase for encrypted storage",
+                )
+                secret_name = name
+                self.jhelper.grant_secret(self.model, name, ENCRYPTED_STORAGE_APP)
+            else:
+                # Operator-provided secret remains under the operator's control.
+                self.jhelper.grant_secret(self.model, secret_id, ENCRYPTED_STORAGE_APP)
+
+            self.update_status(context, "enrolling encrypted storage")
+            node = self.client.cluster.get_node_info(self.node_name)
+            machine_id = str(node["machineid"])
+            unit = self.jhelper.get_unit_from_machine(
+                HYPERVISOR_APP, machine_id, self.model
+            )
+            hypervisor.wait_for_encrypted_storage(
+                self.jhelper, unit, self.model, self.target, secret_id
+            )
+        except (JujuException, TimeoutError, ValueError, KeyError) as e:
+            result = Result(ResultType.FAILED, str(e))
+        finally:
+            self.passphrase = None
+            if secret_name is not None:
+                try:
+                    self.jhelper.remove_secret(self.model, secret_name)
+                except JujuException as e:
+                    result = Result(
+                        ResultType.FAILED,
+                        f"{result.message or 'Enrollment finished'}; "
+                        f"could not remove temporary secret {secret_name}: {e}",
+                    )
+
+        return result

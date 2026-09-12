@@ -3,6 +3,8 @@
 
 import json
 import logging
+import math
+import time
 import typing
 
 import tenacity
@@ -68,6 +70,38 @@ HYPERVISOR_DESTROY_TIMEOUT = 600
 HYPERVISOR_UNIT_TIMEOUT = (
     1800  # 30 minutes, adding / removing units can take a long time
 )
+ENCRYPTED_STORAGE_ACTION = "configure-encrypted-storage"
+ENCRYPTED_STORAGE_TIMEOUT = 1800
+
+
+def wait_for_encrypted_storage(
+    jhelper: JujuHelper, unit: str, model: str, target: str, secret_id: str
+) -> None:
+    """Wait until the hypervisor has mounted the enrolled storage target."""
+    deadline = time.monotonic() + ENCRYPTED_STORAGE_TIMEOUT
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError(f"Encrypted storage enrollment timed out for {unit}")
+
+        result = jhelper.run_action(
+            unit,
+            model,
+            ENCRYPTED_STORAGE_ACTION,
+            {"target": target, "existing-key-secret-id": secret_id},
+            timeout=max(1, math.ceil(remaining)),
+        )
+        if result.get("target") != target:
+            raise ValueError(f"Unexpected encrypted storage result from {unit}")
+        if result.get("status") == "completed":
+            return
+        if result.get("status") != "requested":
+            raise ValueError(f"Unexpected encrypted storage status from {unit}")
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError(f"Encrypted storage enrollment timed out for {unit}")
+        time.sleep(min(10, remaining))
 
 
 class DeployHypervisorApplicationStep(DeployMachineApplicationStep):

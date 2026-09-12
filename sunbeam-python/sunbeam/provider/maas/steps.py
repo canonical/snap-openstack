@@ -47,6 +47,7 @@ from sunbeam.core.deployment import CertPair, Networks
 from sunbeam.core.deployments import DeploymentsConfig
 from sunbeam.core.juju import (
     ActionFailedException,
+    JujuException,
     JujuHelper,
     JujuSecretNotFound,
     JujuStepHelper,
@@ -54,11 +55,16 @@ from sunbeam.core.juju import (
     UnitNotFoundException,
 )
 from sunbeam.core.manifest import Manifest
+from sunbeam.core.openstack_api import (
+    get_admin_connection,
+    guests_on_hypervisor,
+    resolve_hypervisor_name,
+)
 from sunbeam.core.steps import CreateLoadBalancerIPPoolsStep
 from sunbeam.core.terraform import TerraformHelper
 from sunbeam.lazy import LazyImport
 from sunbeam.provider.common import nic_utils
-from sunbeam.steps import clusterd
+from sunbeam.steps import clusterd, hypervisor
 from sunbeam.steps.cluster_status import ClusterStatusStep
 from sunbeam.steps.clusterd import APPLICATION as CLUSTERD_APPLICATION
 from sunbeam.steps.configure import (
@@ -2808,4 +2814,79 @@ class MaasConfigDPDKStep(BaseConfigDPDKStep):
                 LOG.warning(msg)
                 return Result(ResultType.FAILED, msg)
 
+        return Result(ResultType.COMPLETED)
+
+
+ENCRYPTED_STORAGE_APP = "vaultlocker-hypervisor"
+ENCRYPTED_STORAGE_HYPERVISOR_APP = "openstack-hypervisor"
+
+
+class MaasConfigureEncryptedStorageStep(BaseStep):
+    """Configure encrypted compute storage for MAAS compute hosts."""
+
+    def __init__(
+        self,
+        client: Client,
+        jhelper: JujuHelper,
+        model: str,
+        config,
+        deployment: maas_deployment.MaasDeployment,
+    ):
+        """Initialise the step with a compute-storage configuration.
+
+        :param deployment: deployment used to obtain an OpenStack admin
+            connection for the "no instances remain" guard.
+        """
+        super().__init__(
+            "Configure encrypted compute storage",
+            "Configuring encrypted compute storage",
+        )
+        self.client = client
+        self.jhelper = jhelper
+        self.model = model
+        self.config = config
+        self.deployment = deployment
+
+    def run(self, context: StepContext) -> Result:
+        """Enroll each configured host independently."""
+        failures: list[str] = []
+        for node_name, node in self.config.nodes.items():
+            self.update_status(context, f"enrolling encrypted storage on {node_name}")
+            try:
+                conn = get_admin_connection(self.jhelper, self.deployment)
+                hypervisor_name = resolve_hypervisor_name(node_name, conn)
+                guests = guests_on_hypervisor(hypervisor_name, conn)
+                if guests:
+                    failures.append(
+                        f"{node_name}: {len(guests)} instance(s) still assigned; "
+                        "migrate or delete them first"
+                    )
+                    continue
+
+                self.jhelper.grant_secret(
+                    self.model,
+                    node.existing_key_secret_id,
+                    ENCRYPTED_STORAGE_APP,
+                )
+                machine_id = str(
+                    self.client.cluster.get_node_info(node_name)["machineid"]
+                )
+                unit = self.jhelper.get_unit_from_machine(
+                    ENCRYPTED_STORAGE_HYPERVISOR_APP,
+                    machine_id,
+                    self.model,
+                )
+                hypervisor.wait_for_encrypted_storage(
+                    self.jhelper,
+                    unit,
+                    self.model,
+                    node.target,
+                    node.existing_key_secret_id,
+                )
+            except (JujuException, TimeoutError, ValueError, KeyError) as e:
+                failures.append(f"{node_name}: {e}")
+                continue
+
+        if failures:
+            return Result(ResultType.FAILED, "; ".join(failures))
         return Result(ResultType.COMPLETED)
