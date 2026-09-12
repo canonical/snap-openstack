@@ -3,11 +3,15 @@
 
 import json
 import logging
+import subprocess
 import typing
 
 import click
 import tenacity
+from rich.console import Console
+from snaphelpers import Snap
 
+import sunbeam.core.questions
 from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import (
     ConfigItemNotFoundException,
@@ -17,6 +21,7 @@ from sunbeam.commands.configure import (
     get_dpdk_config,
     get_pci_allowedlist_config,
 )
+from sunbeam.core.checks import JujuControllerRegistrationCheck
 from sunbeam.core.common import (
     BaseStep,
     Result,
@@ -27,8 +32,14 @@ from sunbeam.core.common import (
     read_config,
     update_config,
 )
+from sunbeam.core.compute_storage import (
+    get_vault_kv_offer_url,
+    get_vault_kv_offering_controller,
+    set_vault_kv_offer_url,
+)
 from sunbeam.core.deployment import Deployment, Networks
 from sunbeam.core.juju import (
+    MODEL_DELAY,
     ActionFailedException,
     ApplicationNotFoundException,
     JujuHelper,
@@ -55,6 +66,7 @@ from sunbeam.lazy import LazyImport
 from sunbeam.steps.configure import get_external_network_configs
 
 if typing.TYPE_CHECKING:
+    import jubilant
     import openstack
     from keystoneauth1 import exceptions as keystoneauth_exceptions
 else:
@@ -64,6 +76,7 @@ else:
 LOG = logging.getLogger(__name__)
 CONFIG_KEY = "TerraformVarsHypervisor"
 APPLICATION = "openstack-hypervisor"
+VAULTLOCKER_APPLICATION = "vaultlocker-hypervisor"
 HYPERVISOR_APP_TIMEOUT = 1800  # 30 minutes, includes adding / removing units
 HYPERVISOR_DESTROY_TIMEOUT = 600
 HYPERVISOR_UNIT_TIMEOUT = (
@@ -127,6 +140,13 @@ class DeployHypervisorApplicationStep(DeployMachineApplicationStep):
             "nova-offer-url",
         }
         extra_tfvars = {offer: openstack_tf_output.get(offer) for offer in juju_offers}
+
+        # Cluster-wide encrypted compute-storage configuration, if any.
+        vault_offer_url = get_vault_kv_offer_url(self.client)
+        extra_tfvars["vault-kv-offer-url"] = vault_offer_url
+        extra_tfvars["vault-kv-offering-controller"] = get_vault_kv_offering_controller(
+            vault_offer_url
+        )
 
         if len(storage_nodes) > 0:
             cinder_volume_tf_output = self.cinder_volume_tfhelper.output()
@@ -429,7 +449,7 @@ class ReapplyHypervisorTerraformPlanStep(BaseStep):
         jhelper: JujuHelper,
         manifest: Manifest,
         model: str,
-        extra_tfvars: dict = {},
+        extra_tfvars: dict | None = None,
     ):
         super().__init__(
             "Reapply OpenStack Hypervisor Terraform plan",
@@ -440,7 +460,7 @@ class ReapplyHypervisorTerraformPlanStep(BaseStep):
         self.jhelper = jhelper
         self.manifest = manifest
         self.model = model
-        self.extra_tfvars = extra_tfvars
+        self.extra_tfvars = extra_tfvars if extra_tfvars is not None else {}
 
     def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
@@ -453,6 +473,10 @@ class ReapplyHypervisorTerraformPlanStep(BaseStep):
 
         return Result(ResultType.SKIPPED)
 
+    def should_wait_for_hypervisor_status(self) -> bool:
+        """Return whether to wait for every hypervisor after applying Terraform."""
+        return True
+
     @tenacity.retry(
         wait=tenacity.wait_fixed(60),
         stop=tenacity.stop_after_delay(300),
@@ -464,6 +488,15 @@ class ReapplyHypervisorTerraformPlanStep(BaseStep):
         # Refresh model related variables
         self.extra_tfvars["machine_model_uuid"] = self.jhelper.get_model_uuid(
             self.model
+        )
+
+        # Override any offer left in Terraform's saved inputs by a failed attempt.
+        if "vault-kv-offer-url" not in self.extra_tfvars:
+            self.extra_tfvars["vault-kv-offer-url"] = get_vault_kv_offer_url(
+                self.client
+            )
+        self.extra_tfvars["vault-kv-offering-controller"] = (
+            get_vault_kv_offering_controller(self.extra_tfvars["vault-kv-offer-url"])
         )
 
         # Apply Network configs everytime reapply is called
@@ -503,17 +536,190 @@ class ReapplyHypervisorTerraformPlanStep(BaseStep):
 
         # Wait for more time since parallel node joins will take time
         # for openstack-hypervisor application to get settled
-        try:
-            self.jhelper.wait_until_desired_status(
-                self.model,
-                [APPLICATION],
-                status=statuses,
-                agent_status=["idle"],
-                timeout=HYPERVISOR_UNIT_TIMEOUT,
+        if self.should_wait_for_hypervisor_status():
+            try:
+                self.jhelper.wait_until_desired_status(
+                    self.model,
+                    [APPLICATION],
+                    status=statuses,
+                    agent_status=["idle"],
+                    timeout=HYPERVISOR_UNIT_TIMEOUT,
+                )
+            except TimeoutError as e:
+                LOG.warning("Timed out waiting for hypervisor application: %r", e)
+                return Result(ResultType.FAILED, str(e))
+
+        return Result(ResultType.COMPLETED)
+
+
+class DeployVaultlockerStep(ReapplyHypervisorTerraformPlanStep, JujuStepHelper):
+    """Deploy and relate Vaultlocker before encrypted storage enrollment."""
+
+    def __init__(
+        self,
+        client: Client,
+        tfhelper: TerraformHelper,
+        jhelper: JujuHelper,
+        manifest: Manifest,
+        model: str,
+        vault_offer_url: str | None = None,
+        target_nodes: list[str] | None = None,
+    ):
+        super().__init__(client, tfhelper, jhelper, manifest, model, extra_tfvars={})
+        self.name = "Deploy Vaultlocker"
+        self.description = "Deploying Vaultlocker"
+        self.vault_offer_url = vault_offer_url
+        self.target_nodes = target_nodes
+
+    def should_wait_for_hypervisor_status(self) -> bool:
+        """Use the target-unit readiness check instead of an all-unit wait."""
+        return False
+
+    def has_prompts(self) -> bool:
+        """Allow the local command to collect an external Vault offer."""
+        return True
+
+    def prompt(self, console: Console | None = None, show_hint: bool = False) -> None:
+        """Reuse the configured Vault offer or ask for one before deployment."""
+        if self.vault_offer_url is None:
+            self.vault_offer_url = get_vault_kv_offer_url(self.client)
+        if self.vault_offer_url is None and console is not None:
+            self.vault_offer_url = sunbeam.core.questions.PromptQuestion(
+                "External vault-kv offer URL"
+            ).ask()
+
+    @staticmethod
+    def _is_vaultlocker_ready(
+        status: "jubilant.Status",
+        target_machine_ids: set[str] | None = None,
+        require_vault_integration: bool = False,
+    ) -> bool:
+        """Require relations and idle subordinates on each selected compute."""
+        vaultlocker = status.apps.get(VAULTLOCKER_APPLICATION)
+        hypervisor = status.apps.get(APPLICATION)
+        if vaultlocker is None or hypervisor is None or not hypervisor.units:
+            return False
+        if not any(
+            relation.related_app == APPLICATION
+            for relation in vaultlocker.relations.get("encrypted-device", [])
+        ) or not vaultlocker.relations.get("vault-kv"):
+            return False
+
+        # A failed enrollment can leave either workload blocked. The action
+        # must still run so the operator can retry it. Check relation wiring
+        # and idle agents here; the action proves the mount separately.
+        units = list(hypervisor.units.values())
+        if target_machine_ids is not None:
+            units = [unit for unit in units if unit.machine in target_machine_ids]
+            if {unit.machine for unit in units} != target_machine_ids:
+                return False
+        for unit in units:
+            if unit.juju_status.current != "idle":
+                return False
+            subordinates = [
+                subordinate
+                for name, subordinate in unit.subordinates.items()
+                if name.startswith(f"{VAULTLOCKER_APPLICATION}/")
+            ]
+            if not subordinates:
+                return False
+            for subordinate in subordinates:
+                if subordinate.juju_status.current != "idle":
+                    return False
+                workload = subordinate.workload_status
+                if require_vault_integration:
+                    if (
+                        workload.current != "active"
+                        or workload.message != "Vault integration ready"
+                    ):
+                        return False
+                elif workload.current not in {"active", "blocked"}:
+                    return False
+        return True
+
+    def run(self, context: StepContext) -> Result:
+        """Apply the offer and confirm it once Vaultlocker can use Vault."""
+        if self.target_nodes == []:
+            return Result(ResultType.FAILED, "At least one compute host is required")
+        vault_offer_url = (
+            self.vault_offer_url
+            if self.vault_offer_url is not None
+            else get_vault_kv_offer_url(self.client)
+        )
+        if not vault_offer_url or not vault_offer_url.strip():
+            return Result(ResultType.FAILED, "External vault-kv offer URL is required")
+        confirmed_offer = get_vault_kv_offer_url(self.client)
+        if confirmed_offer is not None and confirmed_offer != vault_offer_url:
+            return Result(
+                ResultType.FAILED,
+                "A different vault-kv offer URL is already configured: "
+                f"{confirmed_offer}",
             )
-        except TimeoutError as e:
-            LOG.warning("Timed out waiting for hypervisor application: %r", e)
+
+        try:
+            offering_controller = get_vault_kv_offering_controller(vault_offer_url)
+        except ValueError as e:
             return Result(ResultType.FAILED, str(e))
+        if offering_controller:
+            check = JujuControllerRegistrationCheck(
+                offering_controller, Snap().paths.user_data
+            )
+            if not check.run():
+                return Result(ResultType.FAILED, check.message)
+
+        try:
+            target_machine_ids = (
+                {
+                    str(self.client.cluster.get_node_info(node)["machineid"])
+                    for node in self.target_nodes
+                }
+                if self.target_nodes is not None
+                else None
+            )
+        except (NodeNotExistInClusterException, KeyError) as e:
+            return Result(ResultType.FAILED, str(e))
+
+        self.extra_tfvars["vault-kv-offer-url"] = vault_offer_url
+        self.extra_tfvars["vault-kv-offering-controller"] = offering_controller
+        result = super().run(context)
+        if result.result_type != ResultType.COMPLETED:
+            return result
+
+        if offering_controller:
+            try:
+                # Use the Juju CLI for remote offers, as observability does.
+                self.integrate(
+                    self.model, f"{VAULTLOCKER_APPLICATION}:vault-kv", vault_offer_url
+                )
+            except subprocess.CalledProcessError as e:
+                return Result(
+                    ResultType.FAILED, f"Failed to integrate Vault offer: {e.stderr}"
+                )
+
+        self.update_status(context, "waiting for Vaultlocker relations and units")
+        try:
+            with self.jhelper._model(self.model) as juju:
+                self.jhelper._wait(
+                    lambda status: self._is_vaultlocker_ready(
+                        status,
+                        target_machine_ids,
+                        require_vault_integration=confirmed_offer is None,
+                    ),
+                    juju,
+                    delay=MODEL_DELAY,
+                    timeout=HYPERVISOR_UNIT_TIMEOUT,
+                )
+        except TimeoutError as e:
+            LOG.warning("Timed out waiting for Vaultlocker readiness: %r", e)
+            return Result(ResultType.FAILED, f"Vaultlocker is not ready: {e}")
+
+        if confirmed_offer is None:
+            # Pin only after Vaultlocker receives usable Vault credentials.
+            # This happens before enrollment, so later retries keep one offer.
+            try:
+                set_vault_kv_offer_url(self.client, vault_offer_url)
+            except ValueError as e:
+                return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.COMPLETED)
 
