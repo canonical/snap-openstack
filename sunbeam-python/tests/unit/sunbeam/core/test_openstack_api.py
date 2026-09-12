@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2023 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import pytest
@@ -16,6 +17,7 @@ FAKE_CREDS = {
     "OS_PROJECT_NAME": "admin",
     "OS_IDENTITY_API_VERSION": "3",
     "OS_AUTH_VERSION": "3",
+    "OS_REGION_NAME": "RegionTwo",
 }
 
 
@@ -62,6 +64,7 @@ class TestOpenStackAPI:
             project_name=FAKE_CREDS.get("OS_PROJECT_NAME"),
             user_domain_name=FAKE_CREDS.get("OS_USER_DOMAIN_NAME"),
             project_domain_name=FAKE_CREDS.get("OS_PROJECT_DOMAIN_NAME"),
+            region_name=FAKE_CREDS.get("OS_REGION_NAME"),
         )
 
     def test_guests_on_hypervisor(self):
@@ -72,6 +75,40 @@ class TestOpenStackAPI:
         conn.compute.servers.assert_called_once_with(
             all_projects=True, hypervisor_hostname="hyper1", status=None
         )
+
+    @pytest.mark.parametrize(
+        ("node_name", "hypervisor_names", "expected"),
+        [
+            ("cloud-1", ["cloud-1.maas"], "cloud-1.maas"),
+            ("cloud-1.example.com", ["cloud-1.example.com"], "cloud-1.example.com"),
+        ],
+    )
+    def test_resolve_hypervisor_name(self, node_name, hypervisor_names, expected):
+        conn = Mock()
+        conn.compute.hypervisors.return_value = [
+            SimpleNamespace(name=name) for name in hypervisor_names
+        ]
+
+        assert (
+            sunbeam.core.openstack_api.resolve_hypervisor_name(node_name, conn)
+            == expected
+        )
+
+    @pytest.mark.parametrize(
+        "hypervisor_names", [[], ["cloud-1.a", "cloud-1.b"], ["cloud-11.maas"]]
+    )
+    def test_resolve_hypervisor_name_rejects_missing_or_ambiguous(
+        self, hypervisor_names
+    ):
+        conn = Mock()
+        conn.compute.hypervisors.return_value = [
+            SimpleNamespace(name=name) for name in hypervisor_names
+        ]
+
+        with pytest.raises(
+            ValueError, match="Cannot identify a unique Nova hypervisor"
+        ):
+            sunbeam.core.openstack_api.resolve_hypervisor_name("cloud-1", conn)
 
     def test_remove_compute_service(self):
         service1 = Mock(binary="nova-compute", host="hyper1")
