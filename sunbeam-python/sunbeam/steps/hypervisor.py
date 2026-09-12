@@ -6,7 +6,9 @@ import logging
 import typing
 
 import tenacity
+from rich.console import Console
 
+import sunbeam.core.questions
 from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import (
     ConfigItemNotFoundException,
@@ -26,8 +28,13 @@ from sunbeam.core.common import (
     read_config,
     update_config,
 )
+from sunbeam.core.compute_storage import (
+    get_vault_kv_offer_url,
+    set_vault_kv_offer_url,
+)
 from sunbeam.core.deployment import Deployment, Networks
 from sunbeam.core.juju import (
+    MODEL_DELAY,
     ActionFailedException,
     ApplicationNotFoundException,
     JujuHelper,
@@ -48,6 +55,7 @@ from sunbeam.lazy import LazyImport
 from sunbeam.steps.configure import get_external_network_configs
 
 if typing.TYPE_CHECKING:
+    import jubilant
     import openstack
 else:
     openstack = LazyImport("openstack")
@@ -114,6 +122,9 @@ class DeployHypervisorApplicationStep(DeployMachineApplicationStep):
             "nova-offer-url",
         }
         extra_tfvars = {offer: openstack_tf_output.get(offer) for offer in juju_offers}
+
+        # Cluster-wide encrypted compute-storage configuration, if any.
+        extra_tfvars["vault-kv-offer-url"] = get_vault_kv_offer_url(self.client)
 
         if len(storage_nodes) > 0:
             cinder_volume_tf_output = self.cinder_volume_tfhelper.output()
@@ -362,6 +373,10 @@ class ReapplyHypervisorTerraformPlanStep(BaseStep):
 
         return Result(ResultType.SKIPPED)
 
+    def should_wait_for_hypervisor_status(self) -> bool:
+        """Return whether to wait for every hypervisor after applying Terraform."""
+        return True
+
     @tenacity.retry(
         wait=tenacity.wait_fixed(60),
         stop=tenacity.stop_after_delay(300),
@@ -412,17 +427,140 @@ class ReapplyHypervisorTerraformPlanStep(BaseStep):
 
         # Wait for more time since parallel node joins will take time
         # for openstack-hypervisor application to get settled
+        if self.should_wait_for_hypervisor_status():
+            try:
+                self.jhelper.wait_until_desired_status(
+                    self.model,
+                    [APPLICATION],
+                    status=statuses,
+                    agent_status=["idle"],
+                    timeout=HYPERVISOR_UNIT_TIMEOUT,
+                )
+            except TimeoutError as e:
+                LOG.warning("Timed out waiting for hypervisor application: %r", e)
+                return Result(ResultType.FAILED, str(e))
+
+        return Result(ResultType.COMPLETED)
+
+
+class DeployVaultlockerStep(ReapplyHypervisorTerraformPlanStep):
+    """Deploy and relate Vaultlocker before encrypted storage enrollment."""
+
+    def __init__(
+        self,
+        client: Client,
+        tfhelper: TerraformHelper,
+        jhelper: JujuHelper,
+        manifest: Manifest,
+        model: str,
+        vault_offer_url: str | None = None,
+        target_nodes: list[str] | None = None,
+    ):
+        super().__init__(client, tfhelper, jhelper, manifest, model, extra_tfvars={})
+        self.name = "Deploy Vaultlocker"
+        self.description = "Deploying Vaultlocker"
+        self.vault_offer_url = vault_offer_url
+        self.target_nodes = target_nodes
+
+    def should_wait_for_hypervisor_status(self) -> bool:
+        """Use the target-unit readiness check instead of an all-unit wait."""
+        return False
+
+    def has_prompts(self) -> bool:
+        """Allow the local command to collect an external Vault offer."""
+        return True
+
+    def prompt(self, console: Console | None = None, show_hint: bool = False) -> None:
+        """Reuse the configured Vault offer or ask for one before deployment."""
+        if self.vault_offer_url is None:
+            self.vault_offer_url = get_vault_kv_offer_url(self.client)
+        if self.vault_offer_url is None and console is not None:
+            self.vault_offer_url = sunbeam.core.questions.PromptQuestion(
+                "External vault-kv offer URL"
+            ).ask()
+
+    @staticmethod
+    def _is_vaultlocker_ready(
+        status: "jubilant.Status", target_machine_ids: set[str] | None = None
+    ) -> bool:
+        """Require relations and an idle subordinate on each selected compute."""
+        vaultlocker = status.apps.get("vaultlocker-hypervisor")
+        hypervisor = status.apps.get(APPLICATION)
+        if vaultlocker is None or hypervisor is None or not hypervisor.units:
+            return False
+        if not any(
+            relation.related_app == APPLICATION
+            for relation in vaultlocker.relations.get("encrypted-device", [])
+        ) or not vaultlocker.relations.get("vault-kv"):
+            return False
+
+        # A failed enrollment can leave either workload blocked. The action
+        # must still run so the operator can retry it. Check relation wiring
+        # and idle agents here; the action proves the mount separately.
+        units = list(hypervisor.units.values())
+        if target_machine_ids is not None:
+            units = [unit for unit in units if unit.machine in target_machine_ids]
+            if {unit.machine for unit in units} != target_machine_ids:
+                return False
+        for unit in units:
+            if unit.juju_status.current != "idle":
+                return False
+            subordinates = [
+                subordinate
+                for name, subordinate in unit.subordinates.items()
+                if name.startswith("vaultlocker-hypervisor/")
+            ]
+            if not subordinates or any(
+                subordinate.juju_status.current != "idle"
+                or subordinate.workload_status.current not in {"active", "blocked"}
+                for subordinate in subordinates
+            ):
+                return False
+        return True
+
+    def run(self, context: StepContext) -> Result:
+        """Store the offer, apply Terraform, and wait for Vaultlocker readiness."""
+        if self.target_nodes == []:
+            return Result(ResultType.FAILED, "At least one compute host is required")
+        vault_offer_url = self.vault_offer_url or get_vault_kv_offer_url(self.client)
+        if not vault_offer_url:
+            return Result(ResultType.FAILED, "External vault-kv offer URL is required")
         try:
-            self.jhelper.wait_until_desired_status(
-                self.model,
-                [APPLICATION],
-                status=statuses,
-                agent_status=["idle"],
-                timeout=HYPERVISOR_UNIT_TIMEOUT,
-            )
-        except TimeoutError as e:
-            LOG.warning("Timed out waiting for hypervisor application: %r", e)
+            set_vault_kv_offer_url(self.client, vault_offer_url)
+        except ValueError as e:
             return Result(ResultType.FAILED, str(e))
+
+        self.extra_tfvars["vault-kv-offer-url"] = vault_offer_url
+        result = super().run(context)
+        if result.result_type != ResultType.COMPLETED:
+            return result
+
+        try:
+            target_machine_ids = (
+                {
+                    str(self.client.cluster.get_node_info(node)["machineid"])
+                    for node in self.target_nodes
+                }
+                if self.target_nodes is not None
+                else None
+            )
+        except (NodeNotExistInClusterException, KeyError) as e:
+            return Result(ResultType.FAILED, str(e))
+
+        self.update_status(context, "waiting for Vaultlocker relations and units")
+        try:
+            with self.jhelper._model(self.model) as juju:
+                self.jhelper._wait(
+                    lambda status: self._is_vaultlocker_ready(
+                        status, target_machine_ids
+                    ),
+                    juju,
+                    delay=MODEL_DELAY,
+                    timeout=HYPERVISOR_UNIT_TIMEOUT,
+                )
+        except TimeoutError as e:
+            LOG.warning("Timed out waiting for Vaultlocker readiness: %r", e)
+            return Result(ResultType.FAILED, f"Vaultlocker is not ready: {e}")
 
         return Result(ResultType.COMPLETED)
 
