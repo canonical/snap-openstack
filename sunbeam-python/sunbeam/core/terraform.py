@@ -223,6 +223,117 @@ class TerraformHelper:
             cmd.append(f"-parallelism={self.parallelism}")
         self._run_terraform_command(cmd, os_env, reporter=reporter)
 
+    def terraform_plan(self, extra_args: list | None = None) -> list[dict]:
+        """Run terraform plan and return the change events.
+
+        Executes ``terraform plan`` in JSON mode and returns the
+        parsed change events. Each event is a dict with ``@level``,
+        ``@message``, and optionally ``change`` fields.
+
+        :param extra_args: Extra args (e.g. ``-target=module.keystone``)
+            to scope the plan to specific resources.
+        :returns: list of terraform plan JSON events
+        :raises TerraformException: if the plan command fails
+        """
+        os_env = os.environ.copy()
+        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        tf_log = str(self.path / f"terraform-plan-{timestamp}.log")
+        os_env.update({"TF_LOG_PATH": tf_log})
+        os_env.setdefault("TF_LOG", "INFO")
+        if self.env:
+            os_env.update(self.env)
+
+        cmd = [
+            self.terraform,
+            "plan",
+            "-input=false",
+            "-no-color",
+            "-json",
+        ]
+        if extra_args:
+            cmd.extend(extra_args)
+        if self.parallelism is not None:
+            cmd.append(f"-parallelism={self.parallelism}")
+
+        LOG.debug("Running command %s with cwd: %s", " ".join(cmd), self.path)
+
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            cwd=self.path,
+            env=os_env,
+        )
+
+        events: list[dict] = []
+        if process.stdout is not None:
+            for line in process.stdout:
+                line = line.rstrip("\n")
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                    events.append(event)
+                except json.JSONDecodeError:
+                    LOG.debug("Non-JSON plan line: %s", line)
+
+        process.wait()
+        if process.returncode != 0:
+            stderr_output = ""
+            if process.stderr is not None:
+                stderr_output = process.stderr.read()
+            raise TerraformException(
+                f"terraform plan failed: {' '.join(cmd)}\nstderr: {stderr_output}"
+            )
+
+        return events
+
+    def terraform_plan_text(self, extra_args: list | None = None) -> str:
+        """Run terraform plan in text mode and return human-readable output.
+
+        Unlike ``terraform_plan`` which returns JSON events, this returns
+        the standard ``terraform plan`` text output with ``+``/``-``/``~``
+        field-level diffs. Used for debug logging during dry-run.
+
+        :param extra_args: Extra args (e.g. ``-target=module.keystone``)
+            to scope the plan to specific resources.
+        :returns: terraform plan text output
+        :raises TerraformException: if the plan command fails
+        """
+        os_env = os.environ.copy()
+        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        tf_log = str(self.path / f"terraform-plan-{timestamp}.log")
+        os_env.update({"TF_LOG_PATH": tf_log})
+        os_env.setdefault("TF_LOG", "INFO")
+        if self.env:
+            os_env.update(self.env)
+
+        cmd = [self.terraform, "plan", "-input=false", "-no-color"]
+        if extra_args:
+            cmd.extend(extra_args)
+        if self.parallelism is not None:
+            cmd.append(f"-parallelism={self.parallelism}")
+
+        LOG.debug("Running command %s with cwd: %s", " ".join(cmd), self.path)
+
+        try:
+            process = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=True,
+                cwd=self.path,
+                env=os_env,
+            )
+            LOG.debug("Plan text output:\n%s", process.stdout)
+            return process.stdout
+        except subprocess.CalledProcessError as e:
+            LOG.exception("Terraform plan (text) failed: %s", e.stderr)
+            raise TerraformException(
+                f"terraform plan failed: {' '.join(cmd)}\nstderr: {e.stderr}"
+            )
+
     def destroy(self, reporter: ProgressReporter | None = None):
         """Terraform destroy."""
         os_env = os.environ.copy()
@@ -410,6 +521,33 @@ class TerraformHelper:
         self.write_tfvars(updated_tfvars)
         LOG.debug("Applying plan %s with tfvars %s", self.plan, updated_tfvars)
         self.apply(tf_apply_extra_args, reporter=reporter)
+
+    def update_partial_tfvars_and_plan_tf(
+        self,
+        client: Client,
+        manifest: Manifest,
+        charms: list[str],
+        tfvar_config: str | None = None,
+        tf_plan_extra_args: list | None = None,
+    ) -> list[dict]:
+        """Update tfvars for specific charms and run terraform plan.
+
+        Same as ``update_partial_tfvars_and_apply_tf`` but runs
+        ``terraform plan`` instead of ``terraform apply``. Does not
+        save tfvars to the database — dry-run only.
+
+        :param tf_plan_extra_args: Extra args (e.g. ``-target=...``)
+            to scope the plan to specific resources.
+        :returns: list of terraform plan JSON events
+        """
+        computed_keys, updated_tfvars = self._load_and_filter_db_tfvars_for_charms(
+            client, tfvar_config, charms
+        )
+        tfvars_from_manifest = self._get_tfvars(manifest, charms)
+        self._apply_tfvars(updated_tfvars, tfvars_from_manifest)
+        self.write_tfvars(updated_tfvars)
+        LOG.debug("Planning %s with tfvars %s", self.plan, updated_tfvars)
+        return self.terraform_plan(extra_args=tf_plan_extra_args)
 
     def update_tfvars_and_apply_tf(
         self,

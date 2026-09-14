@@ -27,6 +27,7 @@ from sunbeam.core.terraform import (
     TerraformInitStep,
 )
 from sunbeam.steps.configure import CLOUD_CONFIG_SECTION
+from sunbeam.utils import GuardedGroup
 
 PCI_CONFIG_SECTION = "PCI"
 DPDK_CONFIG_SECTION = "DPDK"
@@ -444,7 +445,7 @@ def _keep_cmd_params(cmd: click.Command, params: dict) -> dict:
     return out_params
 
 
-@click.group(invoke_without_command=True)
+@click.group(invoke_without_command=True, cls=GuardedGroup)
 @click.pass_context
 @click.option("-a", "--accept-defaults", help="Accept all defaults.", is_flag=True)
 @click.option(

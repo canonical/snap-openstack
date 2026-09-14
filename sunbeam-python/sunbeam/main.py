@@ -25,7 +25,7 @@ from sunbeam.core import deployments as deployments_jobs
 from sunbeam.feature_gates import FeatureGateError, validate_feature_gate_config
 from sunbeam.feature_manager import list_feature_gates, list_features
 from sunbeam.provider import commands as provider_cmds
-from sunbeam.utils import CatchGroup, clean_env
+from sunbeam.utils import CatchGroup, GuardedGroup, clean_env
 
 LOG = logging.getLogger()
 
@@ -73,7 +73,7 @@ def proxy(ctx):
     """Manage proxy configuration."""
 
 
-@click.group("enable", context_settings=CONTEXT_SETTINGS, cls=CatchGroup)
+@click.group("enable", context_settings=CONTEXT_SETTINGS, cls=GuardedGroup)
 @click.option(
     "-m",
     "--manifest",
@@ -85,7 +85,7 @@ def enable(ctx, manifest: Path | None = None):
     """Enable features."""
 
 
-@click.group("disable", context_settings=CONTEXT_SETTINGS, cls=CatchGroup)
+@click.group("disable", context_settings=CONTEXT_SETTINGS, cls=GuardedGroup)
 @click.pass_context
 def disable(ctx):
     """Disable features."""

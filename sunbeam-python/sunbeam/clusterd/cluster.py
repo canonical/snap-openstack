@@ -10,6 +10,7 @@ from requests import codes
 from requests.models import HTTPError
 
 from sunbeam.clusterd import models, service
+from sunbeam.clusterd.service import ConfigItemNotFoundException, URLNotFoundException
 
 LOG = logging.getLogger(__name__)
 
@@ -367,6 +368,55 @@ class ExtendedAPIService(service.BaseService):
             "enabled": enabled,
         }
         self._put(f"/1.0/feature-gates/{gate_key}", data=json.dumps(data))
+
+    def acquire_upgrade_lock(self, holder_id: str) -> models.AcquireUpgradeLockResponse:
+        """Acquire the upgrade advisory lock.
+
+        Returns the fencing token that must be passed to every subsequent
+        state write. Raises UpgradeLockHeldException if another live holder
+        owns the lock.
+        """
+        data = {"holder_id": holder_id}
+        resp = self._post("/1.0/upgrade/lock", data=json.dumps(data))
+        return models.AcquireUpgradeLockResponse(**resp.get("metadata", {}))
+
+    def refresh_upgrade_lock(self, token: int) -> None:
+        """Refresh the upgrade lock's TTL (heartbeat).
+
+        Raises UpgradeTokenMismatchException if the caller's token is stale
+        (lock expired and was re-acquired).
+        """
+        data = {"token": token}
+        self._put("/1.0/upgrade/lock", data=json.dumps(data))
+
+    def release_upgrade_lock(self, token: int) -> None:
+        """Release the upgrade lock.
+
+        Raises UpgradeTokenMismatchException if the caller's token is stale.
+        """
+        data = {"token": token}
+        self._delete("/1.0/upgrade/lock", data=json.dumps(data))
+
+    def get_upgrade_state(self) -> str | None:
+        """Return the persisted upgrade state JSON, or None if no hop exists."""
+        try:
+            return self._get("/1.0/upgrade/state").get("metadata")
+        except (ConfigItemNotFoundException, URLNotFoundException):
+            return None
+
+    def update_upgrade_state(self, token: int, state: str) -> None:
+        """Write the upgrade state JSON.
+
+        The token must match the lock's current fencing token, or the write
+        is rejected with UpgradeTokenMismatchException. The state is the
+        JSON-encoded upgrade state blob (spec §6.1).
+        """
+        data = {"token": token, "state": state}
+        self._put("/1.0/upgrade/state", data=json.dumps(data))
+
+    def is_upgrade_active(self) -> bool:
+        """Return True if an upgrade hop is in progress."""
+        return bool(self._get("/1.0/upgrade/active").get("metadata", {}).get("active"))
 
 
 class ClusterService(MicroClusterService, ExtendedAPIService):

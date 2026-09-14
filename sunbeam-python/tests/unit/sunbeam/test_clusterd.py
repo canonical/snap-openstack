@@ -1042,3 +1042,192 @@ class TestSaveManagementCidrStep:
         step.variables = {"bootstrap": {}}
         result = step.run(step_context)
         assert result.result_type == ResultType.FAILED
+
+
+class TestUpgradeLock:
+    """Unit tests for the upgrade advisory lock + fencing-token client.
+
+    G1 invariant tested here: the Python client surfaces HTTP 409 from
+    clusterd as typed exceptions (UpgradeLockHeldException on acquire,
+    UpgradeTokenMismatchException on refresh/release/write) so the
+    coordinator can react — instead of silently retrying against a lock it
+    no longer owns.
+    """
+
+    def _mock_response(self, status=200, json_data=None, raise_for_status=None):
+        mock_resp = MagicMock()
+        mock_resp.status_code = status
+        mock_resp.text = "MOCKCONTENT"
+        if json_data:
+            mock_resp.json.return_value = json_data
+        if raise_for_status:
+            mock_resp.raise_for_status.side_effect = raise_for_status
+        return mock_resp
+
+    def _service(self, mock_response):
+        mock_session = MagicMock()
+        mock_session.request.return_value = mock_response
+        return ClusterService(mock_session, "http+unix://mock")
+
+    def test_acquire_upgrade_lock_returns_token(self):
+        resp = self._mock_response(
+            status=200,
+            json_data={
+                "type": "sync",
+                "status": "Success",
+                "status_code": 200,
+                "operation": "",
+                "error_code": 0,
+                "error": "",
+                "metadata": {"token": 7},
+            },
+        )
+        cs = self._service(resp)
+        result = cs.acquire_upgrade_lock("host-a-pid1234")
+        assert result.token == 7
+        # Verify the request hit the right endpoint with the right body.
+        _, kwargs = cs._BaseService__session.request.call_args
+        assert kwargs["method"] == "post"
+        assert kwargs["url"].endswith("/1.0/upgrade/lock")
+        assert json.loads(kwargs["data"]) == {"holder_id": "host-a-pid1234"}
+
+    def test_acquire_upgrade_lock_raises_when_held(self):
+        # clusterd returns 409 with a LockHeldError-shaped message.
+        resp = self._mock_response(
+            status=409,
+            json_data={
+                "type": "error",
+                "status": "",
+                "status_code": 0,
+                "operation": "",
+                "error_code": 409,
+                "error": 'upgrade lock held by "host-a-pid1234"',
+                "metadata": None,
+            },
+            raise_for_status=HTTPError("Conflict"),
+        )
+        cs = self._service(resp)
+        with pytest.raises(service.UpgradeLockHeldException):
+            cs.acquire_upgrade_lock("host-b-pid5678")
+
+    def test_refresh_upgrade_lock_sends_token(self):
+        resp = self._mock_response(
+            status=200,
+            json_data={
+                "type": "sync",
+                "status": "Success",
+                "status_code": 200,
+                "operation": "",
+                "error_code": 0,
+                "error": "",
+                "metadata": None,
+            },
+        )
+        cs = self._service(resp)
+        cs.refresh_upgrade_lock(token=7)
+        _, kwargs = cs._BaseService__session.request.call_args
+        assert kwargs["method"] == "put"
+        assert kwargs["url"].endswith("/1.0/upgrade/lock")
+        assert json.loads(kwargs["data"]) == {"token": 7}
+
+    def test_refresh_upgrade_lock_raises_on_stale_token(self):
+        resp = self._mock_response(
+            status=409,
+            json_data={
+                "type": "error",
+                "error": "fencing token mismatch: have 7, lock at 8",
+                "metadata": None,
+            },
+            raise_for_status=HTTPError("Conflict"),
+        )
+        cs = self._service(resp)
+        with pytest.raises(service.UpgradeTokenMismatchException):
+            cs.refresh_upgrade_lock(token=7)
+
+    def test_release_upgrade_lock_sends_token(self):
+        resp = self._mock_response(
+            status=200,
+            json_data={
+                "type": "sync",
+                "status": "Success",
+                "status_code": 200,
+                "operation": "",
+                "error_code": 0,
+                "error": "",
+                "metadata": None,
+            },
+        )
+        cs = self._service(resp)
+        cs.release_upgrade_lock(token=7)
+        _, kwargs = cs._BaseService__session.request.call_args
+        assert kwargs["method"] == "delete"
+        assert kwargs["url"].endswith("/1.0/upgrade/lock")
+        assert json.loads(kwargs["data"]) == {"token": 7}
+
+    def test_get_upgrade_state_returns_state_json(self):
+        resp = self._mock_response(
+            status=200,
+            json_data={
+                "type": "sync",
+                "metadata": '{"hop_history": []}',
+            },
+        )
+        cs = self._service(resp)
+        assert cs.get_upgrade_state() == '{"hop_history": []}'
+
+    def test_get_upgrade_state_returns_none_when_missing(self):
+        resp = self._mock_response(
+            status=404,
+            json_data={
+                "type": "error",
+                "error": "ConfigItem not found",
+                "metadata": None,
+            },
+            raise_for_status=HTTPError("Not Found"),
+        )
+        cs = self._service(resp)
+        assert cs.get_upgrade_state() is None
+
+    def test_update_upgrade_state_sends_token_and_state(self):
+        resp = self._mock_response(
+            status=200,
+            json_data={"type": "sync", "metadata": None},
+        )
+        cs = self._service(resp)
+        cs.update_upgrade_state(token=7, state='{"active": true}')
+        _, kwargs = cs._BaseService__session.request.call_args
+        assert kwargs["method"] == "put"
+        assert kwargs["url"].endswith("/1.0/upgrade/state")
+        body = json.loads(kwargs["data"])
+        assert body["token"] == 7
+        assert body["state"] == '{"active": true}'
+
+    def test_update_upgrade_state_raises_on_stale_token(self):
+        resp = self._mock_response(
+            status=409,
+            json_data={
+                "type": "error",
+                "error": "fencing token mismatch: have 7, lock at 8",
+                "metadata": None,
+            },
+            raise_for_status=HTTPError("Conflict"),
+        )
+        cs = self._service(resp)
+        with pytest.raises(service.UpgradeTokenMismatchException):
+            cs.update_upgrade_state(token=7, state="{}")
+
+    def test_is_upgrade_active_true(self):
+        resp = self._mock_response(
+            status=200,
+            json_data={"type": "sync", "metadata": {"active": True}},
+        )
+        cs = self._service(resp)
+        assert cs.is_upgrade_active() is True
+
+    def test_is_upgrade_active_false(self):
+        resp = self._mock_response(
+            status=200,
+            json_data={"type": "sync", "metadata": {"active": False}},
+        )
+        cs = self._service(resp)
+        assert cs.is_upgrade_active() is False

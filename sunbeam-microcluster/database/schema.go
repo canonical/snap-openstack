@@ -20,6 +20,7 @@ var SchemaExtensions = []schema.Update{
 	FeatureGatesSchemaUpdate,
 	AddArchAndIsDPUToNodes,
 	AddImageNameToNodes,
+	UpgradeLockSchemaUpdate,
 }
 
 // NodesSchemaUpdate is schema for table nodes
@@ -155,10 +156,29 @@ func FeatureGatesSchemaUpdate(_ context.Context, tx *sql.Tx) error {
 	stmt := `
 CREATE TABLE feature_gates (
   id                            INTEGER  PRIMARY KEY AUTOINCREMENT NOT NULL,
-  gate_key                      TEXT     NOT NULL,
-  enabled                       BOOLEAN  NOT NULL DEFAULT 0,
+  gate_key                      TEXT     NOT  NULL,
+  enabled                       BOOLEAN  NOT  NULL DEFAULT 0,
   UNIQUE(gate_key)
 );
+  `
+
+	_, err := tx.Exec(stmt)
+	return err
+}
+
+// UpgradeLockSchemaUpdate creates the upgrade_lock table. Single-row table
+// (id=1, seeded at schema-apply time) holding the advisory lock state for the
+// release-upgrade coordinator. token is monotonically increasing — every
+// acquire bumps it, so a stale holder's writes are detectable via CAS.
+func UpgradeLockSchemaUpdate(_ context.Context, tx *sql.Tx) error {
+	stmt := `
+CREATE TABLE upgrade_lock (
+  id          INTEGER  PRIMARY KEY NOT NULL,
+  token       INTEGER  NOT  NULL  DEFAULT 0,
+  holder_id   TEXT     NOT  NULL  DEFAULT '',
+  expires_at  INTEGER  NOT  NULL  DEFAULT 0
+);
+INSERT INTO upgrade_lock (id, token, holder_id, expires_at) VALUES (1, 0, '', 0);
   `
 
 	_, err := tx.Exec(stmt)

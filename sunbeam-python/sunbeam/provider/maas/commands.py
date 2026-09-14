@@ -19,6 +19,7 @@ from snaphelpers import Snap
 from sunbeam.clusterd.service import ConfigItemNotFoundException
 from sunbeam.commands import refresh as refresh_cmds
 from sunbeam.commands import resize as resize_cmds
+from sunbeam.commands import upgrade as upgrade_cmds
 from sunbeam.commands.configure import (
     DemoSetup,
     TerraformDemoInitStep,
@@ -210,6 +211,7 @@ from sunbeam.steps.terraform import CleanTerraformPlansStep
 from sunbeam.utils import (
     CatchGroup,
     DefaultableMappingParameter,
+    GuardedGroup,
     click_option_show_hints,
 )
 
@@ -217,7 +219,7 @@ LOG = logging.getLogger(__name__)
 console = Console()
 
 
-@click.group("cluster", context_settings=CONTEXT_SETTINGS, cls=CatchGroup)
+@click.group("cluster", context_settings=CONTEXT_SETTINGS, cls=GuardedGroup)
 @click.pass_context
 def cluster(ctx):
     """Manage the Sunbeam Cluster."""
@@ -269,6 +271,7 @@ class MaasProvider(ProviderBase):
         cluster.add_command(list_nodes)
         cluster.add_command(resize_cmds.resize)
         cluster.add_command(refresh_cmds.refresh)
+        cluster.add_command(upgrade_cmds.upgrade)
         cluster.add_command(remove_node)
         cluster.add_command(destroy_deployment_cmd)
         configure.add_command(configure_cmd)

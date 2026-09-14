@@ -19,6 +19,7 @@ from sunbeam.errors import SunbeamException
 from sunbeam.storage.base import StorageBackendBase
 from sunbeam.storage.models import BackendNotFoundException, StorageBackendInfo
 from sunbeam.storage.service import StorageBackendService
+from sunbeam.utils import GuardedGroup
 
 LOG = logging.getLogger(__name__)
 console = Console()
@@ -27,7 +28,11 @@ console = Console()
 _STORAGE_BACKENDS: Dict[str, StorageBackendBase] = {}
 
 
-@click.group("storage", context_settings={"help_option_names": ["-h", "--help"]})
+@click.group(
+    "storage",
+    context_settings={"help_option_names": ["-h", "--help"]},
+    cls=GuardedGroup,
+)
 @click.pass_context
 def storage(ctx):
     """Manage Cinder storage backends.

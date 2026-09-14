@@ -1,0 +1,227 @@
+# Upgrade orchestration metadata for 2025.1 -> 2026.1 hop.
+# The engine reads this file to drive the upgrade. Adding a new release
+# is a new file (manifests/<release>/upgrade.yml) — no Python changes.
+from: "2025.1"
+to: "2026.1"
+
+control_plane_groups:
+  - name: identity-core
+    apps: [keystone-k8s]
+    ready_timeout_sec: 600
+    pre_actions:
+      - action: pre-upgrade
+        apps: [keystone-k8s]
+        scope: leader
+    terraform_targets:
+      keystone-k8s: [module.keystone]
+    post_actions:
+      - action: post-upgrade
+        apps: [keystone-k8s]
+        scope: leader
+
+  # - name: messaging-core
+  #   apps: [rabbitmq-k8s]
+  #   ready_timeout_sec: 600
+  #   pre_actions:
+  #     - action: pre-upgrade
+  #       apps: [rabbitmq-k8s]
+  #       scope: leader
+  #   terraform_targets:
+  #     rabbitmq-k8s: [module.rabbitmq]
+  #   post_actions:
+  #     - action: post-upgrade
+  #       apps: [rabbitmq-k8s]
+  #       scope: leader
+
+  - name: image
+    apps: [glance-k8s]
+    ready_timeout_sec: 600
+    pre_actions:
+      - action: pre-upgrade
+        apps: [glance-k8s]
+        scope: leader
+    terraform_targets:
+      glance-k8s: [module.glance]
+    post_actions:
+      - action: post-upgrade
+        apps: [glance-k8s]
+        scope: leader
+
+  - name: placement
+    apps: [placement-k8s]
+    ready_timeout_sec: 600
+    pre_actions:
+      - action: pre-upgrade
+        apps: [placement-k8s]
+        scope: leader
+    terraform_targets:
+      placement-k8s: [module.placement]
+    post_actions:
+      - action: post-upgrade
+        apps: [placement-k8s]
+        scope: leader
+
+  - name: block-storage-api
+    apps: [cinder-k8s]
+    ready_timeout_sec: 600
+    pre_actions:
+      - action: pre-upgrade
+        apps: [cinder-k8s]
+        scope: leader
+    terraform_targets:
+      cinder-k8s: [module.cinder]
+    post_actions:
+      - action: post-upgrade
+        apps: [cinder-k8s]
+        scope: leader
+
+  - name: network-api
+    apps: [neutron-k8s]
+    ready_timeout_sec: 600
+    pre_actions:
+      - action: pre-upgrade
+        apps: [neutron-k8s]
+        scope: leader
+    terraform_targets:
+      neutron-k8s: [module.neutron]
+    post_actions:
+      - action: post-upgrade
+        apps: [neutron-k8s]
+        scope: leader
+
+  - name: compute-control
+    apps: [nova-k8s]
+    ready_timeout_sec: 900
+    pre_actions:
+      - action: pre-upgrade
+        apps: [nova-k8s]
+        scope: leader
+    terraform_targets:
+      nova-k8s:
+        - module.nova
+        - juju_integration.nova-to-ingress-metadata
+    post_actions:
+      - action: post-upgrade
+        apps: [nova-k8s]
+        scope: leader
+
+  - name: dashboard
+    apps: [horizon-k8s]
+    ready_timeout_sec: 600
+    pre_actions:
+      - action: pre-upgrade
+        apps: [horizon-k8s]
+        scope: leader
+    terraform_targets:
+      horizon-k8s: [module.horizon]
+    post_actions:
+      - action: post-upgrade
+        apps: [horizon-k8s]
+        scope: leader
+
+  - name: optional-features
+    apps:
+      - barbican-k8s
+      - octavia-k8s
+      - heat-k8s
+      - designate-k8s
+      - magnum-k8s
+      - watcher-k8s
+      - aodh-k8s
+      - ceilometer-k8s
+      - gnocchi-k8s
+    ready_timeout_sec: 600
+    pre_actions:
+      - action: pre-upgrade
+        apps:
+          - barbican-k8s
+          - octavia-k8s
+          - heat-k8s
+          - designate-k8s
+          - magnum-k8s
+          - watcher-k8s
+          - aodh-k8s
+          - ceilometer-k8s
+          - gnocchi-k8s
+        scope: leader
+    terraform_targets:
+      barbican-k8s: [module.barbican]
+      octavia-k8s: [module.octavia]
+      heat-k8s: [module.heat]
+      designate-k8s: [module.designate]
+      magnum-k8s: [module.magnum]
+      watcher-k8s: [module.watcher]
+      aodh-k8s: [module.aodh]
+      ceilometer-k8s: [juju_application.ceilometer]
+      gnocchi-k8s: [module.gnocchi]
+    post_actions:
+      - action: post-upgrade
+        apps:
+          - barbican-k8s
+          - octavia-k8s
+          - heat-k8s
+          - designate-k8s
+          - magnum-k8s
+          - watcher-k8s
+          - aodh-k8s
+          - ceilometer-k8s
+          - gnocchi-k8s
+        scope: leader
+
+compatibility:
+  pre_hop: []
+  post_hop: []
+
+dataplane:
+  compute:
+    principal: openstack-hypervisor
+    auxiliary: [epa-orchestrator, openstack-network-agents]
+  registration_timeout_sec: 300
+  steps:
+    - resolve
+    - disable-scheduling
+    - pre-upgrade-checks
+    - refresh-principal
+    - refresh-auxiliary
+    - verify-registration
+    - verify-auxiliary
+    - enable-scheduling
+    - mark-complete
+
+storage:
+  principal: cinder-volume
+  registration_timeout_sec: 300
+  steps:
+    - resolve
+    - pre-upgrade-checks
+    - refresh-snap
+    - verify-registration
+    - mark-complete
+
+finalize:
+  - name: verify-upgrade-levels
+    type: engine
+  - name: rpc-cache-refresh
+    type: action
+    action: rpc-cache-refresh
+    apps: [nova-k8s, openstack-hypervisor, cinder-k8s, cinder-volume]
+    scope: all-units
+  - name: reapply-terraform
+    type: engine
+  - name: upgrade-features
+    type: engine
+  - name: nova-online-migrations
+    type: action
+    action: online-data-migrations
+    apps: [nova-k8s]
+    scope: leader
+  - name: validate-end-state
+    type: engine
+
+required_prerequisites:
+  - type: snap_refresh
+    channel: "2026.1/stable"
+  - type: infra_refresh
+    component: mysql
+  - type: infra_refresh
+    component: vault
