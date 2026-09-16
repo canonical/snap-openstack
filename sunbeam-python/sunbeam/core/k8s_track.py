@@ -84,6 +84,7 @@ class K8STrackGuard:
         self.resolve(
             settings.get("channel"),
             settings.get("revision"),
+            config=settings.get("config"),
         )
 
     def resolve(
@@ -92,13 +93,14 @@ class K8STrackGuard:
         revision: int | None = None,
         *,
         persist: bool = False,
+        config: dict | None = None,
     ) -> str:
         """Validate before writing; optionally initialize the track exactly once."""
         if not persist:
-            return self._resolve(channel, revision, persist=False)
+            return self._resolve(channel, revision, persist=False, config=config)
 
         with self._locked():
-            return self._resolve(channel, revision, persist=True)
+            return self._resolve(channel, revision, persist=True, config=config)
 
     @contextmanager
     def terraform_apply(self) -> Iterator[None]:
@@ -106,7 +108,7 @@ class K8STrackGuard:
         with self._locked():
             yield
             if self._recorded_track() is None:
-                self._resolve(None, None, persist=True)
+                self._resolve(None, None, persist=True, config=None)
 
     @contextmanager
     def _locked(self) -> Iterator[None]:
@@ -219,6 +221,7 @@ class K8STrackGuard:
         revision: int | None,
         *,
         persist: bool,
+        config: dict | None,
     ) -> str:
         requested_channel = _k8s_channel(channel) if channel is not None else None
         requested_track = (
@@ -266,6 +269,16 @@ class K8STrackGuard:
 
         if revision is not None and (app is None or app.charm_rev != revision):
             self._check_revision(revision, track)
+
+        if (
+            tuple(int(part) for part in track.split(".")) >= (1, 36)
+            and config
+            and config.get("bootstrap-datastore") == "dqlite"
+        ):
+            raise CharmChannelError(
+                f"Kubernetes {track} does not support the dqlite datastore. "
+                "Use managed-etcd or an external etcd datastore."
+            )
 
         if persist and recorded_track is None and existing:
             update_config(self.client, K8S_TRACK_CONFIG_KEY, {"track": track})

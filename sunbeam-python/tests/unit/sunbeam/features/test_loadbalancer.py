@@ -32,6 +32,7 @@ from sunbeam.features.loadbalancer.feature import (
     _SECGROUPS_KEY,
     _SUBNET_KEY,
     CILIUM_EXCLUSIVE_ANNOTATION,
+    CILIUM_EXCLUSIVE_ANNOTATION_KEY,
     AmphoraConfigStep,
     CleanupMultusCNIFilesStep,
     CreateAmphoraResourcesStep,
@@ -1483,9 +1484,20 @@ class TestUpdateCiliumCNIExclusiveStepIsSkip:
             result = step.is_skip(_make_context())
         assert result.result_type == ResultType.COMPLETED
 
-    def test_disable_multus_annotation_absent_skips(self):
+    def test_disable_multus_annotation_absent_explicitly_restores_mode(self):
         k8s_config = {"k8s_config": {"cluster-annotations": ""}}
         step = self._make_step(enable_multus=False, k8s_config=k8s_config)
+        with self._load_answers_patch, self._read_config_patch:
+            result = step.is_skip(_make_context())
+        assert result.result_type == ResultType.COMPLETED
+
+    def test_disable_multus_exclusive_mode_already_enabled_skips(self):
+        config = {
+            "k8s_config": {
+                "cluster-annotations": f"{CILIUM_EXCLUSIVE_ANNOTATION_KEY}=true"
+            }
+        }
+        step = self._make_step(enable_multus=False, k8s_config=config)
         with self._load_answers_patch, self._read_config_patch:
             result = step.is_skip(_make_context())
         assert result.result_type == ResultType.SKIPPED
@@ -1535,7 +1547,7 @@ class TestUpdateCiliumCNIExclusiveStepRun:
             CILIUM_EXCLUSIVE_ANNOTATION in override["k8s_config"]["cluster-annotations"]
         )
 
-    def test_disable_multus_removes_annotation(self):
+    def test_disable_multus_restores_true_for_merging_charms(self):
         existing = f"other-annotation {CILIUM_EXCLUSIVE_ANNOTATION}"
         result, override = self._run(enable_multus=False, existing_annotations=existing)
         assert result.result_type == ResultType.COMPLETED
@@ -1544,6 +1556,20 @@ class TestUpdateCiliumCNIExclusiveStepRun:
             not in override["k8s_config"]["cluster-annotations"]
         )
         assert "other-annotation" in override["k8s_config"]["cluster-annotations"]
+        assert f"{CILIUM_EXCLUSIVE_ANNOTATION_KEY}=true" in (
+            override["k8s_config"]["cluster-annotations"].split()
+        )
+
+    def test_reenable_multus_replaces_previous_true(self):
+        result, override = self._run(
+            enable_multus=True,
+            existing_annotations=f"other=value {CILIUM_EXCLUSIVE_ANNOTATION_KEY}=true",
+        )
+        assert result.result_type == ResultType.COMPLETED
+        assert override["k8s_config"]["cluster-annotations"].split() == [
+            "other=value",
+            CILIUM_EXCLUSIVE_ANNOTATION,
+        ]
 
     def test_terraform_exception_returns_failed(self):
         deployment = Mock()

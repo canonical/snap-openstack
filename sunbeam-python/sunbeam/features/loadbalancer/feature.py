@@ -148,7 +148,8 @@ OCTAVIA_AMPHORA_CONTROLLER_CERT_MESSAGE = (
 )
 
 # Cilium annotation to enable non-exclusive CNI mode (allows Multus)
-CILIUM_EXCLUSIVE_ANNOTATION = "k8sd/v1alpha1/cilium/exclusive=false"
+CILIUM_EXCLUSIVE_ANNOTATION_KEY = "k8sd/v1alpha1/cilium/exclusive"
+CILIUM_EXCLUSIVE_ANNOTATION = f"{CILIUM_EXCLUSIVE_ANNOTATION_KEY}=false"
 
 # OVS bridge and socket for Multus NetworkAttachmentDefinition
 OVS_BRIDGE = "br-int"
@@ -1007,17 +1008,19 @@ class UpdateCiliumCNIExclusiveStep(BaseStep):
         cluster_annotations = k8s_tfvars.get("k8s_config", {}).get(
             "cluster-annotations", ""
         )
-        annotation_present = CILIUM_EXCLUSIVE_ANNOTATION in cluster_annotations
+        annotation_present = CILIUM_EXCLUSIVE_ANNOTATION in cluster_annotations.split()
         if self.enable_multus and annotation_present:
             return Result(ResultType.SKIPPED, "Cilium CNI exclusive already disabled")
-        if not self.enable_multus and not annotation_present:
+        if not self.enable_multus and (
+            f"{CILIUM_EXCLUSIVE_ANNOTATION_KEY}=true" in cluster_annotations.split()
+        ):
             return Result(
-                ResultType.SKIPPED, "Cilium exclusive annotation already absent"
+                ResultType.SKIPPED, "Cilium exclusive CNI mode already enabled"
             )
         return Result(ResultType.COMPLETED)
 
     def run(self, context: StepContext) -> Result:
-        """Add or remove the exclusive=false annotation from k8s cluster-annotations."""
+        """Explicitly set exclusive mode with both merge- and replace-based charms."""
         client = self.deployment.get_client()
         try:
             k8s_tfvars = read_config(client, K8S_CONFIG_KEY)
@@ -1026,23 +1029,16 @@ class UpdateCiliumCNIExclusiveStep(BaseStep):
 
         k8s_app_config = k8s_tfvars.get("k8s_config", {})
 
-        if self.enable_multus:
-            cluster_annotations = k8s_app_config.get(
-                "cluster-annotations",
-                "",
-            )
-            cluster_annotations = (
-                f"{cluster_annotations} {CILIUM_EXCLUSIVE_ANNOTATION}".strip()
-            )
-        else:
-            cluster_annotations = k8s_app_config.get("cluster-annotations", "")
-            cluster_annotations = " ".join(
-                a
-                for a in cluster_annotations.split()
-                if a != CILIUM_EXCLUSIVE_ANNOTATION
-            )
-
-        k8s_app_config["cluster-annotations"] = cluster_annotations
+        annotations = [
+            annotation
+            for annotation in k8s_app_config.get("cluster-annotations", "").split()
+            if annotation.split("=", 1)[0] != CILIUM_EXCLUSIVE_ANNOTATION_KEY
+        ]
+        # The 1.36 charm merges annotations. Omitting a key does not remove
+        # its previous value, so disabling Multus must explicitly restore true.
+        exclusive = "false" if self.enable_multus else "true"
+        annotations.append(f"{CILIUM_EXCLUSIVE_ANNOTATION_KEY}={exclusive}")
+        k8s_app_config["cluster-annotations"] = " ".join(annotations)
 
         try:
             self.k8s_tfhelper.update_tfvars_and_apply_tf(

@@ -414,15 +414,19 @@ class Deployment(pydantic.BaseModel):
         revision: int | None = None,
         *,
         persist: bool = False,
+        config: dict | None = None,
     ) -> str:
         """Validate Kubernetes against its recorded deployment track."""
-        return self._k8s_track_guard().resolve(channel, revision, persist=persist)
+        return self._k8s_track_guard().resolve(
+            channel, revision, persist=persist, config=config
+        )
 
     def _validate_k8s_tfvars(self, tfvars: dict) -> None:
         """Check final Terraform inputs, including feature-computed overrides."""
         tfvars["k8s_channel"] = self.resolve_k8s_channel(
             tfvars.get("k8s_channel"),
             tfvars.get("k8s_revision"),
+            config=tfvars.get("k8s_config"),
         )
 
     def _k8s_terraform_apply(self):

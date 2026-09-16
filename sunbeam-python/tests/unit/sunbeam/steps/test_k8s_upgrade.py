@@ -26,6 +26,19 @@ def step(basic_deployment, basic_client, basic_manifest, basic_jhelper):
 
 
 class TestK8SCharmUpgradeStepIsSkip:
+    @pytest.mark.parametrize("track", ["1.32", "1.36"])
+    def test_explicit_supported_track_with_new_default(
+        self, step, basic_jhelper, basic_manifest, step_context, track
+    ):
+        basic_jhelper.get_application.return_value = Mock(
+            charm_rev=100, charm_channel=f"{track}/stable", base=None
+        )
+        basic_manifest.find_charm.return_value = Mock(
+            channel=f"{track}/edge", revision=None
+        )
+        assert step.is_skip(step_context).result_type == ResultType.COMPLETED
+        assert step._decision.effective_channel == f"{track}/edge"
+
     def test_skip_when_application_not_deployed(
         self, step, basic_jhelper, step_context
     ):
