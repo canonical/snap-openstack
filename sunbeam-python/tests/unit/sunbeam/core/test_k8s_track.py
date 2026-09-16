@@ -355,6 +355,33 @@ def test_read_only_resolution_does_not_initialize(guard, client):
     client.cluster.update_config.assert_not_called()
 
 
+@pytest.mark.parametrize("track", ["1.32", "1.36"])
+def test_datastore_compatibility(guard, state, jhelper, track):
+    state[K8S_TRACK_CONFIG_KEY] = {"track": track}
+    jhelper.get_application.return_value.charm_channel = f"{track}/stable"
+    if track == "1.32":
+        assert (
+            guard.resolve(None, config={"bootstrap-datastore": "dqlite"})
+            == "1.32/stable"
+        )
+    else:
+        with pytest.raises(CharmChannelError, match="does not support the dqlite"):
+            guard.resolve(None, config={"bootstrap-datastore": "dqlite"})
+    assert (
+        guard.resolve(None, config={"bootstrap-datastore": "managed-etcd"})
+        == f"{track}/stable"
+    )
+
+
+def test_new_deployment_invalid_datastore_is_not_recorded(guard, jhelper, state):
+    jhelper.get_application.side_effect = ApplicationNotFoundException()
+    with pytest.raises(CharmChannelError, match="does not support the dqlite"):
+        guard.resolve(
+            "1.36/stable", persist=True, config={"bootstrap-datastore": "dqlite"}
+        )
+    assert K8S_TRACK_CONFIG_KEY not in state
+
+
 def test_manifest_loading_does_not_query_juju(deployment, jhelper):
     jhelper.get_application.side_effect = JujuException("offline")
 

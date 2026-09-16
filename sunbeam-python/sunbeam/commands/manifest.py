@@ -185,7 +185,9 @@ def generate(
             # MAAS may have a controller before clusterd is configured.
             pass
         else:
-            k8s.channel = deployment.resolve_k8s_channel(k8s.channel, k8s.revision)
+            k8s.channel = deployment.resolve_k8s_channel(
+                k8s.channel, k8s.revision, config=k8s.config
+            )
     if k8s.channel is None:
         k8s.channel = K8S_CHANNEL
     manifest_content += "\n" + generate_software_manifest(software)

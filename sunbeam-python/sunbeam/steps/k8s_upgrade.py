@@ -36,7 +36,7 @@ class K8SCharmUpgradeStep(BaseStep, JujuStepHelper):
     """Upgrade the k8s charm following the Canonical Kubernetes upgrade procedure.
 
     Supports patch upgrades and risk-level changes within the same channel track.
-    Track changes (e.g. 1.32 -> 1.35) are not supported and will return FAILED.
+    Track changes (e.g. 1.32 -> 1.36) are not supported and will return FAILED.
 
     Patch (same channel, new revision):
         1. juju run k8s/leader pre-upgrade-check
@@ -79,7 +79,7 @@ class K8SCharmUpgradeStep(BaseStep, JujuStepHelper):
     def _resolve_channel(self, *, persist: bool = False) -> str:
         charm = self.manifest.core.software.charms.get(CHARM_NAME, CharmManifest())
         return self.deployment.resolve_k8s_channel(
-            charm.channel, charm.revision, persist=persist
+            charm.channel, charm.revision, persist=persist, config=charm.config
         )
 
     def is_skip(self, context: StepContext) -> Result:
