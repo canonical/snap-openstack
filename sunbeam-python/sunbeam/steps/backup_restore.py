@@ -549,7 +549,7 @@ class _BackupAppStep(BaseStep):
                 component=target.component,
                 backup=backup,
             )
-        except (ActionFailedException, JujuException) as e:
+        except (ActionFailedException, JujuException, TaskError, TimeoutError) as e:
             message = str(e)
             self.result = BackupResult(
                 app=target.app,
@@ -719,7 +719,7 @@ class MySQLBackupComponent(BackupComponent):
             secondary = _secondary_unit_from_status(units, result)
             if secondary is not None:
                 return ActionTarget(app, secondary, self.name, self.backup_action)
-        except ActionFailedException as e:
+        except (ActionFailedException, TaskError, TimeoutError) as e:
             if not force:
                 LOG.warning(
                     "Could not resolve backup target for %s, skipping: %s", app, e
@@ -1211,7 +1211,7 @@ class ListBackupsStep(BaseStep):
                 component=target.component,
                 backups=backups,
             )
-        except (ActionFailedException, JujuException) as e:
+        except (ActionFailedException, JujuException, TaskError, TimeoutError) as e:
             return BackupInventory(
                 app=target.app,
                 unit=target.unit,
