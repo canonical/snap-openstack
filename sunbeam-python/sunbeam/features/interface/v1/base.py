@@ -595,6 +595,15 @@ class EnableDisableFeature(BaseFeature, Generic[ConfigType]):
         """Constructor for feature interface."""
         self.user_manifest: Path | None = None
 
+    def get_requirements(self, deployment: Deployment) -> set[FeatureRequirement]:
+        """Return feature requirements for the deployment.
+
+        Deployment is not used in the base implementation, but is provided as an
+        argument to extend functionality for subclasses that may need access to
+        the deployment model and client to determine requirements.
+        """
+        return self.requires
+
     def is_enabled(self, client: Client) -> bool:
         """Feature is enabled or disabled.
 
@@ -704,7 +713,7 @@ class EnableDisableFeature(BaseFeature, Generic[ConfigType]):
             feature = klass()
             if not feature.is_enabled(deployment.get_client()):
                 continue
-            for requirement in feature.requires:
+            for requirement in feature.get_requirements(deployment):
                 if requirement.name != self.name:
                     continue
                 if state == "disable":
@@ -723,7 +732,7 @@ class EnableDisableFeature(BaseFeature, Generic[ConfigType]):
 
     def enable_requirements(self, deployment: Deployment, show_hints: bool):
         """Iterate through requirements, enable features if possible."""
-        for requirement in self.requires:
+        for requirement in self.get_requirements(deployment):
             if not issubclass(requirement.klass, EnableDisableFeature):
                 LOG.debug(
                     "Skipping %s as it is not of type EnableDisableFeature",
