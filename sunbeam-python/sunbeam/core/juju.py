@@ -1762,21 +1762,31 @@ class JujuHelper:
         :param charm_name: Name of charm to look up
         :param revision: Charm revision number to find
         """
-        output = json.loads(
-            self._juju.cli(
-                "info",
-                "--format",
-                "json",
-                charm_name,
-                include_model=False,
+        channels = self.get_charm_channels_for_revision(charm_name, revision)
+        return channels[0] if channels else None
+
+    @staticmethod
+    def get_charm_channels_for_revision(charm_name: str, revision: int) -> list[str]:
+        """Return the channels publishing a revision without contacting a controller."""
+        try:
+            output = json.loads(
+                jubilant.Juju().cli(
+                    "info",
+                    "--format",
+                    "json",
+                    charm_name,
+                    include_model=False,
+                )
             )
-        )
+        except (jubilant.CLIError, json.JSONDecodeError) as e:
+            raise JujuException(f"Cannot look up channels for {charm_name}: {e}") from e
+        channels = []
         for track, risks in output.get("channels", {}).items():
             for risk, entries in risks.items():
                 for entry in entries:
                     if entry.get("revision") == revision:
-                        return f"{track}/{risk}"
-        return None
+                        channels.append(f"{track}/{risk}")
+        return channels
 
     @staticmethod
     def manual_cloud(cloud_name: str, ip_address: str) -> dict[str, dict]:

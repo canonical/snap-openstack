@@ -170,9 +170,10 @@ def refresh(
     # Validate manifest file
     manifest = None
     if clear_manifest:
-        run_plan([AddManifestStep(client, clear=True)], console, show_hints)
+        run_plan([AddManifestStep(deployment, clear=True)], console, show_hints)
     elif manifest_path:
         manifest = deployment.get_manifest(manifest_path)
+        deployment.validate_manifest_for_infra(manifest)
         if not upgrade_release:
             # The latest-in-channel flow refuses to change INFRA_APPS:
             # validate the manifest against the deployment and store it
@@ -188,7 +189,7 @@ def refresh(
                 console,
                 show_hints,
             )
-        run_plan([AddManifestStep(client, manifest_path)], console, show_hints)
+        run_plan([AddManifestStep(deployment, manifest_path)], console, show_hints)
 
     if not manifest:
         LOG.debug("Getting latest manifest from cluster db")
@@ -261,6 +262,7 @@ def refresh_mysql(
     manifest = None
     if manifest_path:
         manifest = deployment.get_manifest(manifest_path)
+        deployment.validate_manifest_for_infra(manifest)
 
     if not manifest:
         LOG.debug("Getting latest manifest from cluster db")
@@ -296,7 +298,7 @@ def refresh_mysql(
         # refreshed charm; the INFRA_APPS gate blocks any reapply that
         # would revert it, and recovery is rerunning this command with
         # the same manifest (same ordering as refresh vault/ingress).
-        run_plan([AddManifestStep(client, manifest_path)], console, show_hints)
+        run_plan([AddManifestStep(deployment, manifest_path)], console, show_hints)
     click.echo("MySQL refresh complete.")
 
 
@@ -327,6 +329,7 @@ def refresh_vault(
     manifest = None
     if manifest_path:
         manifest = deployment.get_manifest(manifest_path)
+        deployment.validate_manifest_for_infra(manifest)
 
     if not manifest:
         LOG.debug("Getting latest manifest from cluster db")
@@ -354,7 +357,7 @@ def refresh_vault(
         # charm refresh can reject the manifest (e.g. unsupported track
         # change) and a rejected manifest must not become the cluster's
         # latest stored manifest.
-        run_plan([AddManifestStep(client, manifest_path)], console, show_hints)
+        run_plan([AddManifestStep(deployment, manifest_path)], console, show_hints)
 
     message = get_step_message(plan_results, VaultCharmUpgradeStep)
     if message:
@@ -387,6 +390,7 @@ def refresh_ingress(
     manifest = None
     if manifest_path:
         manifest = deployment.get_manifest(manifest_path)
+        deployment.validate_manifest_for_infra(manifest)
 
     if not manifest:
         LOG.debug("Getting latest manifest from cluster db")
@@ -416,7 +420,7 @@ def refresh_ingress(
         # scope validation can reject the plan after the charm refresh,
         # and a rejected manifest must not become the cluster's latest
         # stored manifest.
-        run_plan([AddManifestStep(client, manifest_path)], console, show_hints)
+        run_plan([AddManifestStep(deployment, manifest_path)], console, show_hints)
     click.echo("Ingress refresh complete.")
 
 
@@ -456,7 +460,7 @@ def refresh_k8s(
     manifest = None
     if manifest_path:
         manifest = deployment.get_manifest(manifest_path)
-        run_plan([AddManifestStep(client, manifest_path)], console, show_hints)
+        run_plan([AddManifestStep(deployment, manifest_path)], console, show_hints)
 
     if not manifest:
         LOG.debug("Getting latest manifest from cluster db")

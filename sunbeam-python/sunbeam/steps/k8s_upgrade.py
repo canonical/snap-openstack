@@ -3,7 +3,11 @@
 
 import logging
 
+from requests.exceptions import RequestException
+
 from sunbeam.clusterd.client import Client
+from sunbeam.clusterd.service import RemoteException
+from sunbeam.core.charm_channel import CharmChannelError
 from sunbeam.core.common import (
     BaseStep,
     Result,
@@ -18,9 +22,9 @@ from sunbeam.core.juju import (
     JujuWaitException,
     LeaderNotFoundException,
 )
-from sunbeam.core.manifest import Manifest
+from sunbeam.core.manifest import CharmManifest, Manifest
 from sunbeam.steps.charm_upgrade import CharmRefreshDecision, check_charm_needs_refresh
-from sunbeam.versions import K8S_CHANNEL
+from sunbeam.versions import K8S_CHANNEL, K8S_MIN_SUPPORTED_TRACK
 
 LOG = logging.getLogger(__name__)
 
@@ -72,8 +76,19 @@ class K8SCharmUpgradeStep(BaseStep, JujuStepHelper):
         """Return the model where the k8s charm is deployed."""
         return self.deployment.openstack_machines_model
 
+    def _resolve_channel(self, *, persist: bool = False) -> str:
+        charm = self.manifest.core.software.charms.get(CHARM_NAME, CharmManifest())
+        return self.deployment.resolve_k8s_channel(
+            charm.channel, charm.revision, persist=persist
+        )
+
     def is_skip(self, context: StepContext) -> Result:
         """Skip if k8s is not deployed or already at the target revision."""
+        try:
+            channel = self._resolve_channel()
+        except (CharmChannelError, RemoteException, RequestException, ValueError) as e:
+            LOG.debug("Failed to validate the Kubernetes refresh track", exc_info=True)
+            return Result(ResultType.FAILED, str(e))
         decision = check_charm_needs_refresh(
             self.jhelper,
             self.manifest,
@@ -82,6 +97,8 @@ class K8SCharmUpgradeStep(BaseStep, JujuStepHelper):
             self.application,
             default_channel=K8S_CHANNEL,
             support_track_upgrades=False,
+            minimum_track=K8S_MIN_SUPPORTED_TRACK,
+            validated_channel=channel,
         )
         self._decision = decision
         if decision.result.result_type == ResultType.FAILED:
@@ -93,6 +110,11 @@ class K8SCharmUpgradeStep(BaseStep, JujuStepHelper):
 
     def run(self, context: StepContext) -> Result:
         """Execute the k8s charm upgrade procedure."""
+        try:
+            self._resolve_channel(persist=True)
+        except (CharmChannelError, RemoteException, RequestException, ValueError) as e:
+            LOG.debug("Failed to validate the Kubernetes refresh track", exc_info=True)
+            return Result(ResultType.FAILED, str(e))
         target_channel = self._decision.effective_channel
         target_revision = self._decision.effective_revision
 

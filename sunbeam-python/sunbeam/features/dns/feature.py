@@ -143,7 +143,7 @@ class DnsFeature(OpenStackControlPlaneFeature):
 
         plan: list[BaseStep] = []
         if self.user_manifest:
-            plan.append(AddManifestStep(deployment.get_client(), self.user_manifest))
+            plan.append(AddManifestStep(deployment, self.user_manifest))
         plan.extend(
             [
                 TerraformInitStep(tfhelper),

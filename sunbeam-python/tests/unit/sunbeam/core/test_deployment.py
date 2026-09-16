@@ -66,6 +66,7 @@ def deployment(mocker, snap):
         dep.plans_directory = Path("/tmp/plans")
         dep.__setattr__("_tfhelpers", {})
         dep._manifest = None
+        dep.juju_controller = None
         dep.__setattr__("name", "test_deployment")
         dep.get_feature_manager.return_value = Mock(
             get_all_feature_manifests=Mock(return_value={}),
