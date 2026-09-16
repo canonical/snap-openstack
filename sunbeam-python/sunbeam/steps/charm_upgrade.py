@@ -8,6 +8,11 @@ from typing import NamedTuple
 
 import jubilant.statustypes
 
+from sunbeam.core.charm_channel import (
+    CharmChannelError,
+    channel_track,
+    validate_revision_track,
+)
 from sunbeam.core.common import Result, ResultType
 from sunbeam.core.juju import ApplicationNotFoundException, JujuException, JujuHelper
 from sunbeam.core.manifest import Manifest
@@ -64,9 +69,8 @@ def _check_revision_only(
             effective_channel=effective_channel,
         )
     if not support_track_upgrades and deployed_channel:
-        deployed_track = deployed_channel.split("/")[0]
         try:
-            revision_channel = jhelper.get_charm_channel_for_revision(
+            revision_channels = jhelper.get_charm_channels_for_revision(
                 charm_name, manifest_revision
             )
         except JujuException as e:
@@ -75,20 +79,18 @@ def _check_revision_only(
                 manifest_revision,
                 e,
             )
-            revision_channel = None
-
-        if revision_channel:
-            revision_track = revision_channel.split("/")[0]
-            if deployed_track != revision_track:
+        else:
+            try:
+                validate_revision_track(
+                    manifest_revision,
+                    revision_channels,
+                    channel_track(deployed_channel),
+                    charm_name,
+                    require_published=False,
+                )
+            except CharmChannelError as e:
                 return CharmRefreshDecision(
-                    result=Result(
-                        ResultType.FAILED,
-                        f"Revision {manifest_revision} belongs to channel "
-                        f"{revision_channel!r} (track {revision_track!r}), "
-                        f"but the deployed charm is on track "
-                        f"{deployed_track!r}. "
-                        "Track changes are not supported by this command.",
-                    ),
+                    result=Result(ResultType.FAILED, str(e)),
                     effective_channel=effective_channel,
                 )
     return CharmRefreshDecision(
@@ -153,11 +155,14 @@ def check_charm_needs_refresh(
     application: str,
     default_channel: str,
     support_track_upgrades: bool = False,
+    minimum_track: str | None = None,
+    *,
+    validated_channel: str | None = None,
 ) -> CharmRefreshDecision:
     """Determine whether a charm needs refreshing and how.
 
     Effective channel resolution (no manifest channel set):
-    - minimum_track is derived from default_channel.
+    - minimum_track defaults to the track in default_channel.
     - If the deployed track meets the minimum, the deployed channel is used.
     - If the deployed track is below the minimum and support_track_upgrades is
       True, fall back to default_channel (e.g. vault).
@@ -176,6 +181,10 @@ def check_charm_needs_refresh(
             the derived minimum or there is no deployed channel.
         support_track_upgrades: If True, track changes are allowed (vault).
             If False, track changes return FAILED (k8s).
+        minimum_track: Oldest supported track, independently of the default
+            for new deployments. Defaults to the track in default_channel.
+        validated_channel: Channel already resolved by the deployment's policy.
+            If supplied, use it as the target for the refresh decision.
 
     Returns:
         CharmRefreshDecision with result, effective_channel, needs_channel_flag.
@@ -193,12 +202,13 @@ def check_charm_needs_refresh(
         )
 
     charm_manifest = manifest.find_charm(charm_name)
-    manifest_channel: str | None = charm_manifest.channel if charm_manifest else None
+    manifest_channel = charm_manifest.channel if charm_manifest else None
+    if manifest_channel is not None and validated_channel is not None:
+        manifest_channel = validated_channel
     manifest_revision: int | None = charm_manifest.revision if charm_manifest else None
     deployed_channel: str | None = app.charm_channel
 
-    # Minimum track is always derived from default_channel.
-    minimum_track: str = default_channel.split("/")[0]
+    minimum_track = minimum_track or channel_track(default_channel)
 
     # ------------------------------------------------------------------
     # Effective channel resolution
@@ -207,10 +217,12 @@ def check_charm_needs_refresh(
     # Without a manifest channel: stay on the deployed channel if its track
     # meets the minimum, otherwise fall back to default_channel (vault) or
     # fail (k8s, where track changes are not allowed).
-    if manifest_channel:
+    if validated_channel is not None:
+        effective_channel = validated_channel
+    elif manifest_channel:
         effective_channel = manifest_channel
     elif deployed_channel and (
-        _track_version(deployed_channel.split("/")[0]) >= _track_version(minimum_track)
+        _track_version(channel_track(deployed_channel)) >= _track_version(minimum_track)
     ):
         effective_channel = deployed_channel
     elif deployed_channel and not support_track_upgrades:
@@ -219,20 +231,20 @@ def check_charm_needs_refresh(
         LOG.warning(
             "Deployed track %r is below the minimum supported track %r. "
             "Refreshing within the deployed track.",
-            deployed_channel.split("/")[0],
+            channel_track(deployed_channel),
             minimum_track,
         )
         effective_channel = deployed_channel
     else:
         effective_channel = default_channel
 
-    effective_track: str = effective_channel.split("/")[0]
+    effective_track: str = channel_track(effective_channel)
 
     # ------------------------------------------------------------------
     # Downgrade guard: manifest channel below minimum_track → FAILED
     # ------------------------------------------------------------------
     if manifest_channel:
-        manifest_track = manifest_channel.split("/")[0]
+        manifest_track = channel_track(manifest_channel)
         if _track_version(manifest_track) < _track_version(minimum_track):
             LOG.warning(
                 "Manifest channel %r track is below minimum supported track %r.",
@@ -267,7 +279,7 @@ def check_charm_needs_refresh(
     # Track change guard (when support_track_upgrades=False)
     # ------------------------------------------------------------------
     if not support_track_upgrades and manifest_channel and deployed_channel:
-        deployed_track = deployed_channel.split("/")[0]
+        deployed_track = channel_track(deployed_channel)
         if deployed_track != effective_track:
             return CharmRefreshDecision(
                 result=Result(

@@ -136,7 +136,11 @@ def test_sriov(
     )
     assert len(hostdev_iface_elements) == 1
     hostdev_iface_element = hostdev_iface_elements[0]
-    hostdev_source_address = hostdev_iface_element.find("source/address").attrib
+    hostdev_source = hostdev_iface_element.find("source/address")
+    assert hostdev_source is not None, (
+        "SR-IOV hostdev interface has no PCI source address"
+    )
+    hostdev_source_address = hostdev_source.attrib
     assert hostdev_source_address["type"] == "pci"
     hostdev_source_address_str = "%04x:%02x:%02x.%x" % tuple(
         int(x, 16)

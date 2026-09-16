@@ -346,7 +346,7 @@ class VaultTlsFeature(TlsFeature):
 
         jhelper = JujuHelper(deployment.juju_controller)
         plan = [
-            AddManifestStep(client, manifest_path),
+            AddManifestStep(deployment, manifest_path),
             ConfigureTLSCertificatesStep(
                 client,
                 jhelper,
