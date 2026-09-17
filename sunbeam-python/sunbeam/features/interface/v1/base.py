@@ -566,6 +566,32 @@ class FeatureRequirement(Requirement):
             )
         return klass
 
+    @property
+    def group(self) -> typing.Optional[Type["BaseFeatureGroup"]]:
+        """Return the feature group class if the requirement names a group."""
+        return groups().get(self.name)
+
+    @property
+    def feature_klasses(self) -> list[Type["EnableDisableFeature"]]:
+        """Return the feature classes satisfying this requirement.
+
+        A requirement naming a group is satisfied by any one of the group's
+        features, which are mutually exclusive providers of the same
+        functionality.
+        """
+        if group := self.group:
+            klasses = [
+                klass
+                for klass in features().values()
+                if klass.group is group and issubclass(klass, EnableDisableFeature)
+            ]
+            if not klasses:
+                raise InvalidRequirementError(
+                    f"Feature group {self.name} has no enable/disable features"
+                )
+            return klasses
+        return [self.klass]
+
 
 @typing.runtime_checkable
 class NamedEnabledDisableFeatureProtocol(typing.Protocol):
@@ -714,11 +740,19 @@ class EnableDisableFeature(BaseFeature, Generic[ConfigType]):
             if not feature.is_enabled(deployment.get_client()):
                 continue
             for requirement in feature.get_requirements(deployment):
-                if requirement.name != self.name:
+                """
+                For future:
+                This check looks for one of the features being enabled
+                It does not consider the case of both features being enabled.
+                e.g observability.embedded or observability.external.
+                """
+                if requirement.name != self.name and not (
+                    requirement.group is not None and self.group is requirement.group
+                ):
                     continue
                 if state == "disable":
                     raise HasRequirersFeaturesError(
-                        f"{feature.name} is enabled and requires {self.name}"
+                        f"{feature.name} is enabled and requires {requirement.name}"
                     )
                 message = (
                     f"Feature {feature.name} is enabled and "
@@ -733,6 +767,33 @@ class EnableDisableFeature(BaseFeature, Generic[ConfigType]):
     def enable_requirements(self, deployment: Deployment, show_hints: bool):
         """Iterate through requirements, enable features if possible."""
         for requirement in self.get_requirements(deployment):
+            if group := requirement.group:
+                # A group requirement is satisfied by any enabled member and
+                # is never auto-enabled because the user chooses the provider.
+                klasses = requirement.feature_klasses
+                enabled_klass = next(
+                    (
+                        klass
+                        for klass in klasses
+                        if klass().is_enabled(deployment.get_client())
+                    ),
+                    None,
+                )
+                if enabled_klass is not None:
+                    self.check_enabled_requirement_is_compatible(
+                        deployment,
+                        FeatureRequirement(
+                            f"{enabled_klass().name}{requirement.specifier}"
+                        ),
+                    )
+                    continue
+                if requirement.optional:
+                    continue
+                members = ", ".join(f"'{klass().name}'" for klass in klasses)
+                raise FeatureError(
+                    f"Feature {self.name} requires the {group.name} feature"
+                    f" to be enabled. Enable one of {members} and retry."
+                )
             if not issubclass(requirement.klass, EnableDisableFeature):
                 LOG.debug(
                     "Skipping %s as it is not of type EnableDisableFeature",

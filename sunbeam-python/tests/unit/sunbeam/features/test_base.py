@@ -13,9 +13,11 @@ from sunbeam.core.manifest import FeatureManifest, Manifest
 from sunbeam.feature_manager import FeatureManager
 from sunbeam.features.interface.v1.base import (
     BaseFeature,
+    BaseFeatureGroup,
     EnableDisableFeature,
     FeatureError,
     FeatureRequirement,
+    HasRequirersFeaturesError,
     IncompatibleVersionError,
     MissingFeatureError,
     MissingVersionInfoError,
@@ -310,6 +312,34 @@ def feature_klass(version_: str, enabled: bool = False) -> type[EnableDisableFea
     return CompatibleFeature
 
 
+class TestFeatureGroup(BaseFeatureGroup):
+    name = "test_requirement_group"
+
+
+def group_member_klass(name_: str, enabled: bool) -> type[EnableDisableFeature]:
+    class GroupMember(EnableDisableFeature):
+        name = name_
+        group = TestFeatureGroup
+
+        def is_enabled(self, client) -> bool:
+            return enabled
+
+    return GroupMember
+
+
+def test_requirement_feature_group():
+    member_a = group_member_klass("test_requirement_group.a", enabled=False)
+    member_b = group_member_klass("test_requirement_group.b", enabled=False)
+
+    requirement = FeatureRequirement("test_requirement_group")
+
+    assert requirement.group is TestFeatureGroup
+    assert {klass.name for klass in requirement.feature_klasses} == {
+        member_a.name,
+        member_b.name,
+    }
+
+
 class TestEnableDisableFeature:
     def test_check_enabled_feature_is_compatible_with_compatible_requirement(
         self, deployment, mocker
@@ -446,7 +476,8 @@ class TestEnableDisableFeature:
         feature = klass()
 
         for requirement in feature.requires:
-            feature.check_feature_class_is_compatible(requirement.klass(), requirement)
+            for required_klass in requirement.feature_klasses:
+                feature.check_feature_class_is_compatible(required_klass(), requirement)
 
     def test_check_enablement_requirements_with_enabled_compatible_requirement(
         self, deployment, mocker
@@ -590,6 +621,97 @@ class TestEnableDisableFeature:
         checks = run_preflight_checks.call_args.args[0]
         assert len(checks) == 1
         assert checks[0].step.juju_account == juju_account
+
+    def test_enable_requirements_with_enabled_group_requirement(self, deployment):
+        group_member_klass("test_requirement_group.a", enabled=True)
+        group_member_klass("test_requirement_group.b", enabled=False)
+
+        feature = DummyFeature()
+        feature.requires = {FeatureRequirement("test_requirement_group")}
+        feature.enable_requirements(deployment, show_hints=False)
+
+    def test_enable_requirements_with_disabled_group_requirement(self, deployment):
+        group_member_klass("test_requirement_group.a", enabled=False)
+        group_member_klass("test_requirement_group.b", enabled=False)
+
+        feature = DummyFeature()
+        feature.requires = {FeatureRequirement("test_requirement_group")}
+        with pytest.raises(FeatureError, match="test_requirement_group"):
+            feature.enable_requirements(deployment, show_hints=False)
+
+    def test_enable_requirements_with_optional_group_requirement(self, deployment):
+        group_member_klass("test_requirement_group.a", enabled=False)
+        group_member_klass("test_requirement_group.b", enabled=False)
+
+        feature = DummyFeature()
+        feature.requires = {FeatureRequirement("test_requirement_group", optional=True)}
+        feature.enable_requirements(deployment, show_hints=False)
+
+    def test_enable_requirements_with_group_requirement_version_compatible(
+        self, deployment, mocker
+    ):
+        group_member_klass("test_requirement_group.a", enabled=True)
+        group_member_klass("test_requirement_group.b", enabled=False)
+
+        feature = DummyFeature()
+        feature.requires = {FeatureRequirement("test_requirement_group>=1.0.0")}
+        mocker.patch.object(
+            feature, "fetch_feature_version", return_value=Version("1.0.1")
+        )
+        feature.enable_requirements(deployment, show_hints=False)
+
+    def test_enable_requirements_with_group_requirement_version_incompatible(
+        self, deployment, mocker
+    ):
+        group_member_klass("test_requirement_group.a", enabled=True)
+        group_member_klass("test_requirement_group.b", enabled=False)
+
+        feature = DummyFeature()
+        feature.requires = {FeatureRequirement("test_requirement_group>=2.0.0")}
+        mocker.patch.object(
+            feature, "fetch_feature_version", return_value=Version("1.0.1")
+        )
+        with pytest.raises(IncompatibleVersionError):
+            feature.enable_requirements(deployment, show_hints=False)
+
+    def test_check_enablement_requirements_with_enabled_dependant_group(
+        self, deployment, mocker
+    ):
+        member_klass = group_member_klass("test_requirement_group.a", enabled=False)
+
+        class Requirer(EnableDisableFeature):
+            name = "test_group_requirer"
+            requires = {FeatureRequirement("test_requirement_group")}
+
+            def is_enabled(self, client) -> bool:
+                return True
+
+        mocker.patch(
+            "sunbeam.features.interface.v1.base.features",
+            Mock(return_value={Requirer.name: Requirer}),
+        )
+        with pytest.raises(HasRequirersFeaturesError):
+            member_klass().check_enablement_requirements(deployment, "disable")
+
+    def test_check_enablement_requirements_with_group_requirement(
+        self, deployment, mocker
+    ):
+        member_klass = group_member_klass("test_requirement_group.a", enabled=False)
+
+        class Requirer(EnableDisableFeature):
+            name = "test_group_requirer"
+            requires = {FeatureRequirement("test_requirement_group>=1.0.0")}
+
+            def is_enabled(self, client) -> bool:
+                return True
+
+        mocker.patch(
+            "sunbeam.features.interface.v1.base.features",
+            Mock(return_value={Requirer.name: Requirer}),
+        )
+        member = member_klass()
+        member.version = Version("1.0.1")
+        member.check_enablement_requirements(deployment)
 
 
 class TestFeatureManager:
