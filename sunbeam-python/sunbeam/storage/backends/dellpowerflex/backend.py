@@ -61,7 +61,8 @@ class PowerFlexConfig(StorageBackendConfig):
     protocol: Annotated[
         Literal["scaleio", "nvme-tcp"],
         Field(
-            description="Dell PowerFlex protocol selector: scaleio (PowerFlexDriver) or nvme-tcp (PowerFlexNVMeDriver)"
+            description="Dell PowerFlex protocol selector: scaleio (PowerFlexDriver) "
+            "or nvme-tcp (PowerFlexNVMeDriver)"
         ),
     ] = "scaleio"
 
@@ -92,9 +93,9 @@ class PowerFlexConfig(StorageBackendConfig):
     powerflex_allow_non_padded_volumes: Annotated[
         bool | None,
         Field(
-            description="Allow volumes to be created in Storage Pools when zero padding "
-            "is disabled. Should not be enabled if multiple tenants use volumes "
-            "from a shared Storage Pool"
+            description="Allow volumes to be created in Storage Pools when zero "
+            "padding is disabled. Should not be enabled if multiple tenants use "
+            "volumes from a shared Storage Pool"
         ),
     ] = None
     powerflex_allow_migration_during_rebuild: Annotated[
@@ -131,16 +132,18 @@ class PowerFlexConfig(StorageBackendConfig):
     replication_device: Annotated[
         str | None,
         Field(
-            description="Specific replication configuration settings. Must be set under "
-            "the form of backend_id:powerflex_repl, san_ip: <Replication system San ip>, "
-            "san_login: <Replication system San username>, san_password: <Replication system San password>"
+            description="Specific replication configuration settings. Must be set "
+            "under the form of backend_id:powerflex_repl, "
+            "san_ip: <Replication system San ip>, "
+            "san_login: <Replication system San username>, "
+            "san_password: <Replication system San password>"
         ),
     ] = None
 
     # SSL and security
     driver_ssl_cert: Annotated[
         str | None,
-        Field(description="PEM-encoded SSL certificate to use for HTTPS connections")
+        Field(description="PEM-encoded SSL certificate to use for HTTPS connections"),
     ] = None
 
     # Standard Cinder options
