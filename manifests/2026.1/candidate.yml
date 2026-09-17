@@ -41,6 +41,8 @@ core:
         channel: 2026.1/candidate
         config:
           snap-channel: 2026.1/candidate
+      rabbitmq-k8s:
+        channel: 4.0/candidate
       microcluster-token-distributor:
         channel: latest/edge
       role-distributor:

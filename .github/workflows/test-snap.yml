@@ -31,7 +31,7 @@ on:
       rabbitmq-charm-channel:
         description: Specify rabbitmq charms channel
         required: true
-        default: 3.12/candidate
+        default: 4.0/candidate
         type: string
       mysql-charm-channel:
         description: Specify mysql charms channel
