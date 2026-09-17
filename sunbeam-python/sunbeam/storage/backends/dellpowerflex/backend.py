@@ -75,9 +75,7 @@ class PowerFlexConfig(StorageBackendConfig):
     # Storage management
     powerflex_max_over_subscription_ratio: Annotated[
         float | None,
-        Field(
-            description="Maximum oversubscription ratio allowed"
-        ),
+        Field(description="Maximum oversubscription ratio allowed"),
     ] = 10.0
 
     # Volume management
