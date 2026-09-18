@@ -316,26 +316,23 @@ class RemoveMicrocephOSDsStep(BaseStep):
                 f"Failed to parse configured disk listing: {e}"
             ) from e
 
-    def _list_crush_osd_ids(self) -> list[int]:
-        """Return OSD IDs under the target CRUSH host."""
+    def _list_crush_hosts(self) -> dict[str, list[int]]:
+        """Return matching CRUSH hosts and their OSD IDs, including empty hosts."""
         try:
             nodes = json.loads(
                 self._run_command("microceph.ceph osd tree --format json")
             )["nodes"]
-            return sorted(
-                {
-                    osd_id
-                    for node in nodes
-                    if node["type"] == "host" and node["name"] in self._hostnames
-                    for osd_id in node["children"]
-                }
-            )
+            return {
+                node["name"]: node["children"]
+                for node in nodes
+                if node["type"] == "host" and node["name"] in self._hostnames
+            }
         except (json.JSONDecodeError, KeyError, TypeError) as e:
             raise SunbeamException(f"Failed to parse CRUSH tree: {e}") from e
 
-    def _list_target_osds(self) -> tuple[list[int], list[int]]:
+    def _list_target_osds(self) -> tuple[list[int], dict[str, list[int]]]:
         """Read both target OSD sources before changing either source."""
-        return self._list_configured_osd_ids(), self._list_crush_osd_ids()
+        return self._list_configured_osd_ids(), self._list_crush_hosts()
 
     def run(self, context: StepContext) -> Result:
         """Remove DB-backed OSDs and verify both MicroCeph and CRUSH state."""
@@ -345,8 +342,9 @@ class RemoveMicrocephOSDsStep(BaseStep):
                 return preparation
 
         try:
-            configured_osds, crush_osds = self._list_target_osds()
-            crush_only_osds = sorted(set(crush_osds) - set(configured_osds))
+            configured_osds, crush_hosts = self._list_target_osds()
+            crush_osds = {osd for children in crush_hosts.values() for osd in children}
+            crush_only_osds = sorted(crush_osds - set(configured_osds))
             if crush_only_osds:
                 return Result(
                     ResultType.FAILED,
@@ -362,19 +360,26 @@ class RemoveMicrocephOSDsStep(BaseStep):
                     command += " --confirm-failure-domain-downgrade"
                 self._run_command(command)
 
-            if not configured_osds:
-                return Result(ResultType.COMPLETED)
-
-            remaining_configured, remaining_crush = self._list_target_osds()
-            if remaining_configured:
+            if configured_osds:
+                remaining_configured, crush_hosts = self._list_target_osds()
+                if remaining_configured:
+                    return Result(
+                        ResultType.FAILED,
+                        f"Configured OSDs remain for {self.node}: "
+                        f"{remaining_configured}",
+                    )
+            if any(crush_hosts.values()):
                 return Result(
                     ResultType.FAILED,
-                    f"Configured OSDs remain for {self.node}: {remaining_configured}",
+                    f"CRUSH OSDs remain for {self.node}: {crush_hosts}",
                 )
-            if remaining_crush:
+
+            for hostname in crush_hosts:
+                self._run_command(f"microceph.ceph osd crush remove {hostname}")
+            if crush_hosts and (remaining_hosts := self._list_crush_hosts()):
                 return Result(
                     ResultType.FAILED,
-                    f"CRUSH OSDs remain for {self.node}: {remaining_crush}",
+                    f"CRUSH hosts remain for {self.node}: {sorted(remaining_hosts)}",
                 )
         except SunbeamException as e:
             LOG.debug("Failed to clean up MicroCeph OSDs", exc_info=True)

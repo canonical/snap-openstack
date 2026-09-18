@@ -4,6 +4,8 @@
 import json
 from unittest.mock import Mock
 
+import pytest
+
 from sunbeam.core.common import ResultType
 from sunbeam.core.juju import (
     ActionFailedException,
@@ -142,6 +144,8 @@ class TestRemoveMicrocephOSDsStep:
             _command_result(),
             _command_result(),
             _command_result(_configured_disks([{"osd": 9, "location": "node-2"}])),
+            _command_result(_crush_tree("node-1.maas")),
+            _command_result(),
             _command_result(_crush_tree()),
         ]
 
@@ -164,14 +168,19 @@ class TestRemoveMicrocephOSDsStep:
             "microceph disk remove osd.5 --timeout 1800",
             "microceph disk list --json",
             "microceph.ceph osd tree --format json",
+            "microceph.ceph osd crush remove node-1.maas",
+            "microceph.ceph osd tree --format json",
         ]
 
-    def test_crush_only_osd_aborts_before_removal(self, cclient, jhelper, step_context):
+    @pytest.mark.parametrize("force", [False, True])
+    def test_crush_only_osd_aborts_before_removal(
+        self, cclient, jhelper, step_context, force
+    ):
         jhelper.get_unit_from_machine.side_effect = UnitNotFoundException(
             "unit is missing"
         )
         jhelper.get_leader_unit.return_value = "microceph/3"
-        step = _cleanup_step(cclient, jhelper)
+        step = _cleanup_step(cclient, jhelper, force=force)
         jhelper.run_cmd_on_machine_unit_payload.side_effect = [
             _command_result(_configured_disks([{"osd": 2, "location": "node-1"}])),
             _command_result(_crush_tree("node-1", [2, 7])),
@@ -183,6 +192,44 @@ class TestRemoveMicrocephOSDsStep:
         assert result.result_type == ResultType.FAILED
         assert step.unit == "microceph/3"
         assert jhelper.run_cmd_on_machine_unit_payload.call_count == 2
+
+    @pytest.mark.parametrize(
+        "hostname, remaining_hostname, expected",
+        [
+            ("node-1", None, ResultType.COMPLETED),
+            ("node-1.maas", None, ResultType.COMPLETED),
+            ("node-1", "node-1", ResultType.FAILED),
+            ("node-1.maas", "node-1.maas", ResultType.FAILED),
+        ],
+    )
+    def test_verifies_empty_host_cleanup_on_retry(
+        self, cclient, jhelper, step_context, hostname, remaining_hostname, expected
+    ):
+        step = _cleanup_step(cclient, jhelper, force=True)
+        other_host = {"name": "node-10", "type": "host", "children": [9]}
+        tree = json.loads(_crush_tree(hostname))
+        tree["nodes"].append(other_host)
+        remaining = json.loads(_crush_tree(remaining_hostname))
+        remaining["nodes"].append(other_host)
+        jhelper.run_cmd_on_machine_unit_payload.side_effect = [
+            _command_result(_configured_disks([{"osd": 9, "location": "node-10"}])),
+            _command_result(json.dumps(tree)),
+            _command_result(),
+            _command_result(json.dumps(remaining)),
+        ]
+
+        result = step.run(step_context)
+
+        assert result.result_type == expected
+        assert [
+            call.args[2]
+            for call in jhelper.run_cmd_on_machine_unit_payload.call_args_list
+        ] == [
+            "microceph disk list --json",
+            "microceph.ceph osd tree --format json",
+            f"microceph.ceph osd crush remove {hostname}",
+            "microceph.ceph osd tree --format json",
+        ]
 
     def test_force_does_not_bypass_safety_checks(self, cclient, jhelper, step_context):
         step = _cleanup_step(cclient, jhelper, force=True)
@@ -202,11 +249,18 @@ class TestRemoveMicrocephOSDsStep:
             "--confirm-failure-domain-downgrade"
         )
 
-    def test_command_failure_aborts_cleanup(self, cclient, jhelper, step_context):
+    @pytest.mark.parametrize(
+        "hostname, osds", [("node-1", [2]), ("node-1", []), ("node-1.maas", [])]
+    )
+    def test_command_failure_aborts_cleanup(
+        self, cclient, jhelper, step_context, hostname, osds
+    ):
         step = _cleanup_step(cclient, jhelper)
         jhelper.run_cmd_on_machine_unit_payload.side_effect = [
-            _command_result(_configured_disks([{"osd": 2, "location": "node-1"}])),
-            _command_result(_crush_tree("node-1", [2])),
+            _command_result(
+                _configured_disks([{"osd": osd, "location": hostname} for osd in osds])
+            ),
+            _command_result(_crush_tree(hostname, osds)),
             ExecFailedException("remove failed"),
         ]
 
@@ -226,7 +280,12 @@ class TestRemoveMicrocephOSDsStep:
         assert result.result_type == ResultType.FAILED
         assert jhelper.run_cmd_on_machine_unit_payload.call_count == 1
 
-    def test_remaining_osd_fails_verification(self, cclient, jhelper, step_context):
+    @pytest.mark.parametrize(
+        "remaining_disks", [[], [{"osd": 2, "location": "node-1"}]]
+    )
+    def test_remaining_osd_fails_verification(
+        self, cclient, jhelper, step_context, remaining_disks
+    ):
         step = _cleanup_step(cclient, jhelper)
         configured = _configured_disks([{"osd": 2, "location": "node-1"}])
         tree = _crush_tree("node-1", [2])
@@ -234,7 +293,7 @@ class TestRemoveMicrocephOSDsStep:
             _command_result(configured),
             _command_result(tree),
             _command_result(),
-            _command_result(configured),
+            _command_result(_configured_disks(remaining_disks)),
             _command_result(tree),
         ]
 
@@ -242,6 +301,17 @@ class TestRemoveMicrocephOSDsStep:
         result = step.run(step_context)
 
         assert result.result_type == ResultType.FAILED
+        assert jhelper.run_cmd_on_machine_unit_payload.call_count == 5
+
+    def test_already_removed_host_is_a_noop(self, cclient, jhelper, step_context):
+        step = _cleanup_step(cclient, jhelper)
+        jhelper.run_cmd_on_machine_unit_payload.side_effect = [
+            _command_result(_configured_disks([])),
+            _command_result(_crush_tree("node-10", [9])),
+        ]
+
+        assert step.run(step_context).result_type == ResultType.COMPLETED
+        assert jhelper.run_cmd_on_machine_unit_payload.call_count == 2
 
 
 class TestSetCephMgrPoolSizeStep:
