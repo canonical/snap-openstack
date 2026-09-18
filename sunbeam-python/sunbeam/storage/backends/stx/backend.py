@@ -46,6 +46,15 @@ class StxConfig(StorageBackendConfig):
         Protocol | None,
         Field(description="Protocol selector: iscsi."),
     ] = None
+    driver_ssl_cert: Annotated[
+        str | None,
+        Field(
+            description=(
+                "PEM-encoded SSL certificate content for HTTPS connections to "
+                "the storage array."
+            )
+        ),
+    ] = None
 
     # Optional backend configuration
     seagate_pool_name: Annotated[

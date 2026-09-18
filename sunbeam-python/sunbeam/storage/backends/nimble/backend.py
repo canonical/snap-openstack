@@ -64,7 +64,12 @@ class NimbleConfig(StorageBackendConfig):
     ] = None
     nimble_verify_cert_path: Annotated[
         str | None,
-        Field(description="Path to Nimble Array SSL certificate"),
+        Field(
+            description=(
+                "PEM-encoded certificate or CA bundle content used to verify "
+                "the Nimble array."
+            )
+        ),
     ] = None
     san_thin_provision: Annotated[
         bool | None,
