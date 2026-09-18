@@ -15,7 +15,6 @@ from packaging.version import Version
 from rich.console import Console
 from rich.table import Table
 
-from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import ConfigItemNotFoundException
 from sunbeam.commands.configure import retrieve_admin_credentials
 from sunbeam.core import questions
@@ -1503,8 +1502,7 @@ class LoadbalancerFeature(OpenStackControlPlaneFeature):
     name = "loadbalancer"
     tf_plan_location = TerraformPlanLocation.SUNBEAM_TERRAFORM_REPO
 
-    @property
-    def requires(self) -> set[FeatureRequirement]:  # type: ignore[override]
+    def get_requirements(self, deployment: Deployment) -> set[FeatureRequirement]:
         """Require Barbican (secrets) only when Amphora is actually configured.
 
         Checks both the snap feature gate (coarse guard) and the persisted
@@ -1513,7 +1511,9 @@ class LoadbalancerFeature(OpenStackControlPlaneFeature):
         if not is_feature_gate_enabled("feature.loadbalancer-amphora"):
             return set()
         try:
-            saved = questions.load_answers(Client.from_socket(), AMPHORA_CONFIG_SECTION)
+            saved = questions.load_answers(
+                deployment.get_client(), AMPHORA_CONFIG_SECTION
+            )
             if not saved.get(_AMPHORA_ENABLED_KEY, False):
                 return set()
         except Exception:
