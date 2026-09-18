@@ -1215,7 +1215,10 @@ class EndpointsConfigurationStep(BaseStep):
             show_hint=show_hint,
         )
 
-        self.variables["configure"] = configure_endpoint_bank.configure.ask()
+        if self.manifest is None and not self.accept_defaults:
+            self.variables["configure"] = configure_endpoint_bank.configure.ask()
+        else:
+            self.variables["configure"] = preseed.get("configure", False)
 
         if not self.variables["configure"]:
             # Clear all endpoint data when user chooses not to configure endpoints
