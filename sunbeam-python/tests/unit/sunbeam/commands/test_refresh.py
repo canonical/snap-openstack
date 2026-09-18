@@ -10,6 +10,7 @@ from click.testing import CliRunner
 from sunbeam.clusterd.service import ManifestItemNotFoundException
 from sunbeam.commands.refresh import _stored_manifest_risk, refresh
 from sunbeam.core.common import RiskLevel
+from sunbeam.features.tls.ca import CaTlsFeature
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -430,3 +431,58 @@ class TestRefreshWarning:
 
         assert result.exit_code != 0
         assert "mutually exclusive" in result.output.lower()
+
+
+class TestRefreshFixTlsCerts:
+    """Tests for the automatic tls.ca certificate re-provision on refresh."""
+
+    def _invoke(self, args, deployment):
+        runner = CliRunner()
+        return runner.invoke(refresh, args, obj=deployment)
+
+    def _deployment_with_feature(self, mocker, feature):
+        mocker.patch(
+            "sunbeam.commands.refresh.infer_risk",
+            return_value=RiskLevel.STABLE,
+        )
+        client = _build_client("stable")
+        deployment = _build_deployment(client)
+        deployment.get_feature_manager.return_value.resolve_feature.return_value = (
+            feature
+        )
+        return deployment
+
+    def test_reapply_called_when_tls_ca_enabled(self, mocker):
+        feature = MagicMock(spec=CaTlsFeature)
+        feature.is_enabled.return_value = True
+        deployment = self._deployment_with_feature(mocker, feature)
+
+        result = self._invoke([], deployment)
+
+        assert result.exit_code == 0
+        feature.reapply_certificates.assert_called_once()
+        assert "TLS certificate re-provision complete." in result.output
+
+    @pytest.mark.parametrize(
+        "is_enabled,args",
+        [
+            pytest.param(False, [], id="tls_ca_not_enabled"),
+            pytest.param(True, ["--upgrade-release"], id="upgrade_release"),
+        ],
+    )
+    def test_reapply_not_called(self, mocker, is_enabled, args):
+        feature = MagicMock(spec=CaTlsFeature)
+        feature.is_enabled.return_value = is_enabled
+        deployment = self._deployment_with_feature(mocker, feature)
+
+        result = self._invoke(args, deployment)
+
+        assert result.exit_code == 0
+        feature.reapply_certificates.assert_not_called()
+
+    def test_skipped_when_tls_ca_feature_missing(self, mocker):
+        deployment = self._deployment_with_feature(mocker, None)
+
+        result = self._invoke([], deployment)
+
+        assert result.exit_code == 0
