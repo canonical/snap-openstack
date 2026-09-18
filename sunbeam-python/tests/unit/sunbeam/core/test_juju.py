@@ -152,6 +152,113 @@ def test_model_exists_false(jhelper):
     assert not jhelper.model_exists("nope")
 
 
+def test_get_model_uncached_found(jhelper):
+    result = jhelper._get_model_uncached("test-model")
+    assert result == {
+        "short-name": "test-model",
+        "name": "admin/test-model",
+        "model-uuid": "1234",
+    }
+
+
+def test_get_model_uncached_not_found(jhelper):
+    with pytest.raises(jujulib.ModelNotFoundException):
+        jhelper._get_model_uncached("nope")
+
+
+def test_get_model_uncached_always_calls_models(jhelper):
+    """_get_model_uncached does not cache; each call queries models()."""
+    jhelper._get_model_uncached("test-model")
+    jhelper._get_model_uncached("test-model")
+    assert jhelper.models.call_count == 2
+
+
+def test_model_exists_live_true(jhelper):
+    assert jhelper.model_exists_live("test-model")
+
+
+def test_model_exists_live_false(jhelper):
+    assert not jhelper.model_exists_live("nope")
+
+
+def test_model_exists_live_bypasses_cache(jhelper):
+    """model_exists_live sees fresh data even when get_model cache is stale."""
+    # Seed the cache
+    assert jhelper.get_model("test-model") is not None
+
+    # Now model disappears
+    jhelper.models = Mock(return_value=[])
+
+    # Cached model_exists still returns True (stale cache)
+    assert jhelper.model_exists("test-model") is True
+
+    # Live check sees the model is gone
+    assert jhelper.model_exists_live("test-model") is False
+
+
+@patch("time.sleep")
+def test_wait_model_gone_model_already_gone(mock_sleep, jhelper):
+    """Returns immediately if model does not exist."""
+    jhelper.models = Mock(return_value=[])
+    jhelper.get_model.cache_clear()
+
+    jhelper.wait_model_gone("test-model", timeout=60)
+
+    mock_sleep.assert_not_called()
+
+
+@patch("time.sleep")
+def test_wait_model_gone_model_disappears(mock_sleep, jhelper):
+    """Exits loop once model is gone, verifying live checks on each iteration."""
+    model_data = [
+        {"short-name": "test-model", "name": "admin/test-model", "model-uuid": "1234"}
+    ]
+    jhelper.models = Mock(
+        side_effect=[
+            model_data,  # first check: model still present
+            [],  # second check: model gone
+        ]
+    )
+    jhelper.get_model.cache_clear()
+
+    jhelper.wait_model_gone("test-model", timeout=60)
+
+    assert jhelper.models.call_count == 2
+    mock_sleep.assert_called_once()
+
+
+@patch("time.sleep")
+@patch("time.monotonic")
+def test_wait_model_gone_timeout_raises(mock_monotonic, mock_sleep, jhelper):
+    """TimeoutError is raised when model does not disappear in time."""
+    # start=0, first iteration: model exists, check timeout -> 9999 > 1 -> raise
+    mock_monotonic.side_effect = [0, 9999]
+
+    with pytest.raises(TimeoutError):
+        jhelper.wait_model_gone("test-model", timeout=1)
+
+
+@patch("time.sleep")
+def test_wait_model_gone_does_not_use_cache(mock_sleep, jhelper):
+    """Regression test: wait_model_gone uses live checks, not cached model_exists.
+
+    This is the exact bug scenario (see LP#2146354)
+    get_model cache has the model, but the model
+    is actually gone. wait_model_gone must detect this via model_exists_live.
+    """
+    # Seed the get_model cache so cached model_exists would return True forever
+    assert jhelper.get_model("test-model") is not None
+
+    # Now model disappears from the controller
+    jhelper.models = Mock(return_value=[])
+
+    # wait_model_gone should return immediately (model is gone per live check)
+    # If it used cached model_exists, it would loop until timeout
+    jhelper.wait_model_gone("test-model", timeout=5)
+
+    mock_sleep.assert_not_called()
+
+
 def test_get_model_name_with_owner(jhelper):
     assert jhelper.get_model_name_with_owner("test-model") == "admin/test-model"
 
