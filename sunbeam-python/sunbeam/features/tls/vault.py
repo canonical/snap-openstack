@@ -64,6 +64,8 @@ ConfigType = typing.TypeVar("ConfigType", bound=FeatureConfig)
 
 
 class _Certificate(pydantic.BaseModel):
+    model_config = pydantic.ConfigDict(extra="forbid")
+
     certificate: str
 
 
