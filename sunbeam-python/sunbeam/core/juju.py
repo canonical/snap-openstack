@@ -759,22 +759,22 @@ class JujuHelper:
     ) -> "jubilant.Task":
         """Run a shell command on a machine unit.
 
-        Returns action results irrespective of the return-code
-        in action results.
-
         :name: unit name
         :model: Name of the model where the application is located
         :cmd: Command to run
         :timeout: Timeout in seconds
         :returns: Command results
-
-        Command execution failures are part of the results with
-        return-code, stdout, stderr.
+        :raises: ExecFailedException if command execution fails
         """
         with self._model(model) as juju:
             try:
                 task = juju.exec(cmd, unit=name, wait=timeout)
-            except jubilant.TaskError as e:
+            except (
+                jubilant.TaskError,
+                jubilant.CLIError,
+                TimeoutError,
+                ValueError,
+            ) as e:
                 raise ExecFailedException(
                     f"Failed to run command {cmd!r} on unit"
                     f" {name!r} in model {model!r}: {e}"
@@ -825,7 +825,12 @@ class JujuHelper:
                 stdout, _ = juju._cli(*args, "--", *(cmd.split()), log=False)
             except jubilant.CLIError as e:
                 stdout = e.stdout
-        return json.loads(stdout)[name]["results"]
+        try:
+            return json.loads(stdout)[name]["results"]
+        except (json.JSONDecodeError, KeyError, TypeError) as e:
+            raise ExecFailedException(
+                f"Failed to parse command result for unit {name!r}"
+            ) from e
 
     def run_action(
         self,

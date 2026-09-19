@@ -2,9 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
 import pytest
+from keystoneauth1.exceptions.catalog import EndpointNotFound
+from keystoneauth1.exceptions.connection import ConnectFailure
+from openstack.exceptions import SDKException
 
 from sunbeam.clusterd.service import NodeNotExistInClusterException
 from sunbeam.core.common import ResultType
@@ -13,6 +16,7 @@ from sunbeam.core.terraform import TerraformException
 from sunbeam.steps.hypervisor import (
     ReapplyHypervisorOptionalIntegrationsStep,
     ReapplyHypervisorTerraformPlanStep,
+    RemoveHypervisorReferencesStep,
     RemoveHypervisorUnitStep,
 )
 
@@ -309,6 +313,198 @@ class TestRemoveHypervisorUnitStep:
         basic_jhelper.wait_application_ready.assert_called_once()
         assert result.result_type == ResultType.FAILED
         assert result.message == "timed out"
+
+
+class TestRemoveHypervisorReferencesStep:
+    @patch("sunbeam.steps.hypervisor.get_admin_connection")
+    @patch("sunbeam.steps.hypervisor.remove_network_service")
+    @patch("sunbeam.steps.hypervisor.remove_compute_service")
+    def test_run_removes_short_and_fqdn_references(
+        self,
+        remove_compute_service,
+        remove_network_service,
+        get_admin_connection,
+        basic_jhelper,
+        basic_deployment,
+        step_context,
+    ):
+        conn = Mock()
+        conn.compute.services.return_value = []
+        conn.network.agents.return_value = []
+        get_admin_connection.return_value = conn
+        step = RemoveHypervisorReferencesStep(
+            basic_jhelper,
+            basic_deployment,
+            "cloud-4",
+            "cloud-4.maas",
+        )
+
+        result = step.run(step_context)
+
+        assert result.result_type == ResultType.COMPLETED
+        assert remove_compute_service.call_args_list == [
+            call("cloud-4", conn),
+            call("cloud-4.maas", conn),
+        ]
+        assert remove_network_service.call_args_list == [
+            call("cloud-4", conn),
+            call("cloud-4.maas", conn),
+        ]
+        assert conn.compute.services.call_args_list == [
+            call(host="cloud-4"),
+            call(host="cloud-4.maas"),
+        ]
+        assert conn.network.agents.call_args_list == [
+            call(host="cloud-4"),
+            call(host="cloud-4.maas"),
+        ]
+
+    @patch("sunbeam.steps.hypervisor.HYPERVISOR_REFERENCES_POLL_INTERVAL", 0)
+    @patch("sunbeam.steps.hypervisor.get_admin_connection")
+    @patch("sunbeam.steps.hypervisor.remove_network_service")
+    @patch("sunbeam.steps.hypervisor.remove_compute_service")
+    def test_run_retries_until_references_are_gone(
+        self,
+        remove_compute_service,
+        remove_network_service,
+        get_admin_connection,
+        basic_jhelper,
+        basic_deployment,
+        step_context,
+    ):
+        conn = Mock()
+        conn.compute.services.side_effect = [[Mock()], [], [], []]
+        conn.network.agents.return_value = []
+        get_admin_connection.return_value = conn
+        step = RemoveHypervisorReferencesStep(
+            basic_jhelper,
+            basic_deployment,
+            "cloud-4",
+            "cloud-4.maas",
+        )
+
+        result = step.run(step_context)
+
+        assert result.result_type == ResultType.COMPLETED
+        assert remove_compute_service.call_count == 4
+        assert remove_network_service.call_count == 4
+
+    @patch("sunbeam.steps.hypervisor.get_admin_connection")
+    @patch("sunbeam.steps.hypervisor.remove_network_service")
+    @patch("sunbeam.steps.hypervisor.remove_compute_service")
+    def test_run_deduplicates_equal_hostnames(
+        self,
+        remove_compute_service,
+        remove_network_service,
+        get_admin_connection,
+        basic_jhelper,
+        basic_deployment,
+        step_context,
+    ):
+        conn = Mock()
+        conn.compute.services.return_value = []
+        conn.network.agents.return_value = []
+        get_admin_connection.return_value = conn
+        step = RemoveHypervisorReferencesStep(
+            basic_jhelper,
+            basic_deployment,
+            "cloud-4",
+            "cloud-4",
+        )
+
+        result = step.run(step_context)
+
+        assert result.result_type == ResultType.COMPLETED
+        remove_compute_service.assert_called_once_with("cloud-4", conn)
+        remove_network_service.assert_called_once_with("cloud-4", conn)
+
+    @pytest.mark.parametrize(
+        "error",
+        [
+            SDKException("control plane unavailable"),
+            EndpointNotFound("control plane unavailable"),
+        ],
+    )
+    @patch("sunbeam.steps.hypervisor.get_admin_connection")
+    def test_run_force_ignores_client_error(
+        self,
+        get_admin_connection,
+        basic_jhelper,
+        basic_deployment,
+        step_context,
+        error,
+    ):
+        get_admin_connection.side_effect = error
+        step = RemoveHypervisorReferencesStep(
+            basic_jhelper,
+            basic_deployment,
+            "cloud-4",
+            "cloud-4.maas",
+            force=True,
+        )
+
+        result = step.run(step_context)
+
+        assert result.result_type == ResultType.COMPLETED
+        get_admin_connection.assert_called_once_with(basic_jhelper, basic_deployment)
+
+    @patch("sunbeam.steps.hypervisor.HYPERVISOR_REFERENCES_POLL_INTERVAL", 0)
+    @patch("sunbeam.steps.hypervisor.get_admin_connection")
+    def test_run_retries_keystoneauth_error(
+        self,
+        get_admin_connection,
+        basic_jhelper,
+        basic_deployment,
+        step_context,
+    ):
+        conn = Mock()
+        conn.compute.services.return_value = []
+        conn.network.agents.return_value = []
+        get_admin_connection.side_effect = [
+            ConnectFailure("control plane unavailable"),
+            conn,
+        ]
+        step = RemoveHypervisorReferencesStep(
+            basic_jhelper,
+            basic_deployment,
+            "cloud-4",
+            "cloud-4.maas",
+        )
+
+        result = step.run(step_context)
+
+        assert result.result_type == ResultType.COMPLETED
+        assert get_admin_connection.call_count == 2
+
+    @patch("sunbeam.steps.hypervisor.HYPERVISOR_REFERENCES_TIMEOUT", 0)
+    @patch("sunbeam.steps.hypervisor.get_admin_connection")
+    @patch("sunbeam.steps.hypervisor.remove_network_service")
+    @patch("sunbeam.steps.hypervisor.remove_compute_service")
+    def test_run_fails_when_references_persist(
+        self,
+        remove_compute_service,
+        remove_network_service,
+        get_admin_connection,
+        basic_jhelper,
+        basic_deployment,
+        step_context,
+    ):
+        conn = Mock()
+        conn.compute.services.return_value = [Mock()]
+        conn.network.agents.return_value = [Mock()]
+        get_admin_connection.return_value = conn
+        step = RemoveHypervisorReferencesStep(
+            basic_jhelper,
+            basic_deployment,
+            "cloud-4",
+            "cloud-4.maas",
+        )
+
+        result = step.run(step_context)
+
+        assert result.result_type == ResultType.FAILED
+        assert remove_compute_service.called
+        assert remove_network_service.called
 
 
 class TestReapplyHypervisorTerraformPlanStep:
