@@ -409,7 +409,7 @@ class NetAppBackend(StorageBackendBase):
     @property
     def supports_ha(self) -> bool:
         """Whether this backend supports HA deployments."""
-        return True
+        return False
 
     def config_type(self) -> type[StorageBackendConfig]:
         """Return the configuration model type for this backend."""
