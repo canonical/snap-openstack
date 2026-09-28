@@ -22,7 +22,10 @@ from snaphelpers import Snap
 
 from sunbeam import utils
 from sunbeam.clusterd.client import Client
-from sunbeam.clusterd.service import ConfigItemNotFoundException
+from sunbeam.clusterd.service import (
+    ConfigItemNotFoundException,
+    StorageBackendNotFoundException,
+)
 from sunbeam.core.common import BaseStep, run_plan
 from sunbeam.core.deployment import Deployment, Networks
 from sunbeam.core.juju import JujuHelper
@@ -35,11 +38,16 @@ from sunbeam.storage.models import (
     SecretDictField,
 )
 from sunbeam.storage.steps import (
+    PRINCIPAL_HA_APPLICATION,
+    PRINCIPAL_NON_HA_APPLICATION,
+    SNAP_NAME_HA,
+    SNAP_NAME_NON_HA,
     BaseStorageBackendDeployStep,
     BaseStorageBackendDestroyStep,
     DeploySpecificCinderVolumeStep,
     DestroySpecificCinderVolumeStep,
     ValidateStoragePrerequisitesStep,
+    prompt_backend_config,
 )
 
 LOG = logging.getLogger(__name__)
@@ -56,9 +64,6 @@ FQDN_PATTERN = (
     r"^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?"
     r"(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$"
 )
-
-PRINCIPAL_HA_APPLICATION = "cinder-volume"
-PRINCIPAL_NON_HA_APPLICATION = "cinder-volume-noha"
 
 
 def validate_juju_application_name(name: str) -> bool:
@@ -326,8 +331,43 @@ class StorageBackendBase(FeatureGateMixin, typing.Generic[BackendConfig]):
         client = deployment.get_client()
         tfhelper = deployment.get_tfhelper(self.tfplan)
         jhelper = JujuHelper(deployment.juju_controller)
+
+        # Validate prerequisites before collecting configuration, so
+        # answers are only prompted for and saved when the deployment
+        # can actually accept the backend
+        run_plan(
+            [ValidateStoragePrerequisitesStep(deployment, client, jhelper)], console
+        )
+
+        # Collect and validate configuration before building the plan so
+        # decisions that depend on the configuration (e.g. HA support) are
+        # made with the full configuration in hand
+        variables = prompt_backend_config(
+            client, self, self.manifest, name, config, console, accept_defaults
+        )
+        validated_config = self.config_type().model_validate(variables, by_name=True)
+        supports_ha = self.supports_ha_for(validated_config)
+        principal = (
+            PRINCIPAL_HA_APPLICATION if supports_ha else PRINCIPAL_NON_HA_APPLICATION
+        )
+
+        # The principal application is chosen per configuration; changing
+        # it on re-add would orphan the previously deployed application,
+        # so the backend must be removed and added back instead
+        try:
+            existing_backend = client.cluster.get_storage_backend(name)
+        except StorageBackendNotFoundException:
+            existing_backend = None
+        if existing_backend is not None and existing_backend.principal != principal:
+            raise click.ClickException(
+                f"Changing the configuration of backend {name!r} requires a "
+                f"different cinder-volume application "
+                f"({existing_backend.principal} -> {principal}). "
+                f"Remove the backend and add it again to apply the change: "
+                f"'sunbeam storage remove {name}'"
+            )
+
         plan = [
-            ValidateStoragePrerequisitesStep(deployment, client, jhelper),
             TerraformInitStep(tfhelper),
             TerraformInitStep(openstack_tfhelper),
             DeploySpecificCinderVolumeStep(
@@ -339,6 +379,7 @@ class StorageBackendBase(FeatureGateMixin, typing.Generic[BackendConfig]):
                 name,
                 self,
                 deployment.openstack_machines_model,
+                supports_ha=supports_ha,
             ),
             self.create_deploy_step(
                 deployment,
@@ -346,7 +387,7 @@ class StorageBackendBase(FeatureGateMixin, typing.Generic[BackendConfig]):
                 tfhelper,
                 jhelper,
                 self.manifest,
-                config,
+                variables,
                 name,
                 deployment.openstack_machines_model,
                 accept_defaults,
@@ -536,6 +577,14 @@ class StorageBackendBase(FeatureGateMixin, typing.Generic[BackendConfig]):
         client = deployment.get_client()
         tfhelper = deployment.get_tfhelper(self.tfplan)
         jhelper = JujuHelper(deployment.juju_controller)
+
+        # Principal recorded when the backend was added; the deploy step
+        # deletes the clusterd record, so read it before the plan runs
+        principal = None
+        try:
+            principal = client.cluster.get_storage_backend(backend_name).principal
+        except StorageBackendNotFoundException:
+            LOG.debug("Backend %s not found in clusterd", backend_name)
         # Create removal plan - each backend should implement its own destroy step
         plan = [
             ValidateStoragePrerequisitesStep(deployment, client, jhelper),
@@ -559,6 +608,7 @@ class StorageBackendBase(FeatureGateMixin, typing.Generic[BackendConfig]):
                 backend_name,
                 self,
                 deployment.openstack_machines_model,
+                principal_application=principal,
             ),
             DeployControlPlaneStep(
                 deployment,
@@ -614,12 +664,21 @@ class StorageBackendBase(FeatureGateMixin, typing.Generic[BackendConfig]):
         note(gboutry): Backend can redefine which snap to install for principal
         application.
         """
-        return "cinder-volume" if self.supports_ha else "cinder-volume_noha"
+        return SNAP_NAME_HA if self.supports_ha else SNAP_NAME_NON_HA
 
     @property
     def supports_ha(self) -> bool:
         """Return whether this backend supports HA deployments."""
         return False
+
+    def supports_ha_for(self, config: BackendConfig) -> bool:
+        """Return whether a specific backend configuration supports HA.
+
+        Backends whose HA support depends on the configuration (e.g. the
+        selected protocol) override this. The static supports_ha property
+        remains the fallback when no configuration is available.
+        """
+        return self.supports_ha
 
     def get_endpoint_bindings(self, deployment: Deployment) -> list[dict[str, str]]:
         """Endpoint bindings for this backend."""
@@ -673,9 +732,15 @@ class StorageBackendBase(FeatureGateMixin, typing.Generic[BackendConfig]):
                     if revision := charm_cfg.revision:
                         charm_revision = revision
 
+        supports_ha = self.supports_ha_for(config)
+
         # Build Terraform variables to match the plan's expected format
         tfvars = {
-            "principal_application": self.principal_application,
+            "principal_application": (
+                PRINCIPAL_HA_APPLICATION
+                if supports_ha
+                else PRINCIPAL_NON_HA_APPLICATION
+            ),
             "charm_name": self.charm_name,
             "charm_base": self.charm_base,
             "charm_channel": charm_channel,
