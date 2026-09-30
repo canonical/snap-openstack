@@ -138,6 +138,7 @@ class TestDeployManilaDataApplicationStep:
         basic_deployment.get_space.side_effect = lambda network: {
             Networks.MANAGEMENT: "management",
             Networks.INTERNAL: "internal",
+            Networks.STORAGE: "storage",
         }[network]
 
         tfvars = deploy_manila_data_step.extra_tfvars()
@@ -158,6 +159,10 @@ class TestDeployManilaDataApplicationStep:
                 {
                     "endpoint": "identity-credentials",
                     "space": "internal",
+                },
+                {
+                    "endpoint": "storage",
+                    "space": "storage",
                 },
             ],
             "charm-manila-data-config": {},
