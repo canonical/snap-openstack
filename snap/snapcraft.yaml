@@ -166,12 +166,24 @@ parts:
     source-type: git
     organize:
       '*': etc/deploy-openstack/
+    # Excludes are post-organize paths: craft-parts >= 2.35.0 (bundled with
+    # snapcraft >= 9.1) organizes dotfiles, which would otherwise ship .git,
+    # .github, .gitignore and a build-time .terraform.lock.hcl. A shipped lock
+    # file without cached plugins breaks `terraform output` on this plan before
+    # its first init (bootstrap reads openstack-plan outputs before running
+    # TerraformInitStep). Runtime init regenerates the lock file, and the
+    # plugin cache is mirrored to usr/share/terraform-providers instead.
+    stage:
+      - -etc/deploy-openstack/.git
+      - -etc/deploy-openstack/.github
+      - -etc/deploy-openstack/.gitignore
+      - -etc/deploy-openstack/.terraform
+      - -etc/deploy-openstack/.terraform.lock.hcl
     override-build: |
       craftctl default
       cd $CRAFT_PART_INSTALL
       $CRAFT_STAGE/bin/terraform init
       $CRAFT_STAGE/bin/terraform providers mirror $CRAFT_PRIME/usr/share/terraform-providers
-      rm -rf $CRAFT_PART_INSTALL/.terraform
 
   clusterctl:
     plugin: go
