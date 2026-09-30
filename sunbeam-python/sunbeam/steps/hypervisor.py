@@ -26,6 +26,9 @@ from sunbeam.core.common import (
     read_config,
     update_config,
 )
+from sunbeam.core.compute_storage import (
+    get_vault_kv_offer_url,
+)
 from sunbeam.core.deployment import Deployment, Networks
 from sunbeam.core.juju import (
     ActionFailedException,
@@ -114,6 +117,9 @@ class DeployHypervisorApplicationStep(DeployMachineApplicationStep):
             "nova-offer-url",
         }
         extra_tfvars = {offer: openstack_tf_output.get(offer) for offer in juju_offers}
+
+        # Cluster-wide encrypted compute-storage configuration, if any.
+        extra_tfvars["vault-kv-offer-url"] = get_vault_kv_offer_url(self.client)
 
         if len(storage_nodes) > 0:
             cinder_volume_tf_output = self.cinder_volume_tfhelper.output()

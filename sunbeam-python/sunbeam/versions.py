@@ -28,6 +28,7 @@ TRAEFIK_CHANNEL = "latest/stable"
 MICROCEPH_CHANNEL = "tentacle/stable"
 MICROOVN_CHANNEL = "26.03/stable"
 ROLE_DISTRIBUTOR_CHANNEL = "latest/stable"
+VAULTLOCKER_CHANNEL = "latest/edge"
 MYSQL_CHANNEL = "8.0/stable"
 CERT_AUTH_CHANNEL = "1/stable"
 MANUAL_TLS_CERTIFICATES_CHANNEL = "1/stable"
@@ -82,6 +83,7 @@ MACHINE_CHARMS = {
     CINDER_VOLUME_CHARM: OPENSTACK_CHANNEL,
     "cinder-volume-ceph": OPENSTACK_CHANNEL,
     "epa-orchestrator": OPENSTACK_CHANNEL,
+    "vaultlocker": VAULTLOCKER_CHANNEL,
 }
 
 
@@ -276,7 +278,10 @@ DEPLOY_OPENSTACK_HYPERVISOR_TFVAR_MAP: VarMap = {
             "channel": "charm_channel",
             "revision": "charm_revision",
             "config": "charm_config",
-        }
+        },
+        "vaultlocker": {
+            "channel": "vaultlocker-charm-channel",
+        },
     }
 }
 DEPLOY_SUNBEAM_MACHINE_TFVAR_MAP: VarMap = {

@@ -167,3 +167,44 @@ resource "juju_integration" "hypervisor-barbican" {
     offer_url = var.barbican-offer-url
   }
 }
+
+resource "juju_application" "vaultlocker-hypervisor" {
+  count      = (var.vault-kv-offer-url != null) ? 1 : 0
+  name       = "vaultlocker-hypervisor"
+  model_uuid = data.juju_model.machine_model.uuid
+
+  charm {
+    name    = "vaultlocker"
+    channel = var.vaultlocker-charm-channel
+    base    = "ubuntu@24.04"
+  }
+}
+
+resource "juju_integration" "vaultlocker-hypervisor-to-hypervisor" {
+  count      = (var.vault-kv-offer-url != null) ? 1 : 0
+  model_uuid = data.juju_model.machine_model.uuid
+
+  application {
+    name     = juju_application.vaultlocker-hypervisor[count.index].name
+    endpoint = "encrypted-device"
+  }
+
+  application {
+    name     = juju_application.openstack-hypervisor.name
+    endpoint = "encrypted-device"
+  }
+}
+
+resource "juju_integration" "vaultlocker-hypervisor-to-vault" {
+  count      = (var.vault-kv-offer-url != null) ? 1 : 0
+  model_uuid = data.juju_model.machine_model.uuid
+
+  application {
+    name     = juju_application.vaultlocker-hypervisor[count.index].name
+    endpoint = "vault-kv"
+  }
+
+  application {
+    offer_url = var.vault-kv-offer-url
+  }
+}
