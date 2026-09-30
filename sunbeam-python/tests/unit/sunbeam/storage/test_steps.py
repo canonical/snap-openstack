@@ -14,8 +14,10 @@ from sunbeam.storage.models import SecretDictField
 from sunbeam.storage.steps import (
     BaseStorageBackendDeployStep,
     DeploySpecificCinderVolumeStep,
+    DestroySpecificCinderVolumeStep,
     basemodel_validator,
     generate_questions_from_config,
+    prompt_backend_config,
 )
 
 
@@ -46,6 +48,66 @@ class SampleConfig(pydantic.BaseModel):
         if getattr(self, "required_field", None) == 13:
             raise ValueError("thirteen is not allowed")
         return self
+
+
+class TestDestroySpecificCinderVolumeStep:
+    """Tests for DestroySpecificCinderVolumeStep principal handling."""
+
+    @pytest.fixture
+    def mock_backend_instance(self):
+        """Mock storage backend instance."""
+        backend = Mock()
+        backend.principal_application = "cinder-volume-noha"
+        backend.supports_ha = False
+        backend.tfvar_config_key = "TerraformVarsStorageBackends"
+        return backend
+
+    def test_principal_application_explicit(
+        self,
+        basic_deployment,
+        basic_client,
+        basic_tfhelper,
+        basic_jhelper,
+        basic_manifest,
+        test_model,
+        mock_backend_instance,
+    ):
+        """The principal recorded at deploy time is used when given."""
+        step = DestroySpecificCinderVolumeStep(
+            basic_deployment,
+            basic_client,
+            basic_tfhelper,
+            basic_jhelper,
+            basic_manifest,
+            "test-backend",
+            mock_backend_instance,
+            test_model,
+            principal_application="cinder-volume",
+        )
+        assert step.principal_application == "cinder-volume"
+
+    def test_principal_application_defaults_to_backend_property(
+        self,
+        basic_deployment,
+        basic_client,
+        basic_tfhelper,
+        basic_jhelper,
+        basic_manifest,
+        test_model,
+        mock_backend_instance,
+    ):
+        """Without an explicit principal, the backend property is used."""
+        step = DestroySpecificCinderVolumeStep(
+            basic_deployment,
+            basic_client,
+            basic_tfhelper,
+            basic_jhelper,
+            basic_manifest,
+            "test-backend",
+            mock_backend_instance,
+            test_model,
+        )
+        assert step.principal_application == "cinder-volume-noha"
 
 
 class TestBasemodelValidator:
@@ -134,35 +196,61 @@ class TestBaseStorageBackendDeployStep:
             test_model,
         )
 
+    def test_variables_seeded_from_preseed(self, deploy_step):
+        """Configuration is carried by the step, not prompted at run time."""
+        assert deploy_step.variables == {
+            "required_field": "cli-value",
+            "secret_field": "cli-secret",
+        }
+
+
+class TestPromptBackendConfig:
+    """Tests for the prompt_backend_config function."""
+
     def test_prompt_without_manifest_config(
-        self, deploy_step, basic_manifest, mock_backend
+        self, basic_client, basic_manifest, mock_backend
     ):
         """CLI configuration is used when manifest config is absent."""
         backend_manifest = Mock(config=None)
         basic_manifest.storage.root = {
-            mock_backend.backend_type: Mock(
-                root={deploy_step.backend_name: backend_manifest}
-            )
+            mock_backend.backend_type: Mock(root={"test-backend": backend_manifest})
         }
 
         with (
-            patch("sunbeam.storage.steps.load_answers", return_value={}),
+            patch(
+                "sunbeam.storage.steps.load_answers",
+                return_value={
+                    "required_field": "saved-value",
+                    "secret_field": "saved-secret",
+                },
+            ),
             patch("sunbeam.storage.steps.QuestionBank") as question_bank,
             patch("sunbeam.storage.steps.ConfirmQuestion") as confirm_question,
-            patch("sunbeam.storage.steps.write_answers"),
+            patch("sunbeam.storage.steps.write_answers") as mock_write_answers,
         ):
             question_bank.return_value.questions = {}
             confirm_question.return_value.ask.return_value = False
 
-            deploy_step.prompt()
+            variables = prompt_backend_config(
+                basic_client,
+                mock_backend,
+                basic_manifest,
+                "test-backend",
+                {"required_field": "cli-value", "secret_field": "cli-secret"},
+            )
 
         assert question_bank.call_args.kwargs["preseed"] == {
             "required_field": "cli-value",
             "secret_field": "cli-secret",
         }
+        assert variables == {
+            "required_field": "saved-value",
+            "secret_field": "saved-secret",
+        }
+        mock_write_answers.assert_called_once()
 
     def test_prompt_cli_config_overrides_manifest_config(
-        self, deploy_step, basic_manifest, mock_backend
+        self, basic_client, basic_manifest, mock_backend
     ):
         """CLI configuration takes precedence over manifest configuration."""
         manifest_config = mock_backend.config_type().model_validate(
@@ -174,13 +262,17 @@ class TestBaseStorageBackendDeployStep:
         )
         backend_manifest = Mock(config=manifest_config)
         basic_manifest.storage.root = {
-            mock_backend.backend_type: Mock(
-                root={deploy_step.backend_name: backend_manifest}
-            )
+            mock_backend.backend_type: Mock(root={"test-backend": backend_manifest})
         }
 
         with (
-            patch("sunbeam.storage.steps.load_answers", return_value={}),
+            patch(
+                "sunbeam.storage.steps.load_answers",
+                return_value={
+                    "required_field": "saved-value",
+                    "secret_field": "saved-secret",
+                },
+            ),
             patch("sunbeam.storage.steps.QuestionBank") as question_bank,
             patch("sunbeam.storage.steps.ConfirmQuestion") as confirm_question,
             patch("sunbeam.storage.steps.write_answers"),
@@ -188,7 +280,13 @@ class TestBaseStorageBackendDeployStep:
             question_bank.return_value.questions = {}
             confirm_question.return_value.ask.return_value = False
 
-            deploy_step.prompt()
+            prompt_backend_config(
+                basic_client,
+                mock_backend,
+                basic_manifest,
+                "test-backend",
+                {"required_field": "cli-value", "secret_field": "cli-secret"},
+            )
 
         preseed = question_bank.call_args.kwargs["preseed"]
         assert preseed["required_field"] == "cli-value"
@@ -231,6 +329,107 @@ class TestDeploySpecificCinderVolumeStep:
             mock_backend_instance,
             test_model,
         )
+
+    def test_supports_ha_explicit_overrides_backend_default(
+        self,
+        basic_deployment,
+        basic_client,
+        basic_tfhelper,
+        basic_jhelper,
+        basic_manifest,
+        test_model,
+        mock_backend_instance,
+    ):
+        """Explicit supports_ha wins over the backend static property."""
+        step = DeploySpecificCinderVolumeStep(
+            basic_deployment,
+            basic_client,
+            basic_tfhelper,
+            basic_jhelper,
+            basic_manifest,
+            "test-backend",
+            mock_backend_instance,
+            test_model,
+            supports_ha=True,
+        )
+        assert step.supports_ha is True
+
+    def test_supports_ha_defaults_to_backend_property(
+        self,
+        basic_deployment,
+        basic_client,
+        basic_tfhelper,
+        basic_jhelper,
+        basic_manifest,
+        test_model,
+        mock_backend_instance,
+    ):
+        """Without supports_ha, the backend static property is used."""
+        step = DeploySpecificCinderVolumeStep(
+            basic_deployment,
+            basic_client,
+            basic_tfhelper,
+            basic_jhelper,
+            basic_manifest,
+            "test-backend",
+            mock_backend_instance,
+            test_model,
+        )
+        assert step.supports_ha is mock_backend_instance.supports_ha
+
+    def test_is_skip_when_supports_ha(
+        self,
+        basic_deployment,
+        basic_client,
+        basic_tfhelper,
+        basic_jhelper,
+        basic_manifest,
+        test_model,
+        mock_backend_instance,
+        step_context,
+    ):
+        """HA backends reuse the main cinder-volume application."""
+        basic_client.cluster.list_nodes_by_role.return_value = [{"machineid": "1"}]
+        step = DeploySpecificCinderVolumeStep(
+            basic_deployment,
+            basic_client,
+            basic_tfhelper,
+            basic_jhelper,
+            basic_manifest,
+            "test-backend",
+            mock_backend_instance,
+            test_model,
+            supports_ha=True,
+        )
+        result = step.is_skip(step_context)
+        assert result.result_type == ResultType.SKIPPED
+
+    def test_is_skip_completes_when_not_ha(
+        self,
+        basic_deployment,
+        basic_client,
+        basic_tfhelper,
+        basic_jhelper,
+        basic_manifest,
+        test_model,
+        mock_backend_instance,
+        step_context,
+    ):
+        """Non-HA backends deploy their own cinder-volume application."""
+        basic_client.cluster.list_nodes_by_role.return_value = [{"machineid": "1"}]
+        step = DeploySpecificCinderVolumeStep(
+            basic_deployment,
+            basic_client,
+            basic_tfhelper,
+            basic_jhelper,
+            basic_manifest,
+            "test-backend",
+            mock_backend_instance,
+            test_model,
+            supports_ha=False,
+        )
+        result = step.is_skip(step_context)
+        assert result.result_type == ResultType.COMPLETED
 
     def test_init_without_extra_tfvars(
         self,

@@ -34,6 +34,10 @@ class TestDellpowerstoreBackend(BaseBackendTests):
         """Test that charm name is cinder-volume-dellpowerstore."""
         assert backend.charm_name == "cinder-volume-dellpowerstore"
 
+    def test_supports_ha_is_true(self, backend):
+        """Test that PowerStore supports HA (SUPPORTS_ACTIVE_ACTIVE driver)."""
+        assert backend.supports_ha is True
+
     def test_dellpowerstore_config_has_required_fields(self, backend):
         """Test that Dell PowerStore config has all required fields."""
         config_class = backend.config_type()

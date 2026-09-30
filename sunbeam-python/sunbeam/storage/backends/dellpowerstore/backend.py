@@ -96,6 +96,15 @@ class DellPowerstoreBackend(StorageBackendBase):
         """Return the charm base for this backend."""
         return "ubuntu@24.04"
 
+    @property
+    def supports_ha(self) -> bool:
+        """Whether this backend supports HA deployments.
+
+        Cinder PowerStore driver declares SUPPORTS_ACTIVE_ACTIVE
+        for both FC and iSCSI.
+        """
+        return True
+
     def config_type(self) -> type[StorageBackendConfig]:
         """Return the configuration class for Dell PowerStore backend."""
         return DellPowerstoreConfig

@@ -2478,25 +2478,46 @@ class MaasConfigSRIOVStep(BaseStep):
                 }
         return sriov_nics
 
+    def _dpu_parent_system_ids(self) -> set[str]:
+        """Return system IDs of compute hosts that are the parent of a DPU."""
+        dpus = maas_client.list_machines(
+            self.maas_client, tags=maas_deployment.RoleTags.NETWORK.value
+        )
+        return {
+            dpu["parent_system_id"]
+            for dpu in dpus
+            if dpu.get("is_dpu") and dpu.get("parent_system_id")
+        }
+
     def _get_pci_config(
         self, compute_machines: list[dict]
     ) -> Tuple[list[dict], dict[str, list]]:
-        pci_whitelist: list[dict] = []
+        pci_allowedlist: list[dict] = []
         excluded_devices: dict[str, list] = {}
 
         if self.manifest:
             pci_config = self.manifest.core.config.pci
             if pci_config and pci_config.device_specs:
-                pci_whitelist = copy.deepcopy(pci_config.device_specs)
-                LOG.debug("PCI whitelist from manifest: %s", pci_whitelist)
+                pci_allowedlist = copy.deepcopy(pci_config.device_specs)
+                LOG.debug("PCI allowedlist from manifest: %s", pci_allowedlist)
             if pci_config and pci_config.excluded_devices:
                 excluded_devices = copy.deepcopy(pci_config.excluded_devices)
                 LOG.debug("PCI exclude list from manifest: %s", excluded_devices)
 
+        dpu_parent_system_ids = self._dpu_parent_system_ids()
+
         for machine in compute_machines:
+            node_name = machine["hostname"]
+
+            # A DPU parent host claims the DPU's remote-managed VFs instead of
+            # doing regular SR-IOV allowedlisting. The VF interfaces are reported by
+            # the host's own openstack-hypervisor (name contains "vf").
+            if machine.get("system_id") in dpu_parent_system_ids:
+                self._record_dpu_vfs(node_name, pci_allowedlist, excluded_devices)
+                continue
+
             sriov_tagged_nics = self._get_sriov_nics_from_maas_tags(machine)
 
-            node_name = machine["hostname"]
             # nics reported by the compute-hypervisor snap.
             snap_nics = nic_utils.fetch_nics(
                 self.client, node_name, self.jhelper, self.model
@@ -2509,11 +2530,11 @@ class MaasConfigSRIOVStep(BaseStep):
                     continue
 
                 if nic_name in sriov_tagged_nics:
-                    # whitelisted through maas tag
-                    nic_utils.whitelist_sriov_nic(
+                    # allowedlisted through maas tag
+                    nic_utils.allowedlist_sriov_nic(
                         node_name,
                         snap_nic,
-                        pci_whitelist,
+                        pci_allowedlist,
                         excluded_devices,
                         sriov_tagged_nics[nic_name]["physnet"],
                     )
@@ -2523,7 +2544,7 @@ class MaasConfigSRIOVStep(BaseStep):
 
             # Handle PCI passthrough devices
             # All GPU devices returned by openstack-hypervisor will be added
-            # as PCI passthrough devices to pci_whitelist.
+            # as PCI passthrough devices to pci_allowedlist.
             # openstack-hypervisor currently returns all devices that are intended
             # for PCI passthrough as vGPU is not yet supported. So no filtering is
             # reuired on devices returned from openstack-hypervisor.
@@ -2542,11 +2563,38 @@ class MaasConfigSRIOVStep(BaseStep):
                 ) from e
 
             for snap_gpu in snap_gpus["gpus"]:
-                nic_utils.whitelist_pci_passthrough_device(
-                    node_name, snap_gpu, pci_whitelist, excluded_devices
+                nic_utils.allowedlist_pci_passthrough_device(
+                    node_name, snap_gpu, pci_allowedlist, excluded_devices
                 )
 
-        return pci_whitelist, excluded_devices
+        return pci_allowedlist, excluded_devices
+
+    def _record_dpu_vfs(
+        self,
+        node_name: str,
+        pci_allowedlist: list[dict],
+        excluded_devices: dict[str, list],
+    ) -> None:
+        """Record a DPU parent host's remote-managed VFs.
+
+        Off-path SmartNIC DPUs run the networking control plane while Nova on the
+        parent host claims the virtual functions. The VFs show up in the host's
+        openstack-hypervisor list-nics with "Virtual Function" in their
+        product_name; we record them as remote-managed device specs on the host.
+        """
+        snap_nics = nic_utils.fetch_nics(
+            self.client, node_name, self.jhelper, self.model
+        )
+
+        for snap_nic in snap_nics["nics"]:
+            if "virtual function" not in (snap_nic.get("product_name") or "").lower():
+                continue
+            if not (snap_nic.get("product_id") and snap_nic.get("vendor_id")):
+                LOG.debug("Ignoring DPU nic, not a PCI device: %s", snap_nic["name"])
+                continue
+            nic_utils.record_remote_managed_vf(
+                node_name, snap_nic, pci_allowedlist, excluded_devices, None
+            )
 
     def run(self, context: StepContext) -> Result:
         """Apply individual hypervisor settings."""
@@ -2554,8 +2602,11 @@ class MaasConfigSRIOVStep(BaseStep):
 
         compute_machines = self._get_compute_machines()
 
-        pci_whitelist, excluded_devices = self._get_pci_config(compute_machines)
-        self.variables["pci_whitelist"] = pci_whitelist
+        pci_allowedlist, excluded_devices = self._get_pci_config(compute_machines)
+        # "pci_whitelist" is the persisted answer-store key from earlier
+        # releases; kept as-is so upgrades don't lose an already-configured
+        # allowedlist.
+        self.variables["pci_whitelist"] = pci_allowedlist
         self.variables["excluded_devices"] = excluded_devices
         sunbeam.core.questions.write_answers(
             self.client, PCI_CONFIG_SECTION, self.variables

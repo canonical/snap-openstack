@@ -322,10 +322,10 @@ class TestReapplyHypervisorTerraformPlanStep:
             yield mock
 
     @pytest.fixture
-    def get_pci_whitelist_config_patch(self):
-        """Patch for get_pci_whitelist_config function."""
+    def get_pci_allowedlist_config_patch(self):
+        """Patch for get_pci_allowedlist_config function."""
         with patch(
-            "sunbeam.steps.hypervisor.get_pci_whitelist_config",
+            "sunbeam.steps.hypervisor.get_pci_allowedlist_config",
             Mock(return_value={}),
         ) as mock:
             yield mock
@@ -349,7 +349,7 @@ class TestReapplyHypervisorTerraformPlanStep:
         test_model,
         read_config_patch,
         get_network_config_patch,
-        get_pci_whitelist_config_patch,
+        get_pci_allowedlist_config_patch,
         get_dpdk_config_patch,
     ):
         """Create ReapplyHypervisorTerraformPlanStep instance for testing."""
@@ -367,7 +367,7 @@ class TestReapplyHypervisorTerraformPlanStep:
         test_model,
         read_config_patch,
         get_network_config_patch,
-        get_pci_whitelist_config_patch,
+        get_pci_allowedlist_config_patch,
         get_dpdk_config_patch,
         step_context,
     ):
@@ -401,12 +401,12 @@ class TestReapplyHypervisorTerraformPlanStep:
         assert result.result_type == ResultType.COMPLETED
 
     @patch("sunbeam.steps.hypervisor.get_external_network_configs")
-    @patch("sunbeam.steps.hypervisor.get_pci_whitelist_config")
+    @patch("sunbeam.steps.hypervisor.get_pci_allowedlist_config")
     @patch("sunbeam.steps.hypervisor.get_dpdk_config")
     def test_run_after_configure_step(
         self,
         get_dpdk_config,
-        get_pci_whitelist_config,
+        get_pci_allowedlist_config,
         get_external_network_configs,
         basic_client,
         basic_tfhelper,
@@ -436,7 +436,7 @@ class TestReapplyHypervisorTerraformPlanStep:
             "dpdk-driver": "vfio-pci",
         }
         get_external_network_configs.return_value = network_config_tfvars
-        get_pci_whitelist_config.return_value = pci_config_tfvars
+        get_pci_allowedlist_config.return_value = pci_config_tfvars
         get_dpdk_config.return_value = dpdk_config_tfvars
         # Configure the mock to return an empty list for storage nodes
         basic_client.cluster.list_nodes_by_role.return_value = []

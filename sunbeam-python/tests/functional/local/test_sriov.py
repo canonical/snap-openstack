@@ -89,8 +89,8 @@ def test_sriov(
     sriov_agent_expected = not has_hw_offload
     assert sriov_agent_service["enabled"] == sriov_agent_expected
 
-    whitelisted_vfs = _get_whitelisted_vfs(pci_address)
-    assert num_vfs == len(whitelisted_vfs)
+    allowedlisted_vfs = _get_allowedlisted_vfs(pci_address)
+    assert num_vfs == len(allowedlisted_vfs)
 
     instance_name = "sunbeam-sriov-test"
     instance = openstack_demo_session.create_server(
@@ -147,7 +147,7 @@ def test_sriov(
             hostdev_source_address["function"],
         ]
     )
-    assert hostdev_source_address_str in whitelisted_vfs
+    assert hostdev_source_address_str in allowedlisted_vfs
 
 
 def _get_nova_conf_device_specs() -> list[dict]:
@@ -163,11 +163,11 @@ def _get_nova_conf_device_specs() -> list[dict]:
     return device_specs
 
 
-def _get_whitelisted_vfs(pf_address):
+def _get_allowedlisted_vfs(pf_address):
     device_specs = _get_nova_conf_device_specs()
 
-    # The Nova PCI whitelist may contain wildcards, however
-    # Sunbeam will pass the exact address of whitelisted VFs.
+    # The Nova PCI allowedlist may contain wildcards, however
+    # Sunbeam will pass the exact address of allowedlisted VFs.
     found_vfs = []
     for spec in device_specs:
         spec_address = spec.get("address")

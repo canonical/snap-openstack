@@ -498,7 +498,7 @@ class TestLocalConfigSRIOVStep:
                 {
                     "maas0.local": ["0000:2a:0.2"],
                 },
-                # Whitelist confirmation answers,
+                # Allowedlist confirmation answers,
                 [True, False, True, True, True, True],
                 # Physnet prompt answers,
                 ["physnet1", "physnet2", "physnet2", "physnet3", ""],
@@ -577,7 +577,7 @@ class TestLocalConfigSRIOVStep:
                 {
                     "maas0.local": ["0000:2a:0.2"],
                 },
-                # Whitelist confirmation answers,
+                # Allowedlist confirmation answers,
                 [True, False, True, True, True, False],
                 # Physnet prompt answers,
                 ["physnet1", "none", "physnet2", "physnet2", "physnet3"],
@@ -645,7 +645,7 @@ class TestLocalConfigSRIOVStep:
                 {
                     "maas0.local": ["0000:2a:0.2", "0000:8a:0.1"],
                 },
-                # Whitelist confirmation answers,
+                # Allowedlist confirmation answers,
                 [True, False, True, True, True, False],
                 # Physnet prompt answers,
                 ["physnet1", "none", "physnet2", "physnet2", "physnet3"],
@@ -856,7 +856,7 @@ class TestLocalConfigSRIOVStep:
         sriov_question = question_bank.return_value.configure_sriov
         sriov_question.ask.return_value = True
         confirm_question.return_value.ask.return_value = (
-            False  # Don't whitelist any devices
+            False  # Don't allowedlist any devices
         )
         prompt_question.return_value.ask.return_value = "physnet1"
 

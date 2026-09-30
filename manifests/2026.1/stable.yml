@@ -43,6 +43,8 @@ core:
         channel: 2026.1/stable
         config:
           snap-channel: 2026.1/stable
+      rabbitmq-k8s:
+        channel: 4.0/stable
       microcluster-token-distributor:
         channel: latest/edge
       role-distributor:

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2022 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
-# This module can be used to match Nova PCI whitelist specs.
+# This module can be used to match Nova PCI allowedlist specs.
 # Based on https://github.com/openstack/nova/blob/master/nova/pci/devspec.py.
 
 import logging
@@ -120,7 +120,7 @@ class PciDeviceSpec:
             raise Exception("Invalid address format: %s" % address)
 
     def _address_match(self, address: str, parent_address: str | None) -> bool:
-        # Whitelist SR-IOV VFs if the parent PF address matches.
+        # Allowedlist SR-IOV VFs if the parent PF address matches.
         if parent_address and self.address_spec.match(PciAddress(parent_address)):
             return True
 

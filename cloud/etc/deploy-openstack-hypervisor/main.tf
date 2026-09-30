@@ -5,7 +5,7 @@ terraform {
   required_providers {
     juju = {
       source  = "juju/juju"
-      version = "= 1.5.6"
+      version = "= 2.3.1"
     }
   }
 
@@ -95,24 +95,6 @@ resource "juju_integration" "hypervisor-certs" {
 
   application {
     offer_url = var.ca-offer-url
-  }
-}
-
-moved {
-  from = juju_integration.hypervisor-ovn-proxy[0]
-  to   = juju_integration.hypervisor-ovn-proxy
-}
-
-resource "juju_integration" "hypervisor-ovn-proxy" {
-  model_uuid = data.juju_model.machine_model.uuid
-  application {
-    name     = juju_application.openstack-hypervisor.name
-    endpoint = "ovsdb-cms"
-  }
-
-  application {
-    name     = "sunbeam-ovn-proxy"
-    endpoint = "ovsdb-cms"
   }
 }
 

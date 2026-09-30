@@ -878,21 +878,21 @@ class TestUpdateOctaviaAmphoraConfigStepRun:
 
 
 class TestLoadbalancerFeatureRequires:
-    """Test the dynamic ``requires`` property on LoadbalancerFeature."""
+    """Test dynamic requirements on LoadbalancerFeature."""
 
     def _make_feature(self):
         return LoadbalancerFeature()
 
-    def test_requires_empty_when_gate_disabled(self):
+    def test_requires_empty_when_gate_disabled(self, deployment):
         """No FeatureRequirement when loadbalancer-amphora gate is off."""
         feature = self._make_feature()
         with patch(
             "sunbeam.features.loadbalancer.feature.is_feature_gate_enabled",
             return_value=False,
         ):
-            assert feature.requires == set()
+            assert feature.get_requirements(deployment) == set()
 
-    def test_requires_secrets_when_gate_enabled(self):
+    def test_requires_secrets_when_gate_enabled(self, deployment):
         """FeatureRequirement('secrets') returned when gate is on."""
         feature = self._make_feature()
         with (
@@ -900,12 +900,13 @@ class TestLoadbalancerFeatureRequires:
                 "sunbeam.features.loadbalancer.feature.is_feature_gate_enabled",
                 return_value=True,
             ),
-            patch(
-                "sunbeam.features.loadbalancer.feature.Client.from_socket",
-                side_effect=Exception("not a snap"),
+            patch.object(
+                deployment, "get_client", side_effect=Exception("unavailable")
             ),
         ):
-            assert feature.requires == {FeatureRequirement("secrets")}
+            assert feature.get_requirements(deployment) == {
+                FeatureRequirement("secrets")
+            }
 
 
 class TestLoadbalancerFeatureEnabledCommands:
@@ -1623,29 +1624,12 @@ class TestRunConfigurePlansDisableIncludesCleanup:
 
 
 class TestLoadbalancerFeatureRequiresClusterd:
-    """Verify requires reads amphora_enabled from clusterd via Client.from_socket."""
+    """Verify requirements read amphora_enabled via the deployment client."""
 
     def _make_feature(self):
         return LoadbalancerFeature()
 
-    def _gate_on_socket(self, feature, load_answers_return):
-        """Helper: patch gate=True and Client.from_socket + load_answers."""
-        return (
-            patch(
-                "sunbeam.features.loadbalancer.feature.is_feature_gate_enabled",
-                return_value=True,
-            ),
-            patch(
-                "sunbeam.features.loadbalancer.feature.Client.from_socket",
-                return_value=Mock(),
-            ),
-            patch(
-                "sunbeam.features.loadbalancer.feature.questions.load_answers",
-                return_value=load_answers_return,
-            ),
-        )
-
-    def test_requires_secrets_when_amphora_enabled_in_clusterd(self):
+    def test_requires_secrets_when_amphora_enabled_in_clusterd(self, deployment):
         """Requires secrets when clusterd says amphora_enabled=True."""
         feature = self._make_feature()
         with (
@@ -1654,19 +1638,15 @@ class TestLoadbalancerFeatureRequiresClusterd:
                 return_value=True,
             ),
             patch(
-                "sunbeam.features.loadbalancer.feature.Client.from_socket",
-                return_value=Mock(),
-            ),
-            patch(
                 "sunbeam.features.loadbalancer.feature.questions.load_answers",
                 return_value={_AMPHORA_ENABLED_KEY: True},
             ),
         ):
-            reqs = feature.requires
+            reqs = feature.get_requirements(deployment)
         assert len(reqs) == 1
         assert next(iter(reqs)).name == "secrets"
 
-    def test_requires_empty_when_amphora_disabled_in_clusterd(self):
+    def test_requires_empty_when_amphora_disabled_in_clusterd(self, deployment):
         """No requirements when clusterd says amphora_enabled=False."""
         feature = self._make_feature()
         with (
@@ -1675,17 +1655,13 @@ class TestLoadbalancerFeatureRequiresClusterd:
                 return_value=True,
             ),
             patch(
-                "sunbeam.features.loadbalancer.feature.Client.from_socket",
-                return_value=Mock(),
-            ),
-            patch(
                 "sunbeam.features.loadbalancer.feature.questions.load_answers",
                 return_value={_AMPHORA_ENABLED_KEY: False},
             ),
         ):
-            assert feature.requires == set()
+            assert feature.get_requirements(deployment) == set()
 
-    def test_requires_empty_when_clusterd_key_absent(self):
+    def test_requires_empty_when_clusterd_key_absent(self, deployment):
         """No requirements when key is absent (e.g. after post_disable deleted it)."""
         feature = self._make_feature()
         with (
@@ -1694,29 +1670,24 @@ class TestLoadbalancerFeatureRequiresClusterd:
                 return_value=True,
             ),
             patch(
-                "sunbeam.features.loadbalancer.feature.Client.from_socket",
-                return_value=Mock(),
-            ),
-            patch(
                 "sunbeam.features.loadbalancer.feature.questions.load_answers",
                 return_value={},
             ),
         ):
-            assert feature.requires == set()
+            assert feature.get_requirements(deployment) == set()
 
-    def test_requires_secrets_when_socket_unavailable(self):
-        """Falls back to requiring secrets when clusterd socket is unreachable."""
+    def test_requires_secrets_when_client_unavailable(self, deployment):
+        """Fall back to requiring secrets when the deployment client is unavailable."""
         feature = self._make_feature()
         with (
             patch(
                 "sunbeam.features.loadbalancer.feature.is_feature_gate_enabled",
                 return_value=True,
             ),
-            patch(
-                "sunbeam.features.loadbalancer.feature.Client.from_socket",
-                side_effect=Exception("socket not available"),
+            patch.object(
+                deployment, "get_client", side_effect=Exception("unavailable")
             ),
         ):
-            reqs = feature.requires
+            reqs = feature.get_requirements(deployment)
         assert len(reqs) == 1
         assert next(iter(reqs)).name == "secrets"
