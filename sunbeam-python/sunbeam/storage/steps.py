@@ -67,6 +67,11 @@ if TYPE_CHECKING:
 LOG = logging.getLogger(__name__)
 console = Console()
 
+PRINCIPAL_HA_APPLICATION = "cinder-volume"
+PRINCIPAL_NON_HA_APPLICATION = "cinder-volume-noha"
+SNAP_NAME_HA = "cinder-volume"
+SNAP_NAME_NON_HA = "cinder-volume_noha"
+
 
 class ValidateStoragePrerequisitesStep(BaseStep):
     """Validate that Sunbeam is bootstrapped and storage role is deployed."""
@@ -245,6 +250,95 @@ def generate_questions_from_config(
     return questions
 
 
+def prompt_backend_config(
+    client: Client,
+    backend_instance: "StorageBackendBase",
+    manifest: Manifest,
+    backend_name: str,
+    preseed: dict,
+    console: Console | None = None,
+    accept_defaults: bool = False,
+    show_hint: bool = True,
+) -> dict:
+    """Prompt for backend configuration, validating and persisting answers.
+
+    Merges saved answers, manifest preseed and user preseed (CLI values),
+    prompting only for configuration that is still missing. Called before
+    the deployment plan is built so decisions that depend on the
+    configuration (e.g. HA support) can be made up front.
+
+    Returns the validated configuration values keyed by field name.
+    """
+    config_key = backend_instance.config_key(backend_name)
+    variables = load_answers(client, config_key)
+
+    merged_preseed = {}
+    if manifest and manifest.storage:
+        if backends := manifest.storage.root.get(backend_instance.backend_type):
+            if crt := backends.root.get(backend_name):
+                # Since question generation depends on field name,
+                # do not dump by alias
+                if crt.config is not None:
+                    merged_preseed = crt.config.model_dump(by_alias=False)
+
+    # Preseed from user is higher priority than manifest
+    merged_preseed.update(preseed)
+
+    required_questions_bank = QuestionBank(
+        questions=generate_questions_from_config(backend_instance.config_type()),
+        console=console,
+        preseed=merged_preseed,
+        previous_answers=variables,
+        accept_defaults=accept_defaults,
+        show_hint=show_hint,
+    )
+    for name, question in required_questions_bank.questions.items():
+        answer = question.ask()
+        while not answer:
+            answer = question.ask()
+        variables[name] = answer
+
+    res = ConfirmQuestion(
+        "Set optional configurations?",
+        accept_defaults=accept_defaults,
+        default_value=bool(merged_preseed),
+    ).ask()
+
+    if res:
+        optional_questions_bank = QuestionBank(
+            questions=generate_questions_from_config(
+                backend_instance.config_type(), optional=True
+            ),
+            console=console,
+            preseed=merged_preseed,
+            previous_answers=variables,
+            accept_defaults=accept_defaults,
+            show_hint=show_hint,
+        )
+
+        for name, question in optional_questions_bank.questions.items():
+            if ConfirmQuestion(
+                f"Configure option {name!r}?",
+                accept_defaults=accept_defaults,
+                default_value=name in merged_preseed,
+            ).ask():
+                variables[name] = question.ask()
+            else:
+                # Remove variable if previously set for
+                # subsequent runs
+                variables.pop(name, None)
+
+    try:
+        # Validate configuration
+        backend_instance.config_type().model_validate(variables, by_name=True)
+    except pydantic.ValidationError as e:
+        LOG.error("Invalid configuration: %r", e)
+        raise e
+
+    write_answers(client, config_key, variables)
+    return variables
+
+
 class BaseStorageBackendDeployStep(BaseStep):
     """Base class for storage backend deployment steps.
 
@@ -279,108 +373,10 @@ class BaseStorageBackendDeployStep(BaseStep):
         self.model = model
         self.preseed = preseed
         self.accept_defaults = accept_defaults
-        self.variables: dict = {}
+        # Configuration is collected and validated before the plan is built
+        # (prompt_backend_config), so the preseed carries the full config
+        self.variables = dict(preseed)
         self.config_key = self.backend_instance.config_key(self.backend_name)
-
-    def prompt(
-        self,
-        console: Console | None = None,
-        show_hint: bool = False,
-    ) -> None:
-        """Determines if the step can take input from the user.
-
-        Prompts are used by Steps to gather the necessary input prior to
-        running the step. Steps should not expect that the prompt will be
-        available and should provide a reasonable default where possible.
-        """
-        self.variables = load_answers(self.client, self.config_key)
-
-        preseed = {}
-        if self.manifest and self.manifest.storage:
-            if backends := self.manifest.storage.root.get(
-                self.backend_instance.backend_type
-            ):
-                if crt := backends.root.get(self.backend_name):
-                    # Since question generation depends on field name,
-                    # do not dump by alias
-                    if crt.config is not None:
-                        preseed = crt.config.model_dump(by_alias=False)
-
-        # Preseed from user is higher priority than manifest
-        preseed.update(self.preseed)
-
-        manifest_configured = False
-
-        if preseed:
-            manifest_configured = True
-
-        required_questions_bank = QuestionBank(
-            questions=generate_questions_from_config(
-                self.backend_instance.config_type()
-            ),
-            console=console,
-            preseed=preseed,
-            previous_answers=self.variables,
-            accept_defaults=self.accept_defaults,
-            show_hint=show_hint,
-        )
-        for name, question in required_questions_bank.questions.items():
-            answer = question.ask()
-            while not answer:
-                answer = question.ask()
-            self.variables[name] = answer
-
-        res = ConfirmQuestion(
-            "Set optional configurations?",
-            accept_defaults=self.accept_defaults,
-            default_value=manifest_configured,
-        ).ask()
-
-        if not res:
-            write_answers(self.client, self.config_key, self.variables)
-            return
-
-        optional_questions_bank = QuestionBank(
-            questions=generate_questions_from_config(
-                self.backend_instance.config_type(), optional=True
-            ),
-            console=console,
-            preseed=preseed,
-            previous_answers=self.variables,
-            accept_defaults=self.accept_defaults,
-            show_hint=show_hint,
-        )
-
-        for name, question in optional_questions_bank.questions.items():
-            if ConfirmQuestion(
-                f"Configure option {name!r}?",
-                accept_defaults=self.accept_defaults,
-                default_value=name in preseed,
-            ).ask():
-                self.variables[name] = question.ask()
-            else:
-                # Remove variable if previously set for
-                # subsequent runs
-                self.variables.pop(name, None)
-
-        try:
-            # Validate configuration
-            self.backend_instance.config_type().model_validate(
-                self.variables, by_name=True
-            )
-        except pydantic.ValidationError as e:
-            LOG.error("Invalid configuration: %r", e)
-            raise e
-
-        write_answers(self.client, self.config_key, self.variables)
-
-    def has_prompts(self) -> bool:
-        """Returns true if the step has prompts that it can ask the user.
-
-        :return: True if the step can ask the user for prompts,
-                 False otherwise
-        """
-        return True
 
     @tenacity.retry(
         wait=tenacity.wait_fixed(60),
@@ -450,7 +446,11 @@ class BaseStorageBackendDeployStep(BaseStep):
             "name": self.backend_name,
             "backend_type": self.backend_instance.backend_type,
             "config": validated_config.model_dump(exclude_none=True, by_alias=True),
-            "principal": self.backend_instance.principal_application,
+            "principal": (
+                PRINCIPAL_HA_APPLICATION
+                if self.backend_instance.supports_ha_for(validated_config)
+                else PRINCIPAL_NON_HA_APPLICATION
+            ),
             "model_uuid": model["model-uuid"],
         }
         try:
@@ -639,6 +639,7 @@ class DeploySpecificCinderVolumeStep(BaseStep):
         backend_name: str,
         backend_instance: "StorageBackendBase",
         model: str,
+        supports_ha: bool | None = None,
         extra_tfvars: dict | None = None,
     ):
         super().__init__(
@@ -653,6 +654,11 @@ class DeploySpecificCinderVolumeStep(BaseStep):
         self.backend_name = backend_name
         self.backend_instance = backend_instance
         self.model = model
+        # Falls back to the static property when the caller has no
+        # configuration in hand (e.g. redeploys of recorded backends)
+        self.supports_ha = (
+            supports_ha if supports_ha is not None else backend_instance.supports_ha
+        )
         self._offers: dict[str, str | None] | None = None
         self.extra_tfvars: dict = extra_tfvars or {}
 
@@ -667,7 +673,7 @@ class DeploySpecificCinderVolumeStep(BaseStep):
             return Result(ResultType.FAILED, "No storage nodes found in the cluster.")
         # For faster checks, skip if currently deployed backend
         # supports main cinder-volume
-        if self.backend_instance.principal_application == APPLICATION:
+        if self.supports_ha:
             return Result(
                 ResultType.SKIPPED,
                 f"Backend {self.backend_name} supports main cinder-volume;"
@@ -698,7 +704,11 @@ class DeploySpecificCinderVolumeStep(BaseStep):
         except ConfigItemNotFoundException:
             tfvars = {}
 
-        application_name = self.backend_instance.principal_application
+        application_name = (
+            PRINCIPAL_HA_APPLICATION
+            if self.supports_ha
+            else PRINCIPAL_NON_HA_APPLICATION
+        )
         machine_ids = (
             tfvars.get("cinder-volumes", {})
             .get(application_name, {})
@@ -707,7 +717,7 @@ class DeploySpecificCinderVolumeStep(BaseStep):
         if not machine_ids:
             nodes = self.client.cluster.list_nodes_by_role(Role.STORAGE.name.lower())
             machine_ids = sorted((node["machineid"] for node in nodes), key=int)
-            if not self.backend_instance.supports_ha:
+            if not self.supports_ha:
                 machine_ids = machine_ids[:1]
 
         if not tfvars.get("model"):
@@ -717,10 +727,10 @@ class DeploySpecificCinderVolumeStep(BaseStep):
         charm_config = dict(cinder_volume.config) if cinder_volume.config else {}
         if cinder_volume.model_extra:
             config_map = cinder_volume.model_extra.get("config-map", {})
-            charm_config.update(
-                config_map.get(self.backend_instance.principal_application, {})
-            )
-        charm_config["snap-name"] = self.backend_instance.snap_name
+            charm_config.update(config_map.get(application_name, {}))
+        charm_config["snap-name"] = (
+            SNAP_NAME_HA if self.supports_ha else SNAP_NAME_NON_HA
+        )
         charm_revision = cinder_volume.revision
         charm_channel = cinder_volume.channel
 
@@ -834,6 +844,7 @@ class DestroySpecificCinderVolumeStep(BaseStep):
         backend_name: str,
         backend_instance: "StorageBackendBase",
         model: str,
+        principal_application: str | None = None,
     ):
         super().__init__(
             f"Destroy specific cinder-volume for backend {backend_name}",
@@ -847,6 +858,11 @@ class DestroySpecificCinderVolumeStep(BaseStep):
         self.backend_name = backend_name
         self.backend_instance = backend_instance
         self.model = model
+        # Prefer the principal recorded at deploy time; the static
+        # property is only a fallback for never-deployed backends
+        self.principal_application = (
+            principal_application or backend_instance.principal_application
+        )
 
     def is_skip(self, context: StepContext) -> Result:
         """Determine if the step should be skipped.
@@ -854,7 +870,7 @@ class DestroySpecificCinderVolumeStep(BaseStep):
         Returns:
             Result indicating whether to skip the step.
         """
-        if self.backend_instance.principal_application == APPLICATION:
+        if self.principal_application == APPLICATION:
             return Result(
                 ResultType.SKIPPED,
                 f"Backend {self.backend_name} does not use specific cinder-volume;"
@@ -862,7 +878,7 @@ class DestroySpecificCinderVolumeStep(BaseStep):
             )
         backends = self.client.cluster.get_storage_backends()
         for backend in backends.root:
-            if self.backend_instance.principal_application == backend.principal:
+            if self.principal_application == backend.principal:
                 return Result(
                     ResultType.SKIPPED,
                     "Another backend is using the same cinder-volume instance;"
@@ -878,9 +894,7 @@ class DestroySpecificCinderVolumeStep(BaseStep):
         except ConfigItemNotFoundException:
             tfvars = {}
 
-        tfvars.get("cinder-volumes", {}).pop(
-            self.backend_instance.principal_application, None
-        )
+        tfvars.get("cinder-volumes", {}).pop(self.principal_application, None)
 
         try:
             self.tfhelper.update_tfvars_and_apply_tf(
@@ -900,7 +914,7 @@ class DestroySpecificCinderVolumeStep(BaseStep):
 
         try:
             self.jhelper.wait_application_gone(
-                [self.backend_instance.principal_application],
+                [self.principal_application],
                 self.model,
                 timeout=self.get_application_timeout(),
             )
