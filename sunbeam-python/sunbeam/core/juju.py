@@ -309,9 +309,8 @@ class JujuHelper:
             raise JujuException(e.stderr)
         return models.get("models", [])
 
-    @functools.cache
-    def get_model(self, model: str) -> "dict":
-        """Fetch model.
+    def _get_model_uncached(self, model: str) -> "dict":
+        """Fetch model without caching.
 
         :model: Name of the model
         """
@@ -320,13 +319,35 @@ class JujuHelper:
                 return m
         raise ModelNotFoundException(f"Model {model!r} not found")
 
+    @functools.cache
+    def get_model(self, model: str) -> "dict":
+        """Fetch model (cached).
+
+        :model: Name of the model
+        """
+        return self._get_model_uncached(model)
+
     def model_exists(self, model: str) -> bool:
-        """Check if model exists.
+        """Check if model exists (uses cache).
 
         :model: Name of the model
         """
         try:
             self.get_model(model)
+        except JujuException:
+            return False
+        return True
+
+    def model_exists_live(self, model: str) -> bool:
+        """Check if model exists without cache.
+
+        Use this in destroy/removal paths where the model state
+        is actively changing and cached results would be stale.
+
+        :model: Name of the model
+        """
+        try:
+            self._get_model_uncached(model)
         except JujuException:
             return False
         return True
@@ -1297,7 +1318,7 @@ class JujuHelper:
             timeout = 60 * 15
 
         start = time.monotonic()
-        while self.model_exists(model):
+        while self.model_exists_live(model):
             if time.monotonic() - start > timeout:
                 raise TimeoutError(
                     f"Timed out while waiting for model {model!r} to be gone"
