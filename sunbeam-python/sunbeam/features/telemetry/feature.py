@@ -28,7 +28,10 @@ from sunbeam.steps.cinder_volume import DeployCinderVolumeApplicationStep
 from sunbeam.steps.hypervisor import ReapplyHypervisorTerraformPlanStep
 from sunbeam.steps.juju import RemoveSaasApplicationsStep
 from sunbeam.storage.manager import StorageBackendManager
-from sunbeam.storage.steps import DeploySpecificCinderVolumeStep
+from sunbeam.storage.steps import (
+    PRINCIPAL_HA_APPLICATION,
+    DeploySpecificCinderVolumeStep,
+)
 from sunbeam.utils import click_option_show_hints, pass_method_obj
 from sunbeam.versions import OPENSTACK_CHANNEL
 
@@ -168,7 +171,9 @@ class TelemetryFeature(OpenStackControlPlaneFeature):
                             plan3.append(TerraformInitStep(tfhelper_storage))
 
                         # Skip if we've already processed this principal application
-                        principal_app = backend_instance.principal_application
+                        # (the deployed principal from the clusterd record,
+                        # not the backend type's static one)
+                        principal_app = backend_metadata.principal
                         if principal_app in processed_principals:
                             LOG.debug(
                                 "Skipping %s: principal application %s "
@@ -191,6 +196,7 @@ class TelemetryFeature(OpenStackControlPlaneFeature):
                                 backend_name,
                                 backend_instance,
                                 deployment.openstack_machines_model,
+                                supports_ha=(principal_app == PRINCIPAL_HA_APPLICATION),
                                 extra_tfvars=extra_tfvars_cinder_volume,
                             )
                         )
@@ -279,7 +285,9 @@ class TelemetryFeature(OpenStackControlPlaneFeature):
                             plan2.append(TerraformInitStep(tfhelper_storage))
 
                         # Skip if we've already processed this principal application
-                        principal_app = backend_instance.principal_application
+                        # (the deployed principal from the clusterd record,
+                        # not the backend type's static one)
+                        principal_app = backend_metadata.principal
                         if principal_app in processed_principals:
                             LOG.debug(
                                 "Skipping %s: principal application %s "
@@ -303,6 +311,7 @@ class TelemetryFeature(OpenStackControlPlaneFeature):
                                 backend_name,
                                 backend_instance,
                                 deployment.openstack_machines_model,
+                                supports_ha=(principal_app == PRINCIPAL_HA_APPLICATION),
                                 extra_tfvars=extra_tfvars_cinder_volume,
                             )
                         )
