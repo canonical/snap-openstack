@@ -56,6 +56,7 @@ from sunbeam.features.vault.feature import (
     vault_pki_config_key,
 )
 from sunbeam.utils import click_option_show_hints, pass_method_obj
+from sunbeam.versions import MANUAL_TLS_CERTIFICATES_CHANNEL
 
 CA_APP_NAME = "vault"
 LOG = logging.getLogger(__name__)
@@ -232,7 +233,7 @@ class VaultTlsFeature(TlsFeature):
         """Set terraform variables to enable the application."""
         tfvars: dict[str, typing.Any] = {
             "traefik-to-tls-provider": CA_APP_NAME,
-            "manual-tls-certificates-channel": "1/stable",
+            "manual-tls-certificates-channel": MANUAL_TLS_CERTIFICATES_CHANNEL,
         }
         jhelper = JujuHelper(deployment.juju_controller)
         vault_channel = self._get_vault_channel(jhelper)
