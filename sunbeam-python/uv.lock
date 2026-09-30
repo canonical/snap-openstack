@@ -3004,7 +3004,7 @@ wheels = [
 [[package]]
 name = "snap-helpers"
 version = "0.4.2"
-source = { git = "https://github.com/albertodonato/snap-helpers?rev=46803aa9d52cc0bb24f76df878dd1010fc08e6a0#46803aa9d52cc0bb24f76df878dd1010fc08e6a0" }
+source = { git = "https://github.com/albertodonato/snap-helpers?rev=76f8166b640163c0f20887829e31b2cafbfdec11#76f8166b640163c0f20887829e31b2cafbfdec11" }
 dependencies = [
     { name = "pyyaml" },
 ]
@@ -3211,7 +3211,7 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'" },
     { name = "setuptools-rust", marker = "extra == 'openstackclients'" },
     { name = "setuptools-scm", marker = "extra == 'openstackclients'" },
-    { name = "snap-helpers", git = "https://github.com/albertodonato/snap-helpers?rev=46803aa9d52cc0bb24f76df878dd1010fc08e6a0" },
+    { name = "snap-helpers", git = "https://github.com/albertodonato/snap-helpers?rev=76f8166b640163c0f20887829e31b2cafbfdec11" },
     { name = "tempest", marker = "extra == 'dev'", specifier = ">=17.1.0" },
     { name = "tenacity" },
     { name = "testtools", marker = "extra == 'dev'", specifier = ">=2.2.0" },
