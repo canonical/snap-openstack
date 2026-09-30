@@ -408,8 +408,22 @@ class NetAppBackend(StorageBackendBase):
 
     @property
     def supports_ha(self) -> bool:
-        """Whether this backend supports HA deployments."""
-        return True
+        """Whether this backend supports HA deployments.
+
+        Conservative default used when no configuration is available;
+        the config-aware answer is supports_ha_for.
+        """
+        return False
+
+    def supports_ha_for(self, config: NetAppConfig) -> bool:
+        """Whether this backend configuration supports HA deployments.
+
+        Cinder 2024.1: no NetApp ONTAP driver is active-active for the
+        protocols sunbeam offers (iSCSI and NVMe-oF). The iSCSI/FC A/A
+        support landed in cinder 2024.2 (commit 053b2fe63), so on this
+        release NetApp is always non-HA regardless of protocol.
+        """
+        return False
 
     def config_type(self) -> type[StorageBackendConfig]:
         """Return the configuration model type for this backend."""
