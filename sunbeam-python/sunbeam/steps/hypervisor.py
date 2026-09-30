@@ -14,7 +14,7 @@ from sunbeam.clusterd.service import (
 )
 from sunbeam.commands.configure import (
     get_dpdk_config,
-    get_pci_whitelist_config,
+    get_pci_allowedlist_config,
 )
 from sunbeam.core.common import (
     BaseStep,
@@ -160,10 +160,6 @@ class DeployHypervisorApplicationStep(DeployMachineApplicationStep):
                     },
                     {
                         "endpoint": "nova-service",
-                        "space": self.deployment.get_space(Networks.INTERNAL),
-                    },
-                    {
-                        "endpoint": "ovsdb-cms",
                         "space": self.deployment.get_space(Networks.INTERNAL),
                     },
                     {
@@ -391,9 +387,9 @@ class ReapplyHypervisorTerraformPlanStep(BaseStep):
             )
             self.extra_tfvars["charm_config"].update(network_configs)
 
-        pci_whitelist_config = get_pci_whitelist_config(self.client)
-        LOG.debug("Adding PCI whitelist configuration: %s", pci_whitelist_config)
-        self.extra_tfvars["charm_config"].update(pci_whitelist_config)
+        pci_allowedlist_config = get_pci_allowedlist_config(self.client)
+        LOG.debug("Adding PCI allowedlist configuration: %s", pci_allowedlist_config)
+        self.extra_tfvars["charm_config"].update(pci_allowedlist_config)
 
         dpdk_config = get_dpdk_config(self.client)
         LOG.debug("Adding DPDK configuration: %s", dpdk_config)

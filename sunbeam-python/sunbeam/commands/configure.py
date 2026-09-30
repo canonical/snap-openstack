@@ -157,9 +157,11 @@ def retrieve_admin_credentials(
     return params
 
 
-def get_pci_whitelist_config(client: Client) -> dict:
+def get_pci_allowedlist_config(client: Client) -> dict:
     charm_config = {}
     variables = sunbeam.core.questions.load_answers(client, PCI_CONFIG_SECTION)
+    # "pci_whitelist" is the persisted answer-store key from earlier releases;
+    # kept as-is so upgrades don't lose an already-configured allowedlist.
     charm_config["pci-device-specs"] = json.dumps(variables.get("pci_whitelist", []))
     return charm_config
 

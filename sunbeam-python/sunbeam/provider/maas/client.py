@@ -335,6 +335,11 @@ def _convert_raw_machine(machine_raw: dict, root_disk: dict | None) -> dict:
     architecture = raw_arch.split("/")[0] if raw_arch else DEFAULT_ARCHITECTURE
 
     is_dpu = bool(machine_raw.get("is_dpu", False))
+    # For off-path SmartNIC DPUs, MAAS models the DPU machine as a child of
+    # its hypervisor host. The `parent` field is a dict holding the host's
+    # system_id (or None for regular machines). We surface it so that the
+    # SR-IOV configuration can pair a compute host with its DPU.
+    parent_system_id = (machine_raw.get("parent") or {}).get("system_id")
     tag_names = machine_raw.get("tag_names") or []
     image_name = parse_image_name_from_tags(tag_names)
 
@@ -352,6 +357,7 @@ def _convert_raw_machine(machine_raw: dict, root_disk: dict | None) -> dict:
         "memory": machine_raw["memory"],
         "architecture": architecture,
         "is_dpu": is_dpu,
+        "parent_system_id": parent_system_id,
     }
     if image_name:
         machine["image_name"] = image_name

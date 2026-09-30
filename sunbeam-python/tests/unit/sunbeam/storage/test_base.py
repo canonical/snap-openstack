@@ -163,6 +163,17 @@ class BaseStorageBackendTests:
         key = backend.config_key(name)
         assert key == f"Storage-{name}"
 
+    def test_supports_ha_for_defaults_to_static_property(self, backend):
+        """Test that supports_ha_for falls back to the static property."""
+        config = backend.config_type().model_validate(
+            {
+                "required-field": "test",
+                "secret-field": "secret123",
+            }
+        )
+
+        assert backend.supports_ha_for(config) == backend.supports_ha
+
     def test_config_type_returns_pydantic_model(self, backend):
         """Test that config_type returns a Pydantic model class."""
         config_class = backend.config_type()
@@ -221,6 +232,13 @@ class TestStorageBackendBase(BaseStorageBackendTests):
         mock_manifest = Mock()
         mock_manifest.storage.root = {}
 
+        # No existing record for the backend
+        from sunbeam.clusterd.service import StorageBackendNotFoundException
+
+        mock_deployment.get_client.return_value.cluster.get_storage_backend.side_effect = StorageBackendNotFoundException(
+            ""
+        )  # noqa: E501
+
         # Mock the service and JujuHelper
         with patch("sunbeam.storage.base.JujuHelper") as mock_jhelper_class:
             # Patch the manifest property without accessing it
@@ -234,11 +252,145 @@ class TestStorageBackendBase(BaseStorageBackendTests):
 
                 # Mock register_terraform_plan
                 with patch.object(backend, "register_terraform_plan"):
-                    # Mock run_plan
-                    with patch("sunbeam.storage.base.run_plan"):
-                        backend.add_backend_instance(
-                            mock_deployment, backend_name, config, mock_console
-                        )
+                    # Configuration is collected before the plan is built
+                    with patch(
+                        "sunbeam.storage.base.prompt_backend_config",
+                        return_value=config,
+                    ) as mock_prompt:
+                        # Mock run_plan
+                        with patch("sunbeam.storage.base.run_plan") as mock_run_plan:
+                            backend.add_backend_instance(
+                                mock_deployment, backend_name, config, mock_console
+                            )
+
+        mock_prompt.assert_called_once()
+        # Prerequisites are validated in a plan of their own before the
+        # configuration is prompted, and are not re-run in the deploy plan
+        assert len(mock_run_plan.call_args_list) == 2
+        from sunbeam.storage.steps import (
+            DeploySpecificCinderVolumeStep,
+            ValidateStoragePrerequisitesStep,
+        )
+
+        validate_plan = mock_run_plan.call_args_list[0][0][0]
+        assert len(validate_plan) == 1
+        assert isinstance(validate_plan[0], ValidateStoragePrerequisitesStep)
+        deploy_plan = mock_run_plan.call_args_list[1][0][0]
+        specific_step = next(
+            step
+            for step in deploy_plan
+            if isinstance(step, DeploySpecificCinderVolumeStep)
+        )
+        assert not any(
+            isinstance(step, ValidateStoragePrerequisitesStep) for step in deploy_plan
+        )
+        # The HA decision is computed from the validated configuration and
+        # handed to the specific cinder-volume step
+        assert specific_step.supports_ha is backend.supports_ha
+
+    def test_add_backend_instance_prerequisite_failure_skips_prompting(
+        self, backend, mock_deployment, mock_console, tmp_path
+    ):
+        """Configuration is not prompted or saved when prerequisites fail."""
+        backend_name = "test-backend"
+        config = {"required_field": "value", "secret_field": "secret"}
+
+        mock_manifest = Mock()
+        mock_manifest.storage.root = {}
+
+        with patch("sunbeam.storage.base.JujuHelper"):
+            with patch.object(
+                type(backend),
+                "manifest",
+                new_callable=lambda: property(lambda self: mock_manifest),
+            ):
+                with patch.object(backend, "register_terraform_plan"):
+                    with patch(
+                        "sunbeam.storage.base.prompt_backend_config"
+                    ) as mock_prompt:
+                        with patch(
+                            "sunbeam.storage.base.run_plan",
+                            side_effect=click.ClickException("not bootstrapped"),
+                        ):
+                            with pytest.raises(click.ClickException):
+                                backend.add_backend_instance(
+                                    mock_deployment, backend_name, config, mock_console
+                                )
+
+        mock_prompt.assert_not_called()
+
+    def test_add_backend_instance_rejects_principal_change(
+        self, backend, mock_deployment, mock_console
+    ):
+        """Reject re-add that requires a different cinder-volume application."""
+        backend_name = "test-backend"
+        config = {"required_field": "value", "secret_field": "secret"}
+
+        mock_manifest = Mock()
+        mock_manifest.storage.root = {}
+
+        from sunbeam.storage.steps import PRINCIPAL_HA_APPLICATION
+
+        # Deployed with the HA application, new configuration is non-HA
+        mock_deployment.get_client.return_value.cluster.get_storage_backend.return_value = (  # noqa: E501
+            Mock(principal=PRINCIPAL_HA_APPLICATION)
+        )
+
+        with patch("sunbeam.storage.base.JujuHelper"):
+            with patch.object(
+                type(backend),
+                "manifest",
+                new_callable=lambda: property(lambda self: mock_manifest),
+            ):
+                with patch.object(backend, "register_terraform_plan"):
+                    with patch(
+                        "sunbeam.storage.base.prompt_backend_config",
+                        return_value=config,
+                    ):
+                        with patch("sunbeam.storage.base.run_plan") as mock_run_plan:
+                            with pytest.raises(click.ClickException) as exc_info:
+                                backend.add_backend_instance(
+                                    mock_deployment, backend_name, config, mock_console
+                                )
+
+        assert "sunbeam storage remove test-backend" in str(exc_info.value)
+        # Only the prerequisite validation plan ran, nothing was deployed
+        assert len(mock_run_plan.call_args_list) == 1
+
+    def test_add_backend_instance_allows_readd_with_same_principal(
+        self, backend, mock_deployment, mock_console
+    ):
+        """Allow re-add that keeps the same principal application."""
+        backend_name = "test-backend"
+        config = {"required_field": "value", "secret_field": "secret"}
+
+        mock_manifest = Mock()
+        mock_manifest.storage.root = {}
+
+        from sunbeam.storage.steps import PRINCIPAL_NON_HA_APPLICATION
+
+        # Mock backend is non-HA; record matches the new configuration
+        mock_deployment.get_client.return_value.cluster.get_storage_backend.return_value = (  # noqa: E501
+            Mock(principal=PRINCIPAL_NON_HA_APPLICATION)
+        )
+
+        with patch("sunbeam.storage.base.JujuHelper"):
+            with patch.object(
+                type(backend),
+                "manifest",
+                new_callable=lambda: property(lambda self: mock_manifest),
+            ):
+                with patch.object(backend, "register_terraform_plan"):
+                    with patch(
+                        "sunbeam.storage.base.prompt_backend_config",
+                        return_value=config,
+                    ):
+                        with patch("sunbeam.storage.base.run_plan") as mock_run_plan:
+                            backend.add_backend_instance(
+                                mock_deployment, backend_name, config, mock_console
+                            )
+
+        assert len(mock_run_plan.call_args_list) == 2
 
     def test_add_backend_instance_invalid_name(
         self, backend, mock_deployment, mock_console

@@ -525,22 +525,25 @@ class LocalConfigSRIOVStep(BaseStep):
             self.client, PCI_CONFIG_SECTION
         )
 
-        pci_whitelist: list[dict] = []
+        pci_allowedlist: list[dict] = []
         excluded_devices: dict[str, list] = {}
 
         if self.manifest:
             pci_config = self.manifest.core.config.pci
             if pci_config and pci_config.device_specs:
-                pci_whitelist = pci_config.device_specs
-                LOG.debug("PCI whitelist from manifest: %s", pci_whitelist)
+                pci_allowedlist = pci_config.device_specs
+                LOG.debug("PCI allowedlist from manifest: %s", pci_allowedlist)
             if pci_config and pci_config.excluded_devices:
                 excluded_devices = pci_config.excluded_devices
                 LOG.debug("PCI exclude list from manifest: %s", excluded_devices)
 
-        previous_pci_whitelist = self.variables.get("pci_whitelist") or []
+        # "pci_whitelist" is the persisted answer-store key from earlier
+        # releases; kept as-is so upgrades don't lose an already-configured
+        # allowedlist.
+        previous_pci_allowedlist = self.variables.get("pci_whitelist") or []
         previous_excluded_devices = self.variables.get("excluded_devices") or {}
 
-        LOG.debug("PCI whitelist from previous answers: %s", previous_pci_whitelist)
+        LOG.debug("PCI allowedlist from previous answers: %s", previous_pci_allowedlist)
         LOG.debug(
             "PCI exclude list from previous answers: %s", previous_excluded_devices
         )
@@ -550,9 +553,9 @@ class LocalConfigSRIOVStep(BaseStep):
 
         if not self.clear_previous_config:
             LOG.debug("Picking up previous answers")
-            for device_spec in previous_pci_whitelist:
-                if device_spec not in pci_whitelist:
-                    pci_whitelist.append(device_spec)
+            for device_spec in previous_pci_allowedlist:
+                if device_spec not in pci_allowedlist:
+                    pci_allowedlist.append(device_spec)
             for node in previous_excluded_devices:
                 if node not in excluded_devices:
                     excluded_devices[node] = previous_excluded_devices[node]
@@ -566,14 +569,14 @@ class LocalConfigSRIOVStep(BaseStep):
             LOG.debug("Dropping previous answers")
 
         if not self.accept_defaults:
-            self._do_prompt(pci_whitelist, excluded_devices, show_hint)
+            self._do_prompt(pci_allowedlist, excluded_devices, show_hint)
 
-        LOG.info("Updated PCI device whitelist: %s", pci_whitelist)
+        LOG.info("Updated PCI device allowedlist: %s", pci_allowedlist)
         LOG.info("Updated PCI device exclusion list: %s", excluded_devices)
 
         # Handle PCI passthrough devices
         # All GPU devices returned by openstack-hypervisor will be added
-        # as PCI passthrough devices to pci_whitelist.
+        # as PCI passthrough devices to pci_allowedlist.
         try:
             snap_gpus = nic_utils.fetch_gpus(
                 self.client, self.node_name, self.jhelper, self.model
@@ -589,17 +592,17 @@ class LocalConfigSRIOVStep(BaseStep):
             ) from e
 
         for snap_gpu in snap_gpus["gpus"]:
-            nic_utils.whitelist_pci_passthrough_device(
-                self.node_name, snap_gpu, pci_whitelist, excluded_devices
+            nic_utils.allowedlist_pci_passthrough_device(
+                self.node_name, snap_gpu, pci_allowedlist, excluded_devices
             )
 
         LOG.info(
-            "PCI device whitelist information after handling PCI passthrough devices:"
+            "PCI device allowedlist information after handling PCI passthrough devices:"
         )
-        LOG.info("Updated PCI device whitelist: %s", pci_whitelist)
+        LOG.info("Updated PCI device allowedlist: %s", pci_allowedlist)
         LOG.info("Updated PCI device exclusion list: %s", excluded_devices)
 
-        self.variables["pci_whitelist"] = pci_whitelist
+        self.variables["pci_whitelist"] = pci_allowedlist
         self.variables["excluded_devices"] = excluded_devices
 
         sunbeam.core.questions.write_answers(
@@ -608,7 +611,7 @@ class LocalConfigSRIOVStep(BaseStep):
 
     def _do_prompt(
         self,
-        pci_whitelist: list[dict],
+        pci_allowedlist: list[dict],
         excluded_devices: dict[str, list],
         show_hint: bool = False,
     ):
@@ -674,20 +677,22 @@ class LocalConfigSRIOVStep(BaseStep):
 
             if configure_sriov:
                 self._show_sriov_nics(
-                    console, sriov_nics, pci_whitelist, excluded_devices
+                    console, sriov_nics, pci_allowedlist, excluded_devices
                 )
 
                 for nic in sriov_nics:
                     nic_str_repr = nic_utils.get_nic_str_repr(nic)
-                    whitelisted, physnet = nic_utils.is_sriov_nic_whitelisted(
-                        self.node_name, nic, pci_whitelist, excluded_devices
+                    allowedlisted, physnet = nic_utils.is_sriov_nic_allowedlisted(
+                        self.node_name, nic, pci_allowedlist, excluded_devices
                     )
 
-                    question = f"Add network adapter to PCI whitelist? {nic_str_repr} "
-                    should_whitelist = sunbeam.core.questions.ConfirmQuestion(
-                        question, default_value=whitelisted
+                    question = (
+                        f"Add network adapter to PCI allowedlist? {nic_str_repr} "
+                    )
+                    should_allowedlist = sunbeam.core.questions.ConfirmQuestion(
+                        question, default_value=allowedlisted
                     ).ask()
-                    if not should_whitelist:
+                    if not should_allowedlist:
                         nic_utils.exclude_sriov_nic(
                             self.node_name, nic, excluded_devices
                         )
@@ -702,8 +707,8 @@ class LocalConfigSRIOVStep(BaseStep):
                         question,
                         default_value=physnet,
                     ).ask()
-                    nic_utils.whitelist_sriov_nic(
-                        self.node_name, nic, pci_whitelist, excluded_devices, physnet
+                    nic_utils.allowedlist_sriov_nic(
+                        self.node_name, nic, pci_allowedlist, excluded_devices, physnet
                     )
 
         else:
@@ -714,7 +719,7 @@ class LocalConfigSRIOVStep(BaseStep):
         self,
         console: Console,
         sriov_nics: list[dict],
-        pci_whitelist: list[dict],
+        pci_allowedlist: list[dict],
         excluded_devices: dict[str, list],
     ):
         if not sriov_nics:
@@ -723,10 +728,10 @@ class LocalConfigSRIOVStep(BaseStep):
         console.print("Found the following SR-IOV capable devices:")
 
         for nic in sriov_nics:
-            whitelisted, physnet = nic_utils.is_sriov_nic_whitelisted(
-                self.node_name, nic, pci_whitelist, excluded_devices
+            allowedlisted, physnet = nic_utils.is_sriov_nic_allowedlisted(
+                self.node_name, nic, pci_allowedlist, excluded_devices
             )
-            checkbox = "X" if whitelisted else " "
+            checkbox = "X" if allowedlisted else " "
             nic_str_repr = nic_utils.get_nic_str_repr(nic)
 
             nic_info = f"  \\[{checkbox}] {nic_str_repr} \\[physnet: {physnet}]"

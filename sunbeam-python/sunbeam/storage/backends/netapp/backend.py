@@ -408,8 +408,20 @@ class NetAppBackend(StorageBackendBase):
 
     @property
     def supports_ha(self) -> bool:
-        """Whether this backend supports HA deployments."""
-        return True
+        """Whether this backend supports HA deployments.
+
+        Conservative default used when no configuration is available;
+        the config-aware answer is supports_ha_for.
+        """
+        return False
+
+    def supports_ha_for(self, config: NetAppConfig) -> bool:
+        """Whether this backend configuration supports HA deployments.
+
+        Cinder >= 2024.2: the NetApp ONTAP iSCSI driver is active-active
+        (SUPPORTS_ACTIVE_ACTIVE), the NVMe-oF driver is not.
+        """
+        return config.protocol == "iscsi"
 
     def config_type(self) -> type[StorageBackendConfig]:
         """Return the configuration model type for this backend."""
