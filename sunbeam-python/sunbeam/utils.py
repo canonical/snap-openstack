@@ -255,6 +255,80 @@ class CatchGroup(click.Group):
             sys.exit(1)
 
 
+# Command names that are blocked during an active upgrade hop.
+# Read-only commands (list, show, status) are NOT here — they pass through.
+GUARDED_COMMANDS: set[str] = {
+    "refresh",
+    "mysql",
+    "vault",
+    "k8s",
+    "bootstrap",
+    "add",
+    "join",
+    "remove",
+    "resize",
+    "destroy",
+    "configure",
+    "sriov",
+    "dpdk",
+    "enable",
+    "disable",
+}
+
+
+def check_upgrade_active(deployment: typing.Any) -> None:
+    """Raise ClickException if an upgrade hop is active.
+
+    :param deployment: the deployment object (from click context)
+    :raises click.ClickException: if an upgrade is in progress
+    """
+    try:
+        client = deployment.get_client()
+    except (SunbeamException, ValueError):
+        LOG.debug("Cannot get clusterd client — skipping upgrade guard")
+        return
+
+    try:
+        if client.cluster.is_upgrade_active():
+            raise click.ClickException(
+                "An upgrade is in progress. Complete or abandon the upgrade "
+                "before running this command. Use "
+                "'sunbeam cluster upgrade status' to check progress, or "
+                "'sunbeam cluster upgrade abandon' to abandon."
+            )
+    except click.ClickException:
+        raise
+    except Exception:
+        LOG.debug("Cannot check upgrade state — skipping guard", exc_info=True)
+
+
+class GuardedGroup(CatchGroup):
+    """A click.Group that guards mutating commands during active upgrades.
+
+    Before invoking any subcommand whose name is in
+    ``GUARDED_COMMANDS``, checks if an upgrade hop is active. If so,
+    raises ``click.ClickException`` with a clear message.
+
+    Read-only commands pass through unchanged.
+    """
+
+    def invoke(self, ctx: click.Context) -> None:
+        """Guard mutating subcommands before invoking."""
+        # ctx.info_name is the group name (e.g. "enable", "disable") —
+        # checked for top-level guarded groups.
+        # ctx.invoked_subcommand is the subcommand name (e.g. "refresh",
+        # "join") — checked for nested groups like "cluster".
+        names = {ctx.info_name, ctx.invoked_subcommand}
+        names.discard(None)
+
+        if names & GUARDED_COMMANDS:
+            deployment = ctx.obj
+            if deployment is not None and hasattr(deployment, "get_client"):
+                check_upgrade_active(deployment)
+
+        return super().invoke(ctx)
+
+
 K = typing.TypeVar("K")
 V = typing.TypeVar("V")
 

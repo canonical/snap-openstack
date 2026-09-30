@@ -1265,3 +1265,63 @@ class TestRunTerraformCommand:
                 env={},
                 reporter=None,
             )
+
+
+class TestTerraformPlanExtraArgs:
+    """Tests for extra_args support in terraform_plan and terraform_plan_text."""
+
+    def _make_helper(self, mocker, snap, tmp_path):
+        mocker.patch.object(terraform_mod, "Snap", return_value=snap)
+        return TerraformHelper(
+            path=tmp_path,
+            plan="test-plan",
+            tfvar_map={},
+        )
+
+    def test_plan_includes_extra_args(self, mocker, snap, tmp_path):
+        helper = self._make_helper(mocker, snap, tmp_path)
+        mock_process = MagicMock()
+        mock_process.stdout = iter([])
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 0
+        mock_process.returncode = 0
+
+        with patch("subprocess.Popen", return_value=mock_process) as mock_popen:
+            helper.terraform_plan(extra_args=["-target=module.keystone"])
+            cmd = mock_popen.call_args.args[0]
+            assert "-target=module.keystone" in cmd
+
+    def test_plan_without_extra_args(self, mocker, snap, tmp_path):
+        helper = self._make_helper(mocker, snap, tmp_path)
+        mock_process = MagicMock()
+        mock_process.stdout = iter([])
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 0
+        mock_process.returncode = 0
+
+        with patch("subprocess.Popen", return_value=mock_process) as mock_popen:
+            helper.terraform_plan()
+            cmd = mock_popen.call_args.args[0]
+            assert not any(arg.startswith("-target") for arg in cmd)
+
+    def test_plan_text_includes_extra_args(self, mocker, snap, tmp_path):
+        helper = self._make_helper(mocker, snap, tmp_path)
+        mock_result = MagicMock()
+        mock_result.stdout = "Plan: 0 to add"
+        mock_result.stderr = ""
+
+        with patch("subprocess.run", return_value=mock_result) as mock_run:
+            helper.terraform_plan_text(extra_args=["-target=module.keystone"])
+            cmd = mock_run.call_args.args[0]
+            assert "-target=module.keystone" in cmd
+
+    def test_plan_text_without_extra_args(self, mocker, snap, tmp_path):
+        helper = self._make_helper(mocker, snap, tmp_path)
+        mock_result = MagicMock()
+        mock_result.stdout = "Plan: 0 to add"
+        mock_result.stderr = ""
+
+        with patch("subprocess.run", return_value=mock_result) as mock_run:
+            helper.terraform_plan_text()
+            cmd = mock_run.call_args.args[0]
+            assert not any(arg.startswith("-target") for arg in cmd)

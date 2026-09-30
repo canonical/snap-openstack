@@ -110,14 +110,28 @@ class SoftwareConfig(pydantic.BaseModel):
                 )
 
     def validate_charm_keys(self, default_software_config: "SoftwareConfig"):
-        """Validate the charm keys provided are expected."""
+        """Validate the charm keys provided are expected.
+
+        Charms in the deployment manifest that are no longer in the
+        snap's default software config (e.g. removed between releases)
+        are logged as warnings and stripped from the merged manifest
+        rather than causing a hard error.
+        """
         if self.charms:
             charms_keys = set(self.charms.keys())
-            all_charms = default_software_config.charms.keys()
-            if not charms_keys <= all_charms:
-                raise ValueError(
-                    f"Manifest Software charms keys should be one of {all_charms} "
+            all_charms = set(default_software_config.charms.keys())
+            unknown = charms_keys - all_charms
+            if unknown:
+                LOG.debug(
+                    "WARNING: Manifest Software charms %s are not in the "
+                    "current default software config — they will be ignored. "
+                    "Valid keys are: %s",
+                    sorted(unknown),
+                    sorted(all_charms),
                 )
+                # Strip unknown charms so they don't cause downstream errors
+                for key in unknown:
+                    self.charms.pop(key, None)
 
     def validate_against_default(
         self, default_software_config: "SoftwareConfig"

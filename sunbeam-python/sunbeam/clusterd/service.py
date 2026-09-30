@@ -106,6 +106,18 @@ class StorageBackendNotFoundException(StorageBackendException):
     """Raised when storage backend is not found."""
 
 
+class UpgradeLockHeldException(RemoteException):
+    """Raised when the upgrade lock is held by another live holder."""
+
+
+class UpgradeTokenMismatchException(RemoteException):
+    """Raised when a state write carries a stale fencing token.
+
+    The caller's lock expired and was re-acquired by someone else. The
+    coordinator must stop mutating state and surface the error.
+    """
+
+
 class BaseService(ABC):
     """BaseService is the base service class for sunbeam clusterd services."""
 
@@ -220,10 +232,16 @@ class BaseService(ABC):
                 )
             elif "ConfigItem not found" in error:
                 raise ConfigItemNotFoundException("ConfigItem not found")
+            elif "no upgrade state" in error:
+                raise ConfigItemNotFoundException("No upgrade state")
             elif "ManifestItem not found" in error:
                 raise ManifestItemNotFoundException("ManifestItem not found")
             elif "StorageBackend not found" in error:
                 raise StorageBackendNotFoundException("Storage backend not found")
+            elif "upgrade lock held by" in error:
+                raise UpgradeLockHeldException(error)
+            elif "fencing token mismatch" in error:
+                raise UpgradeTokenMismatchException(error)
             raise e
 
         return response.json()
