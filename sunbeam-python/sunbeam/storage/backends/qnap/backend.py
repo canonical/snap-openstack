@@ -48,6 +48,10 @@ class QnapConfig(StorageBackendConfig):
         Protocol | None,
         Field(description="Protocol selector: fc, iscsi."),
     ] = None
+    driver_ssl_cert_verify: Annotated[
+        bool | None,
+        Field(description="Verify HTTPS certificates using the system trust store."),
+    ] = None
 
     # Optional backend configuration
     qnap_management_url: Annotated[

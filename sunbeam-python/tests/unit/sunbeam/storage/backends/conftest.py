@@ -3,7 +3,13 @@
 
 """Common fixtures and utilities for backend-specific tests."""
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
+from cryptography import x509
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ed25519
+from cryptography.x509.oid import NameOID
 
 from sunbeam.storage.backends.datacore.backend import DatacoreBackend
 from sunbeam.storage.backends.datera.backend import DateraBackend
@@ -48,6 +54,31 @@ from sunbeam.storage.backends.toyouacs5000.backend import Toyouacs5000Backend
 from sunbeam.storage.backends.veritasaccess.backend import VeritasAccessBackend
 from sunbeam.storage.backends.yadro.backend import YadroBackend
 from sunbeam.storage.backends.zadara.backend import ZadaraBackend
+
+
+@pytest.fixture(scope="session")
+def pem_certificates():
+    """Provide real leaf and CA certificates for storage TLS validation."""
+    key = ed25519.Ed25519PrivateKey.generate()
+    now = datetime.now(timezone.utc)
+    certificates = []
+    for is_ca in (False, True):
+        name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "storage.test")])
+        certificate = (
+            x509.CertificateBuilder()
+            .subject_name(name)
+            .issuer_name(name)
+            .public_key(key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(now - timedelta(days=1))
+            .not_valid_after(now + timedelta(days=1))
+            .add_extension(x509.BasicConstraints(ca=is_ca, path_length=None), True)
+            .sign(key, algorithm=None)
+        )
+        certificates.append(
+            certificate.public_bytes(serialization.Encoding.PEM).decode()
+        )
+    return tuple(certificates)
 
 
 @pytest.fixture

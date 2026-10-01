@@ -12,6 +12,7 @@ from rich.console import Console
 
 from sunbeam.core.manifest import StorageBackendConfig
 from sunbeam.storage.base import StorageBackendBase
+from sunbeam.storage.models import PEMCertificates
 
 LOG = logging.getLogger(__name__)
 console = Console()
@@ -45,6 +46,15 @@ class StxConfig(StorageBackendConfig):
     protocol: Annotated[
         Protocol | None,
         Field(description="Protocol selector: iscsi."),
+    ] = None
+    driver_ssl_cert: Annotated[
+        PEMCertificates | None,
+        Field(
+            description=(
+                "PEM-encoded SSL certificate content for HTTPS connections to "
+                "the storage array."
+            )
+        ),
     ] = None
 
     # Optional backend configuration

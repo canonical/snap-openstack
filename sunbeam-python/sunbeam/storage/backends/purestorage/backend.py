@@ -12,7 +12,7 @@ from rich.console import Console
 
 from sunbeam.core.manifest import StorageBackendConfig
 from sunbeam.storage.base import StorageBackendBase
-from sunbeam.storage.models import SecretDictField
+from sunbeam.storage.models import PEMCertificates, SecretDictField
 
 LOG = logging.getLogger(__name__)
 console = Console()
@@ -134,7 +134,8 @@ class PureStorageConfig(StorageBackendConfig):
 
     # SSL and security
     driver_ssl_cert: Annotated[
-        str | None, Field(description="SSL certificate content in PEM format")
+        PEMCertificates | None,
+        Field(description="SSL certificate content in PEM format"),
     ] = None
 
     # Performance options

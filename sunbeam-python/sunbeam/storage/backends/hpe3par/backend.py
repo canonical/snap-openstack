@@ -52,7 +52,6 @@ class HPEthreeparConfig(StorageBackendConfig):
         ),
         SecretDictField(field="hpe3par-password"),
     ] = None
-
     # Replication settings
     replication_device: Annotated[
         str | None,

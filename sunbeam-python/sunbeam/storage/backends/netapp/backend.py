@@ -12,7 +12,7 @@ from rich.console import Console
 
 from sunbeam.core.manifest import StorageBackendConfig
 from sunbeam.storage.base import StorageBackendBase
-from sunbeam.storage.models import SecretDictField
+from sunbeam.storage.models import PEMCertificates, SecretDictField
 
 LOG = logging.getLogger(__name__)
 console = Console()
@@ -120,13 +120,8 @@ class NetAppConfig(StorageBackendConfig):
     ] = None
 
     netapp_ssl_cert_path: Annotated[
-        str | None,
-        Field(
-            description=(
-                "The path to a CA_BUNDLE file or directory with certificates of "
-                "trusted CA."
-            )
-        ),
+        PEMCertificates | None,
+        Field(description="CA bundle PEM content for trusted certificates."),
     ] = None
 
     netapp_login: Annotated[
@@ -155,29 +150,21 @@ class NetAppConfig(StorageBackendConfig):
         str | None,
         Field(
             description=(
-                "Absolute path to the file containing the private key "
-                "associated with the certificate."
+                "Private key PEM content associated with the certificate, "
+                "supplied through a Juju secret."
             )
         ),
         SecretDictField(field="netapp-private-key-file"),
     ] = None
 
     netapp_certificate_file: Annotated[
-        str | None,
-        Field(
-            description="Absolute path to the file containing the digital certificate."
-        ),
-        SecretDictField(field="netapp-certificate-file"),
+        PEMCertificates | None,
+        Field(description="Digital certificate PEM content."),
     ] = None
 
     netapp_ca_certificate_file: Annotated[
-        str | None,
-        Field(
-            description=(
-                "Absolute path to the file containing the public key "
-                "certificate of the trusted CA."
-            )
-        ),
+        PEMCertificates | None,
+        Field(description="Trusted CA certificate PEM content."),
     ] = None
 
     netapp_certificate_host_validation: Annotated[
