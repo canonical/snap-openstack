@@ -71,6 +71,25 @@ else:
 LOG = logging.getLogger(__name__)
 console = Console()
 
+
+def _clusterctl_error(stderr: str | bytes | None) -> str:
+    """Extract the error lines from clusterctl output for display to the user.
+
+    clusterctl mixes progress output with errors on stderr; showing the full
+    stream is too noisy for the CLI. Full output is kept in the log file.
+    """
+    if not stderr:
+        return ""
+    if isinstance(stderr, bytes):
+        stderr = stderr.decode(errors="replace")
+    error_lines = [
+        line.strip()
+        for line in stderr.strip().splitlines()
+        if line.strip().startswith("Error:")
+    ]
+    return "\n".join(error_lines) if error_lines else stderr.strip()
+
+
 PROVIDER_WAIT_TIMEOUT = 300  # 5 minutes for each provider
 KUBECONFIG_SECRET_NAME = "kubeconfig"
 MAGNUM_APPLICATION_NAME = "magnum"
@@ -282,9 +301,10 @@ class SetupClusterAPI(BaseStep):
         )
 
     def _initialize_or_upgrade_capi(self) -> None:
-        cmd = ["clusterctl", "init"]
+        clusterctl = str(self.snap.paths.snap / "bin" / "clusterctl")
+        cmd = [clusterctl, "init"]
         if self.micro_version_changed:
-            cmd = ["clusterctl", "upgrade", "apply"]
+            cmd = [clusterctl, "upgrade", "apply"]
 
         with tempfile.NamedTemporaryFile(mode="w") as kubeconfig_file:
             kubeconfig_file.write(yaml.safe_dump(self.kubeconfig))
@@ -308,7 +328,8 @@ class SetupClusterAPI(BaseStep):
                     kubeconfig_file.name,
                 ]
             )
-            subprocess.run(cmd, check=True, timeout=360, capture_output=True)
+            LOG.debug("Running clusterctl command: %s", cmd)
+            subprocess.run(cmd, check=True, timeout=360, capture_output=True, text=True)
 
     def run(self, context: StepContext) -> Result:
         """Execute clusterctl init command."""
@@ -332,10 +353,20 @@ class SetupClusterAPI(BaseStep):
         try:
             self._initialize_or_upgrade_capi()
         except subprocess.CalledProcessError as e:
-            message = f"Error in installing Cluster API components: {str(e)}"
+            LOG.debug(
+                "clusterctl command %s failed with exit code %s.stdout: %s\nstderr: %s",
+                e.cmd,
+                e.returncode,
+                e.stdout,
+                e.stderr,
+            )
+            error = _clusterctl_error(e.stderr) or str(e)
+            message = f"Error in installing Cluster API components: {error}"
             return Result(ResultType.FAILED, message)
         except subprocess.TimeoutExpired as e:
-            message = f"Timed out initiating Cluster API components: {str(e)}"
+            LOG.debug("clusterctl command %s timed out.\nstderr: %s", e.cmd, e.stderr)
+            error = _clusterctl_error(e.stderr) or str(e)
+            message = f"Timed out initiating Cluster API components: {error}"
             return Result(ResultType.FAILED, message)
 
         return Result(ResultType.COMPLETED)
@@ -520,14 +551,16 @@ class DeleteClusterAPI(BaseStep):
         with tempfile.NamedTemporaryFile(mode="w") as kubeconfig_file:
             kubeconfig_file.write(yaml.safe_dump(self.kubeconfig))
             kubeconfig_file.flush()
+            clusterctl = str(Snap().paths.snap / "bin" / "clusterctl")
             cmd = [
-                "clusterctl",
+                clusterctl,
                 "delete",
                 "--all",
                 "--kubeconfig",
                 kubeconfig_file.name,
             ]
-            subprocess.run(cmd, check=True, timeout=300, capture_output=True)
+            LOG.debug("Running clusterctl command: %s", cmd)
+            subprocess.run(cmd, check=True, timeout=300, capture_output=True, text=True)
 
     def _delete_capi_namespaces(self) -> None:
         capi_namespaces = [
@@ -683,14 +716,20 @@ class DeleteClusterAPI(BaseStep):
         try:
             self._delete_capi_components()
         except subprocess.CalledProcessError as e:
-            LOG.debug("Error from clusterctl delete: %s", e.stderr)
+            LOG.debug(
+                "clusterctl command %s failed with exit code %s.stdout: %s\nstderr: %s",
+                e.cmd,
+                e.returncode,
+                e.stdout,
+                e.stderr,
+            )
             # If CRDs are already deleted, the command results in following error
             # Error: failed to check Cluster API version:
             # customresourcedefinitions.apiextensions.k8s.io "clusters.cluster.x-k8s.io"
             # not found
             if "not found" not in str(e.stderr):
-                LOG.debug("Error in deleting capi components", exc_info=True)
-                message = f"Error in deleting Cluster API components: {str(e)}"
+                error = _clusterctl_error(e.stderr) or str(e)
+                message = f"Error in deleting Cluster API components: {error}"
                 return Result(ResultType.FAILED, message)
             else:
                 LOG.debug("CRDs is already deleted, ignoring clusterctl delete error")
