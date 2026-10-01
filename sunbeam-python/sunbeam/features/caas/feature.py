@@ -186,7 +186,88 @@ class SetupClusterAPI(BaseStep):
         if self.micro_version_changed:
             return Result(ResultType.COMPLETED)
 
+        # Providers exist with the required versions, but a previous run may
+        # have failed part way (e.g. images not pulled) leaving broken
+        # deployments behind. Verify the provider pods are actually healthy
+        # before skipping the installation.
+        not_ready = self._providers_not_ready(providers)
+        if not_ready:
+            LOG.error("Cluster API providers are not healthy:\n%s", not_ready)
+            LOG.debug(
+                "Fix the underlying issue (e.g. image registry access) and "
+                "rerun, or clean up with 'sunbeam disable caas' before "
+                "enabling again."
+            )
+            unhealthy_count = len(not_ready.split("; "))
+            return Result(
+                ResultType.FAILED,
+                f"{unhealthy_count} Cluster API provider(s) are installed but "
+                "not healthy. Check the sunbeam log file for details.",
+            )
+
         return Result(ResultType.SKIPPED)
+
+    def _providers_not_ready(self, providers: list) -> str:
+        """Check health of provider pods, return description of unhealthy ones.
+
+        A provider is healthy when all its pods (matched by label
+        cluster.x-k8s.io/provider=<provider name> in the provider namespace)
+        are Running with all containers ready. Returns empty string when all
+        providers are healthy.
+        """
+        unhealthy = []
+        for p in providers:
+            name = p["metadata"]["name"]
+            namespace = p["metadata"]["namespace"]
+            try:
+                pods = list(
+                    self.kube.list(
+                        core_v1.Pod,
+                        namespace=namespace,
+                        labels={"cluster.x-k8s.io/provider": name},
+                    )
+                )
+            except l_exceptions.ApiError as e:
+                LOG.debug("Failed to list pods for provider %s", name, exc_info=True)
+                unhealthy.append(f"{name}: {e.status.message}")
+                continue
+
+            if not pods:
+                unhealthy.append(f"{name}: no pods found in namespace {namespace}")
+                continue
+
+            for pod in pods:
+                status = pod.status
+                if status is None or pod.metadata is None:
+                    unhealthy.append(f"{name}: pod with no metadata or status")
+                    continue
+                phase = status.phase or "Unknown"
+                container_statuses = status.containerStatuses or []
+                container_ready = [cs.ready for cs in container_statuses]
+                if phase == "Succeeded":
+                    continue
+                if phase != "Running" or not all(container_ready):
+                    reason = ""
+                    for cs in container_statuses:
+                        state = cs.state
+                        if state is None:
+                            continue
+                        if state.waiting is not None:
+                            reason = state.waiting.reason or ""
+                            if state.waiting.message:
+                                reason += f": {state.waiting.message}"
+                            break
+                        if state.terminated is not None and not cs.ready:
+                            reason = (
+                                f"{state.terminated.reason}: {state.terminated.message}"
+                            )
+                            break
+                    unhealthy.append(
+                        f"pod {pod.metadata.name} ({name}) is {phase}"
+                        f"{' - ' + reason if reason else ''}"
+                    )
+
+        return "; ".join(unhealthy)
 
     def _install_orc_crd(self) -> None:
         timeout = 180  # 3 minutes to install ORC CRD
@@ -636,18 +717,19 @@ class DeleteClusterAPI(BaseStep):
         try:
             self._delete_capi_components()
         except subprocess.CalledProcessError as e:
-            LOG.error(
-                "clusterctl command %s failed with exit code %s.stdout: %s\nstderr: %s",
-                e.cmd,
-                e.returncode,
-                e.stdout,
-                e.stderr,
-            )
             # If CRDs are already deleted, the command results in following error
             # Error: failed to check Cluster API version:
             # customresourcedefinitions.apiextensions.k8s.io "clusters.cluster.x-k8s.io"
             # not found
             if "not found" not in str(e.stderr):
+                LOG.error(
+                    "clusterctl command %s failed with exit code %s."
+                    "stdout: %s\nstderr: %s",
+                    e.cmd,
+                    e.returncode,
+                    e.stdout,
+                    e.stderr,
+                )
                 error = _clusterctl_error(e.stderr) or str(e)
                 message = f"Error in deleting Cluster API components: {error}"
                 return Result(ResultType.FAILED, message)
