@@ -130,6 +130,7 @@ OBSERVABILITY_OFFER_INTERFACES = [
 ]
 OBSERVABILITY_AGNET_INTEGRATION_APPS = ["openstack-hypervisor", "microceph", "k8s"]
 OBSERVABILITY_AGENT_APP = "opentelemetry-collector"
+OBSERVABILITY_AGENT_INFRA_APP = "opentelemetry-collector-infra"
 MICROOVN_APP = "microovn"
 SUNBEAM_MACHINE_APP = "sunbeam-machine"
 SUNBEAM_CLUSTERD_APP = "sunbeam-clusterd"
@@ -874,33 +875,38 @@ class IntegrateRemoteCosOffersStep(BaseStep, JujuStepHelper):
         self.model = OPENSTACK_MODEL
         self.relations = [
             (
-                "opentelemetry-collector:grafana-dashboards-provider",
+                "grafana-dashboards-provider",
                 self.feature.grafana_offer_url,
             ),
             (
-                "opentelemetry-collector:send-remote-write",
+                "send-remote-write",
                 self.feature.prometheus_offer_url,
             ),
-            ("opentelemetry-collector:send-loki-logs", self.feature.loki_offer_url),
+            ("send-loki-logs", self.feature.loki_offer_url),
         ]
 
     def run(self, context: StepContext) -> Result:
         """Execute integrations using external offers."""
-        models = [OPENSTACK_MODEL, self.deployment.openstack_machines_model]
+        targets = [
+            (OPENSTACK_MODEL, OBSERVABILITY_AGENT_APP),
+            (OPENSTACK_MODEL, OBSERVABILITY_AGENT_INFRA_APP),
+            (self.deployment.openstack_machines_model, OBSERVABILITY_AGENT_APP),
+        ]
         if is_maas_deployment(self.deployment):
-            models.append(self.deployment.infra_model)  # type: ignore [attr-defined]
+            targets.append(
+                (self.deployment.infra_model, OBSERVABILITY_AGENT_APP)  # type: ignore [attr-defined]
+            )
 
-        for model in models:
+        for model, app in targets:
             for relation_pair in self.relations:
                 if relation_pair[0] and relation_pair[1]:
                     self.integrate(
                         model,
-                        relation_pair[0],
+                        f"{app}:{relation_pair[0]}",
                         relation_pair[1],
                     )
 
-        for model in models:
-            app = "opentelemetry-collector"
+        for model, app in targets:
             LOG.debug("Application monitored for readiness: %s", app)
             try:
                 self.jhelper.wait_application_ready(
@@ -935,9 +941,9 @@ class RemoveRemoteCosOffersStep(BaseStep, JujuStepHelper):
         self.feature = feature
         self.jhelper = jhelper
         self.endpoints = [
-            "opentelemetry-collector:grafana-dashboards-provider",
-            "opentelemetry-collector:send-remote-write",
-            "opentelemetry-collector:send-loki-logs",
+            "grafana-dashboards-provider",
+            "send-remote-write",
+            "send-loki-logs",
         ]
 
     def _get_relations(self, model: str, endpoints: list[str]) -> list[tuple]:
@@ -956,13 +962,19 @@ class RemoveRemoteCosOffersStep(BaseStep, JujuStepHelper):
         return relations
 
     def run(self, context: StepContext) -> Result:
-        """Execute integrations using external offers."""
-        models = [OPENSTACK_MODEL, self.deployment.openstack_machines_model]
+        """Remove integrations using external offers."""
+        models = [
+            (OPENSTACK_MODEL, [OBSERVABILITY_AGENT_APP, OBSERVABILITY_AGENT_INFRA_APP]),
+            (self.deployment.openstack_machines_model, [OBSERVABILITY_AGENT_APP]),
+        ]
         if is_maas_deployment(self.deployment):
-            models.append(self.deployment.infra_model)  # type: ignore [attr-defined]
+            models.append((self.deployment.infra_model, [OBSERVABILITY_AGENT_APP]))  # type: ignore [attr-defined]
 
-        for model in models:
-            relations = self._get_relations(model, self.endpoints)
+        for model, apps in models:
+            endpoints = [
+                f"{app}:{endpoint}" for app in apps for endpoint in self.endpoints
+            ]
+            relations = self._get_relations(model, endpoints)
             LOG.debug("List of relations to remove in model %s: %s", model, relations)
             for relation_pair in relations:
                 self.remove_relation(
@@ -971,19 +983,19 @@ class RemoveRemoteCosOffersStep(BaseStep, JujuStepHelper):
                     relation_pair[1],
                 )
 
-        for model in models:
-            app = "opentelemetry-collector"
-            LOG.debug("Application monitored for readiness: %s", app)
-            try:
-                self.jhelper.wait_application_ready(
-                    app,
-                    model,
-                    accepted_status=["blocked"],
-                    timeout=OBSERVABILITY_DEPLOY_TIMEOUT,
-                )
-            except (JujuWaitException, TimeoutError) as e:
-                LOG.debug("Failed to deploy observability agent", exc_info=True)
-                return Result(ResultType.FAILED, str(e))
+        for model, apps in models:
+            for app in apps:
+                LOG.debug("Application monitored for readiness: %s", app)
+                try:
+                    self.jhelper.wait_application_ready(
+                        app,
+                        model,
+                        accepted_status=["blocked"],
+                        timeout=OBSERVABILITY_DEPLOY_TIMEOUT,
+                    )
+                except (JujuWaitException, TimeoutError) as e:
+                    LOG.debug("Failed to deploy observability agent", exc_info=True)
+                    return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.COMPLETED)
 
