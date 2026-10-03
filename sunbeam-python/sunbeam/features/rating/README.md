@@ -4,7 +4,7 @@ This feature provides Rating (billing) service for Sunbeam. It's based on [Cloud
 
 ## Installation
 
-To enable the Rating service, you need an already bootstrapped Sunbeam instance. Then, you can install the feature with:
+To enable the Rating service, you need an already bootstrapped Sunbeam instance with observability already configured. Then, you can install the feature with:
 
 ```bash
 sunbeam enable rating
@@ -19,7 +19,7 @@ This feature will install the following services:
 
 Services are constituted of charms, i.e. operator code, and ROCKs, the corresponding OCI images.
 
-The Cloudkitty charm currently supports Storage V1, Gnocchi and Ceilometer telemetry with other options to be enhanced at a later date.
+The Cloudkitty charm has moved to supports Storage V2 through Loki, with Gnocchi collector and fectcher processes.
 
 ## Removal
 
