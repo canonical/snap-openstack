@@ -3,9 +3,11 @@
 
 import json
 from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import call as mock_call
 
 import click
 import pytest
+from jubilant.statustypes import AppStatus, AppStatusRelation
 
 from sunbeam.clusterd.service import ConfigItemNotFoundException
 from sunbeam.core.common import ResultType
@@ -687,7 +689,73 @@ class TestRemoveObservabilityAgentInfraStep:
         assert result.message == "timed out"
 
 
+@pytest.fixture()
+def remote_cos_model_names(jhelper):
+    jhelper.get_model_name_with_owner.side_effect = lambda model: f"admin/{model}"
+
+
+@pytest.mark.usefixtures("remote_cos_model_names")
 class TestIntegrateRemoteCosOffersStep:
+    @pytest.mark.parametrize("maas", [False, True])
+    @pytest.mark.parametrize("loki_offer", ["", "remotecos:admin/loki"])
+    def test_run_integrates_all_collectors(
+        self,
+        deployment,
+        jhelper,
+        observabilityfeature,
+        run,
+        step_context,
+        maas,
+        loki_offer,
+    ):
+        observabilityfeature.grafana_offer_url = "remotecos:admin/grafana"
+        observabilityfeature.prometheus_offer_url = "remotecos:admin/prometheus"
+        observabilityfeature.loki_offer_url = loki_offer
+        deployment.openstack_machines_model = "openstack-machines"
+        deployment.infra_model = "openstack-infra"
+        targets = [
+            ("openstack", "opentelemetry-collector"),
+            ("openstack", "opentelemetry-collector-infra"),
+            ("openstack-machines", "opentelemetry-collector"),
+        ]
+        if maas:
+            targets.append(("openstack-infra", "opentelemetry-collector"))
+        offers = [
+            ("grafana-dashboards-provider", "remotecos:admin/grafana"),
+            ("send-remote-write", "remotecos:admin/prometheus"),
+        ]
+        if loki_offer:
+            offers.append(("send-loki-logs", loki_offer))
+
+        with (
+            patch(
+                "sunbeam.features.observability.feature.is_maas_deployment",
+                return_value=maas,
+            ),
+            patch.object(
+                observability_feature.IntegrateRemoteCosOffersStep,
+                "_get_juju_binary",
+                return_value="juju",
+            ),
+        ):
+            step = observability_feature.IntegrateRemoteCosOffersStep(
+                deployment, observabilityfeature, jhelper
+            )
+            result = step.run(step_context)
+
+        assert [call.args[0] for call in run.call_args_list] == [
+            ["juju", "integrate", "-m", f"admin/{model}", f"{app}:{endpoint}", offer]
+            for model, app in targets
+            for endpoint, offer in offers
+        ]
+        assert jhelper.wait_application_ready.call_args_list == [
+            mock_call(
+                app, model, timeout=observability_feature.OBSERVABILITY_DEPLOY_TIMEOUT
+            )
+            for model, app in targets
+        ]
+        assert result.result_type == ResultType.COMPLETED
+
     def test_run(
         self, deployment, jhelper, observabilityfeature, snap, run, step_context
     ):
@@ -703,6 +771,7 @@ class TestIntegrateRemoteCosOffersStep:
         jhelper.wait_application_ready.assert_called()
         assert result.result_type == ResultType.COMPLETED
 
+    @pytest.mark.parametrize("ready_checks", [1, 2])
     def test_run_waiting_timedout(
         self,
         deployment,
@@ -711,8 +780,11 @@ class TestIntegrateRemoteCosOffersStep:
         snap,
         run,
         step_context,
+        ready_checks,
     ):
-        jhelper.wait_application_ready.side_effect = TimeoutError("timed out")
+        jhelper.wait_application_ready.side_effect = [None] * (ready_checks - 1) + [
+            TimeoutError("timed out")
+        ]
 
         observabilityfeature.grafana_offer_url = "remotecos:admin/grafana"
         observabilityfeature.prometheus_offer_url = "remotecos:admin/prometheus"
@@ -723,7 +795,7 @@ class TestIntegrateRemoteCosOffersStep:
         )
 
         result = step.run(step_context)
-        jhelper.wait_application_ready.assert_called()
+        assert jhelper.wait_application_ready.call_count == ready_checks
         assert result.result_type == ResultType.FAILED
         assert result.message == "timed out"
 
@@ -752,8 +824,8 @@ class TestIntegrateRemoteCosOffersStep:
             )
             result = step.run(step_context)
 
-        # wait_application_ready called for 3 models: openstack, machines, infra
-        assert jhelper.wait_application_ready.call_count == 3
+        # Both openstack collectors and the machines and infra collectors.
+        assert jhelper.wait_application_ready.call_count == 4
         assert result.result_type == ResultType.COMPLETED
 
     def test_run_non_maas_excludes_infra_model(
@@ -780,12 +852,107 @@ class TestIntegrateRemoteCosOffersStep:
             )
             result = step.run(step_context)
 
-        # wait_application_ready called for 2 models only: openstack, machines
-        assert jhelper.wait_application_ready.call_count == 2
+        # Both openstack collectors and the machines collector.
+        assert jhelper.wait_application_ready.call_count == 3
         assert result.result_type == ResultType.COMPLETED
 
 
+@pytest.mark.usefixtures("remote_cos_model_names")
 class TestRemoveRemoteCosOffersStep:
+    @pytest.mark.parametrize("maas", [False, True])
+    @pytest.mark.parametrize("loki_relation", [False, True])
+    def test_run_removes_relations_from_all_collectors(
+        self,
+        deployment,
+        jhelper,
+        observabilityfeature,
+        step_context,
+        run,
+        maas,
+        loki_relation,
+    ):
+        deployment.openstack_machines_model = "openstack-machines"
+        deployment.infra_model = "openstack-infra"
+        models = {
+            "openstack": ["opentelemetry-collector", "opentelemetry-collector-infra"],
+            "openstack-machines": ["opentelemetry-collector"],
+        }
+        if maas:
+            models["openstack-infra"] = ["opentelemetry-collector"]
+        relations = {
+            "grafana-dashboards-provider": [AppStatusRelation(related_app="grafana")],
+            "send-remote-write": [
+                AppStatusRelation(related_app="prometheus"),
+                AppStatusRelation(related_app="prometheus-secondary"),
+            ],
+        }
+        if loki_relation:
+            relations["send-loki-logs"] = [AppStatusRelation(related_app="loki")]
+        jhelper.get_model_status.side_effect = [
+            Mock(
+                apps={
+                    app: AppStatus(
+                        charm="opentelemetry-collector",
+                        charm_origin="charmhub",
+                        charm_name="opentelemetry-collector",
+                        charm_rev=1,
+                        exposed=False,
+                        relations={
+                            **relations,
+                            "unrelated": [AppStatusRelation(related_app="other")],
+                        },
+                    )
+                    for app in apps
+                }
+            )
+            for apps in models.values()
+        ]
+
+        with (
+            patch(
+                "sunbeam.features.observability.feature.is_maas_deployment",
+                return_value=maas,
+            ),
+            patch.object(
+                observability_feature.RemoveRemoteCosOffersStep,
+                "_get_juju_binary",
+                return_value="juju",
+            ),
+        ):
+            step = observability_feature.RemoveRemoteCosOffersStep(
+                deployment, observabilityfeature, jhelper
+            )
+            result = step.run(step_context)
+
+        assert jhelper.get_model_status.call_args_list == [
+            mock_call(model) for model in models
+        ]
+        assert [call.args[0] for call in run.call_args_list] == [
+            [
+                "juju",
+                "remove-relation",
+                "-m",
+                f"admin/{model}",
+                f"{app}:{endpoint}",
+                related.related_app,
+            ]
+            for model, apps in models.items()
+            for app in apps
+            for endpoint, related_apps in relations.items()
+            for related in related_apps
+        ]
+        assert jhelper.wait_application_ready.call_args_list == [
+            mock_call(
+                app,
+                model,
+                accepted_status=["blocked"],
+                timeout=observability_feature.OBSERVABILITY_DEPLOY_TIMEOUT,
+            )
+            for model, apps in models.items()
+            for app in apps
+        ]
+        assert result.result_type == ResultType.COMPLETED
+
     def test_run(
         self, deployment, jhelper, observabilityfeature, snap, run, step_context
     ):
@@ -794,7 +961,9 @@ class TestRemoveRemoteCosOffersStep:
             Mock(
                 apps={
                     "opentelemetry-collector": Mock(
-                        relations={"send-loki-logs": "loki:loki_push_api"}
+                        relations={
+                            "send-loki-logs": [AppStatusRelation(related_app="loki")]
+                        }
                     )
                 }
             ),
@@ -835,6 +1004,7 @@ class TestRemoveRemoteCosOffersStep:
         jhelper.wait_application_ready.assert_called()
         assert result.result_type == ResultType.COMPLETED
 
+    @pytest.mark.parametrize("ready_checks", [1, 2])
     def test_run_waiting_timedout(
         self,
         deployment,
@@ -843,13 +1013,16 @@ class TestRemoveRemoteCosOffersStep:
         snap,
         run,
         step_context,
+        ready_checks,
     ):
         observabilityfeature.deployment.openstack_machines_model = "test-model"
         jhelper.get_model_status.side_effect = [
             Mock(
                 apps={
                     "opentelemetry-collector": Mock(
-                        relations={"send-loki-logs": "loki:loki_push_api"}
+                        relations={
+                            "send-loki-logs": [AppStatusRelation(related_app="loki")]
+                        }
                     )
                 }
             ),
@@ -861,14 +1034,16 @@ class TestRemoveRemoteCosOffersStep:
                 }
             ),
         ]
-        jhelper.wait_application_ready.side_effect = TimeoutError("timed out")
+        jhelper.wait_application_ready.side_effect = [None] * (ready_checks - 1) + [
+            TimeoutError("timed out")
+        ]
         step = observability_feature.RemoveRemoteCosOffersStep(
             deployment, observabilityfeature, jhelper
         )
 
         result = step.run(step_context)
         run.assert_called_once()
-        jhelper.wait_application_ready.assert_called()
+        assert jhelper.wait_application_ready.call_count == ready_checks
         assert result.result_type == ResultType.FAILED
         assert result.message == "timed out"
 
@@ -899,8 +1074,8 @@ class TestRemoveRemoteCosOffersStep:
             )
             result = step.run(step_context)
 
-        # wait_application_ready called for 3 models
-        assert jhelper.wait_application_ready.call_count == 3
+        # Both OpenStack collectors and the machine and MAAS infra collectors.
+        assert jhelper.wait_application_ready.call_count == 4
         assert result.result_type == ResultType.COMPLETED
 
     def test_run_non_maas_excludes_infra_model(
@@ -925,8 +1100,8 @@ class TestRemoveRemoteCosOffersStep:
             )
             result = step.run(step_context)
 
-        # wait_application_ready called for 2 models only
-        assert jhelper.wait_application_ready.call_count == 2
+        # Both OpenStack collectors and the machine collector.
+        assert jhelper.wait_application_ready.call_count == 3
         assert result.result_type == ResultType.COMPLETED
 
 
