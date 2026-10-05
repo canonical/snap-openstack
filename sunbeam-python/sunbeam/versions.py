@@ -94,10 +94,12 @@ K8S_CHARMS |= MISC_CHARMS_K8S
 MANIFEST_CHARM_VERSIONS: dict[str, str] = {}
 MANIFEST_CHARM_VERSIONS |= K8S_CHARMS
 MANIFEST_CHARM_VERSIONS |= MACHINE_CHARMS
+MANIFEST_CHARM_VERSIONS["s3-integrator"] = S3_INTEGRATOR_CHANNEL
 
 
 # <TF plan>: <TF Plan dir>
 TERRAFORM_DIR_NAMES = {
+    "backup-storage-plan": "deploy-backup-storage",
     "sunbeam-machine-plan": "deploy-sunbeam-machine",
     "k8s-plan": "deploy-k8s",
     "microceph-plan": "deploy-microceph",
@@ -311,6 +313,14 @@ DEPLOY_CINDER_VOLUME_TFVAR_MAP: VarMap = {
 
 
 MANIFEST_ATTRIBUTES_TFVAR_MAP: dict[str, VarMap] = {
+    "backup-storage-plan": {
+        "charms": {
+            "s3-integrator": {
+                "channel": "s3-integrator-channel",
+                "revision": "s3-integrator-revision",
+            }
+        }
+    },
     "sunbeam-machine-plan": DEPLOY_SUNBEAM_MACHINE_TFVAR_MAP,
     "k8s-plan": DEPLOY_K8S_TFVAR_MAP,
     "microceph-plan": DEPLOY_MICROCEPH_TFVAR_MAP,

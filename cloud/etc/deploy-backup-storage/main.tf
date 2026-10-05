@@ -5,7 +5,7 @@ terraform {
   required_providers {
     juju = {
       source  = "juju/juju"
-      version = "= 1.3.1"
+      version = "= 2.3.1"
     }
   }
 }
@@ -17,7 +17,7 @@ data "juju_model" "openstack_model" {
 }
 
 resource "juju_application" "s3_integrator" {
-  for_each   = var.enable-disaster-recovery ? toset(var.s3-integrator-apps) : []
+  for_each   = var.enable-backup-storage ? toset(var.s3-integrator-apps) : []
   name       = each.value
   model_uuid = data.juju_model.openstack_model.uuid
 
@@ -34,14 +34,14 @@ resource "juju_application" "s3_integrator" {
 }
 
 resource "juju_secret" "s3_credentials" {
-  for_each   = var.enable-disaster-recovery ? var.s3-integrator-secret-data : {}
+  for_each   = var.enable-backup-storage ? toset(nonsensitive(keys(var.s3-integrator-secret-data))) : []
   model_uuid = data.juju_model.openstack_model.uuid
-  name       = "${each.key}-credentials"
-  value      = each.value
+  name       = "${each.value}-credentials"
+  value      = var.s3-integrator-secret-data[each.value]
 }
 
 resource "juju_access_secret" "s3_credentials_access" {
-  for_each     = var.enable-disaster-recovery ? var.s3-integrator-secret-data : {}
+  for_each     = var.enable-backup-storage ? toset(nonsensitive(keys(var.s3-integrator-secret-data))) : []
   model_uuid   = data.juju_model.openstack_model.uuid
   secret_id    = juju_secret.s3_credentials[each.key].secret_id
   applications = [each.key]
@@ -50,7 +50,7 @@ resource "juju_access_secret" "s3_credentials_access" {
 }
 
 resource "juju_integration" "s3_integrations" {
-  for_each   = var.enable-disaster-recovery ? var.s3-integrations : {}
+  for_each   = var.enable-backup-storage ? var.s3-integrations : {}
   model_uuid = data.juju_model.openstack_model.uuid
 
   application {

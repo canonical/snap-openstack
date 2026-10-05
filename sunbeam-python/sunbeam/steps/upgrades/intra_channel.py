@@ -7,6 +7,10 @@ import queue
 from rich.console import Console
 
 from sunbeam.clusterd.client import Client
+from sunbeam.commands.backup_storage import (
+    RefreshBackupStorageStep,
+    managed_integrations,
+)
 from sunbeam.core.common import (
     BaseStep,
     Result,
@@ -104,9 +108,17 @@ class LatestInChannel(BaseStep, JujuStepHelper):
 
     def is_track_changed_for_any_charm(self, deployed_apps: dict):
         """Check if chanel track is same in manifest and deployed app."""
+        owned_integrators = (
+            set(managed_integrations(self.deployment).values())
+            if any(charm == "s3-integrator" for charm, _, _ in deployed_apps.values())
+            else set()
+        )
         for app_name, (charm, channel, _) in deployed_apps.items():
             # Infra apps are managed by dedicated subcommands; skip them.
             if charm in INFRA_APPS:
+                continue
+            # Backup storage refreshes its owned integrators through its own plan.
+            if charm == "s3-integrator" and app_name in owned_integrators:
                 continue
             charm_manifest = self.manifest.core.software.charms.get(charm)
             if not charm_manifest:
@@ -225,10 +237,18 @@ class LatestInChannel(BaseStep, JujuStepHelper):
             LOG.debug("Could not fetch pre-refresh status", exc_info=True)
         LOG.debug("Pre-refresh workload status in %s: %s", model, pre_refresh_status)
 
+        owned_integrators = (
+            set(managed_integrations(self.deployment).values())
+            if model == OPENSTACK_MODEL
+            and any(charm == "s3-integrator" for charm, _, _ in apps.values())
+            else set()
+        )
         refreshed_apps = []
         for app_name, (charm, channel, _) in apps.items():
             # Skip infra apps, they are refreshed via `sunbeam cluster refresh <app>`
             if charm in INFRA_APPS:
+                continue
+            if charm == "s3-integrator" and app_name in owned_integrators:
                 continue
             manifest_charm = self.manifest.find_charm(charm)
             trust = charm in CHARMS_REQUIRING_TRUST
@@ -597,6 +617,7 @@ class LatestInChannelCoordinator(UpgradeCoordinator):
                     self.deployment.openstack_machines_model,
                 ),
                 UpgradeFeatures(self.deployment, upgrade_release=False),
+                RefreshBackupStorageStep(self.deployment, self.manifest),
             ]
         )
 

@@ -471,6 +471,8 @@ def configure(
         return
     commands = sorted(configure.commands.items(), key=_sorter)
     for name, command in commands:
+        if name == "backup":
+            continue
         LOG.debug("Running configure %r", name)
         cmd_ctx = click.Context(
             command,

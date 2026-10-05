@@ -6,8 +6,8 @@ variable "openstack-model-uuid" {
   type        = string
 }
 
-variable "enable-disaster-recovery" {
-  description = "Enable disaster recovery resources"
+variable "enable-backup-storage" {
+  description = "Deploy managed backup storage integrations"
   type        = bool
   default     = false
 }
@@ -34,6 +34,7 @@ variable "s3-integrator-secret-data" {
   description = "Per-app secret payload for s3-integrator credentials"
   type        = map(map(string))
   default     = {}
+  sensitive   = true
 }
 
 variable "s3-integrator-apps" {
@@ -45,8 +46,8 @@ variable "s3-integrator-apps" {
 variable "s3-integrations" {
   description = "Map of target app -> per-app s3-integrator app for relation wiring"
   type = map(object({
-    integrator_app = string
+    integrator_app  = string
     target_endpoint = string
   }))
-  default     = {}
+  default = {}
 }
