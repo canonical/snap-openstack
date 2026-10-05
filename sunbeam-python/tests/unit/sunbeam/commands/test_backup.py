@@ -6,7 +6,7 @@ from unittest.mock import Mock
 import pytest
 from click.testing import CliRunner
 
-from sunbeam.commands.backup_restore import backup
+from sunbeam.commands.backup_restore import backup, backup_group
 from sunbeam.core.juju import ActionFailedException
 
 
@@ -61,7 +61,9 @@ class TestBackupCommand:
     def test_no_applications(self, deployment, jhelper):
         jhelper.get_model_status.return_value = _model_status({})
 
-        result = CliRunner().invoke(backup, ["--no-prompt"], obj=deployment)
+        result = CliRunner().invoke(
+            backup_group, ["create", "--no-prompt"], obj=deployment
+        )
 
         assert result.exit_code == 2, result.output
         assert "No applications found to back up. Exiting." in result.output

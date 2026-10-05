@@ -7,7 +7,7 @@ from unittest.mock import Mock
 import pytest
 from click.testing import CliRunner
 
-from sunbeam.commands.backup_restore import restore
+from sunbeam.commands.backup_restore import backup_group, restore
 from sunbeam.core.juju import (
     ActionFailedException,
     JujuException,
@@ -111,7 +111,9 @@ def jhelper(deployment):
 class TestRestoreCommand:
     def test_stops_at_pause_guard_and_is_non_destructive(self, deployment, jhelper):
         jhelper.get_application_actions.return_value = []
-        result = CliRunner().invoke(restore, ["--no-prompt"], obj=deployment)
+        result = CliRunner().invoke(
+            backup_group, ["restore", "--no-prompt"], obj=deployment
+        )
 
         assert result.exit_code == 1, result.output
         assert "pause/resume" in result.output

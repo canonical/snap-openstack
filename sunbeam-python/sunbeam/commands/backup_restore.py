@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
-"""``sunbeam backup``, ``sunbeam restore`` and ``sunbeam list-backups`` commands."""
+"""Commands for ``sunbeam cluster backup``."""
 
 import logging
 import sys
@@ -313,7 +313,7 @@ def _validate_restore_to_time(
     return value
 
 
-@click.command()
+@click.command("create")
 @click.option(
     "--force",
     is_flag=True,
@@ -398,7 +398,7 @@ def backup(ctx: click.Context, force: bool, timeout: int, no_prompt: bool) -> No
     sys.exit(EXIT_PARTIAL)
 
 
-@click.command("list-backups")
+@click.command("list")
 @click.option(
     "--timeout",
     default=DEFAULT_BACKUP_TIMEOUT,
@@ -581,3 +581,13 @@ def restore(
     if succeeded == 0:
         sys.exit(EXIT_FAILURE)
     sys.exit(EXIT_PARTIAL)
+
+
+@click.group("backup")
+def backup_group() -> None:
+    """Manage backups of stateful Sunbeam applications."""
+
+
+backup_group.add_command(backup)
+backup_group.add_command(list_backups)
+backup_group.add_command(restore)

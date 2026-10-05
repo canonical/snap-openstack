@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
-"""Functional smoke test for ``sunbeam backup``.
+"""Functional smoke test for ``sunbeam cluster backup create``.
 
 Skipped by default: requires a bootstrapped cloud with the ``openstack`` snap
 installed and the object-storage backup prerequisite configured. Consistent with
@@ -21,6 +21,6 @@ pytestmark = pytest.mark.skipif(
 
 
 def test_backup_smoke():
-    """``sunbeam backup --help`` is available and the command runs."""
-    output = sunbeam_command("backup --help", capture_output=True)
+    """``sunbeam cluster backup create --help`` is available."""
+    output = sunbeam_command("cluster backup create --help", capture_output=True)
     assert "Create backups" in output

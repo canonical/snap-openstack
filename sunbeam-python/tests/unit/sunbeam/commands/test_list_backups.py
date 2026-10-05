@@ -7,7 +7,7 @@ from unittest.mock import Mock
 import pytest
 from click.testing import CliRunner
 
-from sunbeam.commands.backup_restore import list_backups
+from sunbeam.commands.backup_restore import backup_group, list_backups
 from sunbeam.core.juju import ActionFailedException, LeaderNotFoundException
 
 
@@ -50,7 +50,7 @@ class TestListBackupsCommand:
     def test_no_applications(self, deployment, jhelper):
         jhelper.get_model_status.return_value = _model_status({})
 
-        result = CliRunner().invoke(list_backups, obj=deployment)
+        result = CliRunner().invoke(backup_group, ["list"], obj=deployment)
 
         assert result.exit_code == 2, result.output
         assert "No applications found" in result.output
