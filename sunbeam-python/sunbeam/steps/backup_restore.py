@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
-"""Steps and component registry for ``sunbeam backup/restore``.
+"""Steps and component registry for ``sunbeam cluster backup``.
 
 The module composes and
 runs the top-level steps defined here. All per-component logic (validation
