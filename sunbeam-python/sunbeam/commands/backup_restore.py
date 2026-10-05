@@ -11,8 +11,9 @@ import click
 from rich.console import Console
 from rich.table import Table
 
-from sunbeam.core.common import get_step_message, run_plan
+from sunbeam.core.common import CONTEXT_SETTINGS, get_step_message, run_plan
 from sunbeam.core.deployment import Deployment
+from sunbeam.core.juju import JujuException
 from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.core.questions import ConfirmQuestion, Question
 from sunbeam.steps.backup_restore import (
@@ -20,6 +21,8 @@ from sunbeam.steps.backup_restore import (
     DEFAULT_BACKUP_TIMEOUT,
     DEFAULT_RESTORE_TIMEOUT,
     RESTORE_TIME_FORMAT,
+    S3_ENDPOINT,
+    S3_RELATION_VALIDATION_CHECK,
     BackupInventory,
     BackupResult,
     DiscoverBackupApplicationsStep,
@@ -591,3 +594,44 @@ def backup_group() -> None:
 backup_group.add_command(backup)
 backup_group.add_command(list_backups)
 backup_group.add_command(restore)
+
+
+@backup_group.group("target", context_settings=CONTEXT_SETTINGS)
+def target_group() -> None:
+    """Inspect backup targets."""
+
+
+@target_group.command("list", context_settings=CONTEXT_SETTINGS)
+@click.pass_obj
+def list_targets(deployment: Deployment) -> None:
+    """Show S3-related applications and backup readiness without changes.
+
+    An S3 relation does not verify bucket access or credentials.
+    """
+    jhelper = deployment.get_juju_helper()
+    discovered = _discover_apps(jhelper, OPENSTACK_MODEL)
+    results = run_plan([ValidateStep(jhelper, discovered)], console)
+    outcome = get_step_message(results, ValidateStep)
+    table = Table()
+    for column in ("Application", "Component", "S3 integration", "Readiness"):
+        table.add_column(column, overflow="fold")
+    for component, apps in sorted(discovered.items()):
+        for app in sorted(apps):
+            failures = outcome["failures"].get(app, [])
+            if S3_RELATION_VALIDATION_CHECK.name in failures:
+                continue
+            try:
+                relations = jhelper.get_relation_map(app, S3_ENDPOINT, OPENSTACK_MODEL)
+                consumers = sorted({value for value in relations.values() if value})
+                integration = "\n".join(consumers) or "Unknown"
+            except JujuException:
+                integration = "Unknown"
+            readiness = (
+                ", ".join(
+                    "Not active" if failure == "active" else failure
+                    for failure in failures
+                )
+                or "Ready"
+            )
+            table.add_row(app, component, integration, readiness)
+    console.print(table)
