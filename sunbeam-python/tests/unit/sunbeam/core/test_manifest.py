@@ -60,17 +60,19 @@ core:
 """
 
 test_manifest_incorrect_terraform_key = {
-    "software": {
-        "charms": {
-            "keystone-k8s": {
-                "channel": "2023.1/stable",
-                "revision": 234,
-                "config": {"debug": True},
-            }
-        },
-        "terraform": {
-            "fake-plan": {"source": "/home/ubuntu/tfplan"},
-        },
+    "core": {
+        "software": {
+            "charms": {
+                "keystone-k8s": {
+                    "channel": "2023.1/stable",
+                    "revision": 234,
+                    "config": {"debug": True},
+                }
+            },
+            "terraform": {
+                "fake-plan": {"source": "/home/ubuntu/tfplan"},
+            },
+        }
     }
 }
 

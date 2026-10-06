@@ -273,8 +273,7 @@ class Deployment(pydantic.BaseModel):
             feature = features.get(name)
             group = groups.get(name)
             if not feature and not group:
-                LOG.warning("Feature %s is not found in feature manager", name)
-                continue
+                raise ValueError(f"Feature {name!r} is not found in feature manager")
             if feature and feature_or_group_manifest_dict:
                 feature_manifests[name] = _parse_feature(
                     feature, feature_or_group_manifest_dict
@@ -287,10 +286,9 @@ class Deployment(pydantic.BaseModel):
                 ) in feature_or_group_manifest_dict.items():
                     feature = features.get(group.name + "." + name)
                     if not feature:
-                        LOG.warning(
-                            "Feature %s is not found in group %s", name, group.name
+                        raise ValueError(
+                            f"Feature {name!r} is not found in group {group.name!r}"
                         )
-                        continue
                     if not feature_manifest_dict:
                         continue
                     group_manifest.root[name] = _parse_feature(
@@ -332,6 +330,7 @@ class Deployment(pydantic.BaseModel):
 
     def parse_manifest(self, manifest_data: dict) -> Manifest:
         """Parse manifest data."""
+        manifest_data = copy.deepcopy(manifest_data)
         features = manifest_data.pop("features", {})
         storage = manifest_data.pop("storage", {})
         manifest = Manifest.model_validate(manifest_data)
@@ -357,10 +356,9 @@ class Deployment(pydantic.BaseModel):
         else:
             try:
                 client = self.get_client()
-                override_manifest = self.parse_manifest(
-                    yaml.safe_load(client.cluster.get_latest_manifest()["data"])
+                manifest_data = yaml.safe_load(
+                    client.cluster.get_latest_manifest()["data"]
                 )
-                LOG.debug("Manifest loaded from clusterd")
             except ClusterServiceUnavailableException:
                 LOG.debug(
                     "Failed to get manifest from clusterd, might not be bootstrapped,"
@@ -376,6 +374,9 @@ class Deployment(pydantic.BaseModel):
                     "Failed to get clusterd client, might no be bootstrapped,"
                     " consider empty manifest from database"
                 )
+            else:
+                override_manifest = self.parse_manifest(manifest_data)
+                LOG.debug("Manifest loaded from clusterd")
             if override_manifest is None:
                 # Only get manifest from embedded if manifest not present in clusterd
                 snap = Snap()
