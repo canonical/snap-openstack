@@ -37,7 +37,7 @@ variable "config" {
 variable "cos-channel" {
   description = "Operator channel for COS Lite deployment"
   type        = string
-  default     = "latest/stable"
+  default     = "1/stable"
 }
 
 variable "traefik-channel" {
@@ -61,7 +61,7 @@ variable "traefik-config" {
 variable "alertmanager-channel" {
   description = "Operator channel for COS Lite Alert Manager deployment"
   type        = string
-  default     = "latest/stable"
+  default     = "1/stable"
 }
 
 variable "alertmanager-revision" {
@@ -79,7 +79,7 @@ variable "alertmanager-config" {
 variable "prometheus-channel" {
   description = "Operator channel for COS Lite Prometheus deployment"
   type        = string
-  default     = "latest/stable"
+  default     = "1/stable"
 }
 
 variable "prometheus-revision" {
@@ -97,7 +97,7 @@ variable "prometheus-config" {
 variable "grafana-channel" {
   description = "Operator channel for COS Lite Grafana deployment"
   type        = string
-  default     = "latest/stable"
+  default     = "1/stable"
 }
 
 variable "grafana-revision" {
@@ -115,7 +115,7 @@ variable "grafana-config" {
 variable "catalogue-channel" {
   description = "Operator channel for COS Lite Catalogue deployment"
   type        = string
-  default     = "latest/stable"
+  default     = "1/stable"
 }
 
 variable "catalogue-revision" {
@@ -133,7 +133,7 @@ variable "catalogue-config" {
 variable "loki-channel" {
   description = "Operator channel for COS Lite Loki deployment"
   type        = string
-  default     = "latest/stable"
+  default     = "1/stable"
 }
 
 variable "loki-revision" {
