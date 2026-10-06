@@ -11,7 +11,7 @@ from rich.console import Console
 
 from sunbeam.core.manifest import StorageBackendConfig
 from sunbeam.storage.base import StorageBackendBase
-from sunbeam.storage.models import SecretDictField
+from sunbeam.storage.models import PEMCertificates, SecretDictField
 
 LOG = logging.getLogger(__name__)
 console = Console()
@@ -55,7 +55,8 @@ class HitachiConfig(StorageBackendConfig):
         Field(description="Availability zone to associate with this backend"),
     ] = None
     driver_ssl_cert: Annotated[
-        str | None, Field(description="SSL certificate content in PEM format")
+        PEMCertificates | None,
+        Field(description="SSL certificate content in PEM format"),
     ] = None
 
     # Optional host-group / zoning controls
@@ -145,7 +146,7 @@ class HitachiConfig(StorageBackendConfig):
         str | None, Field(description="Snapshot pool on secondary storage")
     ] = None
     hitachi_mirror_ssl_cert: Annotated[
-        str | None,
+        PEMCertificates | None,
         Field(
             description="SSL certificate content in PEM format for secondary storage"
         ),
