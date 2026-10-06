@@ -33,6 +33,9 @@ var Servers = map[string]rest.Server{
 					storageBackendCmd,
 					featureGatesCmd,
 					featureGateCmd,
+					upgradeLockCmd,
+					upgradeStateCmd,
+					upgradeActiveCmd,
 				},
 			},
 			{

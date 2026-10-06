@@ -45,3 +45,14 @@ class FeatureGate(pydantic.BaseModel):
 
 class FeatureGates(pydantic.RootModel[list[FeatureGate]]):
     """Feature gates model."""
+
+
+class AcquireUpgradeLockResponse(pydantic.BaseModel):
+    """Response from acquiring the upgrade lock.
+
+    token is the fencing token that must be passed to every subsequent
+    state write; clusterd rejects writes whose token != the lock's current
+    token.
+    """
+
+    token: int

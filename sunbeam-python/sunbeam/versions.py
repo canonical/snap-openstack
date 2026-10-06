@@ -5,6 +5,60 @@
 from functools import cache
 from typing import TypedDict
 
+# RELEASE_TRACKS maps each supported OpenStack release to its infrastructure
+# channel mappings. The upgrade engine uses this to:
+# - validate SLURP hop validity (is from->to a declared hop?)
+# - detect which release a cluster is running at
+# - know which channels infrastructure charms should be on per release
+#
+# Adding a new release = one entry here + a new manifests/<release>/ dir.
+# The release key (e.g. "2026.1") is the canonical identifier everywhere:
+# metadata files, state model, CLI flags.
+RELEASE_TRACKS: dict[str, dict[str, str]] = {
+    "2024.1": {
+        "name": "caracal",
+        "openstack_channel": "2024.1/stable",
+        "microceph_channel": "reef/stable",
+        "microovn_channel": "22.03/stable",
+        "mysql_channel": "8.0/stable",
+        "rabbitmq_channel": "3.12/stable",
+        "vault_channel": "1.15/stable",
+        "consul_channel": "1.19/stable",
+    },
+    "2025.1": {
+        "name": "epoxy",
+        "openstack_channel": "2025.1/stable",
+        "microceph_channel": "squid/stable",
+        "microovn_channel": "25.03/stable",
+        "mysql_channel": "8.0/stable",
+        "rabbitmq_channel": "3.12/stable",
+        "vault_channel": "2.0/stable",
+        "consul_channel": "1.19/stable",
+    },
+    "2026.1": {
+        "name": "gazpacho",
+        "openstack_channel": "2026.1/stable",
+        "microceph_channel": "squid/stable",
+        "microovn_channel": "26.03/stable",
+        "mysql_channel": "8.0/stable",
+        "rabbitmq_channel": "3.12/stable",
+        "vault_channel": "2.0/stable",
+        "consul_channel": "1.19/stable",
+    },
+}
+
+# Default release when the snap config doesn't specify one. Must be a key
+# in RELEASE_TRACKS. This is the release the snap ships manifests for.
+DEFAULT_RELEASE = "2026.1"
+
+# Valid SLURP upgrade hops. Each entry is (from_release, to_release). The
+# upgrade engine validates that a requested hop is in this set before
+# creating an active hop.
+SLURP_HOPS: set[tuple[str, str]] = {
+    ("2024.1", "2025.1"),
+    ("2025.1", "2026.1"),
+}
+
 
 @cache
 def determine_version() -> str:
@@ -15,8 +69,66 @@ def determine_version() -> str:
         snap = Snap()
         risk = str(snap.config.get("deployment.version"))
     except Exception:
-        risk = "2026.1"
+        risk = DEFAULT_RELEASE
     return risk
+
+
+def detect_snap_release() -> str:
+    """Return the release the snap binary is built for.
+
+    Reads the snap version string (e.g. '2026.1-abc123' -> '2026.1').
+    Falls back to DEFAULT_RELEASE if the value is not a known release track.
+    """
+    from snaphelpers import Snap
+
+    try:
+        snap = Snap()
+        version = snap.version.split("-")[0]
+    except Exception:
+        return DEFAULT_RELEASE
+    if version in RELEASE_TRACKS:
+        return version
+    return DEFAULT_RELEASE
+
+
+def detect_deployed_release(
+    charm_channels: dict[str, str],
+) -> str | None:
+    """Detect which release a cluster is running at from deployed charm channels.
+
+    Reads the OpenStack charm channels (e.g. from juju status) and matches
+    against RELEASE_TRACKS. Returns the release key, or None if no match.
+
+    :param charm_channels: mapping of charm name to channel, e.g.
+        {"keystone-k8s": "2025.1/stable", "nova-k8s": "2025.1/stable"}
+    :returns: release key like "2025.1", or None if no match
+    """
+    for release, tracks in RELEASE_TRACKS.items():
+        openstack_channel = tracks["openstack_channel"]
+        # Check if OpenStack charms are on this release's channel
+        openstack_charms = [
+            name
+            for name, channel in charm_channels.items()
+            if channel == openstack_channel
+        ]
+        # If multiple core OpenStack charms match this release's channel,
+        # the cluster is at this release
+        if len(openstack_charms) >= 2:
+            return release
+    return None
+
+
+def is_valid_hop(from_release: str, to_release: str) -> bool:
+    """Check if a release hop is a valid SLURP upgrade path."""
+    return (from_release, to_release) in SLURP_HOPS
+
+
+def get_release_tracks(release: str) -> dict[str, str]:
+    """Return the infrastructure channel mappings for a release.
+
+    :raises KeyError: if the release is not in RELEASE_TRACKS
+    """
+    return RELEASE_TRACKS[release]
 
 
 SUPPORTED_RELEASE = "noble"
