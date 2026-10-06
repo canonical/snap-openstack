@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import re
+from pathlib import Path
 from unittest.mock import MagicMock, Mock, patch
 from unittest.mock import call as mock_call
 
@@ -1463,3 +1465,56 @@ class TestRemoveHardwareObserverStep:
         jhelper.wait_application_gone.assert_called_once()
         assert result.result_type == ResultType.FAILED
         assert result.message == "timed out"
+
+
+class TestTerraformChannelDefaults:
+    """Terraform plan channel defaults should stay in sync with feature.py constants."""
+
+    def _tfvar_dir(self) -> Path:
+        return Path(observability_feature.__file__).parent / "etc"
+
+    def _channel_default(self, tf_file: Path, variable: str) -> str:
+        text = tf_file.read_text()
+        pattern = (
+            r'variable\s+"' + re.escape(variable) + r'"\s*\{'
+            r'[^}]*?default\s*=\s*"([^"]+)"'
+        )
+        match = re.search(pattern, text, re.DOTALL)
+        assert match, f"no default found for {variable} in {tf_file.name}"
+        return match.group(1)
+
+    def test_cos_channel_defaults_match_cos_channel(self):
+        tf_file = self._tfvar_dir() / "deploy-cos" / "variables.tf"
+        for variable in (
+            "cos-channel",
+            "alertmanager-channel",
+            "prometheus-channel",
+            "grafana-channel",
+            "catalogue-channel",
+            "loki-channel",
+        ):
+            assert (
+                self._channel_default(tf_file, variable)
+                == observability_feature.COS_CHANNEL
+            )
+
+    def test_traefik_channel_default_matches_traefik_channel(self):
+        tf_file = self._tfvar_dir() / "deploy-cos" / "variables.tf"
+        assert (
+            self._channel_default(tf_file, "traefik-channel")
+            == observability_feature.TRAEFIK_CHANNEL
+        )
+
+    def test_collector_channel_default_matches_collector_channel(self):
+        tf_file = self._tfvar_dir() / "deploy-grafana-agent" / "variables.tf"
+        assert (
+            self._channel_default(tf_file, "opentelemetry-collector-channel")
+            == observability_feature.OPENTELEMETRY_COLLECTOR_CHANNEL
+        )
+
+    def test_hardware_observer_channel_default_matches_hardware_observer_channel(self):
+        tf_file = self._tfvar_dir() / "deploy-hardware-observer" / "variables.tf"
+        assert (
+            self._channel_default(tf_file, "hardware-observer-channel")
+            == observability_feature.HARDWARE_OBSERVER_CHANNEL
+        )
