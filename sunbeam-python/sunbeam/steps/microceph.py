@@ -167,6 +167,15 @@ class DeployMicrocephApplicationStep(DeployMachineApplicationStep):
                     "endpoint": "radosgw",
                     "space": self.deployment.get_space(Networks.STORAGE),
                 },
+                {
+                    # network the NFS (Ganesha) service binds to. The charm only
+                    # reads this binding when nfs-use-dedicated-binding is set;
+                    # it is declared here, on the same network NFS already
+                    # uses, so that it is managed by this plan instead of
+                    # falling back to the application default (management).
+                    "endpoint": "nfs",
+                    "space": self.deployment.get_space(Networks.STORAGE),
+                },
             ],
             "charm_microceph_config": {
                 "enable-rgw": "*",

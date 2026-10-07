@@ -1,11 +1,15 @@
 # SPDX-FileCopyrightText: 2023 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from sunbeam.core.common import ResultType
 from sunbeam.core.juju import ActionFailedException
-from sunbeam.steps.microceph import ConfigureMicrocephOSDStep, SetCephMgrPoolSizeStep
+from sunbeam.steps.microceph import (
+    ConfigureMicrocephOSDStep,
+    DeployMicrocephApplicationStep,
+    SetCephMgrPoolSizeStep,
+)
 
 
 class TestConfigureMicrocephOSDStep:
@@ -121,3 +125,66 @@ class TestSetCephMgrPoolSizeStep:
         expected_message = "Action failed..."
         assert result.result_type == ResultType.FAILED
         assert result.message == expected_message
+
+
+class TestDeployMicrocephApplicationStep:
+    @staticmethod
+    def _build_step(cclient, deployment, tfhelper, jhelper, manifest):
+        # Each network resolves to its own name, so the assertions below read as
+        # "endpoint X is bound to network Y".
+        deployment.get_space.side_effect = lambda network: network.value
+        deployment.get_tfhelper.return_value.output.return_value = {}
+        cclient.cluster.list_nodes_by_role.return_value = ["node-1"]
+        return DeployMicrocephApplicationStep(
+            deployment, cclient, tfhelper, jhelper, manifest, "test-model"
+        )
+
+    @patch("sunbeam.steps.microceph.read_config", return_value={})
+    def test_extra_tfvars_binds_nfs_to_storage(
+        self, read_config, cclient, deployment, tfhelper, jhelper, manifest
+    ):
+        step = self._build_step(cclient, deployment, tfhelper, jhelper, manifest)
+
+        bindings = step.extra_tfvars()["endpoint_bindings"]
+
+        nfs_bindings = [b for b in bindings if b.get("endpoint") == "nfs"]
+        assert nfs_bindings == [{"endpoint": "nfs", "space": "storage"}]
+
+    @patch("sunbeam.steps.microceph.read_config", return_value={})
+    def test_extra_tfvars_binds_nfs_to_same_space_as_public(
+        self, read_config, cclient, deployment, tfhelper, jhelper, manifest
+    ):
+        # NFS keeps listening on the network it already used (the "public"
+        # endpoint's), so declaring the binding does not move it.
+        step = self._build_step(cclient, deployment, tfhelper, jhelper, manifest)
+
+        bindings = {
+            b.get("endpoint"): b["space"]
+            for b in step.extra_tfvars()["endpoint_bindings"]
+        }
+
+        assert bindings["nfs"] == bindings["public"]
+
+    @patch("sunbeam.steps.microceph.read_config", return_value={})
+    def test_extra_tfvars_keeps_existing_bindings(
+        self, read_config, cclient, deployment, tfhelper, jhelper, manifest
+    ):
+        step = self._build_step(cclient, deployment, tfhelper, jhelper, manifest)
+
+        bindings = {
+            b.get("endpoint"): b["space"]
+            for b in step.extra_tfvars()["endpoint_bindings"]
+        }
+
+        # The None key is the application default binding (no endpoint named).
+        assert bindings == {
+            None: "management",
+            "admin": "management",
+            "peers": "management",
+            "cluster": "storage-cluster",
+            "public": "storage",
+            "ceph": "storage",
+            "mds": "storage",
+            "radosgw": "storage",
+            "nfs": "storage",
+        }
