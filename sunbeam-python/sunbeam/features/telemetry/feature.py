@@ -9,7 +9,7 @@ from rich.console import Console
 
 from sunbeam.core.common import BaseStep, run_plan
 from sunbeam.core.deployment import Deployment
-from sunbeam.core.juju import JujuHelper
+from sunbeam.core.juju import ApplicationReadiness, JujuHelper
 from sunbeam.core.manifest import (
     AddManifestStep,
     CharmManifest,
@@ -27,6 +27,7 @@ from sunbeam.features.interface.v1.openstack import (
 from sunbeam.steps.cinder_volume import DeployCinderVolumeApplicationStep
 from sunbeam.steps.hypervisor import ReapplyHypervisorTerraformPlanStep
 from sunbeam.steps.juju import RemoveSaasApplicationsStep
+from sunbeam.steps.readiness import WaitForFeatureReadyStep, terraform_readiness
 from sunbeam.storage.manager import StorageBackendManager
 from sunbeam.storage.steps import (
     PRINCIPAL_HA_APPLICATION,
@@ -37,6 +38,7 @@ from sunbeam.versions import OPENSTACK_CHANNEL
 
 LOG = logging.getLogger(__name__)
 console = Console()
+TELEMETRY_READINESS_TIMEOUT = 900
 
 
 class TelemetryFeature(OpenStackControlPlaneFeature):
@@ -44,6 +46,60 @@ class TelemetryFeature(OpenStackControlPlaneFeature):
 
     name = "telemetry"
     tf_plan_location = TerraformPlanLocation.SUNBEAM_TERRAFORM_REPO
+
+    def _readiness_requirements(
+        self, deployment: Deployment, jhelper: JujuHelper
+    ) -> dict[str, dict[str, ApplicationReadiness]]:
+        """Check the control plane again after machine/storage integrations."""
+        client = deployment.get_client()
+        control_plane = terraform_readiness(
+            deployment.get_tfhelper(self.tfplan), self.set_application_names(deployment)
+        )
+        machines: dict[str, ApplicationReadiness] = {}
+        storage_nodes = client.cluster.list_nodes_by_role("storage")
+        if client.cluster.list_nodes_by_role("compute"):
+            machines.update(
+                terraform_readiness(
+                    deployment.get_tfhelper("hypervisor-plan"), ["openstack-hypervisor"]
+                )
+            )
+            machines["openstack-hypervisor"].status = (
+                ["active", "unknown"]
+                if storage_nodes
+                else ["active", "unknown", "waiting"]
+            )
+        if storage_nodes:
+            machines.update(
+                terraform_readiness(
+                    deployment.get_tfhelper("cinder-volume-plan"), ["cinder-volume"]
+                )
+            )
+            step = DeployCinderVolumeApplicationStep(
+                deployment,
+                client,
+                deployment.get_tfhelper("cinder-volume-plan"),
+                jhelper,
+                self.manifest,
+                deployment.openstack_machines_model,
+            )
+            machines["cinder-volume"].status = step.get_accepted_application_status()
+            principals = {
+                backend.principal
+                for backend in client.cluster.get_storage_backends().root
+                if backend.principal != PRINCIPAL_HA_APPLICATION
+            }
+            if principals:
+                machines.update(
+                    terraform_readiness(
+                        deployment.get_tfhelper("storage-backend-plan"), principals
+                    )
+                )
+                for principal in principals:
+                    machines[principal].status = ["active", "blocked"]
+        result = {OPENSTACK_MODEL: control_plane}
+        if machines:
+            result[deployment.openstack_machines_model] = machines
+        return result
 
     def default_software_overrides(self) -> SoftwareConfig:
         """Feature software configuration."""
@@ -210,6 +266,17 @@ class TelemetryFeature(OpenStackControlPlaneFeature):
             if len(plan3) > 1:  # More than just TerraformInitStep
                 run_plan(plan3, console, show_hints)
 
+        run_plan(
+            [
+                WaitForFeatureReadyStep(
+                    jhelper,
+                    lambda: self._readiness_requirements(deployment, jhelper),
+                    TELEMETRY_READINESS_TIMEOUT,
+                )
+            ],
+            console,
+            show_hints,
+        )
         click.echo(f"OpenStack {self.display_name} application enabled.")
 
     def run_disable_plans(self, deployment: Deployment, show_hints: bool) -> None:

@@ -13,6 +13,7 @@ import enum
 import json
 import logging
 import queue
+from collections.abc import Collection
 from pathlib import Path
 
 import click
@@ -46,6 +47,7 @@ from sunbeam.core.common import (
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import (
     ActionFailedException,
+    ApplicationReadiness,
     JujuHelper,
     JujuStepHelper,
     JujuWaitException,
@@ -88,6 +90,7 @@ from sunbeam.steps.juju import (
     RemoveSaasApplicationsStep,
 )
 from sunbeam.steps.k8s import CREDENTIAL_SUFFIX
+from sunbeam.steps.readiness import WaitForFeatureReadyStep, terraform_readiness
 from sunbeam.utils import click_option_show_hints, pass_method_obj
 from sunbeam.versions import TRAEFIK_CHANNEL
 
@@ -98,6 +101,7 @@ OBSERVABILITY_FEATURE_KEY = "ObservabilityProviderType"
 OBSERVABILITY_MODEL = "observability"
 OBSERVABILITY_DEPLOY_TIMEOUT = 1800  # 30 minutes
 OBSERVABILITY_AGENT_K8S_DEPLOY_TIMEOUT = 1800  # 30 minutes
+OBSERVABILITY_READINESS_TIMEOUT = 1800
 COS_TFPLAN = "cos-plan"
 OBSERVABILITY_AGENT_TFPLAN = "grafana-agent-plan"
 OBSERVABILITY_AGENT_INFRA_TFPLAN = "observability-agent-infra-plan"
@@ -1177,6 +1181,132 @@ class ObservabilityFeature(OpenStackControlPlaneFeature):
         # named opentelemetry-collector
         return ["opentelemetry-collector"]
 
+    def _readiness_requirements(
+        self, deployment: Deployment, jhelper: JujuHelper
+    ) -> dict[str, dict[str, ApplicationReadiness]]:
+        """Freeze intended integrations and per-principal subordinate coverage."""
+        collectors = [OBSERVABILITY_AGENT_APP, OBSERVABILITY_AGENT_INFRA_APP]
+        result = {
+            OPENSTACK_MODEL: terraform_readiness(
+                deployment.get_tfhelper(self.tfplan),
+                collectors,
+                integration_apps=collectors,
+            )
+        }
+        machines = self._machine_readiness_requirements(deployment)
+        result[deployment.openstack_machines_model] = machines
+        if self.get_provider_type() == ProviderType.EMBEDDED:
+            result[OBSERVABILITY_MODEL] = terraform_readiness(
+                deployment.get_tfhelper(self.tfplan_cos)
+            )
+        if is_maas_deployment(deployment):
+            infra_model = deployment.infra_model  # type: ignore [attr-defined]
+            infra = terraform_readiness(
+                deployment.get_tfhelper(self.tfplan_observability_agent_infra),
+                [OBSERVABILITY_AGENT_APP],
+                integration_apps=[OBSERVABILITY_AGENT_APP],
+            )
+            placements = list(jhelper.get_machines(infra_model))
+            infra.setdefault(
+                SUNBEAM_CLUSTERD_APP, ApplicationReadiness()
+            ).machines = placements
+            infra[OBSERVABILITY_AGENT_APP].units = None
+            infra[OBSERVABILITY_AGENT_APP].principals = {
+                SUNBEAM_CLUSTERD_APP: placements
+            }
+            result[infra_model] = infra
+        if self.get_provider_type() == ProviderType.EXTERNAL:
+            offers = {
+                "grafana-dashboards-provider": self.grafana_offer_url,
+                "send-remote-write": self.prometheus_offer_url,
+                "send-loki-logs": self.loki_offer_url,
+            }
+            for apps in result.values():
+                for app in collectors:
+                    if app in apps:
+                        for endpoint, offer in offers.items():
+                            if offer:
+                                apps[app].relations.setdefault(endpoint, set()).add(
+                                    offer.rsplit(".", 1)[-1]
+                                )
+        return result
+
+    def _machine_readiness_requirements(
+        self, deployment: Deployment
+    ) -> dict[str, ApplicationReadiness]:
+        """Require collector coverage on every intended principal placement."""
+        machines = terraform_readiness(
+            deployment.get_tfhelper(self.tfplan_observability_agent),
+            [OBSERVABILITY_AGENT_APP],
+            integration_apps=[OBSERVABILITY_AGENT_APP],
+        )
+        hardware = terraform_readiness(
+            deployment.get_tfhelper(self.tfplan_hardware_observer),
+            [HARDWARE_OBSERVER_APP],
+            integration_apps=[HARDWARE_OBSERVER_APP],
+        )
+        for app, requirement in hardware.items():
+            if app not in machines:
+                machines[app] = requirement
+            else:
+                for endpoint, peers in requirement.relations.items():
+                    machines[app].relations.setdefault(endpoint, set()).update(peers)
+        machines.setdefault(SUNBEAM_MACHINE_APP, ApplicationReadiness())
+        machines[OBSERVABILITY_AGENT_APP].relations.setdefault("juju-info", set()).add(
+            SUNBEAM_MACHINE_APP
+        )
+        machines[HARDWARE_OBSERVER_APP].relations.setdefault("general-info", set()).add(
+            SUNBEAM_MACHINE_APP
+        )
+        machines[HARDWARE_OBSERVER_APP].relations.setdefault("cos-agent", set()).add(
+            OBSERVABILITY_AGENT_APP
+        )
+        client = deployment.get_client()
+        role_map = {
+            SUNBEAM_MACHINE_APP: ["control", "compute", "storage", "region_controller"],
+            "k8s": ["control", "region_controller"],
+            "microceph": ["storage"],
+            "openstack-hypervisor": ["compute"],
+        }
+        principals: dict[str, Collection[str]] = {}
+        for app, roles in role_map.items():
+            if app not in machines:
+                continue
+            placements = {
+                str(node["machineid"])
+                for node in client.cluster.list_nodes_by_role(roles)
+                if node.get("machineid", -1) != -1
+            }
+            machines[app].machines = placements
+            if not placements:
+                machines[app].status = ["active", "unknown"]
+            principals[app] = placements
+        if MICROOVN_APP in machines:
+            microovn = terraform_readiness(
+                deployment.get_tfhelper("microovn-plan"), [MICROOVN_APP]
+            )[MICROOVN_APP]
+            machines[MICROOVN_APP].machines = microovn.machines
+            machines[MICROOVN_APP].status = ["active", "unknown"]
+            if microovn.machines is None:
+                raise ValueError("MicroOVN placement missing from Terraform state")
+            principals[MICROOVN_APP] = microovn.machines
+        if "openstack-hypervisor" in machines:
+            machines["openstack-hypervisor"].status = ["active", "unknown"]
+            if not client.cluster.list_nodes_by_role("storage"):
+                machines["openstack-hypervisor"].status = [
+                    "active",
+                    "unknown",
+                    "waiting",
+                ]
+        machines[OBSERVABILITY_AGENT_APP].units = None
+        machines[OBSERVABILITY_AGENT_APP].principals = principals
+        machines[HARDWARE_OBSERVER_APP].units = None
+        machines[HARDWARE_OBSERVER_APP].status = ["active", "blocked"]
+        machines[HARDWARE_OBSERVER_APP].principals = {
+            SUNBEAM_MACHINE_APP: principals[SUNBEAM_MACHINE_APP]
+        }
+        return machines
+
     def set_application_timeout_on_enable(self, deployment: Deployment) -> int:
         """Set application timeout on enable."""
         # Opentelemetry collector k8s is slow depending on scale of
@@ -1499,6 +1629,17 @@ class EmbeddedObservabilityFeature(ObservabilityFeature):
             ]
             run_plan(infra_agent_plan, console, show_hints)
 
+        run_plan(
+            [
+                WaitForFeatureReadyStep(
+                    jhelper,
+                    lambda: self._readiness_requirements(deployment, jhelper),
+                    OBSERVABILITY_READINESS_TIMEOUT,
+                )
+            ],
+            console,
+            show_hints,
+        )
         click.echo("Observability enabled.")
 
     def run_disable_plans(self, deployment: Deployment, show_hints: bool):
@@ -1735,6 +1876,17 @@ class ExternalObservabilityFeature(ObservabilityFeature):
 
         run_plan(observability_integrations_plan, console, show_hints)
 
+        run_plan(
+            [
+                WaitForFeatureReadyStep(
+                    jhelper,
+                    lambda: self._readiness_requirements(deployment, jhelper),
+                    OBSERVABILITY_READINESS_TIMEOUT,
+                )
+            ],
+            console,
+            show_hints,
+        )
         click.echo("Observability enabled.")
 
     def run_disable_plans(self, deployment: Deployment, show_hints: bool):
