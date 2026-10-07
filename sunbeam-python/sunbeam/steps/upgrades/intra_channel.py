@@ -41,7 +41,11 @@ from sunbeam.steps.microceph import DeployMicrocephApplicationStep
 from sunbeam.steps.microovn import (
     DeployMicroOVNApplicationStep,
 )
-from sunbeam.steps.mysql import MySQLCharmUpgradeStep, ReapplyMySQLTerraformPlanStep
+from sunbeam.steps.mysql import (
+    MySQLCharmUpgradeStep,
+    MySQLRouterCharmRefreshStep,
+    ReapplyMySQLTerraformPlanStep,
+)
 from sunbeam.steps.openstack import (
     OpenStackPatchLoadBalancerServicesIPPoolStep,
     OpenStackPatchLoadBalancerServicesIPStep,
@@ -699,6 +703,12 @@ class MySQLInChannelUpgradeCoordinator(UpgradeCoordinator):
     def get_plan(self) -> list[BaseStep]:
         """Return the upgrade plan."""
         plan = [
+            MySQLRouterCharmRefreshStep(
+                self.deployment,
+                self.client,
+                self.jhelper,
+                self.manifest,
+            ),
             MySQLCharmUpgradeStep(
                 self.deployment,
                 self.client,
