@@ -38,7 +38,8 @@ from sunbeam.versions import OPENSTACK_CHANNEL
 
 LOG = logging.getLogger(__name__)
 console = Console()
-TELEMETRY_READINESS_TIMEOUT = 900
+TELEMETRY_DEPLOY_TIMEOUT = 1800  # 30 minutes
+TELEMETRY_READINESS_TIMEOUT = 1800  # 30 minutes, shared across affected models
 
 
 class TelemetryFeature(OpenStackControlPlaneFeature):
@@ -46,6 +47,10 @@ class TelemetryFeature(OpenStackControlPlaneFeature):
 
     name = "telemetry"
     tf_plan_location = TerraformPlanLocation.SUNBEAM_TERRAFORM_REPO
+
+    def set_application_timeout_on_enable(self, deployment: Deployment) -> int:
+        """Allow the telemetry control plane thirty minutes to converge."""
+        return TELEMETRY_DEPLOY_TIMEOUT
 
     def _readiness_requirements(
         self, deployment: Deployment, jhelper: JujuHelper

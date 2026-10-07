@@ -425,6 +425,13 @@ def test_noop_enablement_still_runs_final_gate(mocker, deployment):
     )
     feature.run_enable_plans(deployment, FeatureConfig(), False)
     helper.wait_until_models_ready.assert_called_once()
+    assert helper.wait_until_models_ready.call_args.args[1] == 1800
+
+
+def test_telemetry_enablement_has_its_own_timeout(deployment):
+    feature = telemetry_feature.TelemetryFeature()
+    assert feature.set_application_timeout_on_enable(deployment) == 1800
+    assert feature.set_application_timeout_on_disable(deployment) == 900
 
 
 @pytest.mark.parametrize("database_topology", ["single", "multi"])

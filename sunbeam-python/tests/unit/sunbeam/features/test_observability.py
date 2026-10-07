@@ -1766,3 +1766,5 @@ def test_observability_final_gate_failure_reaches_cli(deployment, mocker, extern
     assert "Observability enabled" not in result.output
     post_enable.assert_not_called()
     update_feature_info.assert_not_called()
+    helper.wait_until_models_ready.assert_called_once()
+    assert helper.wait_until_models_ready.call_args.args[1] == 3600
