@@ -93,6 +93,33 @@ def test_recorded_machine_placements_and_relaxed_provider_policies():
     assert requirements["traefik"].status == ["active", "maintenance"]
 
 
+@pytest.mark.parametrize("unit_count", [0, 3])
+def test_empty_machine_placements_preserve_unit_count(unit_count):
+    helper = Mock()
+    helper.pull_state.return_value = {
+        "resources": [
+            resource(
+                "juju_application",
+                {"name": "collector", "units": unit_count, "machines": []},
+            )
+        ]
+    }
+    requirement = terraform_readiness(helper)["collector"]
+    application = Mock()
+    application.app_status.current = "active"
+    unit = Mock(machine="")
+    unit.workload_status.current = "active"
+    unit.juju_status.current = "idle"
+    units = {f"collector/{n}": unit for n in range(unit_count)}
+    status = Mock(apps={"collector": application})
+    status.get_units.return_value = units
+    assert requirement.pending(status, "collector") == []
+    units[f"collector/{unit_count}"] = unit
+    assert requirement.pending(status, "collector") == [
+        f"collector: expected {unit_count} units, observed {unit_count + 1}"
+    ]
+
+
 def test_state_absence_does_not_drop_required_application():
     helper = Mock()
     helper.pull_state.return_value = {"resources": []}
