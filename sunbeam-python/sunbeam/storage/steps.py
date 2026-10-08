@@ -58,7 +58,11 @@ from sunbeam.steps.cinder_volume import (
     get_mandatory_control_plane_offers,
     get_optional_control_plane_offers,
 )
-from sunbeam.storage.models import SecretDictField
+from sunbeam.storage.models import (
+    BackendValidationException,
+    SecretDictField,
+    normalize_backend_config,
+)
 from sunbeam.versions import CINDER_VOLUME_CHARM
 
 if TYPE_CHECKING:
@@ -227,6 +231,55 @@ def basemodel_validator(
     return field_validator
 
 
+def _config_option_label(name: str) -> str:
+    alias = name.replace("_", "-")
+    if alias == name:
+        return name
+    return f"{name} ({alias})"
+
+
+def reject_noncompliant_config(
+    config_type: type[pydantic.BaseModel], config: dict[str, Any]
+) -> None:
+    """Reject provided values the model will not accept.
+
+    Dropping or skipping these values can stop the charm from rendering the
+    whole cinder backend section, so fail before deployment instead.
+    """
+    field_validator = basemodel_validator(config_type)
+    errors: list[str] = []
+    for name, value in config.items():
+        if name not in config_type.model_fields:
+            continue
+        label = _config_option_label(name)
+        if _is_blank_config_value(value):
+            errors.append(
+                f"{label}: value is empty; omit the option or provide a non-empty value"
+            )
+            continue
+        try:
+            field_validator(name)(value)
+        except ValueError as exc:
+            errors.append(f"{label}: {exc}")
+    if errors:
+        raise BackendValidationException(
+            "Non-compliant storage config values will not be applied and can "
+            "prevent the cinder backend section from being rendered:\n"
+            + "\n".join(f"- {error}" for error in errors)
+        )
+
+
+def _format_validation_error(exc: pydantic.ValidationError) -> str:
+    lines = []
+    for error in exc.errors():
+        location = ".".join(str(part) for part in error.get("loc", ())) or "config"
+        lines.append(f"- {location}: {error.get('msg', str(error))}")
+    return (
+        "Non-compliant storage config values will not be applied and can "
+        "prevent the cinder backend section from being rendered:\n" + "\n".join(lines)
+    )
+
+
 def generate_questions_from_config(
     config_type: type[pydantic.BaseModel], *, optional: bool = False
 ) -> dict[str, Question]:
@@ -248,6 +301,98 @@ def generate_questions_from_config(
             validation_function=field_validator(field),
         )
     return questions
+
+
+def _is_blank_config_value(value: Any) -> bool:
+    """Return True when a config value cannot satisfy a required field.
+
+    Empty and whitespace-only strings are included.
+    ``False`` and ``0`` are real answers and are not treated as blank.
+    """
+    if value is None:
+        return True
+    return isinstance(value, str) and not value.strip()
+
+
+def _required_config_value(name: str, preseed: dict, variables: dict) -> Any:
+    """Return the value a required question would use without prompting."""
+    if name in preseed:
+        return preseed[name]
+    return variables.get(name)
+
+
+def _ask_until_answered(question: Question, name: str, accept_defaults: bool) -> Any:
+    """Ask until a usable answer is given.
+
+    Preseed and accept-defaults return the same value on every ask, so a
+    blank answer must be rejected instead of retried.
+    """
+    try:
+        answer = question.ask()
+    except ValueError as exc:
+        raise BackendValidationException(
+            f"Non-compliant value for {_config_option_label(name)}: {exc}"
+        ) from exc
+    while _is_blank_config_value(answer):
+        if accept_defaults or question.preseed is not None:
+            raise BackendValidationException(
+                f"Required field {name!r} is missing or empty. "
+                "Provide a non-empty value via --config-file, CLI "
+                "options, or omit --accept-defaults to enter "
+                "interactive mode."
+            )
+        answer = question.ask()
+    return answer
+
+
+def _collect_optional_config(
+    backend_instance: "StorageBackendBase",
+    variables: dict,
+    merged_preseed: dict,
+    console: Console | None,
+    accept_defaults: bool,
+    show_hint: bool,
+) -> None:
+    """Apply preseeded optionals, or prompt when running interactively."""
+    if accept_defaults:
+        # Keep saved defaults unless the preseed supplies a replacement.
+        for field_name, finfo in backend_instance.config_type().model_fields.items():
+            if finfo.is_required():
+                continue
+            if field_name in merged_preseed:
+                variables[field_name] = merged_preseed[field_name]
+        return
+
+    res = ConfirmQuestion(
+        "Set optional configurations?",
+        accept_defaults=accept_defaults,
+        default_value=bool(merged_preseed),
+    ).ask()
+    if not res:
+        for field_name, finfo in backend_instance.config_type().model_fields.items():
+            if not finfo.is_required() and field_name in merged_preseed:
+                variables[field_name] = merged_preseed[field_name]
+        return
+
+    optional_questions_bank = QuestionBank(
+        questions=generate_questions_from_config(
+            backend_instance.config_type(), optional=True
+        ),
+        console=console,
+        preseed=merged_preseed,
+        previous_answers=variables,
+        accept_defaults=accept_defaults,
+        show_hint=show_hint,
+    )
+    for name, question in optional_questions_bank.questions.items():
+        if ConfirmQuestion(
+            f"Configure option {name!r}?",
+            accept_defaults=accept_defaults,
+            default_value=name in merged_preseed,
+        ).ask():
+            variables[name] = question.ask()
+        else:
+            variables.pop(name, None)
 
 
 def prompt_backend_config(
@@ -282,6 +427,10 @@ def prompt_backend_config(
                     merged_preseed = crt.config.model_dump(by_alias=False)
 
     # Preseed from user is higher priority than manifest
+    preseed, _unknown = normalize_backend_config(
+        backend_instance.config_type(), preseed
+    )
+    reject_noncompliant_config(backend_instance.config_type(), preseed)
     merged_preseed.update(preseed)
 
     required_questions_bank = QuestionBank(
@@ -292,48 +441,50 @@ def prompt_backend_config(
         accept_defaults=accept_defaults,
         show_hint=show_hint,
     )
-    for name, question in required_questions_bank.questions.items():
-        answer = question.ask()
-        while not answer:
-            answer = question.ask()
-        variables[name] = answer
+    if accept_defaults:
+        missing = [
+            name
+            for name, finfo in backend_instance.config_type().model_fields.items()
+            if finfo.is_required()
+            and _is_blank_config_value(
+                _required_config_value(name, merged_preseed, variables)
+            )
+        ]
+        if missing:
+            raise BackendValidationException(
+                "Cannot accept defaults for required fields that are "
+                f"missing or empty: {', '.join(missing)}. "
+                "Provide non-empty values via --config-file, CLI options, "
+                "or omit --accept-defaults to enter interactive mode."
+            )
 
-    res = ConfirmQuestion(
-        "Set optional configurations?",
-        accept_defaults=accept_defaults,
-        default_value=bool(merged_preseed),
-    ).ask()
-
-    if res:
-        optional_questions_bank = QuestionBank(
-            questions=generate_questions_from_config(
-                backend_instance.config_type(), optional=True
-            ),
-            console=console,
-            preseed=merged_preseed,
-            previous_answers=variables,
-            accept_defaults=accept_defaults,
-            show_hint=show_hint,
+        # Validate saved defaults before Question.ask can retry an invalid
+        # previous answer indefinitely in non-interactive mode.
+        reject_noncompliant_config(
+            backend_instance.config_type(),
+            {
+                name: _required_config_value(name, merged_preseed, variables)
+                for name in required_questions_bank.questions
+            },
         )
 
-        for name, question in optional_questions_bank.questions.items():
-            if ConfirmQuestion(
-                f"Configure option {name!r}?",
-                accept_defaults=accept_defaults,
-                default_value=name in merged_preseed,
-            ).ask():
-                variables[name] = question.ask()
-            else:
-                # Remove variable if previously set for
-                # subsequent runs
-                variables.pop(name, None)
+    for name, question in required_questions_bank.questions.items():
+        variables[name] = _ask_until_answered(question, name, accept_defaults)
+
+    _collect_optional_config(
+        backend_instance,
+        variables,
+        merged_preseed,
+        console,
+        accept_defaults,
+        show_hint,
+    )
 
     try:
-        # Validate configuration
         backend_instance.config_type().model_validate(variables, by_name=True)
     except pydantic.ValidationError as e:
         LOG.error("Invalid configuration: %r", e)
-        raise e
+        raise BackendValidationException(_format_validation_error(e)) from e
 
     write_answers(client, config_key, variables)
     return variables

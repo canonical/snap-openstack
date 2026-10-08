@@ -10,7 +10,7 @@ import pytest
 from sunbeam.core.common import ResultType
 from sunbeam.core.questions import PasswordPromptQuestion, PromptQuestion
 from sunbeam.core.steps import DeployMachineApplicationStep
-from sunbeam.storage.models import SecretDictField
+from sunbeam.storage.models import BackendValidationException, SecretDictField
 from sunbeam.storage.steps import (
     BaseStorageBackendDeployStep,
     DeploySpecificCinderVolumeStep,
@@ -292,6 +292,127 @@ class TestPromptBackendConfig:
         assert preseed["required_field"] == "cli-value"
         assert preseed["secret_field"] == "cli-secret"
         assert preseed["optional_field"] == "manifest-optional"
+
+    def test_accept_defaults_rejects_empty_required_value(
+        self, basic_client, basic_manifest, mock_backend
+    ):
+        """Blank CLI values must not be treated as present answers."""
+        basic_manifest.storage = None
+
+        with (
+            patch("sunbeam.storage.steps.load_answers", return_value={}),
+            patch("sunbeam.storage.steps.write_answers") as mock_write_answers,
+            pytest.raises(BackendValidationException, match="required_field"),
+        ):
+            prompt_backend_config(
+                basic_client,
+                mock_backend,
+                basic_manifest,
+                "test-backend",
+                {"required_field": "", "secret_field": "secret"},
+                accept_defaults=True,
+            )
+
+        mock_write_answers.assert_not_called()
+
+    def test_accept_defaults_rejects_whitespace_and_saved_blank(
+        self, basic_client, basic_manifest, mock_backend
+    ):
+        """Whitespace and a blank saved answer are not usable defaults."""
+        basic_manifest.storage = None
+
+        with (
+            patch(
+                "sunbeam.storage.steps.load_answers",
+                return_value={"secret_field": "   "},
+            ),
+            patch("sunbeam.storage.steps.write_answers"),
+            pytest.raises(BackendValidationException, match="required_field"),
+        ):
+            prompt_backend_config(
+                basic_client,
+                mock_backend,
+                basic_manifest,
+                "test-backend",
+                {"required_field": "  "},
+                accept_defaults=True,
+            )
+
+    def test_accept_defaults_keeps_non_empty_required_values(
+        self, basic_client, basic_manifest, mock_backend
+    ):
+        """Non-empty required values still skip interactive prompts."""
+        basic_manifest.storage = None
+
+        with (
+            patch("sunbeam.storage.steps.load_answers", return_value={}),
+            patch("sunbeam.storage.steps.write_answers") as mock_write_answers,
+        ):
+            variables = prompt_backend_config(
+                basic_client,
+                mock_backend,
+                basic_manifest,
+                "test-backend",
+                {"required_field": "192.0.2.10", "secret_field": "secret"},
+                accept_defaults=True,
+            )
+
+        assert variables["required_field"] == "192.0.2.10"
+        assert variables["secret_field"] == "secret"
+        mock_write_answers.assert_called_once()
+
+    def test_accept_defaults_applies_alias_keys(
+        self, basic_client, basic_manifest, mock_backend
+    ):
+        """Kebab-case config keys are stored under model field names."""
+        basic_manifest.storage = None
+
+        with (
+            patch("sunbeam.storage.steps.load_answers", return_value={}),
+            patch("sunbeam.storage.steps.write_answers"),
+        ):
+            variables = prompt_backend_config(
+                basic_client,
+                mock_backend,
+                basic_manifest,
+                "test-backend",
+                {
+                    "required-field": "value",
+                    "secret-field": "secret",
+                    "optional-field": "opt",
+                },
+                accept_defaults=True,
+            )
+
+        assert variables["required_field"] == "value"
+        assert variables["secret_field"] == "secret"
+        assert variables["optional_field"] == "opt"
+
+    def test_noncompliant_value_is_rejected(
+        self, basic_client, basic_manifest, mock_backend
+    ):
+        """A bad provided value fails the command instead of being dropped."""
+        basic_manifest.storage = None
+
+        with (
+            patch("sunbeam.storage.steps.load_answers", return_value={}),
+            patch("sunbeam.storage.steps.write_answers") as mock_write_answers,
+            pytest.raises(BackendValidationException, match="int_field"),
+        ):
+            prompt_backend_config(
+                basic_client,
+                mock_backend,
+                basic_manifest,
+                "test-backend",
+                {
+                    "required_field": "value",
+                    "secret_field": "secret",
+                    "int_field": "not-an-int",
+                },
+                accept_defaults=True,
+            )
+
+        mock_write_answers.assert_not_called()
 
 
 class TestDeploySpecificCinderVolumeStep:
