@@ -61,6 +61,7 @@ from sunbeam.steps.cinder_volume import (
     get_optional_control_plane_offers,
 )
 from sunbeam.storage.models import (
+    FIELD_PROMPT_CONTEXT_KEY,
     BackendValidationException,
     SecretDictField,
     normalize_backend_config,
@@ -216,7 +217,12 @@ def basemodel_validator(
 
         def value_validator(value: Any) -> None:
             try:
-                validator.validate_assignment(constructed, field, value)
+                validator.validate_assignment(
+                    constructed,
+                    field,
+                    value,
+                    context={FIELD_PROMPT_CONTEXT_KEY: True},
+                )
             except pydantic.ValidationError as exc:
                 messages: list[str] = []
                 for error in exc.errors():
@@ -485,8 +491,11 @@ def prompt_backend_config(
     try:
         backend_instance.config_type().model_validate(variables, by_name=True)
     except pydantic.ValidationError as e:
-        LOG.error("Invalid configuration: %r", e)
-        raise BackendValidationException(_format_validation_error(e)) from e
+        # Log the formatted message only: the exception's repr includes the
+        # raw input, which holds API tokens.
+        message = _format_validation_error(e)
+        LOG.error("Invalid configuration: %s", message)
+        raise BackendValidationException(message) from e
 
     write_answers(client, config_key, variables)
     return variables

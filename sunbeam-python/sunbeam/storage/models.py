@@ -91,6 +91,14 @@ class StorageBackendInfo(pydantic.BaseModel):
     config: Dict[str, Any] = {}
 
 
+FIELD_PROMPT_CONTEXT_KEY = "sunbeam_field_prompt"
+
+
+def is_field_prompt_validation(info: pydantic.ValidationInfo) -> bool:
+    """Return True when validating a single prompt field."""
+    return bool(info.context and info.context.get(FIELD_PROMPT_CONTEXT_KEY))
+
+
 class SecretDictField:
     """Marker class to indicate a field needs to be managed as a juju secret.
 

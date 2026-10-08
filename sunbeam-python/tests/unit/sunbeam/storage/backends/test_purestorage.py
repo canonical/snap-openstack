@@ -153,6 +153,12 @@ class TestPureStorageBackend(BaseBackendTests):
             "pure_replication_pg_name",
             "pure_replication_pod_name",
             "pure_trisync_enabled",
+            "replication_target_name",
+            "replication_target_address",
+            "replication_target_api_token",
+            "replication_type",
+            "replication_sync_uniform",
+            "replication_driver_ssl_cert",
         ]
         for field in replication_fields:
             assert field in fields, f"Replication field {field} not found"
@@ -240,6 +246,134 @@ class TestPureStorageConfigValidation:
         ):
             assert charm_config[field.replace("_", "-")] == expected[field]
 
+    def test_invalid_config_log_omits_tokens(
+        self, purestorage_backend, mock_deployment, mock_manifest, caplog
+    ):
+        """A rejected config is logged as the formatted message, never raw input."""
+        from sunbeam.storage.models import BackendValidationException
+
+        # Short and last, so it survives the truncation pydantic applies to
+        # input_value and a leak shows up whole.
+        target_token = "LEAK-TGT"
+        saved = {
+            "san_ip": "192.0.2.10",
+            "pure_api_token": "LEAK-PRI",
+            "replication_target_address": "192.0.2.1",
+            "replication_target_api_token": target_token,
+        }
+        with (
+            patch("sunbeam.storage.steps.load_answers", return_value=saved.copy()),
+            patch("sunbeam.storage.steps.write_answers") as write_answers,
+            caplog.at_level("DEBUG", logger="sunbeam.storage.steps"),
+            pytest.raises(BackendValidationException, match="must be set together"),
+        ):
+            prompt_backend_config(
+                mock_deployment.get_client(),
+                purestorage_backend,
+                mock_manifest,
+                "owned-array",
+                {},
+                accept_defaults=True,
+            )
+
+        assert "must be set together" in caplog.text
+        assert "input_value" not in caplog.text
+        for token in (target_token, saved["pure_api_token"]):
+            assert token not in caplog.text
+        write_answers.assert_not_called()
+
+    BASE = {"san-ip": "192.168.1.1", "pure-api-token": "secret-token"}
+    TARGET = {
+        "replication-target-name": "joule",
+        "replication-target-address": "10.240.1.53",
+        "replication-target-api-token": "target-token",
+    }
+
+    @pytest.mark.parametrize("with_target", [False, True], ids=["no-target", "target"])
+    def test_trisync_enabled_rejected(self, purestorage_backend, with_target):
+        """TriSync needs two replication targets, which are not supported."""
+        from pydantic import ValidationError
+
+        config = {**self.BASE, "pure-trisync-enabled": True}
+        if with_target:
+            config.update(self.TARGET)
+        with pytest.raises(ValidationError, match="two replication targets"):
+            purestorage_backend.config_type().model_validate(config)
+
+    def test_trisync_enabled_rejected_at_prompt(self, purestorage_backend):
+        """Answering yes to the TriSync prompt is rejected immediately."""
+        from sunbeam.storage.steps import basemodel_validator
+
+        validate = basemodel_validator(purestorage_backend.config_type())
+        with pytest.raises(ValueError, match="two replication targets"):
+            validate("pure_trisync_enabled")(True)
+
+    def test_trisync_disabled_accepted_with_target(self, purestorage_backend):
+        """An explicit false is still accepted alongside a target."""
+        cfg = purestorage_backend.config_type().model_validate(
+            {**self.BASE, **self.TARGET, "pure-trisync-enabled": False}
+        )
+        assert cfg.pure_trisync_enabled is False
+
+    def test_validation_error_hides_input(self, purestorage_backend):
+        """Validation errors must not echo the config, which holds API tokens."""
+        from pydantic import ValidationError
+
+        target = {k: v for k, v in self.TARGET.items() if "address" not in k}
+        with pytest.raises(ValidationError, match="must be set together") as exc:
+            purestorage_backend.config_type().model_validate({**self.BASE, **target})
+        assert "input_value" not in str(exc.value)
+
+    def test_replication_fields_accepted_in_prompt_order(self, purestorage_backend):
+        """Per-field prompt validation accepts each target field in turn.
+
+        The CLI validates every answer against one shared, partially populated
+        model, asking required fields (san_ip, pure_api_token) first.
+        """
+        from sunbeam.storage.steps import basemodel_validator
+
+        validate = basemodel_validator(purestorage_backend.config_type())
+        validate("san_ip")("192.0.2.10")
+        validate("pure_api_token")("secret-token")
+        validate("replication_target_name")("joule")
+        validate("replication_target_address")("10.240.1.53")
+        validate("replication_target_api_token")("target-token")
+
+    def test_replication_target_full(self, purestorage_backend):
+        cfg = purestorage_backend.config_type().model_validate(
+            {**self.BASE, **self.TARGET, "replication-type": "sync"}
+        )
+        assert cfg.replication_target_name == "joule"
+        assert cfg.replication_type == "sync"
+
+    @pytest.mark.parametrize("missing", list(TARGET))
+    def test_replication_target_partial_rejected(self, purestorage_backend, missing):
+        from pydantic import ValidationError
+
+        partial = {k: v for k, v in self.TARGET.items() if k != missing}
+        with pytest.raises(ValidationError, match="must be set together"):
+            purestorage_backend.config_type().model_validate({**self.BASE, **partial})
+
+    def test_replication_type_rejects_invalid(self, purestorage_backend):
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            purestorage_backend.config_type().model_validate(
+                {**self.BASE, **self.TARGET, "replication-type": "both"}
+            )
+
+    def test_replication_token_secret_key_is_distinct(self, purestorage_backend):
+        from sunbeam.storage.models import SecretDictField
+
+        fields = purestorage_backend.config_type().model_fields
+        keys = {
+            m.field
+            for f in ("pure_api_token", "replication_target_api_token")
+            for m in fields[f].metadata
+            if isinstance(m, SecretDictField)
+        }
+        assert keys == {"token", "replication-target-api-token"}
+
     def test_protocol_accepts_only_valid_values(self, purestorage_backend):
         """Test that protocol field rejects invalid values."""
         from pydantic import ValidationError
@@ -299,12 +433,12 @@ class TestPureStorageConfigValidation:
                 "pure-api-token": "secret-token",
                 "pure-automatic-max-oversubscription-ratio": True,
                 "pure-eradicate-on-delete": False,
-                "pure-trisync-enabled": True,
+                "pure-trisync-enabled": False,
             }
         )
         assert config.pure_automatic_max_oversubscription_ratio is True
         assert config.pure_eradicate_on_delete is False
-        assert config.pure_trisync_enabled is True
+        assert config.pure_trisync_enabled is False
 
     def test_integer_fields_accept_integer_values(self, purestorage_backend):
         """Test that integer fields accept integer values."""
