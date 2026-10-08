@@ -6,7 +6,7 @@
 import logging
 from typing import Annotated, Literal
 
-from pydantic import Field
+from pydantic import Field, IPvAnyAddress
 from rich.console import Console
 
 from sunbeam.core.manifest import StorageBackendConfig
@@ -26,7 +26,7 @@ class DellSCConfig(StorageBackendConfig):
 
     # Mandatory connection parameters
     san_ip: Annotated[
-        str, Field(description="Dell Storage Center management IP or hostname")
+        IPvAnyAddress, Field(description="Dell Storage Center management IP address")
     ]
     san_login: Annotated[
         str,
@@ -112,7 +112,8 @@ class DellSCConfig(StorageBackendConfig):
 
     # Dual DSM configuration
     secondary_san_ip: Annotated[
-        str | None, Field(description="Secondary Dell Storage Center management IP")
+        IPvAnyAddress | None,
+        Field(description="Secondary Dell Storage Center management IP"),
     ] = None
     secondary_san_login: Annotated[
         str | None,
