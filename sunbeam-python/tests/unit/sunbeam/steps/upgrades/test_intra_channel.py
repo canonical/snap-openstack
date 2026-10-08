@@ -678,6 +678,27 @@ class TestIsTrackChanged:
 
         assert result is True
 
+    @patch(f"{_INTRA_CHANNEL}.is_maas_deployment")
+    def test_refresh_apps_skips_traefik_apps(self, mock_is_maas, step_context):
+        """traefik-k8s applications are not refreshed by sunbeam cluster refresh.
+
+        traefik-k8s is upgraded via `sunbeam cluster refresh ingress`.
+        """
+        mock_is_maas.return_value = False
+
+        apps = {
+            "keystone": ("keystone-k8s", "2024.1/stable", 123),
+            "traefik": ("traefik-k8s", "latest/stable", 200),
+            "traefik-public": ("traefik-k8s", "latest/stable", 200),
+        }
+        self.upgrader.jhelper = Mock()
+        self.upgrader.refresh_apps(apps, OPENSTACK_MODEL)
+
+        refreshed = [
+            c.args[0] for c in self.upgrader.jhelper.charm_refresh.call_args_list
+        ]
+        assert refreshed == ["keystone"]
+
 
 class TestLatestInChannelRun:
     """Tests for LatestInChannel.run(step_context), including MAAS infra model."""
