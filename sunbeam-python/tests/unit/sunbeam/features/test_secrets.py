@@ -105,9 +105,15 @@ class TestSecretsFeatureRunEnablePlans:
         """
         feature = secrets_feature.SecretsFeature()
         feature._manifest = Mock()
+        # The INFRA_APPS gate plans against the openstack tfhelper
+        deployment.get_tfhelper.side_effect = lambda plan: (
+            Mock(plan_resource_changes=Mock(return_value={}))
+            if plan == "openstack-plan"
+            else Mock()
+        )
         feature.run_enable_plans(deployment, Mock(), False)
 
-        assert mock_run_plan.call_count == 2
+        assert mock_run_plan.call_count == 3
 
 
 class TestSecretsFeatureRunDisablePlans:
