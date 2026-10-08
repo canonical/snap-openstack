@@ -24,7 +24,11 @@ from sunbeam.features.interface.v1.openstack import (
     OpenStackControlPlaneFeature,
     TerraformPlanLocation,
 )
-from sunbeam.steps.cinder_volume import DeployCinderVolumeApplicationStep
+from sunbeam.steps.cinder_volume import (
+    DeployCinderVolumeApplicationStep,
+    get_accepted_application_status,
+    get_mandatory_control_plane_offers,
+)
 from sunbeam.steps.hypervisor import ReapplyHypervisorTerraformPlanStep
 from sunbeam.steps.juju import RemoveSaasApplicationsStep
 from sunbeam.steps.openstack import ValidateInfraAppsStep
@@ -80,15 +84,9 @@ class TelemetryFeature(OpenStackControlPlaneFeature):
                     deployment.get_tfhelper("cinder-volume-plan"), ["cinder-volume"]
                 )
             )
-            step = DeployCinderVolumeApplicationStep(
-                deployment,
-                client,
-                deployment.get_tfhelper("cinder-volume-plan"),
-                jhelper,
-                self.manifest,
-                deployment.openstack_machines_model,
+            machines["cinder-volume"].status = get_accepted_application_status(
+                get_mandatory_control_plane_offers(deployment.get_tfhelper(self.tfplan))
             )
-            machines["cinder-volume"].status = step.get_accepted_application_status()
             principals = {
                 backend.principal
                 for backend in client.cluster.get_storage_backends().root
@@ -105,7 +103,9 @@ class TelemetryFeature(OpenStackControlPlaneFeature):
         result = {OPENSTACK_MODEL: control_plane}
         if machines:
             result[deployment.openstack_machines_model] = machines
-        return result
+        return deployment.get_feature_manager().readiness_requirements(
+            deployment, result, enabling=self
+        )
 
     def default_software_overrides(self) -> SoftwareConfig:
         """Feature software configuration."""
