@@ -62,6 +62,7 @@ TLS_FIELDS = (
     TLSField("fujitsueternusdx", "fujitsu_private_key_path", is_path=True),
     TLSField("ibmgpfs", "gpfs_private_key", is_path=True),
     TLSField("ibmgpfs", "gpfs_hosts_key_file", is_path=True),
+    TLSField("purestorage", "replication_driver_ssl_cert"),
 )
 
 CERTIFICATE_FIELDS = tuple(

@@ -7,7 +7,7 @@ import logging
 from enum import StrEnum
 from typing import Annotated, Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from rich.console import Console
 
 from sunbeam.core.manifest import StorageBackendConfig
@@ -137,6 +137,13 @@ class PureStorageConfig(StorageBackendConfig):
         PEMCertificates | None,
         Field(description="SSL certificate content in PEM format"),
     ] = None
+    replication_driver_ssl_cert: Annotated[
+        PEMCertificates | None,
+        Field(
+            description="SSL certificate conent in PEM format, used "
+            "to verify the replication target array"
+        ),
+    ] = None
 
     # Performance options
     use_multipath_for_image_xfer: Annotated[
@@ -145,6 +152,47 @@ class PureStorageConfig(StorageBackendConfig):
             description="Enable multipathing for image transfer operations",
         ),
     ] = None
+
+    # Replication target (all three required together)
+    replication_target_name: Annotated[
+        str | None,
+        Field(description="Name of the replication target FlashArray"),
+    ] = None
+    replication_target_address: Annotated[
+        str | None,
+        Field(description="Management IP or FQDN of the replication target"),
+    ] = None
+    replication_target_api_token: Annotated[
+        str | None,
+        Field(description="REST API token for the replication target"),
+        SecretDictField(field="replication-target-api-token"),
+    ] = None
+    replication_type: Annotated[
+        Literal["sync", "async"] | None,
+        Field(description="Replication type (sync or async)"),
+    ] = None
+    replication_sync_uniform: Annotated[
+        bool | None,
+        Field(description="Sync only: data paths are uniform between arrays"),
+    ] = None
+
+    @model_validator(mode="after")
+    def _replication_target_complete(self):
+        # The CLI validates prompted fields one at a time against an empty
+        # model; only enforce cross-field rules on full validation.
+        if "san_ip" not in self.model_fields_set:
+            return self
+        target = (
+            self.replication_target_name,
+            self.replication_target_address,
+            self.replication_target_api_token,
+        )
+        if any(target) and not all(target):
+            raise ValueError(
+                "replication-target-name, replication-target-address and "
+                "replication-target-api-token must be set together"
+            )
+        return self
 
 
 class PureStorageBackend(StorageBackendBase):
