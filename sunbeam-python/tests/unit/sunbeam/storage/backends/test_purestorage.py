@@ -3,8 +3,11 @@
 
 """Tests for Pure Storage FlashArray backend."""
 
+from unittest.mock import patch
+
 import pytest
 
+from sunbeam.storage.steps import prompt_backend_config
 from tests.unit.sunbeam.storage.backends.test_common import BaseBackendTests
 
 
@@ -182,6 +185,60 @@ class TestPureStorageBackend(BaseBackendTests):
 
 class TestPureStorageConfigValidation:
     """Test Pure Storage config validation behavior."""
+
+    @pytest.mark.parametrize(
+        "preseed",
+        [{}, {"backend_availability_zone": "updated-az"}],
+        ids=["saved-defaults", "partial-override"],
+    )
+    def test_accept_defaults_preserves_saved_optional_config(
+        self, purestorage_backend, mock_deployment, mock_manifest, preseed
+    ):
+        """Retries retain saved settings in persistence and deployment inputs."""
+        backend_name = "owned-array"
+        saved = {
+            "san_ip": "192.0.2.10",
+            "pure_api_token": "test-token",
+            "protocol": "iscsi",
+            "backend_availability_zone": "owned-az",
+            "pure_iscsi_cidr": "192.0.2.0/24",
+            "pure_eradicate_on_delete": False,
+        }
+        expected = {**saved, **preseed}
+        client = mock_deployment.get_client()
+        with (
+            patch("sunbeam.storage.steps.load_answers", return_value=saved.copy()),
+            patch("sunbeam.storage.steps.write_answers") as write_answers,
+            patch(
+                "sunbeam.core.questions.Prompt.ask",
+                side_effect=AssertionError("Accepting defaults must not prompt"),
+            ),
+        ):
+            answers = prompt_backend_config(
+                client,
+                purestorage_backend,
+                mock_manifest,
+                backend_name,
+                preseed,
+                accept_defaults=True,
+            )
+
+        assert answers == expected
+        write_answers.assert_called_once_with(
+            client, purestorage_backend.config_key(backend_name), expected
+        )
+        config = purestorage_backend.config_type().model_validate(answers, by_name=True)
+        tfvars = purestorage_backend.build_terraform_vars(
+            mock_deployment, mock_manifest, backend_name, config
+        )
+        charm_config = tfvars["charm_config"]
+        for field in (
+            "protocol",
+            "backend_availability_zone",
+            "pure_iscsi_cidr",
+            "pure_eradicate_on_delete",
+        ):
+            assert charm_config[field.replace("_", "-")] == expected[field]
 
     def test_protocol_accepts_only_valid_values(self, purestorage_backend):
         """Test that protocol field rejects invalid values."""
