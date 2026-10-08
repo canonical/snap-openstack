@@ -170,6 +170,8 @@ class ApplicationReadiness:
     A zero-unit application must explicitly set ``units=0``. Subordinate
     coverage is expressed per principal application and machine, since several
     principal units on one machine can each have a subordinate unit.
+    ``workload_status_message`` restricts accepted non-active workload states
+    to known messages, without relaxing the agent requirements.
     """
 
     status: Collection[str] = ("active",)
@@ -178,6 +180,7 @@ class ApplicationReadiness:
     machines: Collection[str] | None = None
     principals: dict[str, Collection[str]] = dataclasses.field(default_factory=dict)
     relations: dict[str, set[str]] = dataclasses.field(default_factory=dict)
+    workload_status_message: Collection[str] | None = None
 
     def pending(self, model_status: "jubilant.Status", app: str) -> list[str]:
         """Describe missing coverage or unsatisfied status without relation data."""
@@ -206,13 +209,13 @@ class ApplicationReadiness:
                 f"units, observed {len(units)}"
             )
         pending.extend(self._pending_principals(model_status, app))
-        if application.app_status.current not in self.status:
+        if not self._has_expected_workload_status(application.app_status):
             pending.append(
                 f"{app}: workload {application.app_status.current!r} "
                 f"({application.app_status.message})"
             )
         for name, unit in units.items():
-            if unit.workload_status.current not in self.status:
+            if not self._has_expected_workload_status(unit.workload_status):
                 pending.append(
                     f"{name}: workload {unit.workload_status.current!r} "
                     f"({unit.workload_status.message})"
@@ -230,6 +233,16 @@ class ApplicationReadiness:
             for related in sorted(related_apps - actual_related):
                 pending.append(f"{app}:{endpoint}: relation to {related} missing")
         return pending
+
+    def _has_expected_workload_status(
+        self, workload: "jubilant.statustypes.StatusInfo"
+    ) -> bool:
+        """Restrict non-active states to known messages when a policy is supplied."""
+        return workload.current in self.status and (
+            self.workload_status_message is None
+            or workload.current == "active"
+            or workload.message in self.workload_status_message
+        )
 
     def _pending_principals(
         self, model_status: "jubilant.Status", app: str
