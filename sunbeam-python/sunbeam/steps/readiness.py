@@ -51,7 +51,9 @@ def terraform_readiness(
     for app, requirement in result.items():
         attributes = applications.get(app, {})
         machines = attributes.get("machines")
-        if machines is not None:
+        # Kubernetes applications record an empty placement set in state.
+        # Only non-empty placements override the declared unit count.
+        if machines:
             requirement.machines = [str(machine) for machine in machines]
         requirement.units = attributes.get("units")
         overlay = build_overlay_dict([app]).get(app, {})
