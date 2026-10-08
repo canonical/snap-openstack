@@ -478,10 +478,15 @@ def test_final_scope_preserves_distinct_storage_placements(
     }
     deployment.get_tfhelper.side_effect = helpers.__getitem__
     accepted_status = ["active", "unknown", "blocked"]
+    from sunbeam.feature_manager import FeatureManager
+
+    manager = object.__new__(FeatureManager)
+    manager._features = {}
+    deployment.get_feature_manager.return_value = manager
     accepted = mocker.patch.object(
-        telemetry_feature.DeployCinderVolumeApplicationStep,
-        "get_accepted_application_status",
-        return_value=accepted_status,
+        telemetry_feature,
+        "get_mandatory_control_plane_offers",
+        return_value={"keystone-offer-url": None},
     )
     requirements = feature._readiness_requirements(deployment, Mock())
     assert set(requirements["openstack"]) == set(

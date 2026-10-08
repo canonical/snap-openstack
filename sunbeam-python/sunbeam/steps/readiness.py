@@ -83,6 +83,51 @@ def _require_integrations(
                     ).add(peer["name"])
 
 
+def merge_application_readiness(
+    target: ApplicationReadiness,
+    source: ApplicationReadiness,
+    *,
+    workload_policy: bool = True,
+) -> None:
+    """Compose intent without dropping constraints or resolving conflicts by order."""
+    if workload_policy and (
+        set(target.status) != set(source.status)
+        or (
+            None
+            if target.workload_status_message is None
+            else set(target.workload_status_message)
+        )
+        != (
+            None
+            if source.workload_status_message is None
+            else set(source.workload_status_message)
+        )
+    ):
+        raise ValueError("Conflicting application readiness workload policies")
+    if set(target.agent_status) != set(source.agent_status):
+        raise ValueError("Conflicting application readiness agent policies")
+    if target.machines is not None and source.machines is not None:
+        if set(target.machines) != set(source.machines):
+            raise ValueError("Conflicting application readiness machine placements")
+    elif source.machines is not None:
+        target.machines = tuple(source.machines)
+    if target.units is not None and source.units is not None:
+        if target.units != source.units:
+            raise ValueError("Conflicting application readiness unit counts")
+    elif source.units is not None:
+        target.units = source.units
+    for principal, machines in source.principals.items():
+        if principal in target.principals:
+            if set(target.principals[principal]) != set(machines):
+                raise ValueError(
+                    "Conflicting application readiness principal placements"
+                )
+        else:
+            target.principals[principal] = tuple(machines)
+    for endpoint, peers in source.relations.items():
+        target.relations.setdefault(endpoint, set()).update(peers)
+
+
 class WaitForFeatureReadyStep(BaseStep):
     """Check the complete affected scope after all enablement mutations."""
 

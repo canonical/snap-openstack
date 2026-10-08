@@ -1523,6 +1523,22 @@ class TestTerraformChannelDefaults:
 
 @pytest.fixture
 def readiness_states(deployment):
+    from sunbeam.feature_manager import FeatureManager
+    from sunbeam.features.loadbalancer.feature import LoadbalancerFeature
+    from sunbeam.features.vault.feature import VaultFeature
+
+    manager = object.__new__(FeatureManager)
+    manager._features = {
+        "vault": VaultFeature(),
+        "loadbalancer": LoadbalancerFeature(),
+    }
+    for feature in manager._features.values():
+        feature.is_enabled = Mock(return_value=True)
+    deployment.get_feature_manager.return_value = manager
+    deployment.get_client.return_value.cluster.get_config.return_value = (
+        '{"database": "single"}'
+    )
+
     def state(apps, relations=()):
         resources = [
             {

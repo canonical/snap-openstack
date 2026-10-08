@@ -84,16 +84,6 @@ from sunbeam.features.interface.v1.openstack import (
     OpenStackControlPlaneFeature,
     TerraformPlanLocation,
 )
-from sunbeam.features.loadbalancer.feature import (
-    OCTAVIA_AMPHORA_CA_CERT_MESSAGE,
-    OCTAVIA_AMPHORA_CONTROLLER_CERT_MESSAGE,
-    OCTAVIA_AMPHORA_NETWORK_WAITING_MESSAGE,
-    OCTAVIA_AMPHORA_RELATIONS_MISSING_MESSAGE,
-)
-from sunbeam.features.vault.feature import (
-    VAULT_APPLICATION_NAME,
-    VAULT_MANUAL_SETUP_STATUS_MESSAGES,
-)
 from sunbeam.steps import openstack
 from sunbeam.steps.juju import (
     JujuGrantModelAccessStep,
@@ -1203,20 +1193,6 @@ class ObservabilityFeature(OpenStackControlPlaneFeature):
                 integration_apps=collectors,
             )
         }
-        control_plane = result[OPENSTACK_MODEL]
-        if VAULT_APPLICATION_NAME in control_plane:
-            vault = control_plane[VAULT_APPLICATION_NAME]
-            vault.status = ["active", "blocked"]
-            vault.workload_status_message = VAULT_MANUAL_SETUP_STATUS_MESSAGES
-        if "octavia" in control_plane:
-            octavia = control_plane["octavia"]
-            octavia.status = ["active", "waiting", "blocked"]
-            octavia.workload_status_message = [
-                OCTAVIA_AMPHORA_NETWORK_WAITING_MESSAGE,
-                OCTAVIA_AMPHORA_RELATIONS_MISSING_MESSAGE,
-                OCTAVIA_AMPHORA_CA_CERT_MESSAGE,
-                OCTAVIA_AMPHORA_CONTROLLER_CERT_MESSAGE,
-            ]
         machines = self._machine_readiness_requirements(deployment)
         result[deployment.openstack_machines_model] = machines
         if self.get_provider_type() == ProviderType.EMBEDDED:
@@ -1253,7 +1229,9 @@ class ObservabilityFeature(OpenStackControlPlaneFeature):
                                 apps[app].relations.setdefault(endpoint, set()).add(
                                     offer.rsplit(".", 1)[-1]
                                 )
-        return result
+        return deployment.get_feature_manager().readiness_requirements(
+            deployment, result, enabling=self
+        )
 
     def _machine_readiness_requirements(
         self, deployment: Deployment

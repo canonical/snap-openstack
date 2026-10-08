@@ -42,6 +42,7 @@ from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import (
     ActionFailedException,
     ApplicationNotFoundException,
+    ApplicationStatusOverlay,
     JujuException,
     JujuHelper,
     JujuStepHelper,
@@ -641,6 +642,17 @@ class VaultFeature(OpenStackControlPlaneFeature):
     def set_application_names(self, deployment: Deployment) -> list:
         """Application names handled by the terraform plan."""
         return ["vault"]
+
+    def readiness_status_overrides(
+        self, deployment: Deployment
+    ) -> dict[str, ApplicationStatusOverlay]:
+        """Accept only supported manual Vault setup states."""
+        return {
+            VAULT_APPLICATION_NAME: {
+                "status": ["active", "blocked"],
+                "workload_status_message": list(VAULT_MANUAL_SETUP_STATUS_MESSAGES),
+            }
+        }
 
     def set_tfvars_on_enable(
         self, deployment: Deployment, config: FeatureConfig

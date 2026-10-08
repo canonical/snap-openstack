@@ -28,6 +28,7 @@ from sunbeam.core.common import (
 )
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import (
+    ApplicationReadiness,
     ApplicationStatusOverlay,
     JujuHelper,
     JujuStepHelper,
@@ -60,6 +61,7 @@ from sunbeam.steps.openstack import (
     write_database_resource_dict,
     write_database_storage_dict,
 )
+from sunbeam.steps.readiness import terraform_readiness
 
 LOG = logging.getLogger(__name__)
 console = Console()
@@ -131,6 +133,35 @@ class OpenStackControlPlaneFeature(EnableDisableFeature, typing.Generic[ConfigTy
         :returns: True if feature deploys openstack control plane, else False.
         """
         return True
+
+    def readiness_status_overrides(
+        self, deployment: Deployment
+    ) -> dict[str, ApplicationStatusOverlay]:
+        """Return supported workload exceptions for this feature's applications."""
+        return {}
+
+    def readiness_requirements(
+        self, deployment: Deployment, applications: dict[str, typing.Collection[str]]
+    ) -> dict[str, dict[str, ApplicationReadiness]]:
+        """Read intended state only for owned, affected control plane apps."""
+        affected = applications.get(OPENSTACK_MODEL, ())
+        if not affected:
+            return {}
+        apps = [
+            app for app in self.set_application_names(deployment) if app in affected
+        ]
+        if not apps:
+            return {}
+        requirements = terraform_readiness(deployment.get_tfhelper(self.tfplan), apps)
+        for app, overlay in self.readiness_status_overrides(deployment).items():
+            if app not in requirements:
+                continue
+            if status := overlay.get("status"):
+                requirements[app].status = status
+            requirements[app].workload_status_message = overlay.get(
+                "workload_status_message"
+            )
+        return {OPENSTACK_MODEL: requirements}
 
     def get_terraform_openstack_plan_path(self) -> Path:
         """Return Terraform OpenStack plan location."""
