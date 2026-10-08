@@ -59,10 +59,19 @@ done
 # with the sunbeam clustering daemon for cluster operations.
 sudo usermod --append --groups snap_daemon $USER
 
-# Generate keypair and set-up prompt-less access to local machine
-[ -f $HOME/.ssh/id_ed25519 ] || ssh-keygen -f $HOME/.ssh/id_ed25519 -t ed25519 -N ""
-cat $HOME/.ssh/id_ed25519.pub >> $HOME/.ssh/authorized_keys
+# Generate a dedicated passwordless keypair for bootstrapping the
+# local Juju controller. We cannot rely on the default key (id_ed25519)
+# because it may already exist and carry a passphrase — see LP#2054328.
+[ -f $HOME/.ssh/id_rsa_snap-openstack ] || \
+  ssh-keygen -b 4096 -f $HOME/.ssh/id_rsa_snap-openstack -t rsa -N ""
+cat $HOME/.ssh/id_rsa_snap-openstack.pub >> $HOME/.ssh/authorized_keys
 ssh-keyscan -H $(hostname --all-ip-addresses) >> $HOME/.ssh/known_hosts
+[ -f $HOME/.ssh/config ] || \
+  ( touch $HOME/.ssh/config ; chmod 0600 $HOME/.ssh/config )
+cat >> $HOME/.ssh/config <<EOF
+Host $( hostname --all-ip-addresses | paste -s )
+  IdentityFile ~/.ssh/id_rsa_snap-openstack
+EOF
 
 if ! grep -E 'HTTPS?_PROXY' /etc/environment &> /dev/null && \
 ! curl -s -m 10 -x "" api.charmhub.io &> /dev/null; then
