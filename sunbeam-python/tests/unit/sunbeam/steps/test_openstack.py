@@ -38,12 +38,14 @@ from sunbeam.steps.openstack import (
     OpenStackPatchLoadBalancerServicesIPStep,
     ReapplyOpenStackTerraformPlanStep,
     UpdateOpenStackModelConfigStep,
+    ValidateInfraAppsStep,
     compute_ha_scale,
     compute_ingress_scale,
     compute_os_api_scale,
     get_database_default_storage_dict,
     get_database_storage_dict,
     get_rabbitmq_storage_tfvars,
+    pending_infra_app_changes,
     remove_blocked_apps_from_features,
     remove_blocked_apps_from_role,
 )
@@ -1968,3 +1970,289 @@ class TestCheckStorageModificationsInManifest:
         )
 
         assert result == []
+
+
+class TestValidateInfraAppsStep:
+    """Tests for the INFRA_APPS validation gate."""
+
+    @pytest.fixture
+    def client(self):
+        return Mock()
+
+    @pytest.fixture
+    def tfhelper(self):
+        return Mock()
+
+    @pytest.fixture
+    def manifest(self):
+        return Mock()
+
+    @pytest.fixture
+    def step(self, client, tfhelper, manifest):
+        return ValidateInfraAppsStep(client, tfhelper, manifest)
+
+    def test_run_clean_proceeds(self, step, client, tfhelper, step_context):
+        """No INFRA_APP drift means we are good to go."""
+        tfhelper.plan_resource_changes.return_value = {
+            "juju_application.keystone": {
+                "actions": ["update"],
+                "type": "juju_application",
+                "before": None,
+                "after": {
+                    "name": "keystone",
+                    "charm": [{"name": "keystone-k8s", "channel": "2026.1/edge"}],
+                },
+            }
+        }
+
+        result = step.run(step_context)
+
+        tfhelper.update_tfvars.assert_called_once_with(
+            client, step.manifest, tfvar_config=CONFIG_KEY, persist=False
+        )
+        assert result.result_type == ResultType.COMPLETED
+
+    def test_run_pending_traefik_change_fails(self, step, tfhelper, step_context):
+        """A pending traefik channel change fails with the subcommand hint."""
+        tfhelper.plan_resource_changes.return_value = {
+            "juju_application.traefik": {
+                "actions": ["update"],
+                "type": "juju_application",
+                "before": {
+                    "name": "traefik",
+                    "charm": [
+                        {
+                            "name": "traefik-k8s",
+                            "channel": "latest/stable",
+                            "revision": 418,
+                        }
+                    ],
+                },
+                "after": {
+                    "name": "traefik",
+                    "charm": [{"name": "traefik-k8s", "channel": "latest/candidate"}],
+                },
+            }
+        }
+
+        result = step.run(step_context)
+
+        assert result.result_type == ResultType.FAILED
+        assert "sunbeam cluster refresh ingress" in result.message
+        assert "latest/stable -> latest/candidate" in result.message
+
+    def test_run_pending_mysql_router_in_module_fails(
+        self, step, tfhelper, step_context
+    ):
+        """mysql-router apps live inside terraform modules but are gated."""
+        tfhelper.plan_resource_changes.return_value = {
+            'module.single-mysql.juju_application.mysql-router["keystone"]': {
+                "actions": ["update"],
+                "type": "juju_application",
+                "before": {
+                    "name": "keystone-mysql-router",
+                    "charm": [
+                        {
+                            "name": "mysql-router-k8s",
+                            "channel": "8.0/stable",
+                            "revision": 916,
+                        }
+                    ],
+                },
+                "after": {
+                    "name": "keystone-mysql-router",
+                    "charm": [{"name": "mysql-router-k8s", "channel": "8.0/candidate"}],
+                },
+            }
+        }
+
+        result = step.run(step_context)
+
+        assert result.result_type == ResultType.FAILED
+        assert "sunbeam cluster refresh mysql" in result.message
+        assert "keystone-mysql-router" in result.message
+
+    def test_run_same_channel_config_change_proceeds(
+        self, step, tfhelper, step_context
+    ):
+        """Config-only INFRA_APP changes (same channel/revision) pass."""
+        tfhelper.plan_resource_changes.return_value = {
+            "juju_application.vault": {
+                "actions": ["update"],
+                "type": "juju_application",
+                "before": {
+                    "name": "vault",
+                    "charm": [
+                        {"name": "vault-k8s", "channel": "2.0/stable", "revision": 565}
+                    ],
+                    "config": {"a": "old"},
+                },
+                "after": {
+                    "name": "vault",
+                    "charm": [
+                        {"name": "vault-k8s", "channel": "2.0/stable", "revision": 565}
+                    ],
+                    "config": {"a": "new"},
+                },
+            }
+        }
+
+        result = step.run(step_context)
+
+        assert result.result_type == ResultType.COMPLETED
+
+    def test_run_terraform_plan_error_fails(self, step, tfhelper, step_context):
+        tfhelper.plan_resource_changes.side_effect = TerraformException("boom")
+
+        result = step.run(step_context)
+
+        assert result.result_type == ResultType.FAILED
+        assert result.message == "boom"
+
+    def test_run_retries_on_state_lock(self, step, tfhelper, step_context):
+        """State lock contention is retried instead of failing the command."""
+        import tenacity
+
+        from sunbeam.core.terraform import TerraformStateLockedException
+
+        tfhelper.plan_resource_changes.side_effect = TerraformStateLockedException(
+            "state is locked"
+        )
+        # Bound the retry loop for the unit test: instant sleeps and a
+        # small attempt cap instead of the real 60s/300s policy.
+        step.run.retry.wait = tenacity.wait_fixed(0)
+        step.run.retry.sleep = lambda secs: None
+        step.run.retry.stop = tenacity.stop_after_attempt(2)
+
+        result = step.run(step_context)
+
+        assert result.result_type == ResultType.FAILED
+        assert "state is locked" in result.message
+
+    def test_run_does_not_persist_tfvars(self, step, client, tfhelper, step_context):
+        """The gate leaves the stored tfvars baseline untouched."""
+        tfhelper.plan_resource_changes.return_value = {}
+
+        step.run(step_context)
+
+        tfhelper.update_tfvars.assert_called_once_with(
+            client, step.manifest, tfvar_config=CONFIG_KEY, persist=False
+        )
+
+    def test_pending_changes_flat_charm_schema(self, tfhelper):
+        """The gate also handles the flat charm schema (provider 1.x)."""
+        tfhelper.plan_resource_changes.return_value = {
+            "juju_application.mysql": {
+                "actions": ["update"],
+                "type": "juju_application",
+                "before": {
+                    "name": "mysql",
+                    "charm": "mysql-k8s",
+                    "channel": "8.0/stable",
+                },
+                "after": {"name": "mysql", "charm": "mysql-k8s", "channel": "8.0/edge"},
+            }
+        }
+
+        pending = pending_infra_app_changes(tfhelper)
+
+        assert len(pending) == 1
+        assert "sunbeam cluster refresh mysql" in pending[0]
+
+    def test_pending_changes_ignores_non_application_types(self, tfhelper):
+        """Only juju_application resources are considered."""
+        tfhelper.plan_resource_changes.return_value = {
+            "juju_integration.traefik-public-to-tls-provider": {
+                "actions": ["update"],
+                "type": "juju_integration",
+                "before": None,
+                "after": None,
+            }
+        }
+
+        assert pending_infra_app_changes(tfhelper) == []
+
+    def test_pending_changes_ignores_creates(self, tfhelper):
+        """Pending creates are new applications, not drift on existing ones.
+
+        E.g. a first storage node join creating traefik-rgw must not trip
+        the guard.
+        """
+        tfhelper.plan_resource_changes.return_value = {
+            "juju_application.traefik-rgw[0]": {
+                "actions": ["create"],
+                "type": "juju_application",
+                "before": None,
+                "after": {
+                    "name": "traefik-rgw",
+                    "charm": [{"name": "traefik-k8s", "channel": "latest/stable"}],
+                },
+            }
+        }
+
+        assert pending_infra_app_changes(tfhelper) == []
+
+    def test_pending_changes_skip_charms_are_skipped(self, tfhelper):
+        """Charms the calling flow owns (skip_charms) are not reported."""
+        tfhelper.plan_resource_changes.return_value = {
+            "juju_application.vault[0]": {
+                "actions": ["update"],
+                "type": "juju_application",
+                "before": {
+                    "name": "vault",
+                    "charm": [{"name": "vault-k8s", "channel": "1.18/stable"}],
+                },
+                "after": {
+                    "name": "vault",
+                    "charm": [{"name": "vault-k8s", "channel": "1.18/candidate"}],
+                },
+            },
+            "juju_application.traefik": {
+                "actions": ["update"],
+                "type": "juju_application",
+                "before": {
+                    "name": "traefik",
+                    "charm": [{"name": "traefik-k8s", "channel": "latest/stable"}],
+                },
+                "after": {
+                    "name": "traefik",
+                    "charm": [{"name": "traefik-k8s", "channel": "latest/candidate"}],
+                },
+            },
+        }
+
+        pending = pending_infra_app_changes(tfhelper, skip_charms={"vault-k8s"})
+
+        # Only the traefik drift is reported; the vault drift is owned by
+        # the calling flow (e.g. `sunbeam enable vault`).
+        assert len(pending) == 1
+        assert "traefik" in pending[0]
+        assert "vault" not in pending[0]
+
+    def test_run_skips_own_charms(self, client, tfhelper, step_context):
+        """ValidateInfraAppsStep completes when only owned charms drift.
+
+        A flow that owns an INFRA_APP charm (e.g. the vault feature
+        deploying vault-k8s) passes its own charm's channel changes.
+        """
+        tfhelper.plan_resource_changes.return_value = {
+            "juju_application.vault[0]": {
+                "actions": ["update"],
+                "type": "juju_application",
+                "before": {
+                    "name": "vault",
+                    "charm": [{"name": "vault-k8s", "channel": "1.18/stable"}],
+                },
+                "after": {
+                    "name": "vault",
+                    "charm": [{"name": "vault-k8s", "channel": "1.18/candidate"}],
+                },
+            }
+        }
+
+        step = ValidateInfraAppsStep(
+            client, tfhelper, Mock(), skip_charms={"vault-k8s"}
+        )
+        result = step.run(step_context)
+
+        assert result.result_type == ResultType.COMPLETED

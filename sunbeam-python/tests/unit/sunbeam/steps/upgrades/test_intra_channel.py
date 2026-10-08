@@ -18,7 +18,10 @@ from sunbeam.steps.k8s import (
     EnsureL2AdvertisementByHostStep,
 )
 from sunbeam.steps.microovn import DeployMicroOVNApplicationStep
-from sunbeam.steps.openstack import OpenStackPatchLoadBalancerServicesIPPoolStep
+from sunbeam.steps.openstack import (
+    OpenStackPatchLoadBalancerServicesIPPoolStep,
+    ValidateInfraAppsStep,
+)
 from sunbeam.steps.role_distributor import DeployRoleDistributorApplicationStep
 from sunbeam.steps.upgrades.base import UpgradeFeatures
 from sunbeam.steps.upgrades.intra_channel import (
@@ -722,6 +725,27 @@ class TestLatestInChannelRun:
         )
 
     @patch(f"{_INTRA_CHANNEL}.is_maas_deployment")
+    def test_refresh_apps_skips_infra_apps(self, mock_is_maas, step_context):
+        """INFRA_APPS are not refreshed by sunbeam cluster refresh.
+
+        mysql-router-k8s is upgraded via `sunbeam cluster refresh mysql`.
+        """
+        mock_is_maas.return_value = False
+
+        apps = {
+            "keystone": ("keystone-k8s", "2024.1/stable", 123),
+            "vault": ("vault-k8s", "1/stable", 50),
+            "keystone-mysql-router": ("mysql-router-k8s", "8.0/stable", 900),
+        }
+        self.upgrader.jhelper = Mock()
+        self.upgrader.refresh_apps(apps, "openstack")
+
+        refreshed = [
+            c.args[0] for c in self.upgrader.jhelper.charm_refresh.call_args_list
+        ]
+        assert refreshed == ["keystone"]
+
+    @patch(f"{_INTRA_CHANNEL}.is_maas_deployment")
     def test_run_maas_deployment_discovers_and_refreshes_infra_model(
         self,
         mock_is_maas,
@@ -1356,6 +1380,11 @@ class TestRefreshSnapStep:
 
         step_types = [type(s) for s in plan]
         assert RefreshSnapStep in step_types
+        assert ValidateInfraAppsStep in step_types
+        # Validation runs before the charm refresh
+        assert step_types.index(ValidateInfraAppsStep) < step_types.index(
+            LatestInChannel
+        )
 
     @patch(f"{_INTRA_CHANNEL}.is_maas_deployment")
     def test_refresh_snap_step_placed_after_charm_refresh(self, mock_is_maas):

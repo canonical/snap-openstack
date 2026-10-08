@@ -189,6 +189,71 @@ class TestTerraformHelper:
         # and mysql-config is one of the preserve vars of the OpenStack plan
         assert applied_tfvars.get("mysql-config") == {"debug": True}
 
+    def test_update_tfvars_returns_tfvars_without_apply(
+        self,
+        mocker,
+        snap,
+        copytree,
+        deployment: Deployment,
+        read_config,
+    ):
+        """update_tfvars merges, persists and writes tfvars but does not apply."""
+        read_config.return_value = {}
+
+        mocker.patch.object(deployment_mod, "Snap", return_value=snap)
+        mocker.patch.object(manifest_mod, "Snap", return_value=snap)
+        mocker.patch.object(terraform_mod, "Snap", return_value=snap)
+        client = Mock()
+        client.cluster.get_latest_manifest.return_value = {"data": test_manifest}
+        client.cluster.get_config.return_value = "{}"
+        deployment.get_client.return_value = client
+        manifest = deployment.get_manifest()
+
+        tfhelper = deployment.get_tfhelper("openstack-plan")
+        with (
+            patch.object(tfhelper, "write_tfvars") as write_tfvars,
+            patch.object(tfhelper, "apply") as apply,
+            patch("sunbeam.core.terraform.update_config") as update_config,
+        ):
+            tfvars = tfhelper.update_tfvars(client, manifest, "fake-config")
+            assert tfvars == write_tfvars.call_args.args[0]
+            assert "keystone-channel" in tfvars
+            apply.assert_not_called()
+            assert update_config.call_args.args[0] is client
+
+    def test_update_tfvars_without_persist_leaves_db_baseline(
+        self,
+        mocker,
+        snap,
+        copytree,
+        deployment: Deployment,
+        read_config,
+    ):
+        """persist=False writes the tfvars file but leaves the DB untouched.
+
+        Validation callers must not overwrite the stored tfvars baseline
+        that other validation steps compare against.
+        """
+        read_config.return_value = {}
+
+        mocker.patch.object(deployment_mod, "Snap", return_value=snap)
+        mocker.patch.object(manifest_mod, "Snap", return_value=snap)
+        mocker.patch.object(terraform_mod, "Snap", return_value=snap)
+        client = Mock()
+        client.cluster.get_latest_manifest.return_value = {"data": test_manifest}
+        client.cluster.get_config.return_value = "{}"
+        deployment.get_client.return_value = client
+        manifest = deployment.get_manifest()
+
+        tfhelper = deployment.get_tfhelper("openstack-plan")
+        with (
+            patch.object(tfhelper, "write_tfvars") as write_tfvars,
+            patch("sunbeam.core.terraform.update_config") as update_config,
+        ):
+            tfhelper.update_tfvars(client, manifest, "fake-config", persist=False)
+            write_tfvars.assert_called_once()
+            update_config.assert_not_called()
+
     def test_source_tracking_computed_keys_preserved(
         self,
         mocker,
@@ -842,6 +907,133 @@ class TestTerraformHelper:
                 "opentelemetry-collector": {"persisted": "8G"},
                 "opentelemetry-collector-infra": {"persisted": "16G"},
             }
+
+
+class TestPlanResourceChanges:
+    """Unit tests for TerraformHelper.plan_resource_changes."""
+
+    @pytest.fixture
+    def tfhelper(self, mocker, snap):
+        mocker.patch.object(terraform_mod, "Snap", return_value=snap)
+        return TerraformHelper(
+            path=Path("/tmp/test"),
+            plan="openstack-plan",
+            tfvar_map={},
+        )
+
+    @staticmethod
+    def _show_json(resource_changes: list) -> str:
+        return json.dumps(
+            {"format_version": "1.2", "resource_changes": resource_changes}
+        )
+
+    @staticmethod
+    def _resource_change(
+        address: str,
+        actions: list,
+        before: dict | None = None,
+        after: dict | None = None,
+    ) -> dict:
+        return {
+            "address": address,
+            "type": "juju_application",
+            "change": {"actions": actions, "before": before, "after": after},
+        }
+
+    def test_parses_changes_with_before_after(self, tfhelper, run):
+        """Changed resources are returned with before/after attribute maps.
+
+        The plan is saved with -out and read back with terraform show -json;
+        the streaming plan output does not carry before/after values.
+        """
+        show_stdout = self._show_json(
+            [
+                self._resource_change(
+                    "juju_application.traefik",
+                    ["update"],
+                    before={
+                        "name": "traefik",
+                        "charm": [{"name": "traefik-k8s", "channel": "1/stable"}],
+                    },
+                    after={
+                        "name": "traefik",
+                        "charm": [{"name": "traefik-k8s", "channel": "latest/stable"}],
+                    },
+                ),
+                self._resource_change("juju_application.keystone", ["no-op"]),
+                self._resource_change("module.nova.juju_application.nova", ["delete"]),
+            ]
+        )
+        run.side_effect = [
+            Mock(returncode=2, stdout="", stderr=""),
+            Mock(returncode=0, stdout=show_stdout, stderr=""),
+        ]
+
+        changes = tfhelper.plan_resource_changes()
+        assert set(changes) == {
+            "juju_application.traefik",
+            "module.nova.juju_application.nova",
+        }
+        assert (
+            changes["juju_application.traefik"]["before"]["charm"][0]["channel"]
+            == "1/stable"
+        )
+        assert (
+            changes["juju_application.traefik"]["after"]["charm"][0]["channel"]
+            == "latest/stable"
+        )
+        assert changes["module.nova.juju_application.nova"]["before"] is None
+        assert changes["juju_application.traefik"]["type"] == "juju_application"
+        plan_cmd = run.call_args_list[0].args[0]
+        assert "-refresh=false" in plan_cmd
+        assert any(arg.startswith("-out=") for arg in plan_cmd)
+        show_cmd = run.call_args_list[1].args[0]
+        assert show_cmd[1:3] == ["show", "-json"]
+
+    def test_refresh_true_omits_refresh_false(self, tfhelper, run):
+        """With refresh=True the plan refreshes the state before planning."""
+        run.return_value = Mock(returncode=0, stdout="", stderr="")
+        tfhelper.plan_resource_changes(refresh=True)
+        cmd = run.call_args.args[0]
+        assert "-refresh=false" not in cmd
+
+    def test_no_changes_skips_show(self, tfhelper, run):
+        """Exit code 0 means no changes: terraform show is never run."""
+        run.return_value = Mock(returncode=0, stdout="", stderr="")
+        assert tfhelper.plan_resource_changes() == {}
+        assert run.call_count == 1
+
+    def test_plan_error_raises(self, tfhelper, run):
+        run.return_value = Mock(returncode=1, stdout="", stderr="boom")
+        with pytest.raises(TerraformException):
+            tfhelper.plan_resource_changes()
+
+    def test_show_error_raises(self, tfhelper, run):
+        run.side_effect = [
+            Mock(returncode=2, stdout="", stderr=""),
+            Mock(returncode=1, stdout="", stderr="boom"),
+        ]
+        with pytest.raises(TerraformException):
+            tfhelper.plan_resource_changes()
+
+    def test_plan_waits_for_state_lock(self, tfhelper, run):
+        """The plan waits on the shared state lock instead of failing fast."""
+        run.return_value = Mock(returncode=0, stdout="", stderr="")
+        tfhelper.plan_resource_changes()
+        cmd = run.call_args.args[0]
+        assert "-lock-timeout=120s" in cmd
+
+    def test_plan_lock_contention_raises_state_locked(self, tfhelper, run):
+        """Lock errors keep their exception type so retry logic applies."""
+        from sunbeam.core.terraform import TerraformStateLockedException
+
+        run.return_value = Mock(
+            returncode=1,
+            stdout="",
+            stderr="Error acquiring the state lock: lock is held",
+        )
+        with pytest.raises(TerraformStateLockedException):
+            tfhelper.plan_resource_changes()
 
 
 class TestApplyTfvars:

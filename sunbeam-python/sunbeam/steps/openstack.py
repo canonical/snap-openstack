@@ -90,6 +90,145 @@ MULTI_MYSQL_CORE_THRESHOLD = 16
 # feature is enabled.
 APPS_BLOCKED_WHEN_FEATURE_ENABLED = ["barbican", "vault"]
 
+# Charms in the openstack plan that are upgraded by dedicated
+# `sunbeam cluster refresh <subcommand>` flows.  The full plan apply
+# refuses to proceed while any of them has an update available
+# (see ReapplyOpenStackTerraformPlanStep).
+INFRA_APP_SUBCOMMANDS = {
+    "mysql-k8s": "mysql",
+    "mysql-router-k8s": "mysql",
+    "vault-k8s": "vault",
+    "traefik-k8s": "ingress",
+}
+
+
+def _charm_identity(attrs: dict | None) -> tuple[str | None, ...]:
+    """Extract (charm name, channel, revision) from a juju_application map.
+
+    Handles both terraform-provider-juju schemas: flat (charm as string,
+    provider 1.x) and nested (charm as a list of objects, provider >= 2.x).
+    """
+    if not attrs:
+        return None, None, None
+    charm = attrs.get("charm")
+    if isinstance(charm, str):
+        return charm, attrs.get("channel"), attrs.get("revision")
+    if isinstance(charm, list) and charm:
+        nested = charm[0] or {}
+        return nested.get("name"), nested.get("channel"), nested.get("revision")
+    if isinstance(charm, dict):
+        return charm.get("name"), charm.get("channel"), charm.get("revision")
+    return None, None, None
+
+
+def pending_infra_app_changes(
+    tfhelper: TerraformHelper, skip_charms: typing.Collection[str] | None = None
+) -> list[str]:
+    """List pending openstack plan changes that would alter an INFRA_APP.
+
+    Runs terraform plan against the written tfvars and returns a message
+    per INFRA_APP application whose channel or revision the plan would
+    change, pointing at the dedicated `sunbeam cluster refresh
+    <subcommand>` flow.  Returns an empty list when nothing is pending.
+
+    :param skip_charms: INFRA_APP charms to skip: flows that own a charm
+        (e.g. `sunbeam enable vault` deploying vault-k8s) manage its
+        channel on purpose and must not be gated on it.
+    :raises TerraformException: If the terraform plan fails.
+    """
+    skip = skip_charms or ()
+    pending = []
+    for address, change in tfhelper.plan_resource_changes().items():
+        if change.get("type") != "juju_application":
+            continue
+        if change.get("actions") == ["create"]:
+            # A pending create is a new application, not drift on an
+            # existing one (e.g. a first storage node join creating
+            # traefik-rgw); nothing for a refresh subcommand to do.
+            continue
+        after_charm, after_channel, after_revision = _charm_identity(change["after"])
+        if after_charm in skip:
+            continue
+        subcommand = INFRA_APP_SUBCOMMANDS.get(after_charm or "")
+        if not subcommand:
+            continue
+        _, before_channel, before_revision = _charm_identity(change["before"])
+        if before_channel != after_channel or before_revision != after_revision:
+            pending.append(
+                f"{(change['after'] or {}).get('name')}"
+                f" (charm {after_charm}):"
+                f" channel {before_channel} -> {after_channel},"
+                f" revision {before_revision} -> {after_revision}"
+                f" [{address}] — run `sunbeam cluster refresh {subcommand}`"
+            )
+    return pending
+
+
+class ValidateInfraAppsStep(BaseStep):
+    """Validate that reapplying the openstack plan is safe.
+
+    INFRA_APPS (mysql-k8s, mysql-router-k8s, vault-k8s, traefik-k8s) are
+    upgraded by dedicated `sunbeam cluster refresh <subcommand>` flows:
+    refuse to reapply the openstack plan while it would change their
+    channel or revision, pointing at the subcommand instead.  Must run
+    at the start of every command that reapplies the openstack plan,
+    after the plan is initialized and before anything is changed.
+    """
+
+    def __init__(
+        self,
+        client: Client,
+        tfhelper: TerraformHelper,
+        manifest: Manifest,
+        skip_charms: typing.Collection[str] | None = None,
+    ):
+        super().__init__(
+            "Validating infra applications",
+            "Checking mysql, mysql-router, vault and traefik applications"
+            " are up to date",
+        )
+        self.client = client
+        self.tfhelper = tfhelper
+        self.manifest = manifest
+        # INFRA_APP charms the calling flow owns (e.g. the vault feature
+        # deploying vault-k8s): their channel changes are intended.
+        self.skip_charms = skip_charms
+
+    @tenacity.retry(
+        wait=tenacity.wait_fixed(60),
+        stop=tenacity.stop_after_delay(300),
+        retry=tenacity.retry_if_exception_type(TerraformStateLockedException),
+        retry_error_callback=convert_retry_failure_as_result,
+    )
+    def run(self, context: StepContext) -> Result:
+        """Fail when the openstack plan would change an INFRA_APP."""
+        try:
+            # Write the tfvars merged from the manifest and stored values
+            # (the overrides a specific flow adds do not change INFRA_APP
+            # channels or revisions), then plan against them.  persist=False:
+            # the stored tfvars are the baseline other validation steps
+            # compare against (e.g. the immutable storage checks) and must
+            # stay untouched until this validation passes.
+            self.update_status(context, "checking for pending changes")
+            self.tfhelper.update_tfvars(
+                self.client, self.manifest, tfvar_config=CONFIG_KEY, persist=False
+            )
+            pending = pending_infra_app_changes(self.tfhelper, self.skip_charms)
+        except TerraformException as e:
+            LOG.warning("Error validating infra applications: %r", e)
+            return Result(ResultType.FAILED, str(e))
+
+        if pending:
+            LOG.debug("Pending infra app changes: %s", pending)
+            return Result(
+                ResultType.FAILED,
+                "The openstack Terraform plan has pending changes for"
+                " applications upgraded by dedicated subcommands:\n  "
+                + "\n  ".join(pending),
+            )
+
+        return Result(ResultType.COMPLETED)
+
 
 def remove_blocked_apps_from_features(jhelper: JujuHelper, model: str) -> list[str]:
     """Apps that are in blocked state from features.
