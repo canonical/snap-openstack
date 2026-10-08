@@ -12,6 +12,7 @@ import requests.adapters
 import requests_unixsocket  # type: ignore [import-untyped]
 from snaphelpers import Snap
 from urllib3 import poolmanager
+from urllib3.util.retry import Retry
 
 from sunbeam.clusterd.cluster import ClusterService
 
@@ -85,7 +86,21 @@ class Client:
             self._certs = to_file_path_certs(certificate, private_key)
             self._session.mount(
                 "https://",
-                MTLSAdapter(certificate_authority=certificate_authority),
+                MTLSAdapter(
+                    certificate_authority=certificate_authority,
+                    # Connection failures before sending are safe to retry for any
+                    # method. After sending (e.g. a stale pooled connection,
+                    # LP#2169836), only retry reads. Share a single retry budget.
+                    max_retries=Retry(
+                        total=1,
+                        connect=1,
+                        read=1,
+                        redirect=0,
+                        status=0,
+                        other=0,
+                        allowed_methods=frozenset({"GET", "HEAD", "OPTIONS"}),
+                    ),
+                ),
             )
 
         self.cluster = ClusterService(self._session, self._endpoint, self._certs)
