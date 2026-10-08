@@ -15,6 +15,7 @@ from sunbeam.clusterd.service import ConfigItemNotFoundException
 from sunbeam.core.common import ResultType
 from sunbeam.core.manifest import Manifest
 from sunbeam.core.terraform import TerraformException
+from sunbeam.features.loadbalancer import feature as loadbalancer_feature
 from sunbeam.features.observability import feature as observability_feature
 
 
@@ -1712,6 +1713,132 @@ def test_final_readiness_scope_follows_intended_integrations(
             "send-loki-logs"
         ] == {"loki-logging"}
     jhelper.get_model_status.assert_not_called()
+
+
+@pytest.mark.parametrize("external", [False, True])
+@pytest.mark.parametrize(
+    "app,workload,message,ready",
+    [
+        ("vault", "active", "", True),
+        (
+            "vault",
+            "blocked",
+            "Please initialize Vault or integrate with an auto-unseal provider",
+            True,
+        ),
+        ("vault", "blocked", "Please unseal Vault", True),
+        (
+            "vault",
+            "blocked",
+            "Please authorize charm (see `authorize-charm` action)",
+            True,
+        ),
+        ("vault", "blocked", "Vault failed to start", False),
+        ("vault", "waiting", "Please unseal Vault", False),
+        ("octavia", "active", "Unit is ready", True),
+        (
+            "octavia",
+            "waiting",
+            loadbalancer_feature.OCTAVIA_AMPHORA_NETWORK_WAITING_MESSAGE,
+            True,
+        ),
+        (
+            "octavia",
+            "blocked",
+            loadbalancer_feature.OCTAVIA_AMPHORA_RELATIONS_MISSING_MESSAGE,
+            True,
+        ),
+        (
+            "octavia",
+            "blocked",
+            loadbalancer_feature.OCTAVIA_AMPHORA_CA_CERT_MESSAGE,
+            True,
+        ),
+        (
+            "octavia",
+            "blocked",
+            loadbalancer_feature.OCTAVIA_AMPHORA_CONTROLLER_CERT_MESSAGE,
+            True,
+        ),
+        ("octavia", "blocked", "Database relation not ready", False),
+        ("octavia", "waiting", "Database relation not ready", False),
+    ],
+)
+def test_observability_preserves_supported_provider_waits(
+    deployment,
+    readiness_states,
+    jhelper,
+    mocker,
+    external,
+    app,
+    workload,
+    message,
+    ready,
+):
+    resources = readiness_states["openstack-plan"].pull_state.return_value["resources"]
+    resources.extend(
+        [
+            {
+                "mode": "managed",
+                "type": "juju_application",
+                "instances": [{"attributes": {"name": app, "units": 3}}],
+            },
+            {
+                "mode": "managed",
+                "type": "juju_integration",
+                "instances": [
+                    {
+                        "attributes": {
+                            "application": [
+                                {"name": app, "endpoint": "logging"},
+                                {
+                                    "name": "opentelemetry-collector-infra",
+                                    "endpoint": "receive-loki-logs",
+                                },
+                            ]
+                        }
+                    }
+                ],
+            },
+        ]
+    )
+    mocker.patch(
+        "sunbeam.features.observability.feature.is_maas_deployment", return_value=False
+    )
+    feature_type = (
+        observability_feature.ExternalObservabilityFeature
+        if external
+        else observability_feature.EmbeddedObservabilityFeature
+    )
+    requirements = feature_type()._readiness_requirements(deployment, jhelper)
+    requirement = requirements["openstack"][app]
+    status = Mock()
+    application = Mock()
+    status.apps = {app: application}
+    application.app_status.current = workload
+    application.app_status.message = message
+    application.relations = {
+        "logging": [Mock(related_app="opentelemetry-collector-infra")]
+    }
+    units = {f"{app}/{n}": Mock() for n in range(3)}
+    for unit in units.values():
+        unit.workload_status.current = workload
+        unit.workload_status.message = message
+        unit.juju_status.current = "idle"
+    status.get_units.return_value = units
+    assert (not requirement.pending(status, app)) is ready
+    assert requirement.agent_status == ("idle",)
+    assert requirement.units == 3
+    assert requirement.relations == {"logging": {"opentelemetry-collector-infra"}}
+    for collector in ("opentelemetry-collector", "opentelemetry-collector-infra"):
+        assert requirements["openstack"][collector].status == ("active",)
+        assert requirements["openstack"][collector].agent_status == ("idle",)
+    if ready:
+        units[f"{app}/2"].juju_status.current = "executing"
+        assert any(
+            f"{app}/2: agent 'executing'" in reason
+            for reason in requirement.pending(status, app)
+        )
 
 
 @pytest.mark.parametrize("external", [False, True])

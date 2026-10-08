@@ -10,7 +10,7 @@ import pytest
 from sunbeam.core.juju import ApplicationReadiness, JujuException, JujuHelper
 
 
-def application(units, status="active", subordinate_to=()):
+def application(units, status="active", subordinate_to=(), message=""):
     return status_types.AppStatus(
         charm="test",
         charm_origin="charmhub",
@@ -18,16 +18,16 @@ def application(units, status="active", subordinate_to=()):
         charm_rev=1,
         exposed=False,
         units=units,
-        app_status=status_types.StatusInfo(current=status),
+        app_status=status_types.StatusInfo(current=status, message=message),
         subordinate_to=list(subordinate_to),
     )
 
 
-def unit(machine="0", agent="idle", workload="active", subordinates=None):
+def unit(machine="0", agent="idle", workload="active", subordinates=None, message=""):
     return status_types.UnitStatus(
         machine=machine,
         juju_status=status_types.StatusInfo(current=agent),
-        workload_status=status_types.StatusInfo(current=workload),
+        workload_status=status_types.StatusInfo(current=workload, message=message),
         subordinates=subordinates or {},
     )
 
@@ -130,6 +130,73 @@ def test_missing_and_zero_units_are_explicit():
     assert ApplicationReadiness().pending(status, "app")
     assert ApplicationReadiness(units=0).pending(status, "app") == []
     assert ApplicationReadiness(units=1).pending(status, "app")
+
+
+@pytest.mark.parametrize(
+    "workload,message,ready",
+    [
+        ("active", "Unit is ready", True),
+        ("blocked", "Awaiting operator input", True),
+        ("waiting", "Awaiting operator input", True),
+        ("blocked", "Unexpected failure", False),
+        ("blocked", "", False),
+        ("error", "Awaiting operator input", False),
+    ],
+)
+def test_readiness_restricts_non_active_workload_messages(workload, message, ready):
+    app = application(
+        {"app/0": unit(workload=workload, message=message)},
+        status=workload,
+        message=message,
+    )
+    requirement = ApplicationReadiness(
+        status=["active", "blocked", "waiting"],
+        workload_status_message=["Awaiting operator input"],
+    )
+    assert (not requirement.pending(model({"app": app}), "app")) is ready
+
+
+@pytest.mark.parametrize("agent", ["executing", "error"])
+def test_allowed_workload_message_does_not_relax_agent_status(agent):
+    app = application(
+        {
+            "app/0": unit(
+                agent=agent, workload="blocked", message="Awaiting operator input"
+            )
+        },
+        "blocked",
+        message="Awaiting operator input",
+    )
+    requirement = ApplicationReadiness(
+        status=["active", "blocked"],
+        workload_status_message=["Awaiting operator input"],
+    )
+    assert requirement.pending(model({"app": app}), "app") == [
+        f"app/0: agent {agent!r} ()"
+    ]
+
+
+def test_workload_message_policy_checks_application_and_every_unit():
+    app = application(
+        {
+            "app/0": unit(),
+            "app/1": unit(workload="blocked", message="Unexpected failure"),
+        },
+        "blocked",
+        message="Awaiting operator input",
+    )
+    requirement = ApplicationReadiness(
+        status=["active", "blocked"],
+        workload_status_message=["Awaiting operator input"],
+    )
+    assert requirement.pending(model({"app": app}), "app") == [
+        "app/1: workload 'blocked' (Unexpected failure)"
+    ]
+    app.units["app/1"] = unit(workload="blocked", message="Awaiting operator input")
+    app = application(app.units, "blocked", message="Unexpected application failure")
+    assert requirement.pending(model({"app": app}), "app") == [
+        "app: workload 'blocked' (Unexpected application failure)"
+    ]
 
 
 @pytest.mark.parametrize("agent,ready", [("idle", True), ("executing", False)])
