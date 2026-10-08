@@ -1891,6 +1891,111 @@ def test_machine_readiness_uses_union_of_node_roles(
 
 
 @pytest.mark.parametrize("external", [False, True])
+def test_observability_initializes_microovn_before_readiness_state_pull(
+    deployment, readiness_states, jhelper, mocker, external
+):
+    from click.testing import CliRunner
+
+    from sunbeam.core.common import run_plan
+    from sunbeam.core.manifest import FeatureConfig
+
+    initialized = False
+    microovn = Mock()
+
+    def initialize():
+        nonlocal initialized
+        initialized = True
+
+    def pull_state():
+        if not initialized:
+            raise TerraformException("Backend initialization required")
+        return {
+            "resources": [
+                {
+                    "mode": "managed",
+                    "type": "juju_application",
+                    "instances": [
+                        {
+                            "attributes": {
+                                "name": "microovn",
+                                "units": 0,
+                                "machines": ["0", "1", "2"],
+                            }
+                        }
+                    ],
+                }
+            ]
+        }
+
+    microovn.init.side_effect = initialize
+    microovn.pull_state.side_effect = pull_state
+    readiness_states["microovn-plan"] = microovn
+    agent_state = readiness_states["grafana-agent-plan"].pull_state.return_value
+    agent_state["resources"].append(
+        {
+            "mode": "managed",
+            "type": "juju_integration",
+            "instances": [
+                {
+                    "attributes": {
+                        "application": [
+                            {
+                                "name": "opentelemetry-collector",
+                                "endpoint": "cos-agent",
+                            },
+                            {"name": "microovn", "endpoint": "cos-agent"},
+                        ]
+                    }
+                }
+            ],
+        }
+    )
+    mocker.patch(
+        "sunbeam.features.observability.feature.JujuHelper", return_value=jhelper
+    )
+    mocker.patch(
+        "sunbeam.features.observability.feature.is_maas_deployment", return_value=False
+    )
+    feature_type = (
+        observability_feature.ExternalObservabilityFeature
+        if external
+        else observability_feature.EmbeddedObservabilityFeature
+    )
+    feature = feature_type()
+    feature._manifest = Mock()
+
+    def run_initialization_and_readiness(plan, console, show_hints):
+        selected = [
+            step
+            for step in plan
+            if isinstance(
+                step,
+                (
+                    observability_feature.TerraformInitStep,
+                    observability_feature.WaitForFeatureReadyStep,
+                ),
+            )
+        ]
+        return run_plan(selected, console, show_hints) if selected else {}
+
+    mocker.patch(
+        "sunbeam.features.observability.feature.run_plan",
+        side_effect=run_initialization_and_readiness,
+    )
+
+    @click.command()
+    def enable():
+        feature.run_enable_plans(deployment, FeatureConfig(), False)
+
+    result = CliRunner().invoke(enable)
+    assert result.exit_code == 0, result.output
+    assert "Observability enabled" in result.output
+    assert [call[0] for call in microovn.mock_calls] == ["init", "pull_state"]
+    requirements = jhelper.wait_until_models_ready.call_args.args[0]
+    assert requirements["machines"]["microovn"].machines == ["0", "1", "2"]
+
+
+@pytest.mark.parametrize("external", [False, True])
 def test_observability_final_gate_failure_reaches_cli(deployment, mocker, external):
     from click.testing import CliRunner
 

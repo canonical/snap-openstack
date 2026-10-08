@@ -1656,11 +1656,12 @@ class EmbeddedObservabilityFeature(ObservabilityFeature):
 
         run_plan(
             [
+                TerraformInitStep(deployment.get_tfhelper("microovn-plan")),
                 WaitForFeatureReadyStep(
                     jhelper,
                     lambda: self._readiness_requirements(deployment, jhelper),
                     OBSERVABILITY_READINESS_TIMEOUT,
-                )
+                ),
             ],
             console,
             show_hints,
@@ -1903,11 +1904,12 @@ class ExternalObservabilityFeature(ObservabilityFeature):
 
         run_plan(
             [
+                TerraformInitStep(deployment.get_tfhelper("microovn-plan")),
                 WaitForFeatureReadyStep(
                     jhelper,
                     lambda: self._readiness_requirements(deployment, jhelper),
                     OBSERVABILITY_READINESS_TIMEOUT,
-                )
+                ),
             ],
             console,
             show_hints,
