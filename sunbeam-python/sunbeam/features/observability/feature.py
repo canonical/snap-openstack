@@ -1274,7 +1274,8 @@ class ObservabilityFeature(OpenStackControlPlaneFeature):
                 continue
             placements = {
                 str(node["machineid"])
-                for node in client.cluster.list_nodes_by_role(roles)
+                for role in roles
+                for node in client.cluster.list_nodes_by_role(role)
                 if node.get("machineid", -1) != -1
             }
             machines[app].machines = placements
