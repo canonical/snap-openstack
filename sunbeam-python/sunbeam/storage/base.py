@@ -54,6 +54,8 @@ from sunbeam.storage.steps import (
 )
 
 LOG = logging.getLogger(__name__)
+
+
 console = Console()
 
 # Juju application name validation pattern
