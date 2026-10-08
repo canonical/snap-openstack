@@ -292,6 +292,22 @@ def prompt_backend_config(
         accept_defaults=accept_defaults,
         show_hint=show_hint,
     )
+    if accept_defaults:
+        missing = [
+            name
+            for name, finfo in backend_instance.config_type().model_fields.items()
+            if finfo.is_required()
+            and name not in merged_preseed
+            and name not in variables
+        ]
+        if missing:
+            raise ValueError(
+                "Cannot accept defaults for required fields: "
+                f"{', '.join(missing)}. "
+                "Provide values via --config-file, CLI options, or omit "
+                "--accept-defaults to enter interactive mode."
+            )
+
     for name, question in required_questions_bank.questions.items():
         answer = question.ask()
         while not answer:
@@ -327,6 +343,10 @@ def prompt_backend_config(
                 # Remove variable if previously set for
                 # subsequent runs
                 variables.pop(name, None)
+    else:
+        for field_name, finfo in backend_instance.config_type().model_fields.items():
+            if not finfo.is_required() and field_name in merged_preseed:
+                variables[field_name] = merged_preseed[field_name]
 
     try:
         # Validate configuration
