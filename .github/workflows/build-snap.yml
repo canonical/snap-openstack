@@ -147,6 +147,7 @@ jobs:
           sg snap_daemon "openstack.sunbeam cluster refresh k8s"
           sg snap_daemon "openstack.sunbeam cluster refresh mysql"
           sg snap_daemon "openstack.sunbeam cluster refresh vault"
+          sg snap_daemon "openstack.sunbeam cluster refresh ingress"
           sg snap_daemon "openstack.sunbeam cluster refresh"
 
       - name: Collect logs
