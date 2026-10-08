@@ -1715,6 +1715,55 @@ def test_final_readiness_scope_follows_intended_integrations(
 
 
 @pytest.mark.parametrize("external", [False, True])
+@pytest.mark.parametrize("region_controller", [False, True])
+def test_machine_readiness_uses_union_of_node_roles(
+    deployment, readiness_states, external, region_controller
+):
+    feature_type = (
+        observability_feature.ExternalObservabilityFeature
+        if external
+        else observability_feature.EmbeddedObservabilityFeature
+    )
+    nodes = [
+        {
+            "machineid": machine,
+            "role": ["control", "compute", "storage"]
+            if machine < 3
+            else ["compute", "storage"],
+        }
+        for machine in range(5)
+    ]
+    nodes.append({"machineid": -1, "role": ["control"]})
+    if region_controller:
+        nodes.append({"machineid": 5, "role": ["region_controller"]})
+
+    def nodes_matching_roles(role):
+        requested = {role} if isinstance(role, str) else set(role)
+        return [node for node in nodes if requested.issubset(node["role"])]
+
+    deployment.get_client.return_value.cluster.list_nodes_by_role.side_effect = (
+        nodes_matching_roles
+    )
+    requirements = feature_type()._machine_readiness_requirements(deployment)
+    workload_machines = {str(machine) for machine in range(5)}
+    control_machines = {"0", "1", "2"}
+    if region_controller:
+        workload_machines.add("5")
+        control_machines.add("5")
+    assert requirements["sunbeam-machine"].machines == workload_machines
+    assert requirements["k8s"].machines == control_machines
+    assert requirements["opentelemetry-collector"].principals == {
+        "sunbeam-machine": workload_machines,
+        "k8s": control_machines,
+        "microceph": {"0", "1", "2", "3", "4"},
+        "openstack-hypervisor": {"0", "1", "2", "3", "4"},
+    }
+    assert requirements["hardware-observer"].principals == {
+        "sunbeam-machine": workload_machines
+    }
+
+
+@pytest.mark.parametrize("external", [False, True])
 def test_observability_final_gate_failure_reaches_cli(deployment, mocker, external):
     from click.testing import CliRunner
 
