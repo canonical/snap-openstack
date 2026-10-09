@@ -2523,24 +2523,47 @@ class MaasConfigSRIOVStep(BaseStep):
                 self.client, node_name, self.jhelper, self.model
             )
 
+            # Resolve tagged PCI addresses before filtering so NIC ordering does
+            # not affect child VFs or representors sharing a selected address.
+            tagged_pci_physnets = {
+                nic["pci_address"]: sriov_tagged_nics[nic["name"]]["physnet"]
+                for nic in snap_nics["nics"]
+                if nic["name"] in sriov_tagged_nics
+                and nic.get("pci_address")
+                and nic.get("product_id")
+                and nic.get("vendor_id")
+            }
+            node_excluded_devices = excluded_devices.get(node_name) or []
+
             for snap_nic in snap_nics["nics"]:
                 nic_name = snap_nic["name"]
                 if not (snap_nic.get("product_id") and snap_nic.get("vendor_id")):
                     LOG.debug("Ignoring nic, not a PCI device: %s", snap_nic["name"])
                     continue
 
+                if snap_nic["pci_address"] in node_excluded_devices:
+                    # Explicit exclusions take precedence over MAAS selection.
+                    continue
+
                 if nic_name in sriov_tagged_nics:
-                    # allowedlisted through maas tag
-                    nic_utils.allowedlist_sriov_nic(
-                        node_name,
-                        snap_nic,
-                        pci_allowedlist,
-                        excluded_devices,
-                        sriov_tagged_nics[nic_name]["physnet"],
-                    )
+                    physnet = sriov_tagged_nics[nic_name]["physnet"]
+                elif snap_nic["pci_address"] in tagged_pci_physnets:
+                    # A representor can share the selected PF's PCI address.
+                    continue
+                elif snap_nic.get("pf_pci_address") in tagged_pci_physnets:
+                    pf_address = snap_nic["pf_pci_address"]
+                    if pf_address not in node_excluded_devices:
+                        # The hypervisor expands selected PFs into VFs.
+                        continue
+                    physnet = tagged_pci_physnets[pf_address]
                 else:
                     # Add to the per-node exclusion list.
                     nic_utils.exclude_sriov_nic(node_name, snap_nic, excluded_devices)
+                    continue
+
+                self._record_sriov_nic(
+                    node_name, snap_nic, pci_allowedlist, excluded_devices, physnet
+                )
 
             # Handle PCI passthrough devices
             # All GPU devices returned by openstack-hypervisor will be added
@@ -2569,6 +2592,35 @@ class MaasConfigSRIOVStep(BaseStep):
 
         return pci_allowedlist, excluded_devices
 
+    def _record_sriov_nic(
+        self,
+        node_name: str,
+        nic: dict,
+        pci_allowedlist: list[dict],
+        excluded_devices: dict[str, list],
+        physnet: str | None,
+    ) -> None:
+        """Record a selected NIC without relying on an excluded parent PF."""
+        if nic.get("pf_pci_address") not in (excluded_devices.get(node_name) or []):
+            nic_utils.allowedlist_sriov_nic(
+                node_name, nic, pci_allowedlist, excluded_devices, physnet
+            )
+            return
+
+        # The hypervisor filters excluded PFs before expansion. Match and record
+        # this VF directly, since a manifest PF spec covering it is also removed.
+        if not nic_utils.is_pci_device_allowedlisted(
+            node_name, nic, pci_allowedlist, excluded_devices
+        ):
+            pci_allowedlist.append(
+                {
+                    "address": nic["pci_address"],
+                    "vendor_id": nic["vendor_id"].replace("0x", ""),
+                    "product_id": nic["product_id"].replace("0x", ""),
+                    "physical_network": physnet,
+                }
+            )
+
     def _record_dpu_vfs(
         self,
         node_name: str,
@@ -2591,6 +2643,8 @@ class MaasConfigSRIOVStep(BaseStep):
                 continue
             if not (snap_nic.get("product_id") and snap_nic.get("vendor_id")):
                 LOG.debug("Ignoring DPU nic, not a PCI device: %s", snap_nic["name"])
+                continue
+            if snap_nic["pci_address"] in (excluded_devices.get(node_name) or []):
                 continue
             nic_utils.record_remote_managed_vf(
                 node_name, snap_nic, pci_allowedlist, excluded_devices, None
