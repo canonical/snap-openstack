@@ -8,21 +8,12 @@ from enum import StrEnum
 from typing import Annotated, Literal
 
 from pydantic import Field
-from rich.console import Console
 
 from sunbeam.core.manifest import StorageBackendConfig
 from sunbeam.storage.base import StorageBackendBase
 from sunbeam.storage.models import SecretDictField
 
 LOG = logging.getLogger(__name__)
-console = Console()
-
-
-class Protocol(StrEnum):
-    """Enumeration of valid PowerFlex protocol types."""
-
-    SCALEIO = "scaleio"
-    NVME_TCP = "nvme-tcp"
 
 
 class PowerFlexConfig(StorageBackendConfig):
@@ -136,6 +127,7 @@ class PowerFlexConfig(StorageBackendConfig):
             "san_login: <Replication system San username>, "
             "san_password: <Replication system San password>"
         ),
+         SecretDictField(field="replication-details"),
     ] = None
 
     # SSL and security
@@ -160,7 +152,7 @@ class PowerFlexBackend(StorageBackendBase):
 
     backend_type = "dellpowerflex"
     display_name = "Dell PowerFlex"
-    generally_available = True
+    generally_available = False
 
     @property
     def charm_name(self) -> str:
