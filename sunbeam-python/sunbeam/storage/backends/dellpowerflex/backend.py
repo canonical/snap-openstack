@@ -127,7 +127,7 @@ class PowerFlexConfig(StorageBackendConfig):
             "san_login: <Replication system San username>, "
             "san_password: <Replication system San password>"
         ),
-         SecretDictField(field="replication-details"),
+        SecretDictField(field="replication-details"),
     ] = None
 
     # SSL and security
