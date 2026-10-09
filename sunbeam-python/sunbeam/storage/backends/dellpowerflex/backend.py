@@ -4,7 +4,6 @@
 """Dell PowerFlex backend implementation using base step classes."""
 
 import logging
-from enum import StrEnum
 from typing import Annotated, Literal
 
 from pydantic import Field
