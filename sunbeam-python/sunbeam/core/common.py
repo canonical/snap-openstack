@@ -54,6 +54,22 @@ DEFAULT_JUJU_NO_PROXY_SETTINGS = "127.0.0.1,localhost,::1"
 K8S_CLUSTER_SERVICE_CIDR = "10.152.183.0/24"
 K8S_CLUSTER_POD_CIDR = "10.1.0.0/16"
 
+# Number of addresses reserved at the start of each LoadBalancer pool for
+# services that auto-allocate their IP instead of being pinned to a static one.
+# - rabbitmq-lb (always)
+# - ovn-relay-lb (always)
+# - cinder-volume-mysql-router (when cinder-volume enabled/exposed)
+# - manila-data-mysql-router (when shared-filesystem feature)
+# - bind-lb (when designate feature)
+# - traefik-lb (internal), traefik-public-lb, traefik-rgw-lb if not pinned
+#   by an ingress endpoint config
+# so the first N addresses of the internal pool are never available for the
+# operator-configured ingress endpoints.
+#
+# 10 addresses give headroom for the current auto-allocated services plus a
+# few instances without overwhelming small pools.
+LB_INGRESS_RESERVED_ADDRESSES = 10
+
 BaseStepSubclass = TypeVar("BaseStepSubclass", bound="BaseStep")
 
 AnyAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
@@ -726,8 +742,26 @@ def validate_cidr_or_ip_ranges(ip_ranges: str):
         validate_cidr_or_ip_range(ip_range)
 
 
+def _ip_range_address_count(
+    ip_range: str,
+) -> int:
+    """Return the number of usable addresses in a range or CIDR."""
+    parsed = parse_ip_range_or_cidr(ip_range, separator="-")
+    if isinstance(parsed, (ipaddress.IPv4Network, ipaddress.IPv6Network)):
+        return parsed.num_addresses
+    start_ip, end_ip = parsed
+    return int(end_ip) - int(start_ip) + 1
+
+
 def validate_cidr_or_ip_range(ip_range: str):
     _ = parse_ip_range_or_cidr(ip_range, separator="-")
+    if _ip_range_address_count(ip_range) < LB_INGRESS_RESERVED_ADDRESSES:
+        raise ValueError(
+            f"Invalid IP range {ip_range}: the range must contain at least "
+            f"{LB_INGRESS_RESERVED_ADDRESSES} addresses, as the first "
+            f"{LB_INGRESS_RESERVED_ADDRESSES} are reserved for internal "
+            f"LoadBalancer services"
+        )
 
 
 def validate_ip_range(ip_range: str):

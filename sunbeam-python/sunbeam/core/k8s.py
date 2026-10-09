@@ -47,8 +47,12 @@ CREDENTIAL_SUFFIX = "-creds"
 K8S_CLOUD_SUFFIX = "-k8s"
 LOADBALANCER_QUESTION_DESCRIPTION = """\
 OpenStack services are exposed via virtual IP addresses.\
- This range should contain at least ten addresses\
+ Each range must contain at least ten addresses\
  and must not overlap with external network CIDR.\
+ The first ten addresses of a range are reserved for internal\
+ services that allocate their IP automatically; any address\
+ you specify for an ingress endpoint must be chosen from after\
+ those ten.\
  To access APIs from a remote host, the range must reside\
  within the subnet that the primary network interface is on.\
 

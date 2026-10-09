@@ -35,6 +35,10 @@ from sunbeam.core.juju import (
     UnitNotFoundException,
 )
 from sunbeam.core.manifest import Manifest
+from sunbeam.core.openstack import (
+    LB_INGRESS_RESERVED_ADDRESSES,
+    ip_in_reserved_lb_prefix,
+)
 from sunbeam.provider.common import nic_utils
 from sunbeam.steps import hypervisor, microovn
 from sunbeam.steps.cluster_status import ClusterStatusStep
@@ -838,7 +842,6 @@ class LocalEndpointsConfigurationStep(EndpointsConfigurationStep):
                 "is" if is_in_range else "is not",
                 loadbalancer_range,
             )
-            return is_in_range
         elif isinstance(loadbalancer_range, tuple):
             start_ip, end_ip = loadbalancer_range
             if (
@@ -864,7 +867,6 @@ class LocalEndpointsConfigurationStep(EndpointsConfigurationStep):
                 start_ip,
                 end_ip,
             )
-            return is_in_range
         else:
             LOG.debug(
                 "Invalid loadbalancer_range type: %s (expected IPv4Network, "
@@ -872,6 +874,26 @@ class LocalEndpointsConfigurationStep(EndpointsConfigurationStep):
                 type(loadbalancer_range).__name__,
             )
             return False
+
+        if not is_in_range:
+            return False
+
+        if ip_in_reserved_lb_prefix(ip_address, loadbalancer_range):
+            LOG.debug(
+                "IP %s is within the first %d addresses of the loadbalancer "
+                "range, which are reserved for auto-allocated internal services",
+                ip_address,
+                LB_INGRESS_RESERVED_ADDRESSES,
+            )
+            raise ValueError(
+                f"IP address {ip} for the {endpoint} endpoint is within the first "
+                f"{LB_INGRESS_RESERVED_ADDRESSES} addresses of the load balancer "
+                f"range, which are reserved for internal services that allocate "
+                f"their IP automatically. "
+                f"Pick an IP address from the end of the range."
+            )
+
+        return True
 
 
 class LocalConfigDPDKStep(BaseConfigDPDKStep):

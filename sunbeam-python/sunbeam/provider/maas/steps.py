@@ -54,6 +54,10 @@ from sunbeam.core.juju import (
     UnitNotFoundException,
 )
 from sunbeam.core.manifest import Manifest
+from sunbeam.core.openstack import (
+    LB_INGRESS_RESERVED_ADDRESSES,
+    ip_in_reserved_lb_prefix,
+)
 from sunbeam.core.steps import CreateLoadBalancerIPPoolsStep
 from sunbeam.core.terraform import TerraformHelper
 from sunbeam.lazy import LazyImport
@@ -2715,8 +2719,24 @@ class MaasEndpointsConfigurationStep(EndpointsConfigurationStep):
                 start_ip,
                 end_ip,
             )
-            if is_in_range:
-                return True
+            if not is_in_range:
+                continue
+
+            if ip_in_reserved_lb_prefix(ip_address, (start_ip, end_ip)):
+                LOG.debug(
+                    "IP %s is within the first %d addresses of the loadbalancer "
+                    "range, which are reserved for auto-allocated internal services",
+                    ip_address,
+                    LB_INGRESS_RESERVED_ADDRESSES,
+                )
+                raise ValueError(
+                    f"IP address {ip} for the {endpoint} endpoint is within the "
+                    f"first {LB_INGRESS_RESERVED_ADDRESSES} addresses of the load "
+                    f"balancer range, which are reserved for internal services "
+                    f"that allocate their IP automatically. "
+                    f"Pick an IP address from the end of the range."
+                )
+            return True
         return False
 
 
