@@ -33,6 +33,7 @@ jobs:
           uv run .github/scripts/tag-syncer.py \
             '~openstack-snappers/snap-openstack/+snap/openstack-caracal-candidate' \
             '~openstack-snappers/snap-openstack/+snap/openstack-epoxy-candidate' \
+            '~openstack-snappers/snap-openstack/+snap/openstack-gazpacho-candidate' \
             '~openstack-snappers/+snap/openstack-main-edge'
 
       - name: Push tags
