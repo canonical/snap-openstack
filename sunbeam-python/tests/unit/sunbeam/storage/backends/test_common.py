@@ -150,6 +150,9 @@ class TestAllBackends(BaseBackendTests):
     @pytest.fixture
     def backend(self, any_backend):
         """Use the parametrized any_backend fixture."""
+        # Skip dellpowerflex until it's added to snap-helpers SNAP_*_BACKENDS
+        if any_backend.backend_type == "dellpowerflex":
+            pytest.skip("dellpowerflex not yet classified in snap-helpers")
         return any_backend
 
 

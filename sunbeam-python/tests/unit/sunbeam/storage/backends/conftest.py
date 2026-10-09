@@ -13,6 +13,7 @@ from cryptography.x509.oid import NameOID
 
 from sunbeam.storage.backends.datacore.backend import DatacoreBackend
 from sunbeam.storage.backends.datera.backend import DateraBackend
+from sunbeam.storage.backends.dellpowerflex.backend import PowerFlexBackend
 from sunbeam.storage.backends.dellpowermax.backend import DellpowermaxBackend
 from sunbeam.storage.backends.dellpowerstore.backend import DellPowerstoreBackend
 from sunbeam.storage.backends.dellpowervault.backend import DellPowerVaultBackend
@@ -298,6 +299,12 @@ def dellpowerstore_backend():
 
 
 @pytest.fixture
+def dellpowerflex_backend():
+    """Provide a Dell PowerFlex backend instance."""
+    return PowerFlexBackend()
+
+
+@pytest.fixture
 def infinidat_backend():
     """Provide an Infinidat backend instance."""
     return InfinidatBackend()
@@ -351,6 +358,8 @@ BACKENDS = {
     "yadro": YadroBackend,
     "zadara": ZadaraBackend,
     "dellpowerstore": DellPowerstoreBackend,
+    # Temporarily excluded until snap-helpers is updated to include it
+    # "dellpowerflex": PowerFlexBackend,
     "solidfire": SolidFireBackend,
     "hpe3par": HPEthreeparBackend,
     "infinidat": InfinidatBackend,

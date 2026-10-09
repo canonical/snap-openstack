@@ -14,9 +14,9 @@ from pydantic import ValidationError
 from sunbeam.storage.cli_base import StorageBackendCLIBase
 from sunbeam.storage.models import SecretDictField
 from sunbeam.storage.steps import basemodel_validator
-from tests.unit.sunbeam.storage.backends.conftest import BACKENDS
 
 GENERIC_CERT_BACKENDS = (
+    "dellpowerflex",
     "dellpowerstore",
     "dellpowervault",
     "hitachi",
@@ -73,10 +73,19 @@ CERTIFICATE_FIELDS = tuple(
 
 def _certificate_config(model, alias, content):
     """Provide required backend parameters alongside certificate input."""
-    values = {"san-ip": "192.0.2.10", "protocol": "iscsi", alias: content}
+    # Determine appropriate protocol based on backend type
+    protocol = "iscsi"  # default for most backends
+    if hasattr(model, "__name__") and "PowerFlex" in model.__name__:
+        protocol = "scaleio"  # PowerFlex uses scaleio or nvme-tcp
+    elif hasattr(model, "__name__") and "PowerStore" in model.__name__:
+        protocol = "fc"  # PowerStore uses fc or iscsi
+    values = {"san-ip": "192.0.2.10", "protocol": protocol, alias: content}
     for field, info in model.model_fields.items():
         if info.is_required():
             values.setdefault(field.replace("_", "-"), "test-value")
+    # Add dellpowerflex-specific required field
+    if hasattr(model, "__name__") and "PowerFlex" in model.__name__:
+        values["powerflex-storage-pools"] = "domain:pool"
     return values
 
 
@@ -166,6 +175,15 @@ def test_registered_cli_rejects_invalid_certificate(
 
 def _backend(name):
     """Return a backend instance by registry name."""
+    from tests.unit.sunbeam.storage.backends.conftest import BACKENDS
+
+    if name == "dellpowerflex":
+        from sunbeam.storage.backends.dellpowerflex.backend import (
+            PowerFlexBackend,
+        )
+
+        return PowerFlexBackend()
+
     return BACKENDS[name]()
 
 
