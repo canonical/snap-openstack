@@ -1,17 +1,16 @@
-# SPDX-FileCopyrightText: 2025 - Canonical Ltd
+# SPDX-FileCopyrightText: 2026 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
 """Dell PowerFlex backend implementation using base step classes."""
 
 import logging
-from enum import StrEnum
 from typing import Annotated, Literal
 
 from pydantic import Field
 
 from sunbeam.core.manifest import StorageBackendConfig
 from sunbeam.storage.base import StorageBackendBase
-from sunbeam.storage.models import SecretDictField
+from sunbeam.storage.models import PEMCertificates, SecretDictField
 
 LOG = logging.getLogger(__name__)
 
@@ -132,7 +131,7 @@ class PowerFlexConfig(StorageBackendConfig):
 
     # SSL and security
     driver_ssl_cert: Annotated[
-        str | None,
+        PEMCertificates | None,
         Field(description="PEM-encoded SSL certificate to use for HTTPS connections"),
     ] = None
 
