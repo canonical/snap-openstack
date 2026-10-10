@@ -6,7 +6,15 @@
 import logging
 
 from sunbeam.clusterd.client import Client
-from sunbeam.core.common import BaseStep, Result, ResultType, StepContext
+from sunbeam.clusterd.service import ConfigItemNotFoundException
+from sunbeam.core.common import (
+    BaseStep,
+    Result,
+    ResultType,
+    StepContext,
+    read_config,
+    update_config,
+)
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import JujuHelper, JujuStepHelper, JujuWaitException
 from sunbeam.core.manifest import Manifest
@@ -17,7 +25,10 @@ from sunbeam.core.terraform import (
     TerraformStateLockedException,
 )
 from sunbeam.features.interface.v1.openstack import OPENSTACK_TERRAFORM_VARS
-from sunbeam.steps.charm_upgrade import check_charm_needs_refresh
+from sunbeam.steps.charm_upgrade import (
+    CharmRefreshDecision,
+    check_charm_needs_refresh,
+)
 from sunbeam.steps.openstack import build_overlay_dict
 from sunbeam.versions import TRAEFIK_CHANNEL
 
@@ -44,6 +55,12 @@ class IngressCharmRefreshStep(BaseStep, JujuStepHelper):
         self.jhelper = jhelper
         self.manifest = manifest
         self.traefik_apps: list[str] = []
+        # Refresh decisions per application, filled during run(): the
+        # terraform reapply step pins the channel/revision tfvars to the
+        # resolved values so the plan defaults cannot flip a channel the
+        # charm refresh deliberately kept (e.g. after an out-of-band
+        # change, or a revision-only manifest pin).
+        self.decisions: dict[str, CharmRefreshDecision] = {}
 
     def is_skip(self, context: StepContext) -> Result:
         """Skip when no traefik-k8s application is deployed."""
@@ -70,6 +87,7 @@ class IngressCharmRefreshStep(BaseStep, JujuStepHelper):
                 default_channel=TRAEFIK_CHANNEL,
                 support_track_upgrades=True,
             )
+            self.decisions[app] = decision
             if decision.app_not_deployed:
                 continue
             if decision.result.result_type == ResultType.FAILED:
@@ -123,6 +141,7 @@ class ReapplyIngressTerraformPlanStep(BaseStep, JujuStepHelper):
         tfhelper: TerraformHelper,
         jhelper: JujuHelper,
         manifest: Manifest,
+        refresh_step: IngressCharmRefreshStep | None = None,
     ):
         super().__init__(
             "Applying ingress Terraform changes",
@@ -133,7 +152,80 @@ class ReapplyIngressTerraformPlanStep(BaseStep, JujuStepHelper):
         self.tfhelper = tfhelper
         self.jhelper = jhelper
         self.manifest = manifest
+        self.refresh_step = refresh_step
         self.model = OPENSTACK_MODEL
+
+    def _channel_revision_overrides(self) -> dict | None:
+        """Pin the traefik channel/revision tfvars to the resolved values.
+
+        Mirrors the vault refresh: the plan defaults (latest/stable) must
+        not override the channel the charm refresh decided on, otherwise
+        an out-of-band channel change or a revision-only manifest pin
+        would be silently reset by this apply.
+
+        All traefik applications are managed by the shared
+        traefik-channel/traefik-revision plan variables, so the pin is
+        only valid while the per-application decisions agree; otherwise
+        the reapply would silently move applications the charm refresh
+        deliberately left alone.
+
+        :raises TerraformException: If the decisions disagree on a
+            channel, or if a stale revision pin cannot be cleared.
+        """
+        if self.refresh_step is None or not self.refresh_step.decisions:
+            return None
+        # Undeployed applications are not in terraform state and never
+        # touched by the targeted apply, so their default-channel
+        # decision must not weigh in on the pin.
+        decisions = [
+            d for d in self.refresh_step.decisions.values() if not d.app_not_deployed
+        ]
+        if not decisions:
+            return None
+        # Manifest channels are unvalidated input and may be abbreviated
+        # (e.g. "stable"); Juju-derived channels are always normalised.
+        channels = {self.normalise_channel(d.effective_channel) for d in decisions}
+        if len(channels) > 1:
+            raise TerraformException(
+                "Traefik applications resolved to different channels "
+                f"({sorted(channels)}) but the Terraform plan manages "
+                "them with a single traefik-channel variable. Align the "
+                "channels (via the manifest or out-of-band) and re-run."
+            )
+        overrides: dict = {"traefik-channel": channels.pop()}
+        # All applications share the manifest, so a pinned revision is
+        # identical for every application.
+        revisions = {d.effective_revision for d in decisions} - {None}
+        if revisions:
+            overrides["traefik-revision"] = revisions.pop()
+        else:
+            self._clear_stale_revision_pin()
+        return overrides
+
+    def _clear_stale_revision_pin(self) -> None:
+        """Drop a previously computed traefik-revision pin from stored tfvars.
+
+        A pinned refresh persists traefik-revision as a computed key;
+        when the manifest later drops the pin, the stale computed value
+        would otherwise keep re-applying the old revision.
+
+        :raises TerraformException: If the stored tfvars cannot be updated.
+        """
+        try:
+            stored = read_config(self.client, self._CONFIG)
+        except ConfigItemNotFoundException:
+            return
+        changed = False
+        if "traefik-revision" in stored:
+            del stored["traefik-revision"]
+            changed = True
+        computed_keys = set(stored.get("_computed_keys", []))
+        if "traefik-revision" in computed_keys:
+            computed_keys.discard("traefik-revision")
+            stored["_computed_keys"] = list(computed_keys)
+            changed = True
+        if changed:
+            update_config(self.client, self._CONFIG, stored)
 
     def _get_ingress_terraform_targets(self) -> list[str]:
         """Get terraform targets for traefik resources.
@@ -157,6 +249,38 @@ class ReapplyIngressTerraformPlanStep(BaseStep, JujuStepHelper):
         LOG.debug("Ingress terraform targets: %s", targets)
         return targets
 
+    def _validate_ingress_plan(self, targets: list[str]) -> None:
+        """Fail when the targeted plan would change non-traefik applications.
+
+        Terraform targeting also selects the direct and indirect
+        dependencies of each target (e.g. observability applications
+        behind the traefik integrations), and this command must not
+        upgrade them.
+
+        :raises TerraformException: If a non-traefik application would
+            change in the targeted plan.
+        """
+        plan = self.tfhelper.plan_json(targets)
+        for change in plan.get("resource_changes", []):
+            address = change.get("address", "")
+            if not address.startswith("juju_application."):
+                continue
+            if "traefik" in address.lower():
+                continue
+            actions = set(change.get("change", {}).get("actions") or []) - {
+                "no-op",
+                "read",
+            }
+            if not actions:
+                continue
+            raise TerraformException(
+                f"The ingress plan would also change {address!r} "
+                f"({', '.join(sorted(actions))}): terraform targeting "
+                "selects the dependencies of the traefik integrations. "
+                "Refresh that application with its own command and "
+                "re-run."
+            )
+
     def run(self, context: StepContext) -> Result:
         """Apply terraform with targets for traefik components only."""
         try:
@@ -172,16 +296,18 @@ class ReapplyIngressTerraformPlanStep(BaseStep, JujuStepHelper):
 
         try:
             self.update_status(context, "updating ingress components")
-            LOG.info(
-                "Applying terraform with %s ingress-specific targets", len(targets)
-            )
-            self.tfhelper.update_tfvars_and_apply_tf(
+            overrides = self._channel_revision_overrides()
+            self.tfhelper.update_tfvars(
                 self.client,
                 self.manifest,
                 tfvar_config=self._CONFIG,
-                tf_apply_extra_args=targets,
-                reporter=context.reporter,
+                override_tfvars=overrides,
             )
+            self._validate_ingress_plan(targets)
+            LOG.info(
+                "Applying terraform with %s ingress-specific targets", len(targets)
+            )
+            self.tfhelper.apply(targets, reporter=context.reporter)
         except (TerraformException, TerraformStateLockedException) as e:
             LOG.warning("Error updating ingress components: %r", e)
             return Result(ResultType.FAILED, str(e))
