@@ -3,7 +3,10 @@
 
 import json
 import logging
+import time
 from enum import StrEnum
+
+import jubilant
 
 from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import ConfigItemNotFoundException
@@ -17,6 +20,7 @@ from sunbeam.core.common import (
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import (
     MODEL_DELAY,
+    ActionFailedException,
     ApplicationNotFoundException,
     JujuException,
     JujuHelper,
@@ -31,6 +35,7 @@ from sunbeam.core.terraform import (
     TerraformHelper,
     TerraformStateLockedException,
 )
+from sunbeam.versions import JUJU_BASE
 
 LOG = logging.getLogger(__name__)
 
@@ -39,6 +44,11 @@ UPGRADE_HIGHEST_UNIT_TIMEOUT = 900
 MYSQL_UPGRADE_CONFIG_KEY = "mysql_k8s_upgrade_state"
 MYSQL_CHARM = "mysql-k8s"
 MYSQL_APP = "mysql"
+MYSQL_ROUTER_CHARM = "mysql-router-k8s"
+ROUTER_REFRESH_TIMEOUT = 1800
+RESUME_RETRY_POLLS = 3
+MAX_RESUME_ATTEMPTS = 5
+UNVERIFIED_REFRESH_SETTLE_POLLS = 3
 
 
 class MySQLUpgradeState(StrEnum):
@@ -485,30 +495,11 @@ class MySQLCharmUpgradeStep(BaseStep, JujuStepHelper):
             return Result(ResultType.SKIPPED, msg)
 
         deployed = app.charm_rev
-        # Branch channels (track/risk/branch) are not listed in the Charmhub
-        # channel map, so revision lookups will fail. Proceed with refresh
-        # anyway so juju picks up any new revision published to the branch.
-        if len(deployed_channel.split("/")) > 2:
-            LOG.debug(
-                "%s is on a branch channel %r, refreshing to pick up latest revision",
-                MYSQL_CHARM,
-                deployed_channel,
-            )
-            return Result(ResultType.COMPLETED)
-
-        if app.base:
-            base = f"{app.base.name}@{app.base.channel}"
-            latest_revs = self.jhelper.get_available_charm_revisions(
-                MYSQL_CHARM,
-                deployed_channel,
-                base,
-            )
-        else:
-            LOG.debug("Could not determine base for mysql-k8s")
-            latest_revs = self.jhelper.get_available_charm_revisions(
-                MYSQL_CHARM,
-                deployed_channel,
-            )
+        # Compare against the deployed channel since `charm_refresh()` below does
+        # not pass a channel. If it cannot be looked up, assume a newer revision
+        # may exist and proceed
+        latest_revs = _deployed_channel_revisions(self.jhelper, MYSQL_CHARM, app, {})
+        latest_revs = latest_revs or {}
         try:
             leader = self.jhelper.get_leader_unit(self.application, self.model)
         except LeaderNotFoundException:
@@ -567,6 +558,414 @@ class MySQLCharmUpgradeStep(BaseStep, JujuStepHelper):
             )
         except SunbeamException as exc:
             return Result(ResultType.FAILED, str(exc))
+
+
+def in_channel_refresh_needed(
+    jhelper: JujuHelper,
+    charm: str,
+    app: jubilant.statustypes.AppStatus,
+    manifest: Manifest,
+    revision_cache: dict[tuple[str, str], dict[str, int]],
+) -> bool:
+    """Whether an app's charm is behind the target channel/revision.
+
+    The target is the manifest's channel/revision for the charm, defaulting to
+    the deployed channel. Returns False if: manifest track differs from the
+    deployed track, manifest channel is not newer than the deployed one, or if
+    the deployed revision already matches the target.
+
+    :param jhelper: Juju helper for Charmhub lookups
+    :param charm: Charm name, used for lookups and logging
+    :param app: Deployed application status
+    :param manifest: Manifest to look up the charm in
+    :param revision_cache: Per-(channel, base) cache of Charmhub revisions
+    """
+    helper = JujuStepHelper()
+    deployed_channel = helper.normalise_channel(app.charm_channel)
+    charm_manifest = manifest.find_charm(charm)
+    target_channel = deployed_channel
+    target_revision = None
+    if charm_manifest:
+        target_channel = charm_manifest.channel or deployed_channel
+        target_revision = charm_manifest.revision
+
+    if target_channel.split("/")[0] != deployed_channel.split("/")[0]:
+        LOG.debug(
+            "%s channel track different in manifest and deployed: %s vs %s",
+            app.charm_name or charm,
+            target_channel,
+            deployed_channel,
+        )
+        return False
+
+    if target_revision is not None:
+        return app.charm_rev != target_revision
+
+    # Branch channels are not in the Charmhub channel map and the comparison below
+    # cannot order them, so refresh to pick up any new revision
+    if len(target_channel.split("/")) > 2 or len(deployed_channel.split("/")) > 2:
+        return True
+
+    if target_channel != deployed_channel:
+        # Only refresh if the manifest channel is newer (e.g. stable ->
+        # candidate)
+        return helper.channel_update_needed(deployed_channel, target_channel)
+
+    latest = _deployed_channel_revisions(jhelper, charm, app, revision_cache)
+    if latest is None:
+        # Cannot determine the latest revision, proceed with refresh
+        return True
+    return app.charm_rev not in latest.values()
+
+
+def _deployed_channel_revisions(
+    jhelper: JujuHelper,
+    charm: str,
+    app: jubilant.statustypes.AppStatus,
+    revision_cache: dict[tuple[str, str], dict[str, int]],
+) -> dict[str, int] | None:
+    """Latest Charmhub revisions on the app's deployed channel.
+
+    Returns None if they cannot be determined (branch channel, lookup failure).
+
+    :param jhelper: Juju helper for Charmhub lookups
+    :param charm: Charm name, used for lookups and logging
+    :param app: Deployed application status
+    :param revision_cache: Per-(channel, base) cache of Charmhub revisions
+    """
+    deployed_channel = JujuStepHelper().normalise_channel(app.charm_channel)
+    if len(deployed_channel.split("/")) > 2:
+        return None
+
+    base = f"{app.base.name}@{app.base.channel}" if app.base else JUJU_BASE
+    key = (deployed_channel, base)
+    if key not in revision_cache:
+        try:
+            revision_cache[key] = jhelper.get_available_charm_revisions(
+                charm, deployed_channel, base
+            )
+        except JujuException as e:
+            LOG.debug(
+                "Could not look up %s revisions in channel %s: %r",
+                charm,
+                deployed_channel,
+                e,
+            )
+            return None
+    return revision_cache[key]
+
+
+def _is_paused_refresh(app: jubilant.statustypes.AppStatus) -> bool:
+    """Whether the app is blocked waiting for a resume-refresh action."""
+    return app.app_status.current == "blocked" and "resume-refresh" in (
+        app.app_status.message or ""
+    )
+
+
+class MySQLRouterCharmRefreshStep(BaseStep, JujuStepHelper):
+    """Refresh mysql-router-k8s applications to latest in-channel charm revision.
+
+    Routers must be refreshed before mysql-k8s since a newer router can route to both
+    old and new mysql units, but not guaranteed to work the other way around.
+    """
+
+    def __init__(
+        self,
+        deployment: Deployment,
+        client: Client,
+        jhelper: JujuHelper,
+        manifest: Manifest,
+    ):
+        super().__init__(
+            "MySQL Router K8s Charm Refresh",
+            "Refreshing mysql-router applications to latest in-channel charm revision",
+        )
+        self.deployment = deployment
+        self.client = client
+        self.jhelper = jhelper
+        self.manifest = manifest
+        self.model = OPENSTACK_MODEL
+        self.apps_to_refresh: list[str] = []
+        self.apps_to_wait: list[str] = []
+        # (channel, revision) each app was on when its refresh was issued
+        self._refresh_start: dict[str, tuple[str, int]] = {}
+        # Apps whose target revision cannot be looked up, so the revision may
+        # legitimately not move, mapped to the healthy polls seen since refresh
+        self._unverified_polls: dict[str, int] = {}
+
+    def is_skip(self, context: StepContext) -> Result:
+        """Skip if no router needs refreshing or a mysql upgrade is in flight."""
+        if load_upgrade_state(self.client):
+            msg = (
+                "mysql-k8s upgrade already in progress, not refreshing "
+                "mysql-router applications"
+            )
+            LOG.info(msg)
+            return Result(ResultType.SKIPPED, msg)
+
+        try:
+            status = self.jhelper.get_model_status(self.model)
+        except JujuException as e:
+            LOG.warning("Could not get model status: %r", e)
+            return Result(ResultType.FAILED, f"Could not get model status: {e}")
+
+        revision_cache: dict[tuple[str, str], dict[str, int]] = {}
+        routers = {
+            name: app
+            for name, app in status.apps.items()
+            if app.charm_name == MYSQL_ROUTER_CHARM
+        }
+        self.apps_to_refresh = sorted(
+            name
+            for name, app in routers.items()
+            if in_channel_refresh_needed(
+                self.jhelper, MYSQL_ROUTER_CHARM, app, self.manifest, revision_cache
+            )
+        )
+        # Also wait on routers left mid-refresh
+        self.apps_to_wait = sorted(
+            set(self.apps_to_refresh)
+            | {
+                name
+                for name, app in routers.items()
+                if _is_paused_refresh(app)
+                or any(unit.upgrading_from for unit in app.units.values())
+            }
+        )
+        if not self.apps_to_wait:
+            msg = "All mysql-router applications already at target revision"
+            LOG.debug(msg)
+            return Result(ResultType.SKIPPED, msg)
+
+        LOG.debug(
+            "mysql-router applications to refresh: %s, to wait for: %s",
+            self.apps_to_refresh,
+            self.apps_to_wait,
+        )
+        return Result(ResultType.COMPLETED)
+
+    def _settled_and_paused(
+        self, status: jubilant.Status
+    ) -> tuple[list[str], list[str]]:
+        """Return the apps that are settled, and those paused awaiting resume.
+
+        An app is settled once it is active with all units active and idle, and
+        its requested refresh has completed (see `_refresh_done`). A paused app
+        is only returned once all its units are active and idle.
+        """
+        settled: list[str] = []
+        paused: list[str] = []
+        for name in self.apps_to_wait:
+            app = status.apps.get(name)
+            if app is None:
+                # App removed from the model so don't wait for it
+                settled.append(name)
+                continue
+            units_healthy = all(
+                unit.workload_status.current == "active"
+                and unit.juju_status.current == "idle"
+                for unit in app.units.values()
+            )
+            if _is_paused_refresh(app):
+                if units_healthy:
+                    paused.append(name)
+            elif (
+                app.app_status.current == "active"
+                and units_healthy
+                and self._refresh_done(name, app)
+            ):
+                settled.append(name)
+        return settled, paused
+
+    def _refresh_done(self, name: str, app: jubilant.statustypes.AppStatus) -> bool:
+        """Whether there is evidence the requested refresh completed.
+
+        Before the asynchronous unit refresh starts, the app still looks healthy
+        on its old channel/revision, which should not count as settled.
+        """
+        start = self._refresh_start.get(name)
+        if start is None:
+            return True
+        start_channel, start_rev = start
+        deployed_channel = self.normalise_channel(app.charm_channel)
+        charm_manifest = self.manifest.find_charm(MYSQL_ROUTER_CHARM)
+        if charm_manifest and charm_manifest.revision is not None:
+            return app.charm_rev == charm_manifest.revision
+        target_channel = (
+            charm_manifest.channel
+            if charm_manifest and charm_manifest.channel
+            else start_channel
+        )
+
+        if name in self._unverified_polls:
+            # There may be no new revision to move to, so settle once healthy
+            # for a few polls
+            self._unverified_polls[name] += 1
+            return (
+                app.charm_rev != start_rev
+                or self._unverified_polls[name] >= UNVERIFIED_REFRESH_SETTLE_POLLS
+            )
+
+        return deployed_channel == target_channel and (
+            app.charm_rev != start_rev or deployed_channel != start_channel
+        )
+
+    def _resume(self, name: str) -> bool:
+        """Run resume-refresh on an app's leader.
+
+        A failed action is not necessarily a failure. E.g., the resumed refresh
+        restarts the leader, which can abort the action. Caller must judge
+        progress from application status, not the action's result.
+
+        :return: True if the action was invoked, and False if it could not be
+                 attempted (e.g. no leader during election)
+        """
+        try:
+            leader = self.jhelper.get_leader_unit(name, self.model)
+        except LeaderNotFoundException as exc:
+            # Transient during leader election after a restart. The poll loop
+            # will retry on the next pass
+            LOG.debug("No leader found for %s yet: %r", name, exc)
+            return False
+        LOG.debug("Running resume-refresh on %s", leader)
+        try:
+            self.jhelper.run_action(leader, self.model, "resume-refresh")
+        except (ActionFailedException, jubilant.TaskError) as exc:
+            LOG.debug("resume-refresh on %s did not complete: %r", name, exc)
+        return True
+
+    def _prepare_refresh(self, name: str) -> str | None:
+        """Pause after the first unit and run pre-refresh-check on the leader.
+
+        :return: None if the app is ready to refresh, otherwise the reason it is not
+        """
+        try:
+            self.jhelper.set_app_config(
+                name, self.model, {"pause-after-unit-refresh": "first"}
+            )
+            leader = self.jhelper.get_leader_unit(name, self.model)
+            LOG.debug("Running pre-refresh-check on %s", leader)
+            self.jhelper.run_action(leader, self.model, "pre-refresh-check")
+        except (ActionFailedException, jubilant.TaskError) as exc:
+            LOG.debug("pre-refresh-check failed on %s: %r", name, exc)
+            return f"pre-refresh-check failed: {exc}"
+        except (LeaderNotFoundException, ApplicationNotFoundException) as exc:
+            LOG.debug("Cannot prepare %s for refresh: %r", name, exc)
+            return f"could not run pre-refresh-check: {exc}"
+        return None
+
+    def _refresh_apps(self, context: StepContext, failures: dict[str, str]):
+        """Prepare and refresh each outdated app, recording those that fail."""
+        status = self.jhelper.get_model_status(self.model)
+        revision_cache: dict[tuple[str, str], dict[str, int]] = {}
+        for name in self.apps_to_refresh:
+            app = status.apps.get(name)
+            if app is None:
+                LOG.debug("%s not found in model, skipping refresh", name)
+                continue
+            self.update_status(context, f"Refreshing {name}...")
+            reason = self._prepare_refresh(name)
+            if reason:
+                failures[name] = reason
+                self.apps_to_wait.remove(name)
+                continue
+
+            deployed_channel = self.normalise_channel(app.charm_channel)
+            channel, revision = deployed_channel, None
+            charm_manifest = self.manifest.find_charm(MYSQL_ROUTER_CHARM)
+            if charm_manifest:
+                channel = charm_manifest.channel or deployed_channel
+                revision = charm_manifest.revision
+            LOG.debug(
+                "Refreshing %s to channel=%s revision=%s", name, channel, revision
+            )
+            self._refresh_start[name] = (deployed_channel, app.charm_rev)
+            if (
+                revision is None
+                and channel == deployed_channel
+                and _deployed_channel_revisions(
+                    self.jhelper, MYSQL_ROUTER_CHARM, app, revision_cache
+                )
+                is None
+            ):
+                self._unverified_polls[name] = 0
+            self.jhelper.charm_refresh(
+                name, self.model, channel=channel, revision=revision
+            )
+
+    def _wait_for_apps(self, context: StepContext, failures: dict[str, str]):
+        """Poll until every app has settled or been recorded as failed."""
+        self.update_status(
+            context, "Waiting for mysql-router applications to refresh..."
+        )
+        deadline = time.monotonic() + ROUTER_REFRESH_TIMEOUT
+        resume_attempts: dict[str, int] = {}
+        # Polls left before a still-paused app is resumed again
+        resume_backoff: dict[str, int] = {}
+        while True:
+            status = self.jhelper.get_model_status(self.model)
+            settled, paused = self._settled_and_paused(status)
+            for name in set(resume_backoff) - set(paused):
+                del resume_backoff[name]
+            for name in paused:
+                if resume_backoff.get(name, 0) > 0:
+                    resume_backoff[name] -= 1
+                    continue
+                attempts = resume_attempts.get(name, 0)
+                if attempts < MAX_RESUME_ATTEMPTS and self._resume(name):
+                    resume_attempts[name] = attempts + 1
+                    resume_backoff[name] = RESUME_RETRY_POLLS
+            # An app that stays paused after all resume attempts has concluded
+            for name in sorted(paused):
+                if (
+                    resume_attempts.get(name, 0) >= MAX_RESUME_ATTEMPTS
+                    and resume_backoff.get(name, 0) == 0
+                ):
+                    failures[name] = (
+                        "resume-refresh did not unstick it after "
+                        f"{MAX_RESUME_ATTEMPTS} attempts"
+                    )
+                    self.apps_to_wait.remove(name)
+            if len(settled) == len(self.apps_to_wait):
+                return
+            if time.monotonic() >= deadline:
+                for name in sorted(set(self.apps_to_wait) - set(settled)):
+                    failures[name] = "timed out waiting for the refresh to complete"
+                return
+            time.sleep(MODEL_DELAY)
+
+    def run(self, context: StepContext) -> Result:
+        """Refresh mysql-router apps, resuming paused refreshes until fully settled.
+
+        Every app is carried to a conclusion before returning, so a failure in one
+        does not leave the others unwatched. All failures are reported together.
+        """
+        failures: dict[str, str] = {}
+        try:
+            self._refresh_apps(context, failures)
+            self._wait_for_apps(context, failures)
+        except (JujuException, TimeoutError) as exc:
+            LOG.warning("Error refreshing mysql-router applications: %r", exc)
+            return Result(
+                ResultType.FAILED, f"mysql-router applications refresh failed: {exc}"
+            )
+
+        if failures:
+            LOG.debug("mysql-router applications failed to refresh: %s", failures)
+            details = "\n".join(
+                f"  {name}: {why}" for name, why in sorted(failures.items())
+            )
+            return Result(
+                ResultType.FAILED,
+                f"mysql-router applications failed to refresh:\n{details}\n"
+                "Check the status of these applications, run `resume-refresh` on "
+                "the leader of any blocked one and re-run "
+                "`sunbeam cluster refresh mysql`",
+            )
+
+        return Result(
+            ResultType.COMPLETED, "mysql-router applications refreshed successfully"
+        )
 
 
 class ReapplyMySQLTerraformPlanStep(BaseStep, JujuStepHelper):
