@@ -1658,6 +1658,22 @@ class LoadbalancerFeature(OpenStackControlPlaneFeature):
             "octavia": {"octavia-k8s": 10},
         }
 
+    def readiness_status_overrides(
+        self, deployment: Deployment
+    ) -> dict[str, ApplicationStatusOverlay]:
+        """Accept only supported Amphora setup states."""
+        return {
+            "octavia": {
+                "status": ["active", "waiting", "blocked"],
+                "workload_status_message": [
+                    OCTAVIA_AMPHORA_NETWORK_WAITING_MESSAGE,
+                    OCTAVIA_AMPHORA_RELATIONS_MISSING_MESSAGE,
+                    OCTAVIA_AMPHORA_CA_CERT_MESSAGE,
+                    OCTAVIA_AMPHORA_CONTROLLER_CERT_MESSAGE,
+                ],
+            }
+        }
+
     def run_enable_plans(
         self, deployment: Deployment, config: FeatureConfig, show_hints: bool
     ) -> None:
@@ -1674,15 +1690,7 @@ class LoadbalancerFeature(OpenStackControlPlaneFeature):
         if self.user_manifest:
             plan.append(AddManifestStep(deployment.get_client(), self.user_manifest))
 
-        octavia_overlay: ApplicationStatusOverlay = {
-            "status": ["active", "waiting", "blocked"],
-            "workload_status_message": [
-                OCTAVIA_AMPHORA_NETWORK_WAITING_MESSAGE,
-                OCTAVIA_AMPHORA_RELATIONS_MISSING_MESSAGE,
-                OCTAVIA_AMPHORA_CA_CERT_MESSAGE,
-                OCTAVIA_AMPHORA_CONTROLLER_CERT_MESSAGE,
-            ],
-        }
+        octavia_overlay = self.readiness_status_overrides(deployment)["octavia"]
         plan.extend(
             [
                 TerraformInitStep(tfhelper),

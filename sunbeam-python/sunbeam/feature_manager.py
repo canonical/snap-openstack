@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2023 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
+import copy
 import importlib
 import logging
 import pathlib
@@ -21,6 +22,7 @@ from sunbeam.core.common import (
     SunbeamException,
 )
 from sunbeam.core.deployment import Deployment
+from sunbeam.core.juju import ApplicationReadiness
 from sunbeam.core.manifest import FeatureGroupManifest, FeatureManifest
 from sunbeam.feature_gates import FEATURE_GATES, FeatureGateMixin, log_gated_feature
 from sunbeam.features.interface.v1.base import (
@@ -34,6 +36,7 @@ from sunbeam.features.interface.v1.base import (
 from sunbeam.features.interface.v1.base import (
     groups as all_groups,
 )
+from sunbeam.steps.readiness import merge_application_readiness
 from sunbeam.versions import VarMap
 
 if typing.TYPE_CHECKING:
@@ -295,6 +298,54 @@ class FeatureManager:
 
         LOG.debug("Enabled features: %s", ",".join(f.name for f in enabled_features))
         return enabled_features
+
+    def readiness_requirements(
+        self,
+        deployment: Deployment,
+        affected: dict[str, dict[str, ApplicationReadiness]],
+        enabling: EnableDisableFeature | None = None,
+    ) -> dict[str, dict[str, ApplicationReadiness]]:
+        """Compose enabled plugins' definitions within an operation's scope.
+
+        The enabling feature participates before its enabled flag is persisted.
+        Its operation-specific instance replaces the registered instance, which
+        may not yet carry provider configuration supplied by this invocation.
+        """
+        features = self.enabled_features(deployment)
+        if enabling is not None:
+            features = [
+                feature for feature in features if feature.name != enabling.name
+            ]
+            features.append(enabling)
+        applications: dict[str, typing.Collection[str]] = {
+            model: tuple(apps) for model, apps in affected.items()
+        }
+        definitions: dict[str, dict[str, ApplicationReadiness]] = {}
+        for feature in features:
+            for model, apps in feature.readiness_requirements(
+                deployment, applications
+            ).items():
+                for app, requirement in apps.items():
+                    if app not in affected.get(model, {}):
+                        continue
+                    current = definitions.setdefault(model, {}).get(app)
+                    if current is None:
+                        definitions[model][app] = copy.deepcopy(requirement)
+                    else:
+                        merge_application_readiness(current, requirement)
+        result = copy.deepcopy(affected)
+        for model, apps in definitions.items():
+            for app, requirement in apps.items():
+                target = result[model][app]
+                # Generic scope defaults do not overrule the owning feature's
+                # supported workload policy. Conflicts between plugins above
+                # are rejected, rather than resolved by iteration order.
+                merge_application_readiness(target, requirement, workload_policy=False)
+                target.status = copy.deepcopy(requirement.status)
+                target.workload_status_message = copy.deepcopy(
+                    requirement.workload_status_message
+                )
+        return result
 
     def is_feature_enabled(self, deployment: Deployment, name: str) -> bool:
         """Returns true if feature is enabled otherwise false.

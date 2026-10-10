@@ -4,11 +4,15 @@
 from unittest.mock import Mock, patch
 
 import click
+import pytest
 from click.testing import CliRunner
 
 from sunbeam.clusterd.service import ClusterServiceUnavailableException
 from sunbeam.core.common import SunbeamException
+from sunbeam.core.juju import ApplicationReadiness
 from sunbeam.feature_manager import FeatureManager, list_feature_gates, list_features
+from sunbeam.features.interface.v1.base import EnableDisableFeature
+from sunbeam.features.vault.feature import VaultFeature
 
 
 @click.group()
@@ -367,3 +371,218 @@ class TestListFeatureGates:
         assert len(data_lines) > 0
         # The name "multi-region" should appear separately from the full gate key
         assert "multi-region" in data_lines[0]
+
+
+class TestFeatureReadiness:
+    @pytest.fixture
+    def manager(self):
+        # This test controls the registry without loading unrelated plugins.
+        manager = object.__new__(FeatureManager)
+        manager._features = {}
+        return manager
+
+    def feature(self, name, requirements, enabled=True):
+        feature = Mock(spec=EnableDisableFeature)
+        feature.name = name
+        feature.is_enabled.return_value = enabled
+        feature.readiness_requirements.return_value = requirements
+        return feature
+
+    def test_enabled_definitions_are_limited_to_affected_workloads(self, manager):
+        deployment = Mock()
+        owner = self.feature(
+            "owner",
+            {
+                "openstack": {
+                    "vault": ApplicationReadiness(
+                        status=["active", "blocked"],
+                        units=3,
+                        workload_status_message=["Please unseal Vault"],
+                        relations={"certificates": {"consumer"}},
+                    ),
+                    "unrelated": ApplicationReadiness(units=99),
+                }
+            },
+        )
+        disabled = self.feature("disabled", {}, enabled=False)
+        manager._features = {"owner": owner, "disabled": disabled}
+        scope = {
+            "openstack": {
+                "vault": ApplicationReadiness(
+                    units=3,
+                    relations={"logging": {"collector"}},
+                )
+            }
+        }
+        result = manager.readiness_requirements(deployment, scope)
+        assert set(result["openstack"]) == {"vault"}
+        requirement = result["openstack"]["vault"]
+        assert requirement.status == ["active", "blocked"]
+        assert requirement.workload_status_message == ["Please unseal Vault"]
+        assert requirement.agent_status == ("idle",)
+        assert requirement.units == 3
+        assert requirement.relations == {
+            "certificates": {"consumer"},
+            "logging": {"collector"},
+        }
+        assert scope["openstack"]["vault"].status == ("active",)
+        assert scope["openstack"]["vault"].relations == {"logging": {"collector"}}
+        owner.readiness_requirements.assert_called_once_with(
+            deployment,
+            {"openstack": ("vault",)},
+        )
+        disabled.readiness_requirements.assert_not_called()
+
+    @pytest.mark.parametrize("registered_enabled", [False, True])
+    def test_enabling_instance_participates_without_persisting_state(
+        self, manager, registered_enabled
+    ):
+        deployment = Mock()
+        registered = self.feature("current", {}, enabled=registered_enabled)
+        enabling = self.feature(
+            "current",
+            {"model": {"agent": ApplicationReadiness(units=3)}},
+            enabled=False,
+        )
+        manager._features = {"current": registered}
+        result = manager.readiness_requirements(
+            deployment,
+            {"model": {"agent": ApplicationReadiness()}},
+            enabling=enabling,
+        )
+        assert result["model"]["agent"].units == 3
+        registered.readiness_requirements.assert_not_called()
+        enabling.readiness_requirements.assert_called_once()
+        enabling.update_feature_info.assert_not_called()
+
+    def test_plugin_constraints_compose_without_losing_intent(self, manager):
+        first = self.feature(
+            "first",
+            {
+                "model": {
+                    "collector": ApplicationReadiness(
+                        machines=["0", "1"],
+                        units=2,
+                        principals={"k8s": ["0", "1"]},
+                        relations={"cos-agent": {"k8s"}},
+                    )
+                }
+            },
+        )
+        second = self.feature(
+            "second",
+            {
+                "model": {
+                    "collector": ApplicationReadiness(
+                        machines=["1", "0"],
+                        units=2,
+                        principals={"microceph": ["1"]},
+                        relations={"cos-agent": {"microceph"}},
+                    )
+                }
+            },
+        )
+        manager._features = {"first": first, "second": second}
+        scope = {
+            "model": {
+                "collector": ApplicationReadiness(
+                    relations={"send-loki-logs": {"loki"}},
+                )
+            }
+        }
+        requirement = manager.readiness_requirements(Mock(), scope)["model"][
+            "collector"
+        ]
+        assert requirement.units == 2
+        assert set(requirement.machines) == {"0", "1"}
+        assert requirement.principals == {"k8s": ("0", "1"), "microceph": ("1",)}
+        assert requirement.relations == {
+            "cos-agent": {"k8s", "microceph"},
+            "send-loki-logs": {"loki"},
+        }
+
+    @pytest.mark.parametrize(
+        "conflict",
+        [
+            {"status": ["active", "blocked"]},
+            {"workload_status_message": ["Only this message"]},
+            {"agent_status": ["idle", "executing"]},
+            {"units": 2},
+            {"machines": ["1"]},
+            {"principals": {"k8s": ["1"]}},
+        ],
+    )
+    def test_conflicting_plugin_definitions_fail(self, manager, conflict):
+        defaults = {"units": 1, "machines": ["0"], "principals": {"k8s": ["0"]}}
+        first = self.feature(
+            "first",
+            {
+                "model": {
+                    "app": ApplicationReadiness(**defaults),
+                }
+            },
+        )
+        second = self.feature(
+            "second",
+            {
+                "model": {
+                    "app": ApplicationReadiness(**(defaults | conflict)),
+                }
+            },
+        )
+        manager._features = {"first": first, "second": second}
+        with pytest.raises(ValueError, match="Conflicting application readiness"):
+            manager.readiness_requirements(
+                Mock(), {"model": {"app": ApplicationReadiness()}}
+            )
+
+    def test_default_openstack_hook_does_not_pull_unaffected_plan(self):
+        deployment = Mock()
+        feature = VaultFeature()
+        assert (
+            feature.readiness_requirements(deployment, {"openstack": ["ceilometer"]})
+            == {}
+        )
+        deployment.get_tfhelper.assert_not_called()
+
+    def test_disabled_owner_cannot_relax_affected_workload(self, manager):
+        feature = self.feature(
+            "disabled",
+            {
+                "model": {
+                    "app": ApplicationReadiness(status=["active", "blocked"]),
+                }
+            },
+            enabled=False,
+        )
+        manager._features = {"disabled": feature}
+        requirement = manager.readiness_requirements(
+            Mock(),
+            {
+                "model": {"app": ApplicationReadiness(units=3)},
+            },
+        )["model"]["app"]
+        assert requirement.status == ("active",)
+        assert requirement.agent_status == ("idle",)
+        assert requirement.units == 3
+        feature.readiness_requirements.assert_not_called()
+
+    def test_plugin_cannot_replace_conflicting_scope_intent(self, manager):
+        owner = self.feature(
+            "owner",
+            {
+                "model": {
+                    "app": ApplicationReadiness(units=1),
+                }
+            },
+        )
+        manager._features = {"owner": owner}
+        with pytest.raises(
+            ValueError, match="Conflicting application readiness unit counts"
+        ):
+            manager.readiness_requirements(
+                Mock(),
+                {
+                    "model": {"app": ApplicationReadiness(units=3)},
+                },
+            )
