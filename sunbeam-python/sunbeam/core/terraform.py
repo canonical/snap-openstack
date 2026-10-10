@@ -434,6 +434,28 @@ class TerraformHelper:
         :param override_tfvars: Terraform vars to override (computed/runtime)
         :param tf_apply_extra_args: Extra args to terraform apply command
         """
+        self.update_tfvars(client, manifest, tfvar_config, override_tfvars)
+        LOG.debug("Applying plan %s", self.plan)
+        self.apply(tf_apply_extra_args, reporter=reporter)
+
+    def update_tfvars(
+        self,
+        client: Client,
+        manifest: Manifest,
+        tfvar_config: str | None = None,
+        override_tfvars: dict | None = None,
+    ) -> dict:
+        """Merge DB, manifest and override tfvars, persist and write them.
+
+        Precedence Manifest > Override > DB, same as
+        update_tfvars_and_apply_tf. Values supplied via override_tfvars
+        are tracked as computed so they survive later runs that no longer
+        supply them.
+
+        :param tfvar_config: TerraformVar key name used to save tfvar in clusterdb
+        :param override_tfvars: Terraform vars to override (computed/runtime)
+        :returns: The merged tfvars that were written.
+        """
         # Step 1: Load and filter DB values
         computed_keys, updated_tfvars = self._load_and_filter_db_tfvars(
             client, tfvar_config
@@ -452,15 +474,76 @@ class TerraformHelper:
             # Apply override to final result
             self._apply_tfvars(updated_tfvars, override_tfvars)
 
-        # Step 4: Save and apply
+        # Step 4: Save and write
         if tfvar_config:
             data_to_save = dict(updated_tfvars)
             data_to_save["_computed_keys"] = list(computed_keys)
             update_config(client, tfvar_config, data_to_save)
 
         self.write_tfvars(updated_tfvars)
-        LOG.debug("Applying plan %s with tfvars %s", self.plan, updated_tfvars)
-        self.apply(tf_apply_extra_args, reporter=reporter)
+        return updated_tfvars
+
+    def plan_json(self, extra_args: list | None = None) -> dict:
+        """Run terraform plan and return the planned changes as JSON.
+
+        Saves a plan file so the returned JSON matches what an apply
+        with the same extra args would do. Requires tfvars to be
+        written already (see update_tfvars).
+
+        :param extra_args: Extra args to terraform plan (e.g. targets).
+        :raises TerraformException: If the plan cannot be computed.
+        """
+        os_env = os.environ.copy()
+        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        tf_log = str(self.path / f"terraform-plan-{timestamp}.log")
+        os_env.update({"TF_LOG_PATH": tf_log})
+        os_env.setdefault("TF_LOG", "INFO")
+        if self.env:
+            os_env.update(self.env)
+
+        plan_path = self.path / f"terraform-plan-{timestamp}.tfplan"
+        cmd = [
+            self.terraform,
+            "plan",
+            "-input=false",
+            "-no-color",
+            "-detailed-exitcode",
+            f"-out={plan_path}",
+        ]
+        if self.parallelism is not None:
+            cmd.append(f"-parallelism={self.parallelism}")
+        if extra_args:
+            cmd.extend(extra_args)
+        LOG.debug("Running command %s", " ".join(cmd))
+        process = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            env=os_env,
+            cwd=self.path,
+        )
+        # Exit codes: 0 = no changes, 2 = changes present; anything else is an error
+        if process.returncode not in (0, 2):
+            LOG.error("Terraform plan failed: %s", process.stderr)
+            raise TerraformException(
+                process.stderr.strip()
+                or f"terraform plan failed ({process.returncode})"
+            )
+        try:
+            show = subprocess.run(
+                [self.terraform, "show", "-json", "-no-color", str(plan_path)],
+                capture_output=True,
+                text=True,
+                check=True,
+                env=os_env,
+                cwd=self.path,
+            )
+            return json.loads(show.stdout)
+        except (subprocess.CalledProcessError, json.JSONDecodeError) as e:
+            LOG.error("Terraform show failed: %s", e)
+            raise TerraformException(str(e))
+        finally:
+            plan_path.unlink(missing_ok=True)
 
     def _load_and_filter_db_tfvars(
         self, client: Client, tfvar_config: str | None
