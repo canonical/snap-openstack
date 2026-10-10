@@ -43,6 +43,10 @@ from sunbeam.core.common import (
     StepContext,
     parse_ip_range,
 )
+from sunbeam.core.compute_storage import (
+    get_vault_kv_offer_url,
+    set_vault_kv_offer_url,
+)
 from sunbeam.core.deployment import CertPair, Networks
 from sunbeam.core.deployments import DeploymentsConfig
 from sunbeam.core.juju import (
@@ -54,6 +58,7 @@ from sunbeam.core.juju import (
     UnitNotFoundException,
 )
 from sunbeam.core.manifest import Manifest
+from sunbeam.core.openstack_api import get_admin_connection, guests_on_hypervisor
 from sunbeam.core.steps import CreateLoadBalancerIPPoolsStep
 from sunbeam.core.terraform import TerraformHelper
 from sunbeam.lazy import LazyImport
@@ -2808,4 +2813,96 @@ class MaasConfigDPDKStep(BaseConfigDPDKStep):
                 LOG.warning(msg)
                 return Result(ResultType.FAILED, msg)
 
+        return Result(ResultType.COMPLETED)
+
+
+ENCRYPTED_STORAGE_APP = "vaultlocker-hypervisor"
+ENCRYPTED_STORAGE_HYPERVISOR_APP = "openstack-hypervisor"
+CONFIGURE_ENCRYPTED_STORAGE_ACTION = "configure-encrypted-storage"
+
+
+class MaasConfigureEncryptedStorageStep(BaseStep):
+    """Configure encrypted compute storage for MAAS compute hosts."""
+
+    def __init__(
+        self,
+        client: Client,
+        jhelper: JujuHelper,
+        model: str,
+        config,
+        deployment: maas_deployment.MaasDeployment,
+        result_tfvars: dict | None = None,
+    ):
+        """Initialise the step with a compute-storage configuration.
+
+        :param deployment: deployment used to obtain an OpenStack admin
+            connection for the "no instances remain" guard.
+        :param result_tfvars: optional dict mutated in place with the
+            current ``vault-kv-offer-url`` on a successful run, so a
+            subsequent ``ReapplyHypervisorTerraformPlanStep`` in the same
+            plan picks it up.
+        """
+        super().__init__(
+            "Configure encrypted compute storage",
+            "Configuring encrypted compute storage",
+        )
+        self.client = client
+        self.jhelper = jhelper
+        self.model = model
+        self.config = config
+        self.deployment = deployment
+        self.result_tfvars = result_tfvars
+
+    def run(self, context: StepContext) -> Result:
+        """Enroll each configured host independently."""
+        try:
+            set_vault_kv_offer_url(self.client, self.config.vault_offer_url)
+        except ValueError as e:
+            return Result(ResultType.FAILED, str(e))
+
+        if self.result_tfvars is not None:
+            self.result_tfvars["vault-kv-offer-url"] = get_vault_kv_offer_url(
+                self.client
+            )
+
+        failures: list[str] = []
+        for node_name, node in self.config.nodes.items():
+            self.update_status(context, f"enrolling encrypted storage on {node_name}")
+            try:
+                conn = get_admin_connection(self.jhelper, self.deployment)
+                guests = guests_on_hypervisor(node_name, conn)
+                if guests:
+                    failures.append(
+                        f"{node_name}: {len(guests)} instance(s) still assigned; "
+                        "migrate or delete them first"
+                    )
+                    continue
+
+                self.jhelper.grant_secret(
+                    self.model,
+                    node.existing_key_secret_id,
+                    ENCRYPTED_STORAGE_APP,
+                )
+                machine_id = self.client.cluster.get_node_info(node_name)["machine_id"]
+                unit = self.jhelper.get_unit_from_machine(
+                    ENCRYPTED_STORAGE_HYPERVISOR_APP,
+                    machine_id,
+                    self.model,
+                )
+                self.jhelper.run_action(
+                    unit,
+                    self.model,
+                    CONFIGURE_ENCRYPTED_STORAGE_ACTION,
+                    {
+                        "target": node.target,
+                        "existing-key-secret-id": node.existing_key_secret_id,
+                    },
+                    timeout=1800,
+                )
+            except ActionFailedException as e:
+                failures.append(f"{node_name}: {e}")
+                continue
+
+        if failures:
+            return Result(ResultType.FAILED, "; ".join(failures))
         return Result(ResultType.COMPLETED)

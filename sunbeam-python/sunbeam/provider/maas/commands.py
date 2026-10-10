@@ -53,6 +53,7 @@ from sunbeam.core.common import (
     run_plan,
     str_presenter,
 )
+from sunbeam.core.compute_storage import load_compute_storage_config
 from sunbeam.core.deployment import (
     DEPLOYMENT_TYPE_CONFIG_KEY,
     PROXY_CONFIG_KEY,
@@ -96,6 +97,7 @@ from sunbeam.provider.maas.steps import (
     MaasClusterStatusStep,
     MaasConfigDPDKStep,
     MaasConfigSRIOVStep,
+    MaasConfigureEncryptedStorageStep,
     MaasConfigureMicrocephOSDStep,
     MaasCreateLoadBalancerIPPoolsStep,
     MaasDeployInfraMachinesStep,
@@ -274,6 +276,7 @@ class MaasProvider(ProviderBase):
         configure.add_command(configure_cmd)
         configure.add_command(configure_sriov)
         configure.add_command(configure_dpdk)
+        configure.add_command(configure_compute_storage)
         deployment.add_command(machine)
         machine.add_command(list_machines_cmd)
         machine.add_command(show_machine_cmd)
@@ -2061,6 +2064,55 @@ def configure_dpdk(
             jhelper,
             manifest,
             model=deployment.openstack_machines_model,
+        ),
+    ]
+    run_plan(plan, console, show_hints)
+
+
+@click.command("compute-storage")
+@click.option(
+    "--config",
+    "config_path",
+    required=True,
+    help="Compute-storage config file.",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+)
+@click_option_show_hints
+@click.pass_context
+def configure_compute_storage(
+    ctx: click.Context,
+    config_path: Path,
+    show_hints: bool = False,
+) -> None:
+    """Configure encrypted compute storage."""
+    deployment: MaasDeployment = ctx.obj
+    client = deployment.get_client()
+    config = load_compute_storage_config(config_path)
+    manifest = deployment.get_manifest()
+
+    # Login to the Juju controller
+    run_preflight_checks([JujuLoginCheck(deployment.juju_account)], console)
+
+    jhelper = JujuHelper(deployment.juju_controller)
+    tfhelper_hypervisor = deployment.get_tfhelper("hypervisor-plan")
+
+    reapply_tfvars: dict = {}
+    plan: list[BaseStep] = [
+        MaasConfigureEncryptedStorageStep(
+            client,
+            jhelper,
+            deployment.openstack_machines_model,
+            config,
+            deployment=deployment,
+            result_tfvars=reapply_tfvars,
+        ),
+        ReapplyHypervisorTerraformPlanStep(
+            client,
+            tfhelper_hypervisor,
+            jhelper,
+            manifest,
+            model=deployment.openstack_machines_model,
+            extra_tfvars=reapply_tfvars,
         ),
     ]
     run_plan(plan, console, show_hints)
