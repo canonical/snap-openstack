@@ -2651,6 +2651,501 @@ class TestParseImageNameFromTags:
             parse_image_name_from_tags(["network", "dpu-image-"])
 
 
+class TestMaasConfigSRIOVStep:
+    @pytest.fixture
+    def step(self, mocker):
+        mocker.patch.object(
+            maas_steps.maas_client.MaasClient, "from_deployment", return_value=Mock()
+        )
+        mocker.patch.object(maas_steps.maas_client, "list_machines", return_value=[])
+        mocker.patch.object(
+            maas_steps.nic_utils, "fetch_gpus", return_value={"gpus": []}
+        )
+        return MaasConfigSRIOVStep(
+            deployment=Mock(),
+            client=Mock(),
+            jhelper=Mock(),
+            model="openstack-machines",
+        )
+
+    @pytest.fixture
+    def machine(self):
+        return {
+            "system_id": "host-sid",
+            "hostname": "compute-1",
+            "nics": [
+                {
+                    "name": "ens1f0np0",
+                    "mac_address": "00:11:22:33:44:55",
+                    "tags": ["sriov:no-physnet"],
+                }
+            ],
+        }
+
+    @pytest.fixture
+    def nics(self, mocker):
+        nics = [
+            {
+                "name": "ens1f0np0",
+                "pci_address": "0000:41:00.0",
+                "vendor_id": "0x15b3",
+                "product_id": "0x101d",
+                "pf_pci_address": "",
+            },
+            {
+                "name": "ens1f0v0",
+                "pci_address": "0000:41:00.2",
+                "vendor_id": "0x15b3",
+                "product_id": "0x101e",
+                "pf_pci_address": "0000:41:00.0",
+            },
+            {
+                "name": "ens1f0r0",
+                "pci_address": "0000:41:00.0",
+                "vendor_id": "0x15b3",
+                "product_id": "0x101d",
+                "pf_pci_address": "",
+            },
+            {
+                "name": "ens2f0np0",
+                "pci_address": "0000:42:00.0",
+                "vendor_id": "0x15b3",
+                "product_id": "0x101d",
+                "pf_pci_address": "",
+            },
+            {
+                "name": "ens2f0v0",
+                "pci_address": "0000:42:00.2",
+                "vendor_id": "0x15b3",
+                "product_id": "0x101e",
+                "pf_pci_address": "0000:42:00.0",
+            },
+            {"name": "br0", "pci_address": "", "vendor_id": "", "product_id": ""},
+        ]
+        mocker.patch.object(
+            maas_steps.nic_utils, "fetch_nics", return_value={"nics": nics}
+        )
+        return nics
+
+    @pytest.mark.parametrize(
+        "tag,physnet",
+        [
+            ("sriov:no-physnet", None),
+            ("sriov:physnet1", "physnet1"),
+            ("sriov-hw-offload:no-physnet", None),
+        ],
+    )
+    @pytest.mark.parametrize("vf_name", ["ens1f0v0", ""])
+    @pytest.mark.parametrize("reverse", [False, True])
+    def test_tagged_pf_keeps_child_vfs_and_representors(
+        self, step, machine, nics, tag, physnet, vf_name, reverse
+    ):
+        machine["nics"][0]["tags"] = [tag]
+        nics[1]["name"] = vf_name
+        if reverse:
+            nics.reverse()
+
+        allowedlist, excluded = step._get_pci_config([machine])
+
+        assert allowedlist == [
+            {
+                "address": "0000:41:00.0",
+                "vendor_id": "15b3",
+                "product_id": "101d",
+                "physical_network": physnet,
+            }
+        ]
+        assert set(excluded["compute-1"]) == {"0000:42:00.0", "0000:42:00.2"}
+
+    @pytest.mark.parametrize("missing_id", ["vendor_id", "product_id"])
+    def test_invalid_tagged_device_does_not_select_child_vfs(
+        self, step, machine, nics, missing_id
+    ):
+        nics[0][missing_id] = ""
+
+        allowedlist, excluded = step._get_pci_config([machine])
+
+        assert allowedlist == []
+        assert "0000:41:00.2" in excluded["compute-1"]
+
+    def test_preserves_manifest_specs_and_explicit_vf_and_gpu_exclusions(
+        self, mocker, step, machine, nics
+    ):
+        gpu = {
+            "pci_address": "0000:81:00.0",
+            "vendor_id": "0x10de",
+            "product_id": "0x1db4",
+        }
+        reserved_gpu = dict(gpu, pci_address="0000:82:00.0")
+        gpu_spec = {
+            "address": "0000:81:00.0",
+            "vendor_id": "10de",
+            "product_id": "1db4",
+        }
+        manifest_specs = [gpu_spec]
+        manifest_excluded = {
+            "compute-1": ["0000:41:00.2", "0000:82:00.0"],
+            "other-host": ["0000:41:00.2"],
+        }
+        step.manifest = Mock()
+        step.manifest.core.config.pci.device_specs = manifest_specs
+        step.manifest.core.config.pci.excluded_devices = manifest_excluded
+        mocker.patch.object(
+            maas_steps.nic_utils,
+            "fetch_gpus",
+            return_value={"gpus": [gpu, reserved_gpu]},
+        )
+
+        allowedlist, excluded = step._get_pci_config([machine])
+
+        assert allowedlist[0] == gpu_spec
+        assert len(allowedlist) == 2
+        assert set(excluded["compute-1"]) == {
+            "0000:41:00.2",
+            "0000:82:00.0",
+            "0000:42:00.0",
+            "0000:42:00.2",
+        }
+        assert excluded["other-host"] == ["0000:41:00.2"]
+        assert manifest_specs == [gpu_spec]
+        assert manifest_excluded == {
+            "compute-1": ["0000:41:00.2", "0000:82:00.0"],
+            "other-host": ["0000:41:00.2"],
+        }
+
+    def test_directly_tagged_vf_does_not_select_parent_or_siblings(
+        self, step, machine, nics
+    ):
+        machine["nics"][0]["name"] = "ens1f0v0"
+        nics.append(dict(nics[1], name="ens1f0v1", pci_address="0000:41:00.3"))
+
+        allowedlist, excluded = step._get_pci_config([machine])
+
+        assert allowedlist == [
+            {
+                "address": "0000:41:00.2",
+                "vendor_id": "15b3",
+                "product_id": "101e",
+                "physical_network": None,
+            }
+        ]
+        assert set(excluded["compute-1"]) == {
+            "0000:41:00.0",
+            "0000:41:00.3",
+            "0000:42:00.0",
+            "0000:42:00.2",
+        }
+
+    def test_all_vfs_reserved_does_not_exclude_selected_pf(self, step, machine, nics):
+        nics.append(dict(nics[1], name="ens1f0v1", pci_address="0000:41:00.3"))
+        step.manifest = Mock()
+        step.manifest.core.config.pci.device_specs = []
+        step.manifest.core.config.pci.excluded_devices = {
+            "compute-1": ["0000:41:00.2", "0000:41:00.3"]
+        }
+
+        allowedlist, excluded = step._get_pci_config([machine])
+
+        assert allowedlist == [
+            {
+                "address": "0000:41:00.0",
+                "vendor_id": "15b3",
+                "product_id": "101d",
+                "physical_network": None,
+            }
+        ]
+        assert set(excluded["compute-1"]) == {
+            "0000:41:00.2",
+            "0000:41:00.3",
+            "0000:42:00.0",
+            "0000:42:00.2",
+        }
+
+    @pytest.mark.parametrize(
+        "manifest_spec,covers_pf",
+        [
+            ({"address": "0000:41:*.*", "physical_network": "physnet1"}, True),
+            (
+                {
+                    "vendor_id": "15b3",
+                    "product_id": "101e",
+                    "physical_network": "physnet1",
+                },
+                False,
+            ),
+            (
+                {
+                    "address": "0000:41:00.3",
+                    "physical_network": "physnet1",
+                    "trusted": "true",
+                },
+                False,
+            ),
+        ],
+    )
+    @pytest.mark.parametrize("exclude_pf", [False, True])
+    def test_manifest_vf_specs_are_preserved_without_duplicate_specs(
+        self, step, machine, nics, manifest_spec, covers_pf, exclude_pf
+    ):
+        machine["nics"][0]["tags"] = ["sriov:physnet1"]
+        nics.append(dict(nics[1], name="ens1f0v1", pci_address="0000:41:00.3"))
+        step.manifest = Mock()
+        step.manifest.core.config.pci.device_specs = [manifest_spec]
+        manifest_excluded = {"compute-1": ["0000:41:00.2"]}
+        if exclude_pf:
+            manifest_excluded["compute-1"].append("0000:41:00.0")
+        step.manifest.core.config.pci.excluded_devices = manifest_excluded
+
+        allowedlist, excluded = step._get_pci_config([machine])
+
+        expected_specs = [manifest_spec]
+        if not exclude_pf and not covers_pf:
+            expected_specs.append(
+                {
+                    "address": "0000:41:00.0",
+                    "vendor_id": "15b3",
+                    "product_id": "101d",
+                    "physical_network": "physnet1",
+                }
+            )
+        assert allowedlist == expected_specs
+        expected_excluded = {"0000:41:00.2", "0000:42:00.0", "0000:42:00.2"}
+        if exclude_pf:
+            expected_excluded.add("0000:41:00.0")
+        assert set(excluded["compute-1"]) == expected_excluded
+        assert step.manifest.core.config.pci.device_specs == [manifest_spec]
+        assert manifest_excluded == {
+            "compute-1": ["0000:41:00.2", "0000:41:00.0"]
+            if exclude_pf
+            else ["0000:41:00.2"]
+        }
+
+    @pytest.mark.parametrize("physnet", [None, "physnet1"])
+    @pytest.mark.parametrize("reverse", [False, True])
+    @pytest.mark.parametrize("reserve_all_vfs", [False, True])
+    def test_excluded_tagged_pf_selects_only_unexcluded_child_vfs(
+        self, step, machine, nics, physnet, reverse, reserve_all_vfs
+    ):
+        machine["nics"][0]["tags"] = [f"sriov:{physnet or 'no-physnet'}"]
+        nics.append(dict(nics[1], name="ens1f0v1", pci_address="0000:41:00.3"))
+        if reverse:
+            nics.reverse()
+        step.manifest = Mock()
+        step.manifest.core.config.pci.device_specs = []
+        step.manifest.core.config.pci.excluded_devices = {
+            "compute-1": ["0000:41:00.0", "0000:41:00.2"]
+        }
+        if reserve_all_vfs:
+            step.manifest.core.config.pci.excluded_devices["compute-1"].append(
+                "0000:41:00.3"
+            )
+
+        allowedlist, excluded = step._get_pci_config([machine])
+
+        assert allowedlist == (
+            []
+            if reserve_all_vfs
+            else [
+                {
+                    "address": "0000:41:00.3",
+                    "vendor_id": "15b3",
+                    "product_id": "101e",
+                    "physical_network": physnet,
+                }
+            ]
+        )
+        expected_excluded = {
+            "0000:41:00.0",
+            "0000:41:00.2",
+            "0000:42:00.0",
+            "0000:42:00.2",
+        }
+        if reserve_all_vfs:
+            expected_excluded.add("0000:41:00.3")
+        assert set(excluded["compute-1"]) == expected_excluded
+
+    def test_excluded_tagged_pf_without_vfs_stays_excluded(self, step, machine, nics):
+        nics[:] = [nics[0]]
+        step.manifest = Mock()
+        step.manifest.core.config.pci.device_specs = []
+        step.manifest.core.config.pci.excluded_devices = {"compute-1": ["0000:41:00.0"]}
+
+        allowedlist, excluded = step._get_pci_config([machine])
+
+        assert allowedlist == []
+        assert excluded == {"compute-1": ["0000:41:00.0"]}
+
+    def test_excluded_manifest_pf_spec_does_not_hide_child_vf_spec(
+        self, step, machine, nics
+    ):
+        pf_spec = {"address": "0000:41:00.0", "physical_network": None}
+        step.manifest = Mock()
+        step.manifest.core.config.pci.device_specs = [pf_spec]
+        step.manifest.core.config.pci.excluded_devices = {"compute-1": ["0000:41:00.0"]}
+
+        allowedlist, excluded = step._get_pci_config([machine])
+
+        assert allowedlist == [
+            pf_spec,
+            {
+                "address": "0000:41:00.2",
+                "vendor_id": "15b3",
+                "product_id": "101e",
+                "physical_network": None,
+            },
+        ]
+        assert "0000:41:00.0" in excluded["compute-1"]
+
+    def test_direct_vf_tag_selects_vf_of_excluded_manifest_pf(
+        self, step, machine, nics
+    ):
+        machine["nics"][0]["name"] = "ens1f0v0"
+        machine["nics"][0]["tags"] = ["sriov:physnet1"]
+        pf_spec = {"address": "0000:41:00.0", "physical_network": None}
+        step.manifest = Mock()
+        step.manifest.core.config.pci.device_specs = [pf_spec]
+        step.manifest.core.config.pci.excluded_devices = {"compute-1": ["0000:41:00.0"]}
+
+        allowedlist, excluded = step._get_pci_config([machine])
+
+        assert allowedlist == [
+            pf_spec,
+            {
+                "address": "0000:41:00.2",
+                "vendor_id": "15b3",
+                "product_id": "101e",
+                "physical_network": "physnet1",
+            },
+        ]
+        assert "0000:41:00.0" in excluded["compute-1"]
+
+    @pytest.mark.parametrize("tag_parent", [False, True])
+    def test_manifest_exclusion_wins_over_direct_vf_tag(
+        self, step, machine, nics, tag_parent
+    ):
+        if not tag_parent:
+            machine["nics"] = []
+        machine["nics"].append(
+            {
+                "name": "ens1f0v0",
+                "mac_address": "00:11:22:33:44:66",
+                "tags": ["sriov:no-physnet"],
+            }
+        )
+        step.manifest = Mock()
+        step.manifest.core.config.pci.device_specs = []
+        step.manifest.core.config.pci.excluded_devices = {"compute-1": ["0000:41:00.2"]}
+
+        allowedlist, excluded = step._get_pci_config([machine])
+
+        assert "0000:41:00.2" in excluded["compute-1"]
+        assert [spec["address"] for spec in allowedlist] == (
+            ["0000:41:00.0"] if tag_parent else []
+        )
+
+    def test_tagged_pci_addresses_are_scoped_to_each_host(self, step, machine, nics):
+        other_machine = dict(
+            machine, hostname="compute-2", system_id="other-sid", nics=[]
+        )
+
+        allowedlist, excluded = step._get_pci_config([machine, other_machine])
+
+        assert len(allowedlist) == 1
+        assert set(excluded["compute-1"]) == {"0000:42:00.0", "0000:42:00.2"}
+        assert set(excluded["compute-2"]) == {
+            "0000:41:00.0",
+            "0000:41:00.2",
+            "0000:42:00.0",
+            "0000:42:00.2",
+        }
+
+    @pytest.mark.parametrize("reserve_all_vfs", [False, True])
+    def test_mixed_cluster_preserves_remote_managed_dpu_vfs(
+        self, mocker, step, machine, nics, reserve_all_vfs
+    ):
+        dpu_machine = dict(machine, hostname="compute-dpu", system_id="dpu-host-sid")
+        dpu_nics = [
+            dict(nics[0], product_name="BlueField-3 integrated ConnectX-7"),
+            dict(nics[1], product_name="ConnectX Family mlx5Gen Virtual Function"),
+        ]
+        dpu_nics.append(dict(dpu_nics[1], name="ens1f0v1", pci_address="0000:41:00.3"))
+        step.manifest = Mock()
+        step.manifest.core.config.pci.device_specs = []
+        step.manifest.core.config.pci.excluded_devices = {
+            "compute-dpu": ["0000:41:00.2", "0000:42:00.0"]
+        }
+        if reserve_all_vfs:
+            step.manifest.core.config.pci.excluded_devices["compute-dpu"].append(
+                "0000:41:00.3"
+            )
+        mocker.patch.object(
+            maas_steps.maas_client,
+            "list_machines",
+            return_value=[{"is_dpu": True, "parent_system_id": "dpu-host-sid"}],
+        )
+        mocker.patch.object(
+            maas_steps.nic_utils,
+            "fetch_nics",
+            side_effect=lambda client, node_name, jhelper, model: {
+                "nics": dpu_nics if node_name == "compute-dpu" else nics
+            },
+        )
+
+        allowedlist, excluded = step._get_pci_config([machine, dpu_machine])
+
+        expected_allowedlist = [
+            {
+                "address": "0000:41:00.0",
+                "vendor_id": "15b3",
+                "product_id": "101d",
+                "physical_network": None,
+            }
+        ]
+        if not reserve_all_vfs:
+            expected_allowedlist.append(
+                {
+                    "address": "0000:41:00.3",
+                    "vendor_id": "15b3",
+                    "product_id": "101e",
+                    "physical_network": None,
+                    "remote_managed": "true",
+                }
+            )
+        assert allowedlist == expected_allowedlist
+        expected_excluded = {
+            "compute-1": ["0000:42:00.0", "0000:42:00.2"],
+            "compute-dpu": ["0000:41:00.2", "0000:42:00.0"],
+        }
+        if reserve_all_vfs:
+            expected_excluded["compute-dpu"].append("0000:41:00.3")
+        assert excluded == expected_excluded
+
+    def test_run_persists_selection_and_sends_only_unselected_exclusions(
+        self, mocker, step, machine, nics, step_context
+    ):
+        mocker.patch.object(step, "_get_compute_machines", return_value=[machine])
+        write_answers = mocker.patch("sunbeam.core.questions.write_answers")
+        step.client.cluster.get_node_info.return_value = {"machineid": "1"}
+        step.jhelper.get_unit_from_machine.return_value = "openstack-hypervisor/0"
+
+        result = step.run(step_context)
+
+        assert result.result_type == ResultType.COMPLETED
+        assert step.variables["pci_whitelist"][0]["address"] == "0000:41:00.0"
+        assert step.variables["excluded_devices"] == {
+            "compute-1": ["0000:42:00.0", "0000:42:00.2"]
+        }
+        write_answers.assert_called_once_with(step.client, "PCI", step.variables)
+        step.jhelper.run_action.assert_called_once_with(
+            "openstack-hypervisor/0",
+            "openstack-machines",
+            "set-hypervisor-local-settings",
+            action_params={
+                "pci-excluded-devices": json.dumps(["0000:42:00.0", "0000:42:00.2"])
+            },
+        )
+
+
 class TestMaasConfigSRIOVStepDPU:
     def _step(self):
         with patch.object(
