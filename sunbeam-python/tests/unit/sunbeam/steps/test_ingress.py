@@ -199,3 +199,100 @@ class TestReapplyIngressTerraformPlanStep:
         assert result.result_type == ResultType.FAILED
         assert result.message == "state list failed..."
         self.tfhelper.update_tfvars_and_apply_tf.assert_not_called()
+
+
+class TestIngressChannelRevisionOverrides:
+    """The terraform reapply pins traefik channel/revision to the decision.
+
+    Without the pin the plan default (latest/stable) would flip a channel
+    the charm refresh deliberately kept, e.g. after an out-of-band change
+    or a revision-only manifest pin.
+    """
+
+    def setup_method(self):
+        self.deployment = Mock()
+        self.client = Mock()
+        self.tfhelper = Mock()
+        self.jhelper = Mock()
+        self.manifest = Mock()
+        self.refresh_step = Mock()
+
+    def _step(self):
+        return ReapplyIngressTerraformPlanStep(
+            self.deployment,
+            self.client,
+            self.tfhelper,
+            self.jhelper,
+            self.manifest,
+            refresh_step=self.refresh_step,
+        )
+
+    def _run(self, step, step_context):
+        step.tfhelper = self.tfhelper
+        self.tfhelper.state_list = Mock(return_value=["juju_application.traefik"])
+        step.get_apps_filter_by_charms = Mock(return_value=["traefik"])
+        return step.run(step_context)
+
+    def test_channel_and_revision_pinned_from_decision(self, step_context):
+        self.refresh_step.decisions = {
+            "traefik": CharmRefreshDecision(
+                result=Result(ResultType.COMPLETED),
+                effective_channel="latest/candidate",
+                effective_revision=479,
+            )
+        }
+
+        result = self._run(self._step(), step_context)
+
+        assert result.result_type == ResultType.COMPLETED
+        kwargs = self.tfhelper.update_tfvars_and_apply_tf.call_args.kwargs
+        assert kwargs["override_tfvars"] == {
+            "traefik-channel": "latest/candidate",
+            "traefik-revision": 479,
+        }
+
+    def test_revision_omitted_when_not_pinned(self, step_context):
+        """Revision unset in the decision must not become a None tfvar."""
+        self.refresh_step.decisions = {
+            "traefik": CharmRefreshDecision(
+                result=Result(ResultType.COMPLETED),
+                effective_channel="latest/stable",
+            )
+        }
+
+        result = self._run(self._step(), step_context)
+
+        assert result.result_type == ResultType.COMPLETED
+        kwargs = self.tfhelper.update_tfvars_and_apply_tf.call_args.kwargs
+        assert kwargs["override_tfvars"] == {"traefik-channel": "latest/stable"}
+
+    def test_keeps_out_of_band_channel(self, step_context):
+        """Up-to-date apps on a non-default channel: the apply keeps it."""
+        self.refresh_step.decisions = {
+            "traefik": CharmRefreshDecision(
+                result=Result(ResultType.SKIPPED, "already at latest revision"),
+                effective_channel="latest/candidate",
+            )
+        }
+
+        result = self._run(self._step(), step_context)
+
+        assert result.result_type == ResultType.COMPLETED
+        kwargs = self.tfhelper.update_tfvars_and_apply_tf.call_args.kwargs
+        # The plan default (latest/stable) must not win:
+        assert kwargs["override_tfvars"]["traefik-channel"] == "latest/candidate"
+
+    def test_no_decisions_falls_back_to_manifest(self, step_context):
+        """Without a refresh step the apply relies on the manifest alone."""
+        step = ReapplyIngressTerraformPlanStep(
+            self.deployment,
+            self.client,
+            self.tfhelper,
+            self.jhelper,
+            self.manifest,
+        )
+        result = self._run(step, step_context)
+
+        assert result.result_type == ResultType.COMPLETED
+        kwargs = self.tfhelper.update_tfvars_and_apply_tf.call_args.kwargs
+        assert kwargs["override_tfvars"] is None

@@ -363,13 +363,14 @@ def refresh_ingress(
     run_plan(
         [
             TerraformInitStep(tfhelper),
-            IngressCharmRefreshStep(deployment, jhelper, manifest),
+            refresh_step := IngressCharmRefreshStep(deployment, jhelper, manifest),
             ReapplyIngressTerraformPlanStep(
                 deployment,
                 client,
                 tfhelper,
                 jhelper,
                 manifest,
+                refresh_step=refresh_step,
             ),
         ],
         console,

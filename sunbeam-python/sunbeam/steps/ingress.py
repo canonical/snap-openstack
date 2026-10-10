@@ -17,7 +17,10 @@ from sunbeam.core.terraform import (
     TerraformStateLockedException,
 )
 from sunbeam.features.interface.v1.openstack import OPENSTACK_TERRAFORM_VARS
-from sunbeam.steps.charm_upgrade import check_charm_needs_refresh
+from sunbeam.steps.charm_upgrade import (
+    CharmRefreshDecision,
+    check_charm_needs_refresh,
+)
 from sunbeam.steps.openstack import build_overlay_dict
 from sunbeam.versions import TRAEFIK_CHANNEL
 
@@ -44,6 +47,12 @@ class IngressCharmRefreshStep(BaseStep, JujuStepHelper):
         self.jhelper = jhelper
         self.manifest = manifest
         self.traefik_apps: list[str] = []
+        # Refresh decisions per application, filled during run(): the
+        # terraform reapply step pins the channel/revision tfvars to the
+        # resolved values so the plan defaults cannot flip a channel the
+        # charm refresh deliberately kept (e.g. after an out-of-band
+        # change, or a revision-only manifest pin).
+        self.decisions: dict[str, CharmRefreshDecision] = {}
 
     def is_skip(self, context: StepContext) -> Result:
         """Skip when no traefik-k8s application is deployed."""
@@ -70,6 +79,7 @@ class IngressCharmRefreshStep(BaseStep, JujuStepHelper):
                 default_channel=TRAEFIK_CHANNEL,
                 support_track_upgrades=True,
             )
+            self.decisions[app] = decision
             if decision.app_not_deployed:
                 continue
             if decision.result.result_type == ResultType.FAILED:
@@ -123,6 +133,7 @@ class ReapplyIngressTerraformPlanStep(BaseStep, JujuStepHelper):
         tfhelper: TerraformHelper,
         jhelper: JujuHelper,
         manifest: Manifest,
+        refresh_step: IngressCharmRefreshStep | None = None,
     ):
         super().__init__(
             "Applying ingress Terraform changes",
@@ -133,7 +144,26 @@ class ReapplyIngressTerraformPlanStep(BaseStep, JujuStepHelper):
         self.tfhelper = tfhelper
         self.jhelper = jhelper
         self.manifest = manifest
+        self.refresh_step = refresh_step
         self.model = OPENSTACK_MODEL
+
+    def _channel_revision_overrides(self) -> dict | None:
+        """Pin the traefik channel/revision tfvars to the resolved values.
+
+        Mirrors the vault refresh: the plan defaults (latest/stable) must
+        not override the channel the charm refresh decided on, otherwise
+        an out-of-band channel change or a revision-only manifest pin
+        would be silently reset by this apply.
+        """
+        if self.refresh_step is None:
+            return None
+        decision = next(iter(self.refresh_step.decisions.values()), None)
+        if decision is None:
+            return None
+        overrides: dict = {"traefik-channel": decision.effective_channel}
+        if decision.effective_revision is not None:
+            overrides["traefik-revision"] = decision.effective_revision
+        return overrides
 
     def _get_ingress_terraform_targets(self) -> list[str]:
         """Get terraform targets for traefik resources.
@@ -179,6 +209,7 @@ class ReapplyIngressTerraformPlanStep(BaseStep, JujuStepHelper):
                 self.client,
                 self.manifest,
                 tfvar_config=self._CONFIG,
+                override_tfvars=self._channel_revision_overrides(),
                 tf_apply_extra_args=targets,
                 reporter=context.reporter,
             )
