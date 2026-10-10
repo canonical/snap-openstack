@@ -208,6 +208,9 @@ class StorageBackendCLIBase:
             # Name is guaranted to be given through the CLI.
             backend_name = provided_cli_values.pop("name")
 
+            if cfg_file or provided_cli_values:
+                accept_defaults = True
+
             merged = {**file_cfg, **provided_cli_values}
             self.backend.add_backend_instance(
                 deployment, backend_name, merged, console, accept_defaults
