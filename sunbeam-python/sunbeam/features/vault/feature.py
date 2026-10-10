@@ -62,6 +62,7 @@ from sunbeam.features.interface.v1.openstack import (
     OpenStackControlPlaneFeature,
     TerraformPlanLocation,
 )
+from sunbeam.steps.openstack import ValidateInfraAppsStep
 from sunbeam.utils import click_option_show_hints, pass_method_obj
 from sunbeam.versions import VAULT_CHANNEL
 
@@ -660,6 +661,23 @@ class VaultFeature(OpenStackControlPlaneFeature):
         """Run plans to enable feature."""
         tfhelper = deployment.get_tfhelper(self.tfplan)
         jhelper = JujuHelper(deployment.juju_controller)
+
+        # This feature reapplys the openstack plan: make sure that apply
+        # would not change an INFRA_APP (mysql, vault, traefik), and only
+        # then store the user manifest in the database.
+        run_plan(
+            [
+                TerraformInitStep(deployment.get_tfhelper(self.tfplan)),
+                ValidateInfraAppsStep(
+                    deployment.get_client(),
+                    tfhelper,
+                    self.manifest,
+                    skip_charms=self._own_infra_charms,
+                ),
+            ],
+            console,
+            show_hints,
+        )
 
         plan: list[BaseStep] = []
         if self.user_manifest:

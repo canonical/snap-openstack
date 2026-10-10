@@ -43,6 +43,7 @@ from sunbeam.steps.openstack import (
     OpenStackPatchLoadBalancerServicesIPPoolStep,
     OpenStackPatchLoadBalancerServicesIPStep,
     ReapplyOpenStackTerraformPlanStep,
+    ValidateInfraAppsStep,
     build_overlay_dict,
 )
 from sunbeam.steps.role_distributor import DeployRoleDistributorApplicationStep
@@ -52,7 +53,7 @@ from sunbeam.steps.upgrades.base import UpgradeCoordinator, UpgradeFeatures
 LOG = logging.getLogger(__name__)
 console = Console()
 
-INFRA_APPS = ["mysql-k8s", "vault-k8s", "k8s"]
+INFRA_APPS = ["mysql-k8s", "mysql-router-k8s", "vault-k8s", "k8s"]
 
 # Charms that must be refreshed with trust=True so that their upgrade-charm
 # hook has the necessary k8s RBAC permissions (e.g. get/patch StatefulSets).
@@ -422,6 +423,15 @@ class LatestInChannelCoordinator(UpgradeCoordinator):
     def get_plan(self) -> list[BaseStep]:
         """Return the upgrade plan."""
         plan = [
+            # Fail fast when the openstack plan would change an INFRA_APP
+            # (mysql, mysql-router, vault, traefik): those upgrades belong
+            # to the dedicated refresh subcommands.
+            TerraformInitStep(self.deployment.get_tfhelper("openstack-plan")),
+            ValidateInfraAppsStep(
+                self.client,
+                self.deployment.get_tfhelper("openstack-plan"),
+                self.manifest,
+            ),
             LatestInChannel(self.deployment, self.jhelper, self.manifest),
             ReapplyInfraModelConfigStep(self.deployment, self.jhelper, self.manifest),
             RefreshSnapStep(self.deployment, self.jhelper),

@@ -32,7 +32,10 @@ from sunbeam.core.juju import JujuHelper
 from sunbeam.core.manifest import Manifest, StorageBackendConfig
 from sunbeam.core.terraform import TerraformHelper, TerraformInitStep
 from sunbeam.feature_gates import FeatureGateMixin
-from sunbeam.steps.openstack import DeployControlPlaneStep
+from sunbeam.steps.openstack import (
+    DeployControlPlaneStep,
+    ValidateInfraAppsStep,
+)
 from sunbeam.storage.cli_base import StorageBackendCLIBase
 from sunbeam.storage.models import (
     SecretDictField,
@@ -370,6 +373,7 @@ class StorageBackendBase(FeatureGateMixin, typing.Generic[BackendConfig]):
         plan = [
             TerraformInitStep(tfhelper),
             TerraformInitStep(openstack_tfhelper),
+            ValidateInfraAppsStep(client, openstack_tfhelper, self.manifest),
             DeploySpecificCinderVolumeStep(
                 deployment,
                 client,
@@ -590,6 +594,7 @@ class StorageBackendBase(FeatureGateMixin, typing.Generic[BackendConfig]):
             ValidateStoragePrerequisitesStep(deployment, client, jhelper),
             TerraformInitStep(tfhelper),
             TerraformInitStep(openstack_tfhelper),
+            ValidateInfraAppsStep(client, openstack_tfhelper, self.manifest),
             self.create_destroy_step(
                 deployment,
                 client,

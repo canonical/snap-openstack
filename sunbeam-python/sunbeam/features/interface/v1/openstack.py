@@ -49,13 +49,16 @@ from sunbeam.features.interface.v1.base import ConfigType, EnableDisableFeature
 from sunbeam.steps.openstack import (
     DATABASE_MAX_POOL_SIZE,
     DATABASE_STORAGE_KEY,
+    INFRA_APP_SUBCOMMANDS,
     TOPOLOGY_KEY,
+    ValidateInfraAppsStep,
     build_overlay_dict,
     compute_resources_for_service,
     get_database_default_storage_dict,
     get_database_resource_dict,
     get_database_resource_tfvars,
     get_database_storage_dict,
+    pending_infra_app_changes,
     service_scale_function,
     write_database_resource_dict,
     write_database_storage_dict,
@@ -93,6 +96,22 @@ class OpenStackControlPlaneFeature(EnableDisableFeature, typing.Generic[ConfigTy
     _manifest: Manifest | None
     interface_version = Version("0.0.1")
     tf_plan_location: TerraformPlanLocation
+
+    @property
+    def _own_infra_charms(self) -> set[str]:
+        """INFRA_APP charms this feature deploys in its own plan.
+
+        The feature owns these charms' channels (e.g. the vault feature
+        deploying vault-k8s), so INFRA_APPS validation must not gate its
+        flows on them.
+        """
+        return {
+            charm
+            for charm in self.manifest_attributes_tfvar_map()
+            .get(self.tfplan, {})
+            .get("charms", {})
+            if charm in INFRA_APP_SUBCOMMANDS
+        }
 
     def __init__(self) -> None:
         """Constructor for feature interface.
@@ -159,9 +178,28 @@ class OpenStackControlPlaneFeature(EnableDisableFeature, typing.Generic[ConfigTy
         tfhelper = deployment.get_tfhelper(self.tfplan)
         jhelper = JujuHelper(deployment.juju_controller)
 
+        client = deployment.get_client()
+        if self.tf_plan_location == TerraformPlanLocation.SUNBEAM_TERRAFORM_REPO:
+            # This feature reapplys the openstack plan: make sure that
+            # apply would not change an INFRA_APP (mysql, vault, traefik),
+            # and only then store the user manifest in the database.
+            run_plan(
+                [
+                    TerraformInitStep(deployment.get_tfhelper(self.tfplan)),
+                    ValidateInfraAppsStep(
+                        client,
+                        tfhelper,
+                        self.manifest,
+                        skip_charms=self._own_infra_charms,
+                    ),
+                ],
+                console,
+                show_hints,
+            )
+
         plan: list[BaseStep] = []
         if self.user_manifest:
-            plan.append(AddManifestStep(deployment.get_client(), self.user_manifest))
+            plan.append(AddManifestStep(client, self.user_manifest))
         plan.extend(
             [
                 TerraformInitStep(deployment.get_tfhelper(self.tfplan)),
@@ -183,7 +221,24 @@ class OpenStackControlPlaneFeature(EnableDisableFeature, typing.Generic[ConfigTy
         """Run plans to disable the feature."""
         tfhelper = deployment.get_tfhelper(self.tfplan)
         jhelper = JujuHelper(deployment.juju_controller)
-        plan = [
+        if self.tf_plan_location == TerraformPlanLocation.SUNBEAM_TERRAFORM_REPO:
+            # This feature reapplys the openstack plan: make sure that
+            # apply would not change an INFRA_APP (mysql, vault, traefik).
+            run_plan(
+                [
+                    TerraformInitStep(tfhelper),
+                    ValidateInfraAppsStep(
+                        deployment.get_client(),
+                        tfhelper,
+                        self.manifest,
+                        skip_charms=self._own_infra_charms,
+                    ),
+                ],
+                console,
+                show_hints,
+            )
+
+        plan: list[BaseStep] = [
             TerraformInitStep(tfhelper),
             DisableOpenStackApplicationStep(deployment, tfhelper, jhelper, self),
         ]
@@ -503,6 +558,29 @@ class UpgradeOpenStackApplicationStep(BaseStep, JujuStepHelper):
         return Result(ResultType.COMPLETED)
 
 
+def _infra_app_drift_result(
+    tfhelper: TerraformHelper, feature: "OpenStackControlPlaneFeature"
+) -> Result | None:
+    """FAILED Result when this feature apply would change an INFRA_APP.
+
+    Backstop inside the shared enable/disable steps so features that
+    override run_enable_plans/run_disable_plans are gated as well.  The
+    feature's own charms are exempt: it deploys them on purpose.  Returns
+    None when nothing is pending or the plan is not the openstack plan.
+    """
+    if tfhelper.plan != f"{OPENSTACK_TERRAFORM_PLAN}-plan":
+        return None
+    pending = pending_infra_app_changes(tfhelper, feature._own_infra_charms)
+    if not pending:
+        return None
+    LOG.debug("Pending infra app changes: %s", pending)
+    return Result(
+        ResultType.FAILED,
+        "The openstack Terraform plan has pending changes for"
+        " applications upgraded by dedicated subcommands:\n  " + "\n  ".join(pending),
+    )
+
+
 class EnableOpenStackApplicationStep(
     BaseStep, JujuStepHelper, typing.Generic[ConfigType]
 ):
@@ -574,13 +652,16 @@ class EnableOpenStackApplicationStep(
         )
 
         try:
-            self.tfhelper.update_tfvars_and_apply_tf(
+            self.tfhelper.update_tfvars(
                 self.deployment.get_client(),
                 self.feature.manifest,
                 tfvar_config=config_key,
                 override_tfvars=extra_tfvars,
-                reporter=context.reporter,
             )
+            drift = _infra_app_drift_result(self.tfhelper, self.feature)
+            if drift is not None:
+                return drift
+            self.tfhelper.apply(reporter=context.reporter)
         except (TerraformException, TerraformStateLockedException) as e:
             return Result(ResultType.FAILED, str(e))
 
@@ -675,13 +756,16 @@ class DisableOpenStackApplicationStep(
                 extra_tfvars.update(
                     self.feature.get_database_tfvars(self.deployment, enable=False)
                 )
-                self.tfhelper.update_tfvars_and_apply_tf(
+                self.tfhelper.update_tfvars(
                     self.deployment.get_client(),
                     self.feature.manifest,
                     tfvar_config=config_key,
                     override_tfvars=extra_tfvars,
-                    reporter=context.reporter,
                 )
+                drift = _infra_app_drift_result(self.tfhelper, self.feature)
+                if drift is not None:
+                    return drift
+                self.tfhelper.apply(reporter=context.reporter)
         except (TerraformException, TerraformStateLockedException) as e:
             return Result(ResultType.FAILED, str(e))
 

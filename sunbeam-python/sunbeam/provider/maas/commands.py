@@ -189,6 +189,7 @@ from sunbeam.steps.openstack import (
     PromptDatabaseTopologyStep,
     PromptRegionStep,
     ReapplyOpenStackTerraformPlanStep,
+    ValidateInfraAppsStep,
 )
 from sunbeam.steps.role_distributor import (
     DeployRoleDistributorApplicationStep,
@@ -859,6 +860,16 @@ def deploy(
                 ovn_manager,
             )
         )
+    # This command must not upgrade INFRA_APPS: validate the manifest
+    # against the deployment before deploying anything.
+    run_plan(
+        [
+            TerraformInitStep(tfhelper_openstack_deploy),
+            ValidateInfraAppsStep(client, tfhelper_openstack_deploy, manifest),
+        ],
+        console,
+        show_hints,
+    )
     plan2.append(TerraformInitStep(tfhelper_openstack_deploy))
     plan2.append(
         MaasEndpointsConfigurationStep(
@@ -1982,6 +1993,20 @@ def configure_sriov(
 
     tfhelper_hypervisor = deployment.get_tfhelper("hypervisor-plan")
     tfhelper_openstack = deployment.get_tfhelper("openstack-plan")
+
+    # This command must not upgrade INFRA_APPS: validate the manifest
+    # against the deployment before changing anything on it, and before
+    # storing the manifest in the cluster database.
+    run_plan(
+        [
+            TerraformInitStep(tfhelper_openstack),
+            ValidateInfraAppsStep(client, tfhelper_openstack, manifest),
+        ],
+        console,
+        show_hints,
+    )
+    if manifest_path:
+        run_plan([AddManifestStep(client, manifest_path)], console, show_hints)
 
     plan: list[BaseStep] = [
         MaasConfigSRIOVStep(

@@ -411,16 +411,119 @@ class TerraformHelper:
         LOG.debug("Applying plan %s with tfvars %s", self.plan, updated_tfvars)
         self.apply(tf_apply_extra_args, reporter=reporter)
 
-    def update_tfvars_and_apply_tf(
+    def plan_resource_changes(self, refresh: bool = False) -> dict[str, dict]:
+        """Run terraform plan and return the planned changes per resource.
+
+        The plan is saved to a file and read back with ``terraform show
+        -json``: the streaming plan output only carries resource addresses,
+        the before/after attribute maps are only available through the
+        saved plan.
+
+        With ``refresh=False`` (the default) the plan is evaluated against
+        the stored state only, without contacting the Juju controller.  That
+        is enough to detect configuration drift and keeps the check fast;
+        the callers apply (and refresh state) right after.
+
+        :param refresh: Refresh state before planning (slower).
+        :return: Mapping of resource address to its planned change:
+            ``{"actions": [...], "before": <attrs or None>, "after": <attrs or None>}``
+            for every resource with pending changes (no-ops excluded).
+        :raises TerraformException: If terraform plan fails.
+        """
+        os_env = os.environ.copy()
+        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        # Fixed name: overwritten each run instead of accumulating one
+        # log per invocation in the plan directory.
+        tf_log = str(self.path / "terraform-plan.log")
+        plan_file = self.path / f"tfplan-{timestamp}"
+        os_env.update({"TF_LOG_PATH": tf_log})
+        os_env.setdefault("TF_LOG", "INFO")
+        if self.env:
+            os_env.update(self.env)
+
+        cmd = [
+            self.terraform,
+            "plan",
+            "-input=false",
+            "-no-color",
+            "-detailed-exitcode",
+            # Wait for the shared state lock instead of failing fast:
+            # concurrent commands legitimately hold the lock.
+            "-lock-timeout=120s",
+            f"-out={plan_file}",
+        ]
+        if not refresh:
+            cmd.append("-refresh=false")
+        LOG.debug("Running command %s", " ".join(cmd))
+        process = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            cwd=self.path,
+            env=os_env,
+        )
+        # -detailed-exitcode: 0 = no changes, 1 = error, 2 = changes
+        if process.returncode == 1:
+            LOG.error("Terraform plan failed: %s", process.stderr)
+            plan_file.unlink(missing_ok=True)
+            if "state lock" in process.stderr.lower() or "already locked" in (
+                process.stderr.lower()
+            ):
+                raise TerraformStateLockedException(process.stderr)
+            raise TerraformException(process.stderr)
+        if process.returncode == 0:
+            plan_file.unlink(missing_ok=True)
+            LOG.debug("Terraform plan has no changes")
+            return {}
+
+        try:
+            cmd = [self.terraform, "show", "-json", "-no-color", str(plan_file)]
+            LOG.debug("Running command %s", " ".join(cmd))
+            show = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                cwd=self.path,
+                env=os_env,
+            )
+            if show.returncode != 0:
+                LOG.error("Terraform show failed: %s", show.stderr)
+                raise TerraformException(show.stderr)
+            try:
+                plan_json = json.loads(show.stdout)
+            except json.JSONDecodeError as e:
+                raise TerraformException(
+                    f"Could not parse terraform plan output: {e}"
+                ) from e
+        finally:
+            plan_file.unlink(missing_ok=True)
+
+        changes: dict[str, dict] = {}
+        for resource_change in plan_json.get("resource_changes", []):
+            change = resource_change.get("change", {})
+            actions = change.get("actions", [])
+            address = resource_change.get("address")
+            if not address or actions == ["no-op"]:
+                continue
+            changes[address] = {
+                "actions": actions,
+                "type": resource_change.get("type"),
+                "before": change.get("before"),
+                "after": change.get("after"),
+            }
+
+        LOG.debug("Terraform plan resource changes: %s", list(changes))
+        return changes
+
+    def update_tfvars(
         self,
         client: Client,
         manifest: Manifest,
         tfvar_config: str | None = None,
         override_tfvars: dict | None = None,
-        tf_apply_extra_args: list | None = None,
-        reporter: ProgressReporter | None = None,
-    ) -> None:
-        """Updates terraform vars and Apply the terraform.
+        persist: bool = True,
+    ) -> dict:
+        """Update terraform vars from DB, manifest and overrides.
 
         Merges tfvars from three sources with precedence Manifest > Override > DB:
         1. DB: Previously stored values (filtered by source tracking)
@@ -430,9 +533,12 @@ class TerraformHelper:
         Source tracking distinguishes computed values (from override_tfvars) from
         manifest-derivable values. Computed values persist across runs.
 
+        Persists the merged tfvars in clusterdb (when tfvar_config is given),
+        writes them to the tfvars file and returns them.
+
         :param tfvar_config: TerraformVar key name used to save tfvar in clusterdb
         :param override_tfvars: Terraform vars to override (computed/runtime)
-        :param tf_apply_extra_args: Extra args to terraform apply command
+        :return: The merged tfvars.
         """
         # Step 1: Load and filter DB values
         computed_keys, updated_tfvars = self._load_and_filter_db_tfvars(
@@ -452,14 +558,38 @@ class TerraformHelper:
             # Apply override to final result
             self._apply_tfvars(updated_tfvars, override_tfvars)
 
-        # Step 4: Save and apply
-        if tfvar_config:
+        # Step 4: Save.  Validation callers pass persist=False: they only
+        # need the written tfvars file to plan against and must not
+        # overwrite the stored tfvars other validation steps compare
+        # against (e.g. the immutable storage checks).
+        if persist and tfvar_config:
             data_to_save = dict(updated_tfvars)
             data_to_save["_computed_keys"] = list(computed_keys)
             update_config(client, tfvar_config, data_to_save)
 
         self.write_tfvars(updated_tfvars)
-        LOG.debug("Applying plan %s with tfvars %s", self.plan, updated_tfvars)
+        LOG.debug("Updated tfvars for plan %s: %s", self.plan, updated_tfvars)
+        return updated_tfvars
+
+    def update_tfvars_and_apply_tf(
+        self,
+        client: Client,
+        manifest: Manifest,
+        tfvar_config: str | None = None,
+        override_tfvars: dict | None = None,
+        tf_apply_extra_args: list | None = None,
+        reporter: ProgressReporter | None = None,
+    ) -> None:
+        """Updates terraform vars and apply the terraform.
+
+        See update_tfvars for how the tfvars are merged.
+
+        :param tfvar_config: TerraformVar key name used to save tfvar in clusterdb
+        :param override_tfvars: Terraform vars to override (computed/runtime)
+        :param tf_apply_extra_args: Extra args to terraform apply command
+        """
+        self.update_tfvars(client, manifest, tfvar_config, override_tfvars)
+        LOG.debug("Applying plan %s", self.plan)
         self.apply(tf_apply_extra_args, reporter=reporter)
 
     def _load_and_filter_db_tfvars(

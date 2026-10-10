@@ -62,6 +62,9 @@ class TestSharedFilesystemFeature:
     @patch.object(manila_feature, "click", Mock())
     def test_run_enable_plans(self, mock_JujuHelper, deployment):
         jhelper = mock_JujuHelper.return_value
+        tfhelper = deployment.get_tfhelper.return_value
+        # ValidateInfraAppsStep plans against the tfhelper
+        tfhelper.plan_resource_changes.return_value = {}
         manila = manila_feature.SharedFilesystemFeature()
         manila._manifest = Mock()
         manila._manifest.core.software.charms = {}
@@ -85,6 +88,8 @@ class TestSharedFilesystemFeature:
         jhelper.get_model_uuid.return_value = "model-uuid"
         tfhelper = deployment.get_tfhelper.return_value
         tfhelper.state_list.return_value = []
+        # ValidateInfraAppsStep plans against the tfhelper
+        tfhelper.plan_resource_changes.return_value = {}
         manila = manila_feature.SharedFilesystemFeature()
         manila._manifest = Mock()
         manila._manifest.core.software.charms = {}
@@ -108,12 +113,11 @@ class TestSharedFilesystemFeature:
         # DisableOpenStackApplicationStep calls.
         extra_tfvars = manila.set_tfvars_on_disable(deployment)
         extra_tfvars.update(manila.get_database_tfvars(deployment, enable=False))
-        tfhelper.update_tfvars_and_apply_tf.assert_any_call(
+        tfhelper.update_tfvars.assert_any_call(
             deployment.get_client.return_value,
             manila._manifest,
             tfvar_config="TerraformVarsOpenstack",
             override_tfvars=extra_tfvars,
-            reporter=ANY,
         )
         jhelper.wait_application_gone.assert_any_call(
             manila.set_application_names(deployment), "openstack", timeout=ANY
