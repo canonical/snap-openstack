@@ -857,6 +857,23 @@ class JujuHelper:
             raise ActionFailedException(str(task))
         return task.results
 
+    def get_application_actions(self, application: str, model: str) -> list[str]:
+        """Return action names available for an application in a model."""
+        with self._model(model) as juju:
+            try:
+                actions = self.cli(
+                    "actions",
+                    application,
+                    include_controller=False,
+                    juju=juju,
+                )
+            except jubilant.CLIError as e:
+                raise JujuException(str(e)) from e
+
+        if not isinstance(actions, dict):
+            return []
+        return sorted(actions.keys())
+
     def add_secret(self, model: str, name: str, data: dict, info: str) -> str:
         """Add secret to the model.
 
