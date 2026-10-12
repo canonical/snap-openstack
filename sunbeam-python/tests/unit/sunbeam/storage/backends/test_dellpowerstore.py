@@ -96,6 +96,15 @@ class TestDellpowerstoreBackend(BaseBackendTests):
 
         config_class = backend.config_type()
 
+        # Check san_ip is marked as secret
+        ip_field = config_class.model_fields.get("san_ip")
+        assert ip_field is not None
+        has_secret_marker = any(
+            isinstance(m, SecretDictField) for m in ip_field.metadata
+        )
+
+        assert has_secret_marker, "san_ip` should be marked as secret"
+
         # Check san_login is marked as secret
         username_field = config_class.model_fields.get("san_login")
         assert username_field is not None
