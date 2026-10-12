@@ -10,6 +10,7 @@ permissions:
 
 jobs:
     TICS:
+      if: github.repository == 'canonical/snap-openstack'
       runs-on: [self-hosted, linux, amd64, tiobe, noble]
       steps:
         - name: Checkout

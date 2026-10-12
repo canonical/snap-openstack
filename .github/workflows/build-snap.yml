@@ -13,6 +13,10 @@ on:
 jobs:
   build:
     name: Build snap
+    # Skip only the schedule path in forks; pull_request/workflow_call callers keep working.
+    if: >-
+      github.event_name != 'schedule' ||
+      github.repository == 'canonical/snap-openstack'
     runs-on: ubuntu-latest
     outputs:
       snap: ${{ steps.snapcraft.outputs.snap }}
@@ -33,6 +37,7 @@ jobs:
   functional-test:
     needs: build
     name: Functional test
+    if: github.repository == 'canonical/snap-openstack'
     runs-on: [self-hosted, large, noble, x64]
     steps:
       - name: Checkout

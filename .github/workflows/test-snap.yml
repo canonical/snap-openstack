@@ -55,6 +55,7 @@ on:
 jobs:
   functional-test:
     name: Functional test
+    if: github.repository == 'canonical/snap-openstack'
     runs-on: [self-hosted, large, noble, x64]
     steps:
       - name: Checkout

@@ -10,7 +10,9 @@ jobs:
     name: Sync Git Tags from Snap Builds
     runs-on: ubuntu-latest
     # Only run on main branch (for scheduled runs, this is automatic, but this ensures manual runs respect it too)
-    if: github.ref == 'refs/heads/main'
+    if: >-
+      github.repository == 'canonical/snap-openstack' &&
+      github.ref == 'refs/heads/main'
     permissions:
       contents: write # Required to push git tags
     steps:

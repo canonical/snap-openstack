@@ -7,10 +7,14 @@ on:
 
 jobs:
   test-python:
+    if: github.repository == 'canonical/snap-openstack'
     uses: ./.github/workflows/test-python.yml
   test-golang:
+    if: github.repository == 'canonical/snap-openstack'
     uses: ./.github/workflows/test-golang.yml
   build-microcluster:
+    if: github.repository == 'canonical/snap-openstack'
     uses: ./.github/workflows/build-golang.yml
   build:
+    if: github.repository == 'canonical/snap-openstack'
     uses: ./.github/workflows/build-snap.yml
