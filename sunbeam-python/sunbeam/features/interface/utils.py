@@ -120,6 +120,10 @@ def validate_ca_chain(
             flags=re.DOTALL,
         )
 
+        for cert in chain_list:
+            if not is_ca_certificate(base64.b64encode(cert.encode())):
+                raise click.BadParameter("The ca-chain contains a non-CA certificate.")
+
         if len(chain_list) < 2:
             # Just validate individual certs
             for cert in chain_list:
