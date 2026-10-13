@@ -17,6 +17,11 @@ from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import ConfigItemNotFoundException
 from sunbeam.core.checks import JujuLoginCheck, run_preflight_checks
 from sunbeam.core.common import SunbeamException, read_config, update_config
+from sunbeam.core.config_overrides import (
+    ConfigOverridesError,
+    report_stale_overrides,
+    require_valid_overrides,
+)
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.manifest import FeatureConfig, Manifest, SoftwareConfig
 from sunbeam.feature_gates import FeatureGateMixin
@@ -839,6 +844,7 @@ class EnableDisableFeature(BaseFeature, Generic[ConfigType]):
         run_preflight_checks([JujuLoginCheck(deployment.juju_account)], console)
         self.check_enablement_requirements(deployment)
         self.enable_requirements(deployment, show_hints)
+        self.check_config_overrides(deployment)
 
     def post_enable(
         self, deployment: Deployment, config: ConfigType, show_hints: bool
@@ -876,12 +882,25 @@ class EnableDisableFeature(BaseFeature, Generic[ConfigType]):
 
         self.run_enable_plans(deployment, config, show_hints)
         self.post_enable(deployment, config, show_hints)
+        self.report_config_overrides(deployment)
         self.update_feature_info(deployment.get_client(), {"enabled": "true"})
+
+    def check_config_overrides(self, deployment: Deployment) -> None:
+        """Fail before a feature change when a stored override is invalid."""
+        try:
+            require_valid_overrides(deployment, console)
+        except ConfigOverridesError as e:
+            raise FeatureError(str(e)) from e
+
+    def report_config_overrides(self, deployment: Deployment) -> None:
+        """Warn about overrides that stopped validating after the change."""
+        report_stale_overrides(deployment, console)
 
     def pre_disable(self, deployment: Deployment, show_hints: bool) -> None:
         """Handler to perform tasks before disabling the feature."""
         run_preflight_checks([JujuLoginCheck(deployment.juju_account)], console)
         self.check_enablement_requirements(deployment, state="disable")
+        self.check_config_overrides(deployment)
 
     def post_disable(self, deployment: Deployment, show_hints: bool) -> None:
         """Handler to perform tasks after the feature is disabled."""
@@ -901,6 +920,7 @@ class EnableDisableFeature(BaseFeature, Generic[ConfigType]):
 
         self.run_disable_plans(deployment, show_hints)
         self.post_disable(deployment, show_hints)
+        self.report_config_overrides(deployment)
         self.update_feature_info(deployment.get_client(), {"enabled": "false"})
 
     def commands(

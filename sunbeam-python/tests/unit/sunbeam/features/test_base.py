@@ -9,6 +9,7 @@ import pytest
 from packaging.version import Version
 
 from sunbeam.clusterd.service import ConfigItemNotFoundException
+from sunbeam.core.config_overrides import ConfigOverridesError
 from sunbeam.core.manifest import FeatureManifest, Manifest
 from sunbeam.feature_manager import FeatureManager
 from sunbeam.features.interface.v1.base import (
@@ -593,6 +594,10 @@ class TestEnableDisableFeature:
         )
         mocker.patch.object(feature, "check_enablement_requirements")
         mocker.patch.object(feature, "enable_requirements")
+        mocker.patch(
+            "sunbeam.features.interface.v1.base.require_valid_overrides",
+            return_value=None,
+        )
 
         feature.pre_enable(deployment, Mock(), show_hints=False)
 
@@ -611,6 +616,10 @@ class TestEnableDisableFeature:
         check_enablement_requirements = mocker.patch.object(
             feature, "check_enablement_requirements"
         )
+        mocker.patch(
+            "sunbeam.features.interface.v1.base.require_valid_overrides",
+            return_value=None,
+        )
 
         feature.pre_disable(deployment, show_hints=False)
 
@@ -621,6 +630,21 @@ class TestEnableDisableFeature:
         checks = run_preflight_checks.call_args.args[0]
         assert len(checks) == 1
         assert checks[0].step.juju_account == juju_account
+
+    def test_pre_enable_blocks_on_invalid_config_override(self, deployment, mocker):
+        feature = DummyFeature()
+        mocker.patch("sunbeam.features.interface.v1.base.run_preflight_checks")
+        mocker.patch.object(feature, "check_enablement_requirements")
+        mocker.patch.object(feature, "enable_requirements")
+        mocker.patch(
+            "sunbeam.features.interface.v1.base.require_valid_overrides",
+            side_effect=ConfigOverridesError(
+                "config-file override validation failed for: glance"
+            ),
+        )
+
+        with pytest.raises(FeatureError, match="glance"):
+            feature.pre_enable(deployment, Mock(), show_hints=False)
 
     def test_enable_requirements_with_enabled_group_requirement(self, deployment):
         group_member_klass("test_requirement_group.a", enabled=True)

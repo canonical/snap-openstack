@@ -10,6 +10,10 @@ from rich.console import Console
 from sunbeam.clusterd.client import Client
 from sunbeam.core.checks import JujuLoginCheck, run_preflight_checks
 from sunbeam.core.common import click_option_topology, run_plan
+from sunbeam.core.config_overrides import (
+    report_stale_overrides,
+    require_valid_overrides,
+)
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import JujuHelper
 from sunbeam.core.terraform import TerraformInitStep
@@ -60,6 +64,10 @@ def resize(
         LOG.warning("Option --force is deprecated and the value is ignored")
 
     jhelper = JujuHelper(deployment.juju_controller)
+
+    # A resize changes the configuration the services run with; make sure the
+    # stored config-file overrides still validate before touching the cloud.
+    require_valid_overrides(deployment, console)
 
     plan: list = []
     if len(storage_nodes):
@@ -115,5 +123,8 @@ def resize(
         )
 
     run_plan(plan, console, show_hints)
+
+    # Resize applied; report overrides that stopped validating because of it.
+    report_stale_overrides(deployment, console)
 
     click.echo("Resize complete.")
