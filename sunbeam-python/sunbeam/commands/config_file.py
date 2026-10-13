@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: 2026 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
-import datetime
 import functools
 import logging
 from pathlib import Path
@@ -24,10 +23,7 @@ from sunbeam.core.config_overrides import (
     read_overrides,
     remove_override,
     set_override,
-    validate_ini,
     validate_overrides,
-    validate_policy_yaml,
-    wait_for_settle,
 )
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import JujuException, JujuHelper
@@ -61,7 +57,11 @@ def _preflight_checks(deployment: Deployment) -> None:
 def _read_local_files(
     file: Path | None, policy: Path | None
 ) -> tuple[str | None, str | None]:
-    """Read and locally validate the config (and policy) files."""
+    """Read the config (and policy) files, leaving their content unchecked.
+
+    The unit validates the content before anything is attached, so a file
+    that is not a usable override is reported by the service itself.
+    """
     if file is None and policy is None:
         raise click.ClickException(
             "provide a configuration file, a policy file, or both"
@@ -72,7 +72,6 @@ def _read_local_files(
             config_text = file.read_text()
         except OSError as e:
             raise click.ClickException(f"unable to read config file {file}: {e}") from e
-        validate_ini(config_text)
     policy_text = None
     if policy is not None:
         try:
@@ -81,7 +80,6 @@ def _read_local_files(
             raise click.ClickException(
                 f"unable to read policy file {policy}: {e}"
             ) from e
-        validate_policy_yaml(policy_text)
     return config_text, policy_text
 
 
@@ -126,11 +124,6 @@ def _enable(
     record["enabled"] = True
     set_override(deployment.get_client(), app, record)
     console.print(f"Enabled config-file override for {app}.")
-    if not wait_for_settle(jhelper, app):
-        console.print(
-            f"[yellow]warning:[/yellow] application {app} did not settle; "
-            f"check `juju status {app}`."
-        )
 
 
 def _detach(jhelper: JujuHelper, app: str) -> None:
@@ -164,7 +157,6 @@ def override(ctx: click.Context) -> None:
     default=None,
     help="Policy YAML file with the override rules.",
 )
-@click.option("--enable", is_flag=True, default=False, help="Apply it immediately.")
 @click_option_show_hints
 @click.pass_context
 @_handle_errors
@@ -173,22 +165,20 @@ def add(
     app: str,
     file: Path | None,
     policy: Path | None,
-    enable: bool,
     show_hints: bool,
 ) -> None:
-    """Store a config file override for an application.
+    """Store a config file override for an application and apply it.
 
-    The config file and the policy file are validated locally and against
-    the deployed service before anything is stored or attached; at least one
-    of them is required, so a policy-only override is allowed. The files are
-    attached as the charm's config-override/policy-override juju resources,
-    replacing any previous override completely (a missing half is cleared
-    with an empty file). With --enable the override is applied immediately
-    via the charm's apply-config-overrides action.
+    At least one of the config file and the policy file is required, so a
+    policy-only override is allowed.  The content is validated on the
+    deployed service first: content the service rejects is stored but never
+    attached, so it can be inspected and fixed.  Valid content is attached
+    as the charm's config-override/policy-override juju resources, replacing
+    any previous override completely (a missing half is cleared with an
+    empty file), and applied via the charm's apply-config-overrides action.
     """
     deployment: Deployment = ctx.obj
     client = deployment.get_client()
-
     config_text, policy_text = _read_local_files(file, policy)
     record = make_record(config_text, policy_text)
 
@@ -207,11 +197,6 @@ def add(
         )
 
     attach_overrides(jhelper, app, config_text, policy_text)
-
-    if not enable:
-        console.print(f"Run `sunbeam config-file override enable {app}` to apply it.")
-        return
-
     _enable(deployment, jhelper, app, record)
 
 
@@ -272,37 +257,124 @@ def remove(ctx: click.Context, app: str, force: bool, show_hints: bool) -> None:
     console.print(f"Removed config-file override for {app}.")
 
 
+def _print_override(app: str, record: dict, *, header: bool = False) -> None:
+    """Print the stored halves of one override."""
+    config_text = record.get("config")
+    policy_text = record.get("policy")
+    if config_text is not None:
+        if header:
+            console.print(f"# --- {app} ---")
+        console.print(config_text, markup=False, highlight=False)
+    if policy_text is not None:
+        console.print(f"# --- {app} policy ---" if header else "# --- policy ---")
+        console.print(policy_text, markup=False, highlight=False)
+
+
+def _write_override(output: Path, record: dict) -> None:
+    """Write the stored halves of one override next to ``output``."""
+    try:
+        if record.get("config") is not None:
+            output.write_text(record["config"])
+            console.print(f"Wrote config to {output}")
+        if record.get("policy") is not None:
+            policy_output = output.with_name(output.name + ".policy.yaml")
+            policy_output.write_text(record["policy"])
+            console.print(f"Wrote policy to {policy_output}")
+    except OSError as e:
+        raise click.ClickException(f"unable to write {output}: {e}") from e
+
+
+def _write_overrides(output_dir: Path, overrides: dict) -> int:
+    """Write every stored override into ``output_dir``, returning the count."""
+
+    def _write(path: Path, text: str) -> None:
+        try:
+            path.write_text(text)
+        except OSError as e:
+            raise click.ClickException(f"unable to write {path}: {e}") from e
+
+    try:
+        output_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        raise click.ClickException(f"unable to create {output_dir}: {e}") from e
+    written = 0
+    for app in sorted(overrides):
+        record = overrides[app]
+        if record.get("config") is not None:
+            _write(output_dir / f"{app}.conf", record["config"])
+            written += 1
+        if record.get("policy") is not None:
+            _write(output_dir / f"{app}.policy.yaml", record["policy"])
+            written += 1
+    return written
+
+
 @override.command("get")
-@click.argument("app", type=str)
+@click.argument("app", type=str, required=False)
+@click.option(
+    "--all",
+    "all_apps",
+    is_flag=True,
+    default=False,
+    help="Print every stored override.",
+)
 @click.option(
     "--output",
     type=click.Path(dir_okay=False, path_type=Path),
     default=None,
-    help="Write the stored config file to this path.",
+    help="Write one application's stored files to this path.",
+)
+@click.option(
+    "--output-dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="Write every stored override into this directory (with --all).",
 )
 @click.pass_context
 @_handle_errors
-def get(ctx: click.Context, app: str, output: Path | None) -> None:
-    """Print the stored config file override for an application."""
+def get(
+    ctx: click.Context,
+    app: str | None,
+    all_apps: bool,
+    output: Path | None,
+    output_dir: Path | None,
+) -> None:
+    """Print the stored config file override of an application.
+
+    With --all every stored override is printed, or written into --output-dir
+    when given, for support and debugging.  For one application, --output
+    writes the files next to the given path instead of printing them;
+    otherwise the unit is asked which override files it has applied.
+    """
+    if app is not None and all_apps:
+        raise click.UsageError("pass an application or --all, not both")
+    if output is not None and all_apps:
+        raise click.UsageError("--output writes one application, use --output-dir")
+    if output_dir is not None and not all_apps:
+        raise click.UsageError("--output-dir needs --all")
+
     deployment: Deployment = ctx.obj
     client = deployment.get_client()
+    if all_apps:
+        overrides = read_overrides(client)
+        if not overrides:
+            console.print("No config-file overrides stored.")
+            return
+        if output_dir is None:
+            for name in sorted(overrides):
+                _print_override(name, overrides[name], header=True)
+            return
+        written = _write_overrides(output_dir, overrides)
+        console.print(f"Collected {written} override(s) into {output_dir}.")
+        return
+
+    if app is None:
+        raise click.UsageError("pass an application or --all")
     record = get_override(client, app)
-    config_text = record.get("config")
-    policy_text = record.get("policy")
     if output is not None:
-        if config_text is not None:
-            output.write_text(config_text)
-            console.print(f"Wrote config to {output}")
-        if policy_text is not None:
-            policy_output = output.with_name(output.name + ".policy.yaml")
-            policy_output.write_text(policy_text)
-            console.print(f"Wrote policy to {policy_output}")
-    else:
-        if config_text is not None:
-            console.print(config_text, markup=False, highlight=False)
-        if policy_text is not None:
-            console.print("# --- policy ---")
-            console.print(policy_text, markup=False, highlight=False)
+        _write_override(output, record)
+        return
+    _print_override(app, record)
     try:
         applied = get_applied_overrides(_jhelper(deployment), app)
     except (ConfigOverridesError, JujuException) as e:
@@ -338,66 +410,3 @@ def list_overrides(ctx: click.Context) -> None:
             str(record.get("added_at", "")),
         )
     console.print(table)
-
-
-@override.command("validate")
-@click.argument("app", type=str)
-@click.argument(
-    "file",
-    required=False,
-    type=click.Path(exists=True, dir_okay=False, path_type=Path),
-)
-@click.option(
-    "--policy",
-    type=click.Path(exists=True, dir_okay=False, path_type=Path),
-    default=None,
-    help="Policy YAML file with the override rules.",
-)
-@click.pass_context
-@_handle_errors
-def validate(
-    ctx: click.Context, app: str, file: Path | None, policy: Path | None
-) -> None:
-    """Validate a config file override on the unit without applying it."""
-    deployment: Deployment = ctx.obj
-    config_text, policy_text = _read_local_files(file, policy)
-    _preflight_checks(deployment)
-    jhelper = _jhelper(deployment)
-    if policy_text is not None:
-        check_charm_support(jhelper, app, policy=True)
-    if not _validate_unit(jhelper, app, config_text, policy_text):
-        raise ConfigOverridesError(f"Validation failed for {app}.")
-
-
-@override.command("collect")
-@click.option(
-    "--output-dir",
-    type=click.Path(file_okay=False, path_type=Path),
-    default=None,
-    help="Directory to write the collected overrides to.",
-)
-@click.pass_context
-@_handle_errors
-def collect(ctx: click.Context, output_dir: Path | None) -> None:
-    """Dump every stored override to files for support/debugging."""
-    deployment: Deployment = ctx.obj
-    client = deployment.get_client()
-    overrides = read_overrides(client)
-    if output_dir is None:
-        timestamp = datetime.datetime.now(datetime.timezone.utc).strftime(
-            "%Y%m%dT%H%M%SZ"
-        )
-        output_dir = Path.cwd() / f"sunbeam-config-overrides-{timestamp}"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    written = 0
-    for app in sorted(overrides):
-        record = overrides[app]
-        config_text = record.get("config")
-        policy_text = record.get("policy")
-        if config_text is not None:
-            (output_dir / f"{app}.conf").write_text(config_text)
-            written += 1
-        if policy_text is not None:
-            (output_dir / f"{app}.policy.yaml").write_text(policy_text)
-            written += 1
-    console.print(f"Collected {written} override(s) into {output_dir}.")

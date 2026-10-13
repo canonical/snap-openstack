@@ -595,7 +595,7 @@ class TestEnableDisableFeature:
         mocker.patch.object(feature, "check_enablement_requirements")
         mocker.patch.object(feature, "enable_requirements")
         mocker.patch(
-            "sunbeam.features.interface.v1.base.require_valid_overrides",
+            "sunbeam.features.interface.v1.base.check_stale_overrides",
             return_value=None,
         )
 
@@ -617,7 +617,7 @@ class TestEnableDisableFeature:
             feature, "check_enablement_requirements"
         )
         mocker.patch(
-            "sunbeam.features.interface.v1.base.require_valid_overrides",
+            "sunbeam.features.interface.v1.base.check_stale_overrides",
             return_value=None,
         )
 
@@ -637,7 +637,7 @@ class TestEnableDisableFeature:
         mocker.patch.object(feature, "check_enablement_requirements")
         mocker.patch.object(feature, "enable_requirements")
         mocker.patch(
-            "sunbeam.features.interface.v1.base.require_valid_overrides",
+            "sunbeam.features.interface.v1.base.check_stale_overrides",
             side_effect=ConfigOverridesError(
                 "config-file override validation failed for: glance"
             ),

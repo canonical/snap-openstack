@@ -1688,14 +1688,13 @@ class JujuHelper:
         resources the target revision declares and the application has not
         uploaded yet, so those are supplied as EMPTY files ("no override").
         An already attached resource is never passed along: ``juju refresh
-        --resource`` would overwrite the operator's live override.
+        --resource`` would overwrite the operator's live override.  What the
+        application has attached is looked up only when juju refuses the
+        refresh over an override resource; a refresh juju accepts, or refuses
+        over anything else, is never asked about resources.
         """
         if trust and self.is_k8s_model(model):
             self.charm_trust(application_name, model)
-        attached = {
-            str(r.get("name", ""))
-            for r in self.get_application_resources(application_name, model)
-        }
         with tempfile.TemporaryDirectory() as tmp:
             resources: dict[str, str] = {}
             for _ in range(len(OVERRIDE_RESOURCE_FILENAMES) + 1):
@@ -1717,9 +1716,28 @@ class JujuHelper:
                         )
                     return
                 except jubilant.CLIError as e:
-                    missing = (
-                        _missing_override_resources(e) - attached - resources.keys()
-                    )
+                    missing = _missing_override_resources(e) - resources.keys()
+                    if not missing:
+                        raise
+                    # Filter out what the operator attached with the
+                    # ``attach-overrides`` action: ``juju refresh
+                    # --resource`` would overwrite that live override. The
+                    # lookup runs only for a refresh juju refused over one
+                    # of these resources, so a charm that declares none --
+                    # or one refused over anything else -- is never asked
+                    # about its resources.
+                    try:
+                        attached = {
+                            str(r.get("name", ""))
+                            for r in self.get_application_resources(
+                                application_name, model
+                            )
+                        }
+                    except Exception:
+                        # What is attached cannot be told: let juju report
+                        # instead of overwriting a live override.
+                        attached = missing
+                    missing -= attached
                     if not missing:
                         raise
                     for name in sorted(missing):

@@ -87,9 +87,10 @@ def _action_calls(helper):
     return [call.args for call in helper.run_action.call_args_list]
 
 
-def test_add_attaches_and_stores_record(
+def test_add_validates_attaches_and_enables(
     runner, deployment, client, preflight_patch, jhelper_patch, tmp_path
 ):
+    """Adding an override stores it and, once valid, attaches and applies it."""
     _empty_store(client)
     config_file_ = tmp_path / "glance.conf"
     config_file_.write_text("[glance]\nfoo = bar\n")
@@ -105,22 +106,22 @@ def test_add_attaches_and_stores_record(
     assert record["config"] == "[glance]\nfoo = bar\n"
     assert record["policy"] is None
     assert record["sha256"] == co.content_sha256("[glance]\nfoo = bar\n", None)
-    assert record["enabled"] is False
-    assert attached == {
-        "config-override": ("override.conf", "[glance]\nfoo = bar\n"),
-        "policy-override": ("override.yaml", ""),
-    }
+    assert record["enabled"] is True
+    assert attached["config-override"] == ("override.conf", "[glance]\nfoo = bar\n")
+    assert attached["policy-override"] == ("override.yaml", "")
     assert _action_calls(helper) == [
         (
             "glance/0",
             co.OPENSTACK_MODEL,
             co.VALIDATE_OVERRIDES_ACTION,
             {"content": "[glance]\nfoo = bar\n"},
-        )
+        ),
+        ("glance/0", co.OPENSTACK_MODEL, co.APPLY_OVERRIDES_ACTION, {}),
     ]
     assert "Stored config-file override for glance" in result.output
     assert "Validation succeeded." in result.output
-    assert "enable glance" in result.output
+    assert "Enabled config-file override for glance." in result.output
+    helper.wait_until_desired_status.assert_called_once()
 
 
 def test_add_with_policy(
@@ -144,6 +145,7 @@ def test_add_with_policy(
     record = _written_overrides(client)["glance"]
     assert record["config"] == "[glance]\nfoo = bar\n"
     assert record["policy"] == "get_image: role:admin\n"
+    assert record["enabled"] is True
     assert attached == {
         "config-override": ("override.conf", "[glance]\nfoo = bar\n"),
         "policy-override": ("override.yaml", "get_image: role:admin\n"),
@@ -151,6 +153,7 @@ def test_add_with_policy(
     assert [call.args[3] for call in helper.run_action.call_args_list] == [
         {"content": "[glance]\nfoo = bar\n"},
         {"content": "get_image: role:admin\n"},
+        {},
     ]
 
 
@@ -173,24 +176,31 @@ def test_add_policy_only(
     record = _written_overrides(client)["glance"]
     assert record["config"] is None
     assert record["policy"] == "get_image: role:admin\n"
-    assert attached == {
-        "config-override": ("override.conf", ""),
-        "policy-override": ("override.yaml", "get_image: role:admin\n"),
-    }
+    assert record["enabled"] is True
+    assert attached["config-override"] == ("override.conf", "")
+    assert attached["policy-override"] == ("override.yaml", "get_image: role:admin\n")
 
 
-def test_add_invalid_ini_not_stored(runner, deployment, client, tmp_path):
-    _empty_store(client)
-    config_file_ = tmp_path / "glance.conf"
-    config_file_.write_text("[a]\nx = 1\nx = 2\n")
+def test_get_output_write_failure_reported(
+    runner, deployment, client, jhelper_patch, tmp_path
+):
+    """An unwritable --output is a clean error, not a traceback."""
+    _seed(client, {"glance": co.make_record("[glance]\nfoo = bar\n", None)})
 
     result = runner.invoke(
-        config_file, ["override", "add", "glance", str(config_file_)], obj=deployment
+        config_file,
+        [
+            "override",
+            "get",
+            "glance",
+            "--output",
+            str(tmp_path / "missing" / "glance.conf"),
+        ],
+        obj=deployment,
     )
 
     assert result.exit_code != 0
-    assert "duplicate option" in result.output
-    client.cluster.update_config.assert_not_called()
+    assert "unable to write" in result.output
 
 
 def test_add_without_config_or_policy_not_stored(runner, deployment, client):
@@ -276,39 +286,6 @@ def test_add_validation_failure_stored_not_attached(
     record = _written_overrides(client)["glance"]
     assert record["enabled"] is False
     helper.attach_resource.assert_not_called()
-
-
-def test_add_enable_applies(
-    runner, deployment, client, preflight_patch, jhelper_patch, tmp_path
-):
-    _empty_store(client)
-    config_file_ = tmp_path / "glance.conf"
-    config_file_.write_text("[glance]\nfoo = bar\n")
-    helper = jhelper_patch.return_value
-    attached = _capture_attaches(helper)
-
-    result = runner.invoke(
-        config_file,
-        ["override", "add", "glance", str(config_file_), "--enable"],
-        obj=deployment,
-    )
-
-    assert result.exit_code == 0, result.output
-    assert _action_calls(helper) == [
-        (
-            "glance/0",
-            co.OPENSTACK_MODEL,
-            co.VALIDATE_OVERRIDES_ACTION,
-            {"content": "[glance]\nfoo = bar\n"},
-        ),
-        ("glance/0", co.OPENSTACK_MODEL, co.APPLY_OVERRIDES_ACTION, {}),
-    ]
-    assert attached["config-override"] == ("override.conf", "[glance]\nfoo = bar\n")
-    record = _written_overrides(client)["glance"]
-    assert record["enabled"] is True
-    assert "Validation succeeded." in result.output
-    assert "Enabled config-file override for glance." in result.output
-    helper.wait_until_desired_status.assert_called_once()
 
 
 def test_enable_attaches_stored_content_and_applies(
@@ -486,22 +463,20 @@ def test_remove_disabled_without_force(
     assert _written_overrides(client) == {}
 
 
-def test_get_writes_output_file(runner, deployment, client, jhelper_patch, tmp_path):
+def test_get_writes_output_file(runner, deployment, client, tmp_path):
     record = co.make_record("[glance]\nfoo = bar\n", "policy: on\n")
     _seed(client, {"glance": record})
-    with patch("sunbeam.commands.config_file.get_applied_overrides") as get_applied:
-        get_applied.return_value = ["glance.conf"]
-        output = tmp_path / "out.conf"
-        result = runner.invoke(
-            config_file,
-            ["override", "get", "glance", "--output", str(output)],
-            obj=deployment,
-        )
+    output = tmp_path / "out.conf"
+
+    result = runner.invoke(
+        config_file,
+        ["override", "get", "glance", "--output", str(output)],
+        obj=deployment,
+    )
 
     assert result.exit_code == 0, result.output
     assert output.read_text() == "[glance]\nfoo = bar\n"
     assert output.with_name("out.conf.policy.yaml").read_text() == "policy: on\n"
-    assert "Applied on the unit: glance.conf" in result.output
 
 
 def test_get_prints_config(runner, deployment, client, jhelper_patch):
@@ -546,58 +521,24 @@ def test_list_shows_records(runner, deployment, client):
     assert "nova" in result.output
 
 
-def test_validate_runs_action_only(
-    runner, deployment, client, preflight_patch, jhelper_patch, tmp_path
-):
-    config_file_ = tmp_path / "glance.conf"
-    config_file_.write_text("[glance]\nfoo = bar\n")
-    helper = jhelper_patch.return_value
-    helper.run_action.return_value = {
-        "valid": "false",
-        "errors": '["bad"]',
-        "warnings": '["w"]',
-        "checks": '{"ini": true}',
-    }
-
-    result = runner.invoke(
-        config_file,
-        ["override", "validate", "glance", str(config_file_)],
-        obj=deployment,
+def test_get_all_prints_every_override(runner, deployment, client):
+    _seed(
+        client,
+        {
+            "glance": co.make_record("[glance]\nfoo = bar\n", None),
+            "nova": co.make_record("[nova]\nbaz = qux\n", None),
+        },
     )
 
-    assert result.exit_code != 0
-    assert "bad" in result.output
-    assert "w" in result.output
-    assert _action_calls(helper) == [
-        (
-            "glance/0",
-            co.OPENSTACK_MODEL,
-            co.VALIDATE_OVERRIDES_ACTION,
-            {"content": "[glance]\nfoo = bar\n"},
-        )
-    ]
-    helper.attach_resource.assert_not_called()
-    client.cluster.update_config.assert_not_called()
-
-
-def test_validate_valid_passes(
-    runner, deployment, client, preflight_patch, jhelper_patch, tmp_path
-):
-    config_file_ = tmp_path / "glance.conf"
-    config_file_.write_text("[glance]\nfoo = bar\n")
-
-    result = runner.invoke(
-        config_file,
-        ["override", "validate", "glance", str(config_file_)],
-        obj=deployment,
-    )
+    result = runner.invoke(config_file, ["override", "get", "--all"], obj=deployment)
 
     assert result.exit_code == 0, result.output
-    assert "Validation succeeded." in result.output
-    client.cluster.update_config.assert_not_called()
+    assert "# --- glance ---" in result.output
+    assert "# --- nova ---" in result.output
+    assert "foo = bar" in result.output
 
 
-def test_collect_writes_files(runner, deployment, client, tmp_path):
+def test_get_all_writes_output_dir(runner, deployment, client, tmp_path):
     glance = co.make_record("[glance]\nfoo = bar\n", "policy: on\n")
     nova = co.make_record("[nova]\nbaz = qux\n", None)
     _seed(client, {"glance": glance, "nova": nova})
@@ -605,7 +546,7 @@ def test_collect_writes_files(runner, deployment, client, tmp_path):
     output_dir = tmp_path / "collected"
     result = runner.invoke(
         config_file,
-        ["override", "collect", "--output-dir", str(output_dir)],
+        ["override", "get", "--all", "--output-dir", str(output_dir)],
         obj=deployment,
     )
 
@@ -614,34 +555,30 @@ def test_collect_writes_files(runner, deployment, client, tmp_path):
     assert (output_dir / "glance.policy.yaml").read_text() == "policy: on\n"
     assert (output_dir / "nova.conf").read_text() == "[nova]\nbaz = qux\n"
     assert not (output_dir / "nova.policy.yaml").exists()
+    assert "Collected 3 override(s)" in result.output
 
 
-def test_collect_writes_policy_only_record(runner, deployment, client, tmp_path):
-    record = co.make_record(None, "policy: on\n")
-    _seed(client, {"glance": record})
+def test_get_usage_errors(runner, deployment, client):
+    _seed(client, {"glance": co.make_record("[glance]\n", None)})
 
-    output_dir = tmp_path / "collected"
-    result = runner.invoke(
-        config_file,
-        ["override", "collect", "--output-dir", str(output_dir)],
-        obj=deployment,
+    both = runner.invoke(
+        config_file, ["override", "get", "glance", "--all"], obj=deployment
     )
+    assert both.exit_code != 0
+    assert "not both" in both.output
 
-    assert result.exit_code == 0, result.output
-    assert not (output_dir / "glance.conf").exists()
-    assert (output_dir / "glance.policy.yaml").read_text() == "policy: on\n"
+    output_all = runner.invoke(
+        config_file, ["override", "get", "--all", "--output", "x.conf"], obj=deployment
+    )
+    assert output_all.exit_code != 0
+    assert "--output-dir" in output_all.output
 
+    dir_without_all = runner.invoke(
+        config_file, ["override", "get", "glance", "--output-dir", "x"], obj=deployment
+    )
+    assert dir_without_all.exit_code != 0
+    assert "--all" in dir_without_all.output
 
-def test_collect_default_output_dir(runner, deployment, client, tmp_path, monkeypatch):
-    record = co.make_record("[glance]\n", None)
-    _seed(client, {"glance": record})
-    monkeypatch.chdir(tmp_path)
-
-    result = runner.invoke(config_file, ["override", "collect"], obj=deployment)
-
-    assert result.exit_code == 0, result.output
-    created = [
-        p for p in tmp_path.iterdir() if p.name.startswith("sunbeam-config-overrides-")
-    ]
-    assert len(created) == 1
-    assert (created[0] / "glance.conf").exists()
+    neither = runner.invoke(config_file, ["override", "get"], obj=deployment)
+    assert neither.exit_code != 0
+    assert "pass an application" in neither.output

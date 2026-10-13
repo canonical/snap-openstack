@@ -19,8 +19,7 @@ from sunbeam.core.checks import JujuLoginCheck, run_preflight_checks
 from sunbeam.core.common import SunbeamException, read_config, update_config
 from sunbeam.core.config_overrides import (
     ConfigOverridesError,
-    report_stale_overrides,
-    require_valid_overrides,
+    check_stale_overrides,
 )
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.manifest import FeatureConfig, Manifest, SoftwareConfig
@@ -888,13 +887,13 @@ class EnableDisableFeature(BaseFeature, Generic[ConfigType]):
     def check_config_overrides(self, deployment: Deployment) -> None:
         """Fail before a feature change when a stored override is invalid."""
         try:
-            require_valid_overrides(deployment, console)
+            check_stale_overrides(deployment, console, fail=True)
         except ConfigOverridesError as e:
             raise FeatureError(str(e)) from e
 
     def report_config_overrides(self, deployment: Deployment) -> None:
         """Warn about overrides that stopped validating after the change."""
-        report_stale_overrides(deployment, console)
+        check_stale_overrides(deployment, console, fail=False)
 
     def pre_disable(self, deployment: Deployment, show_hints: bool) -> None:
         """Handler to perform tasks before disabling the feature."""

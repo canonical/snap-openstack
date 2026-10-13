@@ -9,9 +9,12 @@ file resources (``config-override`` / ``policy-override``) attached with
 ``juju attach-resource``; an attached resource can never be detached, so an
 EMPTY file means "no override". The content is also stored in the cluster
 database because a resource's bytes cannot be downloaded back through juju.
+
+An override is validated on the unit before it is attached, so content the
+service rejects never reaches the charm: it stays stored, and the cluster
+database is the only copy until it is fixed or removed.
 """
 
-import configparser
 import datetime
 import hashlib
 import json
@@ -22,7 +25,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import jubilant
-import yaml
 
 from sunbeam.clusterd.service import ConfigItemNotFoundException
 from sunbeam.core.common import read_config, update_config
@@ -54,14 +56,10 @@ VALIDATE_OVERRIDES_ACTION = "validate-config-overrides"
 APPLY_OVERRIDES_ACTION = "apply-config-overrides"
 GET_OVERRIDES_ACTION = "get-config-overrides"
 
-# Seconds to wait for a unit to settle after a resource change before
-# retrying an action that the unit agent restart interrupted.
+# Seconds to wait for a unit to settle after a resource change.  Attaching a
+# resource recreates the unit pod, so the apply action waits for the charm to
+# finish the config-changed the attach triggered instead of racing it.
 APPLY_SETTLE_TIMEOUT = 300
-
-# Attempts for the apply action.  Attaching a resource recreates the unit
-# pod, and juju kills any task that was in flight when the pod was replaced,
-# so an attempt can fail without saying anything about the override itself.
-APPLY_ATTEMPTS = 3
 
 
 class ConfigOverridesError(SunbeamException):
@@ -78,38 +76,6 @@ class ValidationResult:
     checks: dict[str, Any] = field(default_factory=dict)
 
 
-def validate_ini(text: str) -> None:
-    """Strictly validate INI text, raising on syntax/duplicate issues."""
-    parser = configparser.ConfigParser(interpolation=None, strict=True)
-    try:
-        parser.read_string(text)
-    except configparser.DuplicateSectionError as e:
-        raise ConfigOverridesError(
-            f"duplicate section {e.section!r} in config file"
-        ) from e
-    except configparser.DuplicateOptionError as e:
-        raise ConfigOverridesError(
-            f"duplicate option {e.option!r} in section {e.section!r} of config file"
-        ) from e
-    except configparser.MissingSectionHeaderError as e:
-        raise ConfigOverridesError(
-            f"config file is missing a section header before line {e.lineno}: "
-            f"{e.line!r}"
-        ) from e
-    except configparser.Error as e:
-        raise ConfigOverridesError(f"invalid INI config file: {e}") from e
-
-
-def validate_policy_yaml(text: str) -> None:
-    """Validate that the policy text is syntactically valid YAML mapping."""
-    try:
-        data = yaml.safe_load(text)
-    except yaml.YAMLError as e:
-        raise ConfigOverridesError(f"invalid policy YAML file: {e}") from e
-    if data is not None and not isinstance(data, dict):
-        raise ConfigOverridesError("policy YAML file must contain a mapping")
-
-
 def content_sha256(config: str | None, policy: str | None) -> str:
     """Return a stable hex digest of the stored override content."""
     digest = hashlib.sha256()
@@ -119,16 +85,17 @@ def content_sha256(config: str | None, policy: str | None) -> str:
     return digest.hexdigest()
 
 
-def now_iso() -> str:
-    """Return the current UTC time as an ISO 8601 string."""
-    return datetime.datetime.now(datetime.timezone.utc).isoformat()
-
-
 def read_overrides(client) -> dict[str, dict]:
     """Read the stored overrides, returning an empty mapping when absent."""
     try:
         data = read_config(client, CONFIG_FILE_OVERRIDES_KEY)
     except ConfigItemNotFoundException:
+        return {}
+    except ValueError:
+        LOG.warning("Unparseable %s config item, ignoring", CONFIG_FILE_OVERRIDES_KEY)
+        return {}
+    if not isinstance(data, dict):
+        LOG.warning("Malformed %s config item, ignoring", CONFIG_FILE_OVERRIDES_KEY)
         return {}
     overrides = data.get("overrides", {})
     if not isinstance(overrides, dict):
@@ -177,7 +144,7 @@ def make_record(config: str | None, policy: str | None) -> dict:
         "policy": policy,
         "sha256": content_sha256(config, policy),
         "enabled": False,
-        "added_at": now_iso(),
+        "added_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
     }
 
 
@@ -228,6 +195,10 @@ def _declared_resources(jhelper: JujuHelper, app: str, model: str) -> set[str]:
         raise ConfigOverridesError(
             f"application {app!r} is not deployed in model {model!r}"
         ) from e
+    except json.JSONDecodeError:
+        # A charm that declares no resources makes ``juju resources`` print
+        # nothing, which is not JSON: no resources, not a broken listing.
+        return set()
     return {str(r.get("name", "")) for r in resources}
 
 
@@ -279,11 +250,39 @@ def attach_overrides(
         def _attach(resource: str, filename: str, text: str | None) -> None:
             path = tmpdir / filename
             path.write_text(text or "")
-            jhelper.attach_resource(app, model, resource, str(path))
+            try:
+                jhelper.attach_resource(app, model, resource, str(path))
+            except jubilant.CLIError as e:
+                raise ConfigOverridesError(
+                    f"could not attach the {resource} resource to {app!r}: {e}"
+                ) from e
 
         _attach(CONFIG_OVERRIDE_RESOURCE, CONFIG_OVERRIDE_FILENAME, config)
         if policy is not None or POLICY_OVERRIDE_RESOURCE in resources:
             _attach(POLICY_OVERRIDE_RESOURCE, POLICY_OVERRIDE_FILENAME, policy)
+
+
+def _run_override_action(
+    jhelper: JujuHelper,
+    unit: str,
+    model: str,
+    action: str,
+    params: dict | None = None,
+) -> dict:
+    """Run one override action, reporting juju's non-verdict failures clearly.
+
+    ``JujuHelper.run_action`` converts a failed task, but a juju call that
+    never produced one (action undefined, unit gone, timeout) reaches here as
+    a plain ``TimeoutError``/``ValueError``: the caller can only report it.
+    """
+    try:
+        return jhelper.run_action(unit, model, action, params or {})
+    except TimeoutError as e:
+        raise ConfigOverridesError(
+            f"the {action} action on {unit} did not finish in time"
+        ) from e
+    except ValueError as e:
+        raise ConfigOverridesError(f"the {action} action on {unit} failed: {e}") from e
 
 
 def validate_overrides(
@@ -296,8 +295,8 @@ def validate_overrides(
     check_charm_support(jhelper, app, model=model)
     unit = jhelper.get_leader_unit(app, model)
     try:
-        results = jhelper.run_action(
-            unit, model, VALIDATE_OVERRIDES_ACTION, {"content": content}
+        results = _run_override_action(
+            jhelper, unit, model, VALIDATE_OVERRIDES_ACTION, {"content": content}
         )
     except ActionFailedException as e:
         if "valid" not in e.results:
@@ -306,29 +305,6 @@ def validate_overrides(
         # results still hold the verdict, which is not a run failure.
         return parse_validation_result(e.results)
     return parse_validation_result(results)
-
-
-def _looks_transient(exc: ActionFailedException) -> bool:
-    """Whether an action failure is the unit restarting, not a verdict.
-
-    Two observed shapes: juju kills the task when the unit agent is replaced
-    (``return code -1 ... Message: terminated``), and the charm raises while
-    the workload container comes back (``Uncaught ConnectionError in charm
-    code: Could not connect to Pebble: socket not found at
-    '/charm/containers/<service>/pebble.socket' (container restarted?)``).
-    Only the wording of the final error depends on this; the retry itself
-    covers every failed task, so an unknown shape is still retried and just
-    reported verbatim.
-    """
-    text = str(exc)
-    return any(
-        marker in text
-        for marker in (
-            "terminated",
-            "container restarted",
-            "Could not connect to Pebble",
-        )
-    )
 
 
 def wait_for_settle(
@@ -363,45 +339,24 @@ def apply_overrides(
 ) -> ValidationResult:
     """Apply the attached override resources via the charm's apply action.
 
-    Attaching a resource recreates the unit pod and restarts the workload, so
-    an action started right after the attach can fail without judging the
-    override at all.  A failed task carries no verdict, and the action is
-    idempotent, so it is retried after the application settles (up to
-    ``APPLY_ATTEMPTS``): an override the service rejects comes back as a
-    result (``valid: false``) and is never retried, while a deterministic
-    failure fails the same way and is reported from the last attempt.
+    Attaching a resource recreates the unit pod and restarts the workload,
+    so the application is waited for before the action runs: the charm has
+    then finished the config-changed the attach triggered and the action
+    judges the override itself.  A failed task carrying no result holds no
+    verdict and is reported as is.
     """
     check_charm_support(jhelper, app, model=model)
+    if not wait_for_settle(jhelper, app, model):
+        LOG.debug("applying overrides on %s before it settled", app)
     unit = jhelper.get_leader_unit(app, model)
-    attempt = 1
-    while True:
-        try:
-            results = jhelper.run_action(unit, model, APPLY_OVERRIDES_ACTION, {})
-        except ActionFailedException as e:
-            if "valid" in e.results:
-                # A verdict from the service, not a failed run: never retried.
-                return parse_validation_result(e.results)
-            if attempt >= APPLY_ATTEMPTS:
-                if not _looks_transient(e):
-                    raise
-                raise ActionFailedException(
-                    f"the {app} unit was restarting while the overrides were "
-                    f"applied (attaching a resource recreates the pod); the "
-                    f"override may already be in effect, check with "
-                    f"`sunbeam config-file override get {app}`: {e}"
-                ) from e
-            LOG.debug(
-                "apply action on %s failed without a verdict (attempt %d/%d): %s",
-                app,
-                attempt,
-                APPLY_ATTEMPTS,
-                e,
-            )
-            wait_for_settle(jhelper, app, model)
-            unit = jhelper.get_leader_unit(app, model)
-            attempt += 1
-            continue
-        return parse_validation_result(results)
+    try:
+        results = _run_override_action(jhelper, unit, model, APPLY_OVERRIDES_ACTION)
+    except ActionFailedException as e:
+        if "valid" in e.results:
+            # A verdict from the service, not a failed run.
+            return parse_validation_result(e.results)
+        raise
+    return parse_validation_result(results)
 
 
 def get_applied_overrides(
@@ -412,7 +367,7 @@ def get_applied_overrides(
     """Return the drop-in paths the charm reports as written on the unit."""
     check_charm_support(jhelper, app, model=model)
     unit = jhelper.get_leader_unit(app, model)
-    results = jhelper.run_action(unit, model, GET_OVERRIDES_ACTION, {})
+    results = _run_override_action(jhelper, unit, model, GET_OVERRIDES_ACTION)
     return _parse_json_list(results.get("applied"))
 
 
@@ -453,32 +408,33 @@ def validate_enabled_overrides(
     return failures
 
 
-def require_valid_overrides(deployment: "Deployment", console: "Console") -> None:
-    """Fail when an enabled override no longer validates.
+def check_stale_overrides(
+    deployment: "Deployment", console: "Console", *, fail: bool
+) -> None:
+    """Check every enabled override against the deployed services.
 
-    Used before a change that can invalidate overrides (enabling a feature,
-    resizing the deployment) so the change is reported as failed instead of
-    landing with an override that leaves a charm blocked.
+    Used around a change that can invalidate overrides (enabling a feature,
+    resizing the deployment): such a change alters the configuration and
+    policy the services run with.
 
-    :raises ConfigOverridesError: naming the applications that failed.
+    :param fail: report the change as failed (used before the change), so it
+        does not land with a charm blocked by an override that stopped
+        validating.  When unset the overrides are only reported (used after
+        the change, when they cannot hold it back anymore).
+    :raises ConfigOverridesError: naming the applications that failed, when
+        ``fail`` is set.
     """
     failures = validate_enabled_overrides(deployment)
-    for app, errors in failures:
-        console.print(f"[red]error:[/red] {app}: {'; '.join(errors)}")
-    if failures:
+    if not failures:
+        return
+    if fail:
+        for app, errors in failures:
+            console.print(f"[red]error:[/red] {app}: {'; '.join(errors)}")
         raise ConfigOverridesError(
             "config-file override validation failed for "
             + ", ".join(app for app, _ in failures)
         )
-
-
-def report_stale_overrides(deployment: "Deployment", console: "Console") -> None:
-    """Warn about enabled overrides that no longer validate.
-
-    Used after a change that already moved the deployment: the override
-    cannot hold the change back anymore, but it is no longer in effect.
-    """
-    for app, errors in validate_enabled_overrides(deployment):
+    for app, errors in failures:
         console.print(
             f"[yellow]warning:[/yellow] config-file override for {app} no "
             f"longer validates: {'; '.join(errors)}\n"

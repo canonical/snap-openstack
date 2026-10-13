@@ -404,14 +404,16 @@ def test_charm_refresh_supplies_all_missing_resources(jhelper, juju):
     assert captured == {"override.conf": "", "override.yaml": ""}
 
 
-def test_charm_refresh_keeps_attached_resource(jhelper, juju):
-    """Target declares the resource and the app has it attached: nothing passed."""
-    juju.cli.return_value = json.dumps(
-        {"resources": [{"name": "config-override", "type": "file"}]}
-    )
+def test_charm_refresh_does_not_look_up_resources(jhelper, juju):
+    """A refresh juju accepts needs no resource lookup.
 
+    ``juju resources --format json`` prints nothing for a charm that
+    declares no resources (certificate-authority in the CI job), so the
+    lookup must never stand in the way of an app being refreshed.
+    """
     jhelper.charm_refresh("app", "test-model")
 
+    juju.cli.assert_not_called()
     assert "resources" not in juju.refresh.call_args.kwargs
 
 
@@ -453,6 +455,32 @@ def test_charm_refresh_foreign_missing_resource_not_supplied(jhelper, juju):
     )
 
     with pytest.raises(jubilant.CLIError):
+        jhelper.charm_refresh("app", "test-model")
+
+    assert juju.refresh.call_count == 1
+    assert "resources" not in juju.refresh.call_args.kwargs
+
+
+def test_charm_refresh_other_error_does_not_look_up_resources(jhelper, juju):
+    """Juju refusing over anything but an override resource: no lookup."""
+    juju.refresh.side_effect = jubilant.CLIError(
+        1, "refresh app", stderr="ERROR cannot refresh: no revision"
+    )
+
+    with pytest.raises(jubilant.CLIError):
+        jhelper.charm_refresh("app", "test-model")
+
+    juju.cli.assert_not_called()
+
+
+def test_charm_refresh_lookup_failure_does_not_mask_juju_error(jhelper, juju):
+    """Unusable resource listing: juju's error surfaces, nothing passed."""
+    juju.cli.side_effect = json.JSONDecodeError("Expecting value", "", 0)
+    juju.refresh.side_effect = jubilant.CLIError(
+        1, "refresh app", stderr=_MISSING_CONFIG_MSG
+    )
+
+    with pytest.raises(jubilant.CLIError, match="was missing"):
         jhelper.charm_refresh("app", "test-model")
 
     assert juju.refresh.call_count == 1
