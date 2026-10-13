@@ -323,8 +323,9 @@ def _validate_restore_to_time(
     default=False,
     show_default=True,
     help=(
-        "Back up applications whose cluster health cannot be verified, using the"
-        " leader unit. May capture stale data; use with caution."
+        "Proceed despite application health concerns. For MySQL, allow leader"
+        " fallback when cluster health cannot be verified. S3 integration is still"
+        " required. May capture stale data; use with caution."
     ),
 )
 @click.option(
@@ -604,8 +605,9 @@ def target_group() -> None:
 @target_group.command("list", context_settings=CONTEXT_SETTINGS)
 @click.pass_obj
 def list_targets(deployment: Deployment) -> None:
-    """Show S3-related applications and backup readiness without changes.
+    """List MySQL and Vault applications configured with an S3 relation.
 
+    Includes inactive applications and reports their readiness.
     An S3 relation does not verify bucket access or credentials.
     """
     jhelper = deployment.get_juju_helper()
@@ -619,6 +621,7 @@ def list_targets(deployment: Deployment) -> None:
         for app in sorted(apps):
             failures = outcome["failures"].get(app, [])
             if S3_RELATION_VALIDATION_CHECK.name in failures:
+                # Only S3-configured targets are listed; health failures stay visible.
                 continue
             try:
                 relations = jhelper.get_relation_map(app, S3_ENDPOINT, OPENSTACK_MODEL)
