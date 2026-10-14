@@ -15,6 +15,8 @@ core:
         channel: 2026.1/edge
       keystone-k8s:
         channel: 2026.1/edge
+      keystone-saml-k8s:
+        channel: 2026.1/edge
       neutron-k8s:
         channel: 2026.1/edge
       nova-k8s:
