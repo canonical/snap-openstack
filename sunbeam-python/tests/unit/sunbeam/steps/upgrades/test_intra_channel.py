@@ -18,6 +18,7 @@ from sunbeam.steps.k8s import (
     EnsureL2AdvertisementByHostStep,
 )
 from sunbeam.steps.microovn import DeployMicroOVNApplicationStep
+from sunbeam.steps.mysql import MySQLCharmUpgradeStep, MySQLRouterCharmRefreshStep
 from sunbeam.steps.openstack import OpenStackPatchLoadBalancerServicesIPPoolStep
 from sunbeam.steps.role_distributor import DeployRoleDistributorApplicationStep
 from sunbeam.steps.upgrades.base import UpgradeFeatures
@@ -26,6 +27,7 @@ from sunbeam.steps.upgrades.intra_channel import (
     SNAP_APPS_MACHINE_MODEL,
     LatestInChannel,
     LatestInChannelCoordinator,
+    MySQLInChannelUpgradeCoordinator,
     ReapplyInfraModelConfigStep,
     RefreshSnapStep,
 )
@@ -1019,6 +1021,19 @@ class TestLatestInChannelCoordinator:
             < role_distributor_deploy_index
             < microovn_init_index
             < microovn_deploy_index
+        )
+
+
+class TestMySQLInChannelUpgradeCoordinator:
+    def test_get_plan_refreshes_router_before_mysql(self):
+        """mysql-router must be refreshed before mysql-k8s"""
+        coordinator = MySQLInChannelUpgradeCoordinator(
+            Mock(), Mock(), Mock(), Mock(), reset_mysql_upgrade_state=False
+        )
+        step_types = [type(step) for step in coordinator.get_plan()]
+
+        assert step_types.index(MySQLRouterCharmRefreshStep) < step_types.index(
+            MySQLCharmUpgradeStep
         )
 
 
