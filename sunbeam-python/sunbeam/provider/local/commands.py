@@ -64,6 +64,7 @@ from sunbeam.core.common import (
     update_config,
     validate_roles,
 )
+from sunbeam.core.compute_storage import load_compute_storage_config
 from sunbeam.core.deployment import (
     DEPLOYMENT_TYPE_CONFIG_KEY,
     Deployment,
@@ -90,6 +91,7 @@ from sunbeam.provider.local.steps import (
     LocalClusterStatusStep,
     LocalConfigDPDKStep,
     LocalConfigSRIOVStep,
+    LocalConfigureEncryptedStorageStep,
     LocalEndpointsConfigurationStep,
     LocalSetOpenStackNetworkAgentsStep,
     LocalUserQuestions,
@@ -238,6 +240,7 @@ class LocalProvider(ProviderBase):
         configure.add_command(configure_cmd)
         configure.add_command(configure_sriov)
         configure.add_command(configure_dpdk)
+        configure.add_command(configure_compute_storage)
         cluster.add_command(bootstrap)
         cluster.add_command(add)
         cluster.add_command(add_secondary_region_node)
@@ -1147,6 +1150,63 @@ def configure_dpdk(
             jhelper,
             manifest,
             model=deployment.openstack_machines_model,
+        ),
+    ]
+    run_plan(plan, console, show_hints)
+
+
+@click.command("compute-storage")
+@click.option(
+    "--config",
+    "config_path",
+    help="Compute-storage config file.",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+)
+@click_option_show_hints
+@click.pass_context
+def configure_compute_storage(
+    ctx: click.Context,
+    config_path: Path | None = None,
+    show_hints: bool = False,
+) -> None:
+    """Configure encrypted compute storage."""
+    deployment: LocalDeployment = ctx.obj
+    client = deployment.get_client()
+    fqdn = utils.get_fqdn()
+
+    node = client.cluster.get_node_info(fqdn)
+    if "compute" not in node["role"]:
+        raise click.ClickException(
+            "Encrypted compute storage can only be configured on compute hosts"
+        )
+
+    config = load_compute_storage_config(config_path) if config_path else None
+    manifest = deployment.get_manifest()
+
+    # Login to the Juju controller
+    run_preflight_checks([JujuLoginCheck(deployment.juju_account)], console)
+
+    jhelper = deployment.get_juju_helper()
+    tfhelper_hypervisor = deployment.get_tfhelper("hypervisor-plan")
+
+    reapply_tfvars: dict = {}
+    plan: list[BaseStep] = [
+        LocalConfigureEncryptedStorageStep(
+            client,
+            fqdn,
+            jhelper,
+            deployment.openstack_machines_model,
+            deployment,
+            config=config,
+            result_tfvars=reapply_tfvars,
+        ),
+        ReapplyHypervisorTerraformPlanStep(
+            client,
+            tfhelper_hypervisor,
+            jhelper,
+            manifest,
+            model=deployment.openstack_machines_model,
+            extra_tfvars=reapply_tfvars,
         ),
     ]
     run_plan(plan, console, show_hints)
