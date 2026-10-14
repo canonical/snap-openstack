@@ -34,6 +34,7 @@ from sunbeam.steps.openstack import (
     OPENSTACK_MODEL_CONFIG_KEY,
     RABBITMQ_STORAGE_KEY,
     DeployControlPlaneStep,
+    EndpointsConfigurationStep,
     OpenStackPatchLoadBalancerServicesIPPoolStep,
     OpenStackPatchLoadBalancerServicesIPStep,
     ReapplyOpenStackTerraformPlanStep,
@@ -1968,3 +1969,88 @@ class TestCheckStorageModificationsInManifest:
         )
 
         assert result == []
+
+
+class TestEndpointsConfigurationStepPrompt:
+    """Tests for the endpoints promp-skip fix."""
+
+    def _make_step(self, manifest=None, accept_defaults=False, client=None):
+        client = client or Mock()
+        step = EndpointsConfigurationStep(
+            client=client,
+            manifest=manifest,
+            accept_defaults=accept_defaults,
+        )
+        return step
+
+    @patch("sunbeam.steps.openstack.INGRESS_ENDPOINT_TYPES", [])
+    @patch("sunbeam.steps.openstack.load_answers")
+    @patch("sunbeam.steps.openstack.QuestionBank")
+    def test_no_manifest_no_accept_defaults_prompts_interactively(
+        self, mock_question_bank, mock_load_answers
+    ):
+        """With no manifest and no --accept-defaults, should prompt."""
+        mock_load_answers.return_value = {}
+        mock_bank_instance = mock_question_bank.return_value
+        mock_bank_instance.configure.ask.return_value = True
+
+        step = self._make_step(manifest=None, accept_defaults=False)
+        step.prompt(console=None)
+
+        mock_bank_instance.configure.ask.assert_called_once()
+        assert step.variables["configure"] is True
+
+    @patch("sunbeam.steps.openstack.INGRESS_ENDPOINT_TYPES", [])
+    @patch("sunbeam.steps.openstack.load_answers")
+    @patch("sunbeam.steps.openstack.QuestionBank")
+    def test_manifest_without_endpoints_does_not_prompt(
+        self, mock_question_bank, mock_load_answers
+    ):
+        """Manifest provided and no core.config.endpoints, should not prompt."""
+        mock_load_answers.return_value = {}
+        mock_bank_instance = mock_question_bank.return_value
+
+        manifest = Mock()
+        manifest.core.config.endpoints = None
+
+        step = self._make_step(manifest=manifest, accept_defaults=False)
+        step.prompt(console=None)
+
+        mock_bank_instance.configure.ask.assert_not_called()
+        assert step.variables["configure"] is False
+
+    @patch("sunbeam.steps.openstack.INGRESS_ENDPOINT_TYPES", [])
+    @patch("sunbeam.steps.openstack.load_answers")
+    @patch("sunbeam.steps.openstack.QuestionBank")
+    def test_manifest_with_endpoints_does_not_prompt_uses_value(
+        self, mock_question_bank, mock_load_answers
+    ):
+        """Manifest provided with core.config.endpoints, should not prompt."""
+        mock_load_answers.return_value = {}
+        mock_bank_instance = mock_question_bank.return_value
+
+        manifest = Mock()
+        manifest.core.config.endpoints.model_dump.return_value = {
+            "configure": True,
+        }
+
+        step = self._make_step(manifest=manifest, accept_defaults=False)
+        step.prompt(console=None)
+
+        mock_bank_instance.configure.ask.assert_not_called()
+        assert step.variables["configure"] is True
+
+    @patch("sunbeam.steps.openstack.load_answers")
+    @patch("sunbeam.steps.openstack.QuestionBank")
+    def test_accept_defaults_does_not_prompt_even_without_manifest(
+        self, mock_question_bank, mock_load_answers
+    ):
+        """--accept-defaults set: should not prompt, regardless of the manifest."""
+        mock_load_answers.return_value = {}
+        mock_bank_instance = mock_question_bank.return_value
+
+        step = self._make_step(manifest=None, accept_defaults=True)
+        step.prompt(console=None)
+
+        mock_bank_instance.configure.ask.assert_not_called()
+        assert step.variables["configure"] is False
