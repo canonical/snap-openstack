@@ -15,6 +15,8 @@ core:
         channel: 2026.1/beta
       keystone-k8s:
         channel: 2026.1/beta
+      keystone-saml-k8s:
+        channel: 2026.1/beta
       neutron-k8s:
         channel: 2026.1/beta
       nova-k8s:
@@ -31,6 +33,8 @@ core:
           snap-channel: 2026.1/beta
       sunbeam-machine:
         channel: 2026.1/beta
+      epa-orchestrator:
+        channel: 2026.1/beta
       microceph:
         channel: tentacle/stable
         config:
@@ -44,7 +48,7 @@ core:
       rabbitmq-k8s:
         channel: 4.0/beta
       microcluster-token-distributor:
-        channel: latest/edge
+        channel: v1/stable
       role-distributor:
         channel: latest/stable
       sunbeam-ovn-proxy:
