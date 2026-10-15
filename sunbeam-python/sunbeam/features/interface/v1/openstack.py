@@ -5,7 +5,7 @@ import logging
 import queue
 import typing
 from abc import abstractmethod
-from enum import Enum
+from enum import Enum, StrEnum
 from pathlib import Path
 
 import click
@@ -78,6 +78,13 @@ class TerraformPlanLocation(Enum):
 
     SUNBEAM_TERRAFORM_REPO = 1
     FEATURE_REPO = 2
+
+
+class DatabaseTopology(StrEnum):
+    """Database deployment topology."""
+
+    SINGLE = "single"
+    MULTI = "multi"
 
 
 class OpenStackControlPlaneFeature(EnableDisableFeature, typing.Generic[ConfigType]):
@@ -166,13 +173,28 @@ class OpenStackControlPlaneFeature(EnableDisableFeature, typing.Generic[ConfigTy
             [
                 TerraformInitStep(deployment.get_tfhelper(self.tfplan)),
                 EnableOpenStackApplicationStep(
-                    deployment, config, tfhelper, jhelper, self
+                    deployment,
+                    config,
+                    tfhelper,
+                    jhelper,
+                    self,
+                    overlay=self.get_app_status_overlay_on_enable(deployment),
                 ),
             ]
         )
 
         run_plan(plan, console, show_hints)
         click.echo(f"OpenStack {self.display_name} application enabled.")
+
+    def get_app_status_overlay_on_enable(
+        self, deployment: Deployment
+    ) -> dict[str, ApplicationStatusOverlay]:
+        """Set per-app status overlay while waiting on enable.
+
+        Features can override this to accept additional workload statuses for
+        specific apps during enablement.
+        """
+        return {}
 
     def pre_disable(self, deployment: Deployment, show_hints: bool) -> None:
         """Handler to perform tasks before disabling the feature."""
@@ -205,12 +227,12 @@ class OpenStackControlPlaneFeature(EnableDisableFeature, typing.Generic[ConfigTy
         else:
             return f"TerraformVars{self.app_name}"
 
-    def get_database_topology(self, deployment: Deployment) -> str:
+    def get_database_topology(self, deployment: Deployment) -> DatabaseTopology:
         """Returns the database topology of the cluster."""
         # Database topology can be set only during bootstrap and cannot be changed.
         client = deployment.get_client()
         topology = read_config(client, TOPOLOGY_KEY)
-        return topology["database"]
+        return DatabaseTopology(topology["database"])
 
     def get_cluster_topology(self, deployment: Deployment) -> str:
         """Returns the cluster topology of the cluster."""

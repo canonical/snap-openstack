@@ -408,7 +408,7 @@ class TerraformHelper:
             update_config(client, tfvar_config, data_to_save)
 
         self.write_tfvars(updated_tfvars)
-        LOG.debug("Applying plan %s with tfvars %s", self.plan, updated_tfvars)
+        LOG.debug("Applying plan %s", self.plan)
         self.apply(tf_apply_extra_args, reporter=reporter)
 
     def update_tfvars_and_apply_tf(
