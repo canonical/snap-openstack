@@ -9,7 +9,12 @@ import pytest
 from snaphelpers import UnknownConfigKey
 
 from sunbeam.clusterd.service import ClusterServiceUnavailableException
-from sunbeam.core.common import Role, infer_version, validate_roles
+from sunbeam.core.common import (
+    Role,
+    convert_proxy_to_model_configs,
+    infer_version,
+    validate_roles,
+)
 from sunbeam.core.deployment import Deployment
 
 
@@ -47,6 +52,106 @@ class TestRoles:
 
 
 class TestProxy:
+    @pytest.mark.parametrize("provider_defaults", [False, True])
+    @pytest.mark.parametrize(
+        "no_proxy",
+        [
+            "localhost,192.0.2.0/24,.example.com,127.0.0.1",
+            ".example.com,127.0.0.1,192.0.2.0/24,localhost",
+            "192.0.2.0/24,localhost,.example.com,localhost,127.0.0.1",
+        ],
+    )
+    def test_get_proxy_settings_stable_order(
+        self, read_config, deployment, provider_defaults, no_proxy
+    ):
+        if provider_defaults:
+            read_config.side_effect = ClusterServiceUnavailableException(
+                "Cluster unavailable.."
+            )
+            deployment.get_default_proxy_settings.return_value = {
+                "HTTP_PROXY": "http://squid.internal:3128",
+                "HTTPS_PROXY": "http://squid.internal:3129",
+                "NO_PROXY": no_proxy,
+            }
+        else:
+            read_config.return_value = {
+                "proxy": {
+                    "proxy_required": True,
+                    "http_proxy": "http://squid.internal:3128",
+                    "https_proxy": "http://squid.internal:3129",
+                    "no_proxy": no_proxy,
+                }
+            }
+
+        proxy = deployment.get_proxy_settings()
+
+        expected_no_proxy = (
+            ".example.com,.svc,.svc.cluster.local,10.1.0.0/16,"
+            "10.152.183.0/24,127.0.0.1,192.0.2.0/24,localhost"
+        )
+        assert proxy == {
+            "HTTP_PROXY": "http://squid.internal:3128",
+            "HTTPS_PROXY": "http://squid.internal:3129",
+            "NO_PROXY": expected_no_proxy,
+        }
+        assert (
+            convert_proxy_to_model_configs(proxy)["juju-no-proxy"] == expected_no_proxy
+        )
+
+    @pytest.mark.parametrize("reverse_endpoints", [False, True])
+    @pytest.mark.parametrize(
+        "no_proxy,expected_no_proxy",
+        [
+            (
+                "localhost,10.20.0.0/24,.example.com,10.20.0.10,127.0.0.1",
+                ".example.com,10.20.0.0/24,10.20.0.10,10.20.0.11,127.0.0.1,localhost",
+            ),
+            (
+                ".example.com,127.0.0.1,10.20.0.10,10.20.0.0/24,localhost,localhost,",
+                ".example.com,10.20.0.0/24,10.20.0.10,10.20.0.11,127.0.0.1,localhost",
+            ),
+            (
+                "localhost,.example.com,127.0.0.1",
+                ".example.com,127.0.0.1,localhost",
+            ),
+            ("", ""),
+        ],
+    )
+    def test_ensure_juju_controller_in_no_proxy_stable_order(
+        self, deployment, no_proxy, expected_no_proxy, reverse_endpoints
+    ):
+        deployment.get_proxy_settings.side_effect = None
+        deployment.get_proxy_settings.return_value = {
+            "HTTP_PROXY": "http://squid.internal:3128",
+            "HTTPS_PROXY": "http://squid.internal:3129",
+            "NO_PROXY": no_proxy,
+        }
+        endpoints = ["10.20.0.10:17070", "10.20.0.11:17070", "192.0.2.10:17070"]
+        if reverse_endpoints:
+            endpoints.reverse()
+
+        Deployment._ensure_juju_controller_in_no_proxy(
+            deployment, Mock(api_endpoints=endpoints)
+        )
+
+        deployment.ensure_proxy_settings.assert_called_once_with(
+            {
+                "HTTP_PROXY": "http://squid.internal:3128",
+                "HTTPS_PROXY": "http://squid.internal:3129",
+                "NO_PROXY": expected_no_proxy,
+            }
+        )
+
+    def test_ensure_juju_controller_without_proxy(self, deployment):
+        deployment.get_proxy_settings.side_effect = None
+        deployment.get_proxy_settings.return_value = {}
+
+        Deployment._ensure_juju_controller_in_no_proxy(
+            deployment, Mock(api_endpoints=["192.0.2.10:17070"])
+        )
+
+        deployment.ensure_proxy_settings.assert_not_called()
+
     @pytest.mark.parametrize(
         "test_input,expected_proxy",
         [
