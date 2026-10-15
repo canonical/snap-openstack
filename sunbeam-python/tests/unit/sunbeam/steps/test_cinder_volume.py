@@ -10,6 +10,7 @@ from sunbeam.steps.cinder_volume import (
     CINDER_VOLUME_UNIT_TIMEOUT,
     DeployCinderVolumeApplicationStep,
     RemoveCinderVolumeUnitsStep,
+    get_accepted_application_status,
 )
 
 
@@ -361,3 +362,16 @@ class TestRemoveCinderVolumeUnitsStep:
             remove_cinder_volume_units_step.get_unit_timeout()
             == CINDER_VOLUME_UNIT_TIMEOUT
         )
+
+
+@pytest.mark.parametrize(
+    "offers,expected",
+    [
+        ({}, ["active", "unknown", "blocked"]),
+        ({"keystone": None}, ["active", "unknown", "blocked"]),
+        ({"keystone": "url", "database": None}, ["active", "unknown", "blocked"]),
+        ({"keystone": "url", "database": "url"}, ["active", "unknown"]),
+    ],
+)
+def test_cinder_accepted_state_depends_on_current_mandatory_offers(offers, expected):
+    assert get_accepted_application_status(offers) == expected

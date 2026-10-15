@@ -63,6 +63,14 @@ def get_optional_control_plane_offers(
     return tfvars
 
 
+def get_accepted_application_status(offers: dict[str, str | None]) -> list[str]:
+    """Accept blocked Cinder units only while mandatory offers are unavailable."""
+    accepted_status = ["active", "unknown"]
+    if not offers or not all(offers.values()):
+        accepted_status.append("blocked")
+    return accepted_status
+
+
 class DeployCinderVolumeApplicationStep(DeployMachineApplicationStep):
     """Deploy Cinder Volume application using Terraform."""
 
@@ -99,11 +107,7 @@ class DeployCinderVolumeApplicationStep(DeployMachineApplicationStep):
 
     def get_accepted_application_status(self) -> list[str]:
         """Return accepted application status."""
-        accepted_status = super().get_accepted_application_status()
-        offers = self._get_offers()
-        if not offers or not all(offers.values()):
-            accepted_status.append("blocked")
-        return accepted_status
+        return get_accepted_application_status(self._get_offers())
 
     def _get_offers(self):
         if not self._offers:

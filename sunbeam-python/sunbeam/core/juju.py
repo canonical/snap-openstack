@@ -3,6 +3,7 @@
 
 import base64
 import contextlib
+import dataclasses
 import functools
 import ipaddress
 import json
@@ -160,6 +161,122 @@ class ApplicationStatusOverlay(TypedDict, total=False):
     agent_status: list[str] | None
     units: list[str] | None
     workload_status_message: list[str] | None
+
+
+@dataclasses.dataclass
+class ApplicationReadiness:
+    """Required workload, agent, placement and integration state of an app.
+
+    A zero-unit application must explicitly set ``units=0``. Subordinate
+    coverage is expressed per principal application and machine, since several
+    principal units on one machine can each have a subordinate unit.
+    ``workload_status_message`` restricts accepted non-active workload states
+    to known messages, without relaxing the agent requirements.
+    """
+
+    status: Collection[str] = ("active",)
+    agent_status: Collection[str] = ("idle",)
+    units: int | None = None
+    machines: Collection[str] | None = None
+    principals: dict[str, Collection[str]] = dataclasses.field(default_factory=dict)
+    relations: dict[str, set[str]] = dataclasses.field(default_factory=dict)
+    workload_status_message: Collection[str] | None = None
+
+    def pending(self, model_status: "jubilant.Status", app: str) -> list[str]:
+        """Describe missing coverage or unsatisfied status without relation data."""
+        application = model_status.apps.get(app)
+        if application is None:
+            return [f"{app}: application missing"]
+        try:
+            units = model_status.get_units(app)
+        except KeyError:
+            return [f"{app}: principal application missing"]
+        pending = []
+        expected = self.units
+        if self.machines is not None:
+            expected = len(self.machines)
+            actual = {u.machine for u in units.values()}
+            if actual != set(self.machines):
+                pending.append(
+                    f"{app}: expected machines {sorted(self.machines)}, "
+                    f"observed {sorted(actual)}"
+                )
+        if (expected is not None and len(units) != expected) or (
+            expected is None and not units
+        ):
+            pending.append(
+                f"{app}: expected {expected if expected is not None else 'at least 1'} "
+                f"units, observed {len(units)}"
+            )
+        pending.extend(self._pending_principals(model_status, app))
+        if not self._has_expected_workload_status(application.app_status):
+            pending.append(
+                f"{app}: workload {application.app_status.current!r} "
+                f"({application.app_status.message})"
+            )
+        for name, unit in units.items():
+            if not self._has_expected_workload_status(unit.workload_status):
+                pending.append(
+                    f"{name}: workload {unit.workload_status.current!r} "
+                    f"({unit.workload_status.message})"
+                )
+            if unit.juju_status.current not in self.agent_status:
+                pending.append(
+                    f"{name}: agent {unit.juju_status.current!r} "
+                    f"({unit.juju_status.message})"
+                )
+        for endpoint, related_apps in self.relations.items():
+            actual_related = {
+                relation.related_app
+                for relation in application.relations.get(endpoint, [])
+            }
+            for related in sorted(related_apps - actual_related):
+                pending.append(f"{app}:{endpoint}: relation to {related} missing")
+        return pending
+
+    def _has_expected_workload_status(
+        self, workload: "jubilant.statustypes.StatusInfo"
+    ) -> bool:
+        """Restrict non-active states to known messages when a policy is supplied."""
+        return workload.current in self.status and (
+            self.workload_status_message is None
+            or workload.current == "active"
+            or workload.message in self.workload_status_message
+        )
+
+    def _pending_principals(
+        self, model_status: "jubilant.Status", app: str
+    ) -> list[str]:
+        """Check one attachment for each intended principal and machine."""
+        pending = []
+        for principal, machines in self.principals.items():
+            principal_app = model_status.apps.get(principal)
+            if machines and principal not in model_status.apps[app].subordinate_to:
+                pending.append(f"{app}: principal {principal} not registered")
+            for machine in machines:
+                placements = (
+                    []
+                    if principal_app is None
+                    else [
+                        (name, unit)
+                        for name, unit in principal_app.units.items()
+                        if unit.machine == machine
+                    ]
+                )
+                if len(placements) != 1:
+                    pending.append(
+                        f"{app}: expected one {principal} unit on machine {machine}"
+                    )
+                for name, unit in placements:
+                    attachments = [
+                        sub for sub in unit.subordinates if sub.startswith(f"{app}/")
+                    ]
+                    if len(attachments) != 1:
+                        pending.append(
+                            f"{app}: expected one subordinate under {name}, "
+                            f"observed {len(attachments)}"
+                        )
+        return pending
 
 
 def build_pre_status_overlay(
@@ -1365,7 +1482,7 @@ class JujuHelper:
         queue: queue.Queue | None = None,
         overlay: dict[str, ApplicationStatusOverlay] | None = None,
     ) -> None:
-        """Wait for all agents in model to reach idle status.
+        """Wait for application workloads to reach active status.
 
         :model: Name of the model to wait for readiness
         :apps: Name of the appplication to wait for, if None, wait for all apps
@@ -1393,6 +1510,7 @@ class JujuHelper:
         expected_status: Collection[str],
         expected_agent_status: Collection[str] | None = None,
         expected_workload_status_message: Collection[str] | None = None,
+        resolved_units: Mapping[str, "jubilant.statustypes.UnitStatus"] | None = None,
     ):
         """Check if the desired status is achieved for the given application.
 
@@ -1401,10 +1519,10 @@ class JujuHelper:
         :expected_status: Expected workload status values.
         :expected_agent_status: Expected agent status values.
         :expected_workload_status_message: Expected workload status messages.
+        :resolved_units: Units resolved from the full model for subordinate agents.
         """
-        units = application_status.units
+        units = application_status.units if resolved_units is None else resolved_units
         app_status: set[str] = set()
-        agent_status: set[str] = set()
         workload_status_message: set[str] = set()
         # Application is a subordinate, collect status from app instead of units
         # as units is empty dictionary.
@@ -1417,8 +1535,6 @@ class JujuHelper:
                         app_status.add(unit.workload_status.current)
                     if unit.workload_status.message:
                         workload_status_message.add(unit.workload_status.message)
-                    if unit.juju_status.current:
-                        agent_status.add(unit.juju_status.current)
 
         if len(unit_list) == 0:
             # scale is 0 on machine models
@@ -1434,9 +1550,15 @@ class JujuHelper:
         has_expected_app_status = len(app_status) > 0 and app_status.issubset(
             expected_status
         )
-        has_expected_agent_status = (
-            expected_agent_status is None
-            or agent_status.issubset(expected_agent_status)
+        selected_units = [
+            unit for name, unit in units.items() if not unit_list or name in unit_list
+        ]
+        has_expected_agent_status = expected_agent_status is None or (
+            bool(selected_units)
+            and all(
+                unit.juju_status.current in expected_agent_status
+                for unit in selected_units
+            )
         )
         has_expected_workload_status_message = (
             expected_workload_status_message is None
@@ -1546,12 +1668,22 @@ class JujuHelper:
                 expected_agent_status,
                 expected_workload_status_message,
             ) in app_params.items():
-                if JujuHelper._is_desired_status_achieved(
-                    status.apps[app],
+                application = status.apps.get(app)
+                try:
+                    resolved_units = (
+                        status.get_units(app)
+                        if expected_agent_status is not None
+                        else None
+                    )
+                except KeyError:
+                    resolved_units = {}
+                if application is not None and JujuHelper._is_desired_status_achieved(
+                    application,
                     unit_list,
                     expected_status,
                     expected_agent_status,
                     expected_workload_status_message,
+                    resolved_units=resolved_units,
                 ):
                     if queue is not None:
                         queue.put_nowait((STATUS_READY, app))
@@ -1568,6 +1700,77 @@ class JujuHelper:
                 delay=MODEL_DELAY,
                 timeout=timeout,
             )
+
+    def wait_until_models_ready(
+        self,
+        requirements: dict[str, dict[str, ApplicationReadiness]],
+        timeout: int,
+        progress: Callable[[str], None] | None = None,
+    ) -> None:
+        """Wait for three complete passing rounds with stable unit membership.
+
+        Models are sampled sequentially because ``_model`` changes the shared
+        client's model. The polling budget is shared across models; existing
+        status CLI calls and their retries can overrun that budget.
+        """
+        if not requirements or any(not apps for apps in requirements.values()):
+            raise ValueError("No application readiness targets supplied")
+        start = time.monotonic()
+        deadline = start + timeout
+        successes = 0
+        previous_membership = None
+        pending: list[str] = []
+        while time.monotonic() < deadline:
+            pending = []
+            membership: list[tuple[str, str, str, str]] = []
+            for model, apps in requirements.items():
+                if time.monotonic() >= deadline:
+                    pending.append(f"{model}: readiness budget exhausted")
+                    break
+                try:
+                    status = self.get_model_status(model)
+                except (JujuException, jubilant.CLIError) as exc:
+                    pending.append(
+                        f"{model}: status unavailable ({type(exc).__name__})"
+                    )
+                    continue
+                for app, requirement in apps.items():
+                    pending.extend(
+                        f"{model}/{item}" for item in requirement.pending(status, app)
+                    )
+                    try:
+                        units = status.get_units(app)
+                    except KeyError:
+                        units = {}
+                    membership.extend(
+                        (model, app, name, unit.machine) for name, unit in units.items()
+                    )
+            fingerprint = tuple(sorted(membership))
+            if pending:
+                successes = 0
+                elapsed = time.monotonic() - start
+                LOG.debug(
+                    "Readiness pending after %.0fs/%ss: %s",
+                    elapsed,
+                    timeout,
+                    "; ".join(pending),
+                )
+                if progress is not None:
+                    progress(
+                        f"waiting ({elapsed:.0f}s/{timeout}s): {'; '.join(pending[:3])}"
+                    )
+            else:
+                successes = successes + 1 if fingerprint == previous_membership else 1
+                if successes >= 3 and time.monotonic() < deadline:
+                    return
+            previous_membership = fingerprint
+            remaining = deadline - time.monotonic()
+            if remaining > 0:
+                time.sleep(min(MODEL_DELAY, remaining))
+        detail = "; ".join(pending) or "unit membership did not settle for three rounds"
+        raise TimeoutError(
+            f"Timed out after {timeout}s waiting for feature readiness: {detail}"
+        )
 
     def is_k8s_model(self, model: str) -> bool:
         """Return True if the model is a k8s (CAAS) model.

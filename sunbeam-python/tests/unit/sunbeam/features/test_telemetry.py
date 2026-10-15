@@ -3,8 +3,12 @@
 
 from unittest.mock import Mock, patch
 
+import click
 import pytest
+from click.testing import CliRunner
 
+from sunbeam.core.common import run_plan
+from sunbeam.core.manifest import FeatureConfig
 from sunbeam.features.telemetry import feature as telemetry_feature
 
 
@@ -238,9 +242,11 @@ class TestTelemetryFeatureDeduplication:
         feature._manifest = Mock()
         feature.run_enable_plans(deployment, Mock(), False)
 
-        # Verify run_plan was called for plan1 and plan2, but not plan3
-        # (plan3 is for storage backends which we don't have)
-        assert mock_run_plan.call_count == 2
+        # No backend plan is needed; the third call checks final readiness.
+        assert mock_run_plan.call_count == 3
+        final_plan = mock_run_plan.call_args.args[0]
+        assert len(final_plan) == 1
+        assert isinstance(final_plan[0], telemetry_feature.WaitForFeatureReadyStep)
 
     @patch("sunbeam.features.telemetry.feature.JujuHelper")
     @patch("sunbeam.features.telemetry.feature.StorageBackendManager")
@@ -343,3 +349,153 @@ class TestTelemetryFeatureDeduplication:
         for call in mock_deploy_step_class.call_args_list:
             extra_tfvars = call[1]["extra_tfvars"]
             assert extra_tfvars == {"enable-telemetry-notifications": False}
+
+
+@pytest.mark.parametrize("reenable", [False, True])
+def test_final_gate_failure_reaches_cli_before_success(mocker, deployment, reenable):
+    feature = telemetry_feature.TelemetryFeature()
+    feature._manifest = Mock()
+    mocker.patch.object(feature, "pre_enable")
+    mocker.patch.object(feature, "post_enable")
+    previous_enabled = "true" if reenable else "false"
+    feature_info = {"enabled": previous_enabled}
+    write_feature_info = mocker.patch.object(
+        feature,
+        "update_feature_info",
+        side_effect=lambda client, info: feature_info.update(info),
+    )
+    mocker.patch.object(feature, "_readiness_requirements", return_value={})
+    helper = mocker.patch("sunbeam.features.telemetry.feature.JujuHelper").return_value
+    helper.wait_until_models_ready.side_effect = TimeoutError(
+        "ceilometer: logging integration incomplete"
+    )
+    client = deployment.get_client.return_value
+    client.cluster.get_storage_backends.return_value.root = []
+    deployment.get_tfhelper.return_value.output.return_value = {}
+
+    def run_final_only(plan, console, show_hints):
+        final = [
+            step
+            for step in plan
+            if isinstance(step, telemetry_feature.WaitForFeatureReadyStep)
+        ]
+        if final:
+            return run_plan(final, console, show_hints)
+        return {}
+
+    mocker.patch(
+        "sunbeam.features.telemetry.feature.run_plan", side_effect=run_final_only
+    )
+
+    @click.command()
+    def enable():
+        feature.enable_feature(deployment, FeatureConfig(), False)
+
+    result = CliRunner().invoke(enable)
+    assert result.exit_code == 1
+    assert "logging integration incomplete" in result.output
+    assert "application enabled" not in result.output
+    write_feature_info.assert_not_called()
+    assert feature_info["enabled"] == previous_enabled
+    feature.post_enable.assert_not_called()
+    helper.wait_until_models_ready.assert_called_once()
+
+
+def test_noop_enablement_still_runs_final_gate(mocker, deployment):
+    feature = telemetry_feature.TelemetryFeature()
+    feature._manifest = Mock()
+    mocker.patch.object(feature, "_readiness_requirements", return_value={})
+    helper = mocker.patch("sunbeam.features.telemetry.feature.JujuHelper").return_value
+    client = deployment.get_client.return_value
+    client.cluster.get_storage_backends.return_value.root = []
+    deployment.get_tfhelper.return_value.output.return_value = {}
+
+    def run_final_only(plan, console, show_hints):
+        final = [
+            step
+            for step in plan
+            if isinstance(step, telemetry_feature.WaitForFeatureReadyStep)
+        ]
+        if final:
+            return run_plan(final, console, show_hints)
+        return {}
+
+    mocker.patch(
+        "sunbeam.features.telemetry.feature.run_plan", side_effect=run_final_only
+    )
+    feature.run_enable_plans(deployment, FeatureConfig(), False)
+    helper.wait_until_models_ready.assert_called_once()
+    assert helper.wait_until_models_ready.call_args.args[1] == 1800
+
+
+def test_telemetry_enablement_has_its_own_timeout(deployment):
+    feature = telemetry_feature.TelemetryFeature()
+    assert feature.set_application_timeout_on_enable(deployment) == 1800
+    assert feature.set_application_timeout_on_disable(deployment) == 900
+
+
+@pytest.mark.parametrize("database_topology", ["single", "multi"])
+def test_final_scope_preserves_distinct_storage_placements(
+    mocker, deployment, mock_storage_backends, database_topology
+):
+    feature = telemetry_feature.TelemetryFeature()
+    feature._manifest = Mock()
+    deployment.openstack_machines_model = "machines"
+    client = deployment.get_client.return_value
+    client.cluster.get_config.return_value = f'{{"database": "{database_topology}"}}'
+    client.cluster.list_nodes_by_role.return_value = [
+        {"name": f"node{number}", "machineid": number} for number in range(3)
+    ]
+    client.cluster.get_storage_backends.return_value.root = mock_storage_backends
+
+    def state(apps):
+        helper = Mock()
+        helper.pull_state.return_value = {
+            "resources": [
+                {
+                    "mode": "managed",
+                    "type": "juju_application",
+                    "instances": [
+                        {
+                            "attributes": {
+                                "name": app,
+                                "units": len(machines) if machines is not None else 3,
+                                "machines": machines,
+                            }
+                        }
+                    ],
+                }
+                for app, machines in apps.items()
+            ]
+        }
+        return helper
+
+    helpers = {
+        feature.tfplan: state(dict.fromkeys(feature.set_application_names(deployment))),
+        "hypervisor-plan": state({"openstack-hypervisor": ["0", "1", "2"]}),
+        "cinder-volume-plan": state({"cinder-volume": ["0", "1", "2"]}),
+        "storage-backend-plan": state({"cinder-volume-noha": ["2"]}),
+    }
+    deployment.get_tfhelper.side_effect = helpers.__getitem__
+    accepted_status = ["active", "unknown", "blocked"]
+    from sunbeam.feature_manager import FeatureManager
+
+    manager = object.__new__(FeatureManager)
+    manager._features = {}
+    deployment.get_feature_manager.return_value = manager
+    accepted = mocker.patch.object(
+        telemetry_feature,
+        "get_mandatory_control_plane_offers",
+        return_value={"keystone-offer-url": None},
+    )
+    requirements = feature._readiness_requirements(deployment, Mock())
+    assert set(requirements["openstack"]) == set(
+        feature.set_application_names(deployment)
+    )
+    machines = requirements["machines"]
+    assert machines["cinder-volume"].machines == ["0", "1", "2"]
+    assert machines["cinder-volume"].status == accepted_status
+    assert machines["cinder-volume-noha"].machines == ["2"]
+    assert machines["cinder-volume-noha"].status == ["active", "blocked"]
+    assert machines["openstack-hypervisor"].agent_status == ("idle",)
+    accepted.assert_called_once()

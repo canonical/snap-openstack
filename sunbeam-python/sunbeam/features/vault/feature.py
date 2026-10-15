@@ -42,6 +42,7 @@ from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import (
     ActionFailedException,
     ApplicationNotFoundException,
+    ApplicationStatusOverlay,
     JujuException,
     JujuHelper,
     JujuStepHelper,
@@ -75,6 +76,12 @@ VAULT_APPLICATION_NAME = "vault"
 VAULT_CONTAINER_NAME = "vault"
 VAULT_SECRET_FOR_AUTHORIZATION = "vault-tmp-token"
 VAULT_DEV_MODE_KEY = "VaultDevModeInfo"
+VAULT_UNSEAL_MESSAGE = "Please unseal Vault"
+VAULT_MANUAL_SETUP_STATUS_MESSAGES = (
+    "Please initialize Vault or integrate with an auto-unseal provider",
+    VAULT_UNSEAL_MESSAGE,
+    "Please authorize charm (see `authorize-charm` action)",
+)
 DEFAULT_VAULT_KEY_SHARES = 1
 DEFAULT_VAULT_KEY_THRESHOLD = 1
 
@@ -410,7 +417,7 @@ class VaultUnsealStep(BaseStep):
                                 units=non_leader_units,
                                 status=["active", "blocked"],
                                 agent_status=["idle"],
-                                workload_status_message=["Please unseal Vault"],
+                                workload_status_message=[VAULT_UNSEAL_MESSAGE],
                                 timeout=VAULT_CHARM_UPDATES_TIMEOUT,
                             )
                         )
@@ -635,6 +642,17 @@ class VaultFeature(OpenStackControlPlaneFeature):
     def set_application_names(self, deployment: Deployment) -> list:
         """Application names handled by the terraform plan."""
         return ["vault"]
+
+    def readiness_status_overrides(
+        self, deployment: Deployment
+    ) -> dict[str, ApplicationStatusOverlay]:
+        """Accept only supported manual Vault setup states."""
+        return {
+            VAULT_APPLICATION_NAME: {
+                "status": ["active", "blocked"],
+                "workload_status_message": list(VAULT_MANUAL_SETUP_STATUS_MESSAGES),
+            }
+        }
 
     def set_tfvars_on_enable(
         self, deployment: Deployment, config: FeatureConfig

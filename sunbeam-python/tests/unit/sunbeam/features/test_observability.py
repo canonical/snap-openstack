@@ -15,6 +15,7 @@ from sunbeam.clusterd.service import ConfigItemNotFoundException
 from sunbeam.core.common import ResultType
 from sunbeam.core.manifest import Manifest
 from sunbeam.core.terraform import TerraformException
+from sunbeam.features.loadbalancer import feature as loadbalancer_feature
 from sunbeam.features.observability import feature as observability_feature
 
 
@@ -1518,3 +1519,549 @@ class TestTerraformChannelDefaults:
             self._channel_default(tf_file, "hardware-observer-channel")
             == observability_feature.HARDWARE_OBSERVER_CHANNEL
         )
+
+
+@pytest.fixture
+def readiness_states(deployment):
+    from sunbeam.feature_manager import FeatureManager
+    from sunbeam.features.loadbalancer.feature import LoadbalancerFeature
+    from sunbeam.features.vault.feature import VaultFeature
+
+    manager = object.__new__(FeatureManager)
+    manager._features = {
+        "vault": VaultFeature(),
+        "loadbalancer": LoadbalancerFeature(),
+    }
+    for feature in manager._features.values():
+        feature.is_enabled = Mock(return_value=True)
+    deployment.get_feature_manager.return_value = manager
+    deployment.get_client.return_value.cluster.get_config.return_value = (
+        '{"database": "single"}'
+    )
+
+    def state(apps, relations=()):
+        resources = [
+            {
+                "mode": "managed",
+                "type": "juju_application",
+                "instances": [
+                    {"attributes": {"name": app, "units": 1, "machines": None}}
+                ],
+            }
+            for app in apps
+        ]
+        resources.extend(
+            {
+                "mode": "managed",
+                "type": "juju_integration",
+                "instances": [
+                    {
+                        "attributes": {
+                            "application": [
+                                {
+                                    "name": left,
+                                    "endpoint": left_endpoint,
+                                    "offer_url": None,
+                                },
+                                {
+                                    "name": right,
+                                    "endpoint": right_endpoint,
+                                    "offer_url": None,
+                                },
+                            ]
+                        }
+                    }
+                ],
+            }
+            for left, left_endpoint, right, right_endpoint in relations
+        )
+        return {"resources": resources}
+
+    deployment.openstack_machines_model = "machines"
+    deployment.infra_model = "infra"
+    deployment.get_client.return_value.cluster.list_nodes_by_role.return_value = [
+        {"machineid": machine} for machine in range(3)
+    ]
+    helpers = {
+        "openstack-plan": Mock(
+            pull_state=Mock(
+                return_value=state(
+                    [
+                        "opentelemetry-collector",
+                        "opentelemetry-collector-infra",
+                        "ceilometer",
+                    ],
+                    [
+                        (
+                            "ceilometer",
+                            "logging",
+                            "opentelemetry-collector",
+                            "receive-loki-logs",
+                        )
+                    ],
+                )
+            )
+        ),
+        "grafana-agent-plan": Mock(
+            pull_state=Mock(
+                return_value=state(
+                    ["opentelemetry-collector"],
+                    [
+                        ("opentelemetry-collector", "cos-agent", app, "cos-agent")
+                        for app in ("k8s", "microceph", "openstack-hypervisor")
+                    ]
+                    + [
+                        (
+                            "opentelemetry-collector",
+                            "juju-info",
+                            "sunbeam-machine",
+                            "juju-info",
+                        )
+                    ],
+                )
+            )
+        ),
+        "hardware-observer-plan": Mock(
+            pull_state=Mock(
+                return_value=state(
+                    ["hardware-observer"],
+                    [
+                        (
+                            "hardware-observer",
+                            "general-info",
+                            "sunbeam-machine",
+                            "juju-info",
+                        ),
+                        (
+                            "hardware-observer",
+                            "cos-agent",
+                            "opentelemetry-collector",
+                            "cos-agent",
+                        ),
+                    ],
+                )
+            )
+        ),
+        "cos-plan": Mock(
+            pull_state=Mock(return_value=state(["prometheus", "loki", "traefik"]))
+        ),
+        "observability-agent-infra-plan": Mock(
+            pull_state=Mock(
+                return_value=state(
+                    ["opentelemetry-collector"],
+                    [
+                        (
+                            "opentelemetry-collector",
+                            "juju-info",
+                            "sunbeam-clusterd",
+                            "juju-info",
+                        )
+                    ],
+                )
+            )
+        ),
+    }
+    deployment.get_tfhelper.side_effect = helpers.__getitem__
+    return helpers
+
+
+@pytest.mark.parametrize("external", [False, True])
+@pytest.mark.parametrize("maas", [False, True])
+def test_final_readiness_scope_follows_intended_integrations(
+    deployment,
+    jhelper,
+    readiness_states,
+    mocker,
+    external,
+    maas,
+):
+    feature_type = (
+        observability_feature.ExternalObservabilityFeature
+        if external
+        else observability_feature.EmbeddedObservabilityFeature
+    )
+    feature = feature_type()
+    feature.grafana_offer_url = "other:owner/cos.grafana-dashboards"
+    feature.prometheus_offer_url = "other:owner/cos.prometheus-write"
+    feature.loki_offer_url = "other:owner/cos.loki-logging"
+    jhelper.get_machines.return_value = {"0": Mock(), "1": Mock(), "2": Mock()}
+    mocker.patch(
+        "sunbeam.features.observability.feature.is_maas_deployment", return_value=maas
+    )
+    requirements = feature._readiness_requirements(deployment, jhelper)
+    assert set(requirements) == (
+        {"openstack", "machines"}
+        | ({"observability"} if not external else set())
+        | ({"infra"} if maas else set())
+    )
+    assert set(requirements["openstack"]) == {
+        "opentelemetry-collector",
+        "opentelemetry-collector-infra",
+        "ceilometer",
+    }
+    assert requirements["openstack"]["ceilometer"].relations == {
+        "logging": {"opentelemetry-collector"}
+    }
+    machine_requirements = requirements["machines"]
+    collector = machine_requirements["opentelemetry-collector"]
+    assert collector.units is None
+    assert collector.relations["cos-agent"] == {
+        "k8s",
+        "microceph",
+        "openstack-hypervisor",
+        "hardware-observer",
+    }
+    assert collector.principals == {
+        app: {"0", "1", "2"}
+        for app in ("sunbeam-machine", "k8s", "microceph", "openstack-hypervisor")
+    }
+    hardware = machine_requirements["hardware-observer"]
+    assert hardware.principals == {"sunbeam-machine": {"0", "1", "2"}}
+    assert hardware.status == ["active", "blocked"]
+    assert hardware.agent_status == ("idle",)
+    if maas:
+        assert requirements["infra"]["opentelemetry-collector"].principals == {
+            "sunbeam-clusterd": ["0", "1", "2"]
+        }
+    if external:
+        assert collector.relations["send-loki-logs"] == {"loki-logging"}
+        assert requirements["openstack"]["opentelemetry-collector-infra"].relations[
+            "send-loki-logs"
+        ] == {"loki-logging"}
+    jhelper.get_model_status.assert_not_called()
+
+
+@pytest.mark.parametrize("external", [False, True])
+@pytest.mark.parametrize(
+    "app,workload,message,ready",
+    [
+        ("vault", "active", "", True),
+        (
+            "vault",
+            "blocked",
+            "Please initialize Vault or integrate with an auto-unseal provider",
+            True,
+        ),
+        ("vault", "blocked", "Please unseal Vault", True),
+        (
+            "vault",
+            "blocked",
+            "Please authorize charm (see `authorize-charm` action)",
+            True,
+        ),
+        ("vault", "blocked", "Vault failed to start", False),
+        ("vault", "waiting", "Please unseal Vault", False),
+        ("octavia", "active", "Unit is ready", True),
+        (
+            "octavia",
+            "waiting",
+            loadbalancer_feature.OCTAVIA_AMPHORA_NETWORK_WAITING_MESSAGE,
+            True,
+        ),
+        (
+            "octavia",
+            "blocked",
+            loadbalancer_feature.OCTAVIA_AMPHORA_RELATIONS_MISSING_MESSAGE,
+            True,
+        ),
+        (
+            "octavia",
+            "blocked",
+            loadbalancer_feature.OCTAVIA_AMPHORA_CA_CERT_MESSAGE,
+            True,
+        ),
+        (
+            "octavia",
+            "blocked",
+            loadbalancer_feature.OCTAVIA_AMPHORA_CONTROLLER_CERT_MESSAGE,
+            True,
+        ),
+        ("octavia", "blocked", "Database relation not ready", False),
+        ("octavia", "waiting", "Database relation not ready", False),
+    ],
+)
+def test_observability_preserves_supported_provider_waits(
+    deployment,
+    readiness_states,
+    jhelper,
+    mocker,
+    external,
+    app,
+    workload,
+    message,
+    ready,
+):
+    resources = readiness_states["openstack-plan"].pull_state.return_value["resources"]
+    resources.extend(
+        [
+            {
+                "mode": "managed",
+                "type": "juju_application",
+                "instances": [{"attributes": {"name": app, "units": 3}}],
+            },
+            {
+                "mode": "managed",
+                "type": "juju_integration",
+                "instances": [
+                    {
+                        "attributes": {
+                            "application": [
+                                {"name": app, "endpoint": "logging"},
+                                {
+                                    "name": "opentelemetry-collector-infra",
+                                    "endpoint": "receive-loki-logs",
+                                },
+                            ]
+                        }
+                    }
+                ],
+            },
+        ]
+    )
+    mocker.patch(
+        "sunbeam.features.observability.feature.is_maas_deployment", return_value=False
+    )
+    feature_type = (
+        observability_feature.ExternalObservabilityFeature
+        if external
+        else observability_feature.EmbeddedObservabilityFeature
+    )
+    requirements = feature_type()._readiness_requirements(deployment, jhelper)
+    requirement = requirements["openstack"][app]
+    status = Mock()
+    application = Mock()
+    status.apps = {app: application}
+    application.app_status.current = workload
+    application.app_status.message = message
+    application.relations = {
+        "logging": [Mock(related_app="opentelemetry-collector-infra")]
+    }
+    units = {f"{app}/{n}": Mock() for n in range(3)}
+    for unit in units.values():
+        unit.workload_status.current = workload
+        unit.workload_status.message = message
+        unit.juju_status.current = "idle"
+    status.get_units.return_value = units
+    assert (not requirement.pending(status, app)) is ready
+    assert requirement.agent_status == ("idle",)
+    assert requirement.units == 3
+    assert requirement.relations == {"logging": {"opentelemetry-collector-infra"}}
+    for collector in ("opentelemetry-collector", "opentelemetry-collector-infra"):
+        assert requirements["openstack"][collector].status == ("active",)
+        assert requirements["openstack"][collector].agent_status == ("idle",)
+    if ready:
+        units[f"{app}/2"].juju_status.current = "executing"
+        assert any(
+            f"{app}/2: agent 'executing'" in reason
+            for reason in requirement.pending(status, app)
+        )
+
+
+@pytest.mark.parametrize("external", [False, True])
+@pytest.mark.parametrize("region_controller", [False, True])
+def test_machine_readiness_uses_union_of_node_roles(
+    deployment, readiness_states, external, region_controller
+):
+    feature_type = (
+        observability_feature.ExternalObservabilityFeature
+        if external
+        else observability_feature.EmbeddedObservabilityFeature
+    )
+    nodes = [
+        {
+            "machineid": machine,
+            "role": ["control", "compute", "storage"]
+            if machine < 3
+            else ["compute", "storage"],
+        }
+        for machine in range(5)
+    ]
+    nodes.append({"machineid": -1, "role": ["control"]})
+    if region_controller:
+        nodes.append({"machineid": 5, "role": ["region_controller"]})
+
+    def nodes_matching_roles(role):
+        requested = {role} if isinstance(role, str) else set(role)
+        return [node for node in nodes if requested.issubset(node["role"])]
+
+    deployment.get_client.return_value.cluster.list_nodes_by_role.side_effect = (
+        nodes_matching_roles
+    )
+    requirements = feature_type()._machine_readiness_requirements(deployment)
+    workload_machines = {str(machine) for machine in range(5)}
+    control_machines = {"0", "1", "2"}
+    if region_controller:
+        workload_machines.add("5")
+        control_machines.add("5")
+    assert requirements["sunbeam-machine"].machines == workload_machines
+    assert requirements["k8s"].machines == control_machines
+    assert requirements["opentelemetry-collector"].principals == {
+        "sunbeam-machine": workload_machines,
+        "k8s": control_machines,
+        "microceph": {"0", "1", "2", "3", "4"},
+        "openstack-hypervisor": {"0", "1", "2", "3", "4"},
+    }
+    assert requirements["hardware-observer"].principals == {
+        "sunbeam-machine": workload_machines
+    }
+
+
+@pytest.mark.parametrize("external", [False, True])
+def test_observability_initializes_microovn_before_readiness_state_pull(
+    deployment, readiness_states, jhelper, mocker, external
+):
+    from click.testing import CliRunner
+
+    from sunbeam.core.common import run_plan
+    from sunbeam.core.manifest import FeatureConfig
+
+    initialized = False
+    microovn = Mock()
+
+    def initialize():
+        nonlocal initialized
+        initialized = True
+
+    def pull_state():
+        if not initialized:
+            raise TerraformException("Backend initialization required")
+        return {
+            "resources": [
+                {
+                    "mode": "managed",
+                    "type": "juju_application",
+                    "instances": [
+                        {
+                            "attributes": {
+                                "name": "microovn",
+                                "units": 0,
+                                "machines": ["0", "1", "2"],
+                            }
+                        }
+                    ],
+                }
+            ]
+        }
+
+    microovn.init.side_effect = initialize
+    microovn.pull_state.side_effect = pull_state
+    readiness_states["microovn-plan"] = microovn
+    agent_state = readiness_states["grafana-agent-plan"].pull_state.return_value
+    agent_state["resources"].append(
+        {
+            "mode": "managed",
+            "type": "juju_integration",
+            "instances": [
+                {
+                    "attributes": {
+                        "application": [
+                            {
+                                "name": "opentelemetry-collector",
+                                "endpoint": "cos-agent",
+                            },
+                            {"name": "microovn", "endpoint": "cos-agent"},
+                        ]
+                    }
+                }
+            ],
+        }
+    )
+    mocker.patch(
+        "sunbeam.features.observability.feature.JujuHelper", return_value=jhelper
+    )
+    mocker.patch(
+        "sunbeam.features.observability.feature.is_maas_deployment", return_value=False
+    )
+    feature_type = (
+        observability_feature.ExternalObservabilityFeature
+        if external
+        else observability_feature.EmbeddedObservabilityFeature
+    )
+    feature = feature_type()
+    feature._manifest = Mock()
+
+    def run_initialization_and_readiness(plan, console, show_hints):
+        selected = [
+            step
+            for step in plan
+            if isinstance(
+                step,
+                (
+                    observability_feature.TerraformInitStep,
+                    observability_feature.WaitForFeatureReadyStep,
+                ),
+            )
+        ]
+        return run_plan(selected, console, show_hints) if selected else {}
+
+    mocker.patch(
+        "sunbeam.features.observability.feature.run_plan",
+        side_effect=run_initialization_and_readiness,
+    )
+
+    @click.command()
+    def enable():
+        feature.run_enable_plans(deployment, FeatureConfig(), False)
+
+    result = CliRunner().invoke(enable)
+    assert result.exit_code == 0, result.output
+    assert "Observability enabled" in result.output
+    assert [call[0] for call in microovn.mock_calls] == ["init", "pull_state"]
+    requirements = jhelper.wait_until_models_ready.call_args.args[0]
+    assert requirements["machines"]["microovn"].machines == ["0", "1", "2"]
+
+
+@pytest.mark.parametrize("external", [False, True])
+def test_observability_final_gate_failure_reaches_cli(deployment, mocker, external):
+    from click.testing import CliRunner
+
+    from sunbeam.core.common import run_plan
+    from sunbeam.core.manifest import FeatureConfig
+
+    feature_type = (
+        observability_feature.ExternalObservabilityFeature
+        if external
+        else observability_feature.EmbeddedObservabilityFeature
+    )
+    feature = feature_type()
+    feature._manifest = Mock()
+    mocker.patch.object(feature, "pre_enable")
+    post_enable = mocker.patch.object(feature, "post_enable")
+    update_feature_info = mocker.patch.object(feature, "update_feature_info")
+    mocker.patch.object(feature, "_readiness_requirements", return_value={})
+    helper = mocker.patch(
+        "sunbeam.features.observability.feature.JujuHelper"
+    ).return_value
+    helper.wait_until_models_ready.side_effect = TimeoutError(
+        "hardware-observer/2: agent executing"
+    )
+    mocker.patch(
+        "sunbeam.features.observability.feature.is_maas_deployment", return_value=False
+    )
+
+    def run_final_only(plan, console, show_hints):
+        final = [
+            step
+            for step in plan
+            if isinstance(step, observability_feature.WaitForFeatureReadyStep)
+        ]
+        if final:
+            return run_plan(final, console, show_hints)
+        return {}
+
+    mocker.patch(
+        "sunbeam.features.observability.feature.run_plan", side_effect=run_final_only
+    )
+
+    @click.command()
+    def enable():
+        feature.enable_feature(deployment, FeatureConfig(), False)
+
+    result = CliRunner().invoke(enable)
+    assert result.exit_code == 1
+    assert "hardware-observer/2: agent executing" in result.output
+    assert "Observability enabled" not in result.output
+    post_enable.assert_not_called()
+    update_feature_info.assert_not_called()
+    helper.wait_until_models_ready.assert_called_once()
+    assert helper.wait_until_models_ready.call_args.args[1] == 7200
