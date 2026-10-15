@@ -194,6 +194,21 @@ class TestRemoveMicrocephOSDsStep:
         assert step.unit == "microceph/3"
         assert jhelper.run_cmd_on_machine_unit_payload.call_count == 2
 
+    @pytest.mark.parametrize("force", [False, True])
+    def test_osd_under_other_crush_host_aborts_before_removal(
+        self, cclient, jhelper, step_context, force
+    ):
+        step = _cleanup_step(cclient, jhelper, force=force)
+        jhelper.run_cmd_on_machine_unit_payload.side_effect = [
+            _command_result(_configured_disks([{"osd": 2, "location": "node-1"}])),
+            _command_result(_crush_tree("node-2", [2])),
+        ]
+
+        result = step.run(step_context)
+
+        assert result.result_type == ResultType.FAILED
+        assert jhelper.run_cmd_on_machine_unit_payload.call_count == 2
+
     @pytest.mark.parametrize(
         "hostname, remaining_hostname, expected",
         [

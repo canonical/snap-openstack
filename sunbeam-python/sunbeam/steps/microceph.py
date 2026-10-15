@@ -329,7 +329,7 @@ class RemoveMicrocephOSDsStep(BaseStep):
             ) from e
 
     def _list_crush_hosts(self) -> dict[str, list[int]]:
-        """Return matching CRUSH hosts and their OSD IDs, including empty hosts."""
+        """Return all CRUSH hosts and their OSD IDs, including empty hosts."""
         try:
             nodes = json.loads(
                 self._run_command("microceph.ceph osd tree --format json")
@@ -337,13 +337,23 @@ class RemoveMicrocephOSDsStep(BaseStep):
             return {
                 node["name"]: node["children"]
                 for node in nodes
-                if node["type"] == "host" and node["name"] in self._hostnames
+                if node["type"] == "host"
             }
         except (json.JSONDecodeError, KeyError, TypeError) as e:
             raise SunbeamException(f"Failed to parse CRUSH tree: {e}") from e
 
+    def _target_crush_hosts(
+        self, crush_hosts: dict[str, list[int]]
+    ) -> dict[str, list[int]]:
+        """Return the CRUSH hosts that belong to the target node."""
+        return {
+            hostname: osds
+            for hostname, osds in crush_hosts.items()
+            if hostname in self._hostnames
+        }
+
     def _list_target_osds(self) -> tuple[list[int], dict[str, list[int]]]:
-        """Read both target OSD sources before changing either source."""
+        """Read both OSD sources before changing either source."""
         return self._list_configured_osd_ids(), self._list_crush_hosts()
 
     def run(self, context: StepContext) -> Result:
@@ -354,13 +364,28 @@ class RemoveMicrocephOSDsStep(BaseStep):
                 return preparation
 
         try:
-            configured_osds, crush_hosts = self._list_target_osds()
+            configured_osds, all_crush_hosts = self._list_target_osds()
+            crush_hosts = self._target_crush_hosts(all_crush_hosts)
             crush_osds = {osd for children in crush_hosts.values() for osd in children}
             crush_only_osds = sorted(crush_osds - set(configured_osds))
             if crush_only_osds:
                 return Result(
                     ResultType.FAILED,
                     f"CRUSH-only OSDs for {self.node}: {crush_only_osds}",
+                )
+            # OSDs absent from CRUSH are still removed so a retry can finish.
+            conflicting_osds = sorted(
+                osd
+                for hostname, children in all_crush_hosts.items()
+                if hostname not in crush_hosts
+                for osd in children
+                if osd in configured_osds
+            )
+            if conflicting_osds:
+                return Result(
+                    ResultType.FAILED,
+                    f"OSDs for {self.node} are under other CRUSH hosts: "
+                    f"{conflicting_osds}",
                 )
 
             for osd_id in configured_osds:
@@ -373,7 +398,8 @@ class RemoveMicrocephOSDsStep(BaseStep):
                 self._run_command(command)
 
             if configured_osds:
-                remaining_configured, crush_hosts = self._list_target_osds()
+                remaining_configured, all_crush_hosts = self._list_target_osds()
+                crush_hosts = self._target_crush_hosts(all_crush_hosts)
                 if remaining_configured:
                     return Result(
                         ResultType.FAILED,
@@ -388,7 +414,9 @@ class RemoveMicrocephOSDsStep(BaseStep):
 
             for hostname in crush_hosts:
                 self._run_command(f"microceph.ceph osd crush remove {hostname}")
-            if crush_hosts and (remaining_hosts := self._list_crush_hosts()):
+            if crush_hosts and (
+                remaining_hosts := self._target_crush_hosts(self._list_crush_hosts())
+            ):
                 return Result(
                     ResultType.FAILED,
                     f"CRUSH hosts remain for {self.node}: {sorted(remaining_hosts)}",
