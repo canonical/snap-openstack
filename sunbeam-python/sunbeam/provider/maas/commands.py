@@ -1721,7 +1721,18 @@ def remove_node(ctx: click.Context, name: str, force: bool, show_hints: bool) ->
     run_plan(check_plan, console, show_hints)
 
     maas_client = MaasClient.from_deployment(deployment)
-    machine = get_machine(maas_client, name)
+    try:
+        machine = get_machine(maas_client, name)
+    except ValueError as e:
+        if not force:
+            raise click.ClickException(
+                f"{e} Use --force to clean up {name!r} by its cluster name only."
+            ) from e
+        console.print(
+            f"Warning: {e} Cleaning up {name!r} by its cluster name only; "
+            "records under its FQDN may remain."
+        )
+        machine = {"hostname": name, "fqdn": name}
 
     plan = [
         MigrateK8SKubeconfigStep(
