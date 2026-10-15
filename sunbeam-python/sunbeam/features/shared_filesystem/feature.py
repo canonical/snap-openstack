@@ -116,14 +116,29 @@ class SharedFilesystemFeature(OpenStackControlPlaneFeature):
 
         return apps
 
+    def _manila_data_plan(
+        self, deployment: Deployment, jhelper: JujuHelper
+    ) -> list[BaseStep]:
+        """Plan to deploy or update the manila-data application."""
+        tfhelper_manila_data = deployment.get_tfhelper(self.tfplan_manila_data)
+        return [
+            TerraformInitStep(tfhelper_manila_data),
+            manila_data.DeployManilaDataApplicationStep(
+                deployment,
+                deployment.get_client(),
+                tfhelper_manila_data,
+                jhelper,
+                self.manifest,
+                deployment.openstack_machines_model,
+            ),
+        ]
+
     def run_enable_plans(
         self, deployment: Deployment, config: FeatureConfig, show_hints: bool
     ):
         """Run the enablement plans."""
         jhelper = JujuHelper(deployment.juju_controller)
         tfhelper = deployment.get_tfhelper(self.tfplan)
-        tfhelper_manila_data = deployment.get_tfhelper(self.tfplan_manila_data)
-        client = deployment.get_client()
 
         plan: list[BaseStep] = []
         if self.user_manifest:
@@ -142,20 +157,8 @@ class SharedFilesystemFeature(OpenStackControlPlaneFeature):
             ]
         )
 
-        manila_data_plan = [
-            TerraformInitStep(tfhelper_manila_data),
-            manila_data.DeployManilaDataApplicationStep(
-                deployment,
-                client,
-                tfhelper_manila_data,
-                jhelper,
-                self.manifest,
-                deployment.openstack_machines_model,
-            ),
-        ]
-
         run_plan(plan, console, show_hints)
-        run_plan(manila_data_plan, console, show_hints)
+        run_plan(self._manila_data_plan(deployment, jhelper), console, show_hints)
 
         click.echo("Shared Filesystems enabled.")
 
@@ -185,6 +188,27 @@ class SharedFilesystemFeature(OpenStackControlPlaneFeature):
         run_plan(plan, console, show_hints)
 
         click.echo("Shared Filesystems disabled.")
+
+    def upgrade_hook(
+        self,
+        deployment: Deployment,
+        upgrade_release: bool = False,
+        show_hints: bool = False,
+    ):
+        """Run upgrade.
+
+        :param upgrade_release: Whether to upgrade release
+        """
+        if upgrade_release:
+            LOG.debug("Release upgrade is not supported for feature %s", self.name)
+            return
+
+        super().upgrade_hook(deployment, upgrade_release, show_hints)
+
+        # manila-data is not part of the control plane refresh
+        jhelper = JujuHelper(deployment.juju_controller)
+        run_plan(self._manila_data_plan(deployment, jhelper), console, show_hints)
+        LOG.debug("OpenStack %s application refreshed", self.display_name)
 
     def set_tfvars_on_enable(
         self, deployment: Deployment, config: FeatureConfig

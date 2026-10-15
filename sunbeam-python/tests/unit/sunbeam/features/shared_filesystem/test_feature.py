@@ -145,3 +145,30 @@ class TestSharedFilesystemFeature:
             "horizon-plugins": ["foo"],
         }
         assert extra_tfvars == expected_tfvars
+
+    @patch.object(manila_feature, "run_plan")
+    @patch.object(manila_feature.OpenStackControlPlaneFeature, "upgrade_hook")
+    @patch.object(manila_feature, "JujuHelper", Mock())
+    def test_upgrade_hook(self, mock_super_upgrade, mock_run_plan, deployment):
+        manila = manila_feature.SharedFilesystemFeature()
+        manila._manifest = Mock()
+
+        manila.upgrade_hook(deployment)
+
+        mock_super_upgrade.assert_called_once_with(deployment, False, False)
+        mock_run_plan.assert_called_once()
+        plan = mock_run_plan.call_args.args[0]
+        assert [type(step) for step in plan] == [
+            manila_feature.TerraformInitStep,
+            manila_data.DeployManilaDataApplicationStep,
+        ]
+
+    @patch.object(manila_feature, "run_plan")
+    @patch.object(manila_feature.OpenStackControlPlaneFeature, "upgrade_hook")
+    def test_upgrade_hook_release(self, mock_super_upgrade, mock_run_plan, deployment):
+        manila = manila_feature.SharedFilesystemFeature()
+
+        manila.upgrade_hook(deployment, upgrade_release=True)
+
+        mock_super_upgrade.assert_not_called()
+        mock_run_plan.assert_not_called()
