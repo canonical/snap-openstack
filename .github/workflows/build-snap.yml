@@ -155,6 +155,11 @@ jobs:
           sg snap_daemon "openstack.sunbeam cluster refresh ingress"
           sg snap_daemon "openstack.sunbeam cluster refresh"
 
+          sg snap_daemon "openstack.sunbeam cluster backup create --help"
+          sg snap_daemon "openstack.sunbeam cluster backup list --help"
+          sg snap_daemon "openstack.sunbeam cluster backup restore --help"
+          sg snap_daemon "openstack.sunbeam cluster backup target list"
+
       - name: Collect logs
         if: always()
         run: |
