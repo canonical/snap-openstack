@@ -17,7 +17,7 @@ from sunbeam.core.checks import DiagnosticResultType
 from sunbeam.core.deployment import Networks
 from sunbeam.core.deployments import DeploymentsConfig
 from sunbeam.core.juju import ControllerNotFoundException
-from sunbeam.provider.maas.client import _convert_raw_machine
+from sunbeam.provider.maas.client import MaasClient, _convert_raw_machine
 from sunbeam.provider.maas.commands import (
     remove_node,
     validate_deployment_cmd,
@@ -87,6 +87,27 @@ class TestConvertRawMachine:
         machine = _convert_raw_machine(machine_raw, None)
 
         assert machine["fqdn"] == "cloud-4.maas"
+
+
+class TestMaasClientGetMachine:
+    def test_missing_resource_tag_raises_value_error(self, mocker):
+        maas_client = mocker.patch("sunbeam.provider.maas.client.maas_client")
+        machines_api = Mock()
+        maas_client.connect.return_value.machines.list.__self__ = machines_api
+        machines_api._handler.read.side_effect = CallError(
+            request={"method": "GET", "uri": "http://localhost:5240/MAAS"},
+            response=Mock(status=400, reason="Bad Request"),
+            content=b"No such tag(s): 'openstack-sunbeam'.",
+            call=None,
+        )
+        client = MaasClient("http://localhost:5240/MAAS", "token", "openstack-sunbeam")
+
+        with pytest.raises(ValueError, match="No such tag"):
+            client.get_machine("node-1")
+
+        machines_api._handler.read.assert_called_once_with(
+            hostname="node-1", tags="openstack-sunbeam"
+        )
 
 
 class TestAddMaasDeployment:
@@ -2966,3 +2987,43 @@ class TestRemoveNode:
         assert plan[osd_index].node == "node-1"
         assert plan[osd_index]._hostnames == ("node-1", "node-1.maas")
         assert plan[osd_index].force is force
+
+    @patch("sunbeam.provider.maas.commands.JujuHelper")
+    @patch("sunbeam.provider.maas.commands.run_preflight_checks")
+    @patch("sunbeam.provider.maas.commands.run_plan")
+    def test_remove_without_maas_machine_requires_force(
+        self, run_plan_cmd, run_preflight, juju_helper, mock_maas_machine
+    ):
+        _, get_machine = mock_maas_machine
+        get_machine.side_effect = ValueError("Machine 'node-1' not found.")
+        deployment = Mock()
+        deployment.get_ovn_manager.return_value.get_machines.return_value = []
+
+        result = CliRunner().invoke(remove_node, ["node-1"], obj=deployment)
+
+        assert result.exit_code == 1
+        assert "--force" in result.output
+        assert run_plan_cmd.call_count == 1
+
+    @patch("sunbeam.provider.maas.commands.JujuHelper")
+    @patch("sunbeam.provider.maas.commands.run_preflight_checks")
+    @patch("sunbeam.provider.maas.commands.run_plan")
+    def test_forced_remove_without_maas_machine_uses_cluster_name(
+        self, run_plan_cmd, run_preflight, juju_helper, mock_maas_machine
+    ):
+        _, get_machine = mock_maas_machine
+        get_machine.side_effect = ValueError("Machine 'node-1' not found.")
+        deployment = Mock()
+        deployment.openstack_machines_model = "openstack-machines"
+        deployment.get_ovn_manager.return_value.get_machines.return_value = []
+
+        result = CliRunner().invoke(remove_node, ["--force", "node-1"], obj=deployment)
+
+        assert result.exit_code == 0, result.output
+        plan = run_plan_cmd.call_args_list[1][0][0]
+        references = next(
+            step for step in plan if isinstance(step, RemoveHypervisorReferencesStep)
+        )
+        osds = next(step for step in plan if isinstance(step, RemoveMicrocephOSDsStep))
+        assert references._hostnames == ("node-1",)
+        assert osds._hostnames == ("node-1",)
