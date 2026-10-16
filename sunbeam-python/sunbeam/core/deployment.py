@@ -181,7 +181,7 @@ class Deployment(pydantic.BaseModel):
                     "Endpoint %s should bypass proxy, adding to no_proxy", endpoint
                 )
                 no_proxy_set.add(host)
-        proxy["NO_PROXY"] = ",".join(no_proxy_set)
+        proxy["NO_PROXY"] = ",".join(sorted(no_proxy_set))
         self.ensure_proxy_settings(proxy)
 
     def ensure_proxy_settings(self, settings: dict[str, str] | None = None):
@@ -242,7 +242,9 @@ class Deployment(pydantic.BaseModel):
         if "NO_PROXY" in proxy:
             no_proxy_list = set(proxy.get("NO_PROXY", "").split(","))
             default_no_proxy_list = _get_default_no_proxy_settings()
-            proxy["NO_PROXY"] = ",".join(no_proxy_list.union(default_no_proxy_list))
+            proxy["NO_PROXY"] = ",".join(
+                sorted(no_proxy_list.union(default_no_proxy_list))
+            )
 
         return proxy
 
