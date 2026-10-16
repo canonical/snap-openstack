@@ -44,6 +44,34 @@ OWNER_TAG_PREFIX = "user-"
 
 MODEL_DELAY = 10
 
+CONFIG_OVERRIDE_RESOURCE = "config-override"
+CONFIG_OVERRIDE_FILENAME = "override.conf"
+POLICY_OVERRIDE_RESOURCE = "policy-override"
+POLICY_OVERRIDE_FILENAME = "override.yaml"
+OVERRIDE_RESOURCE_FILENAMES = {
+    CONFIG_OVERRIDE_RESOURCE: CONFIG_OVERRIDE_FILENAME,
+    POLICY_OVERRIDE_RESOURCE: POLICY_OVERRIDE_FILENAME,
+}
+_MISSING_RESOURCE_MARKER = 'new resource "{}" was missing'
+
+
+def _missing_override_resources(error: jubilant.CLIError) -> set[str]:
+    """Return the known override resources juju demands for the refresh target.
+
+    juju aborts a refresh with ``new resource "<name>" was missing, please
+    provide it via --resource`` exactly for the resources the target revision
+    declares and the application has not uploaded yet.  Only the resources
+    this code knows how to supply matter, so the known names are matched
+    literally instead of parsed out of the message.
+    """
+    text = (error.stdout or "") + (error.stderr or "")
+    return {
+        name
+        for name in OVERRIDE_RESOURCE_FILENAMES
+        if _MISSING_RESOURCE_MARKER.format(name) in text
+    }
+
+
 T = TypeVar("T")
 
 
@@ -102,10 +130,15 @@ class LeaderNotFoundException(JujuException):
 
 
 class ActionFailedException(JujuException):
-    """Raised when Juju run failed."""
+    """Raised when Juju run failed.
 
-    def __init__(self, action_result):
+    ``results`` carries the results the charm set on the failed task, so a
+    caller can tell a charm verdict from a run that never produced one.
+    """
+
+    def __init__(self, action_result, results: dict | None = None):
         self.action_result = action_result
+        self.results = results if isinstance(results, dict) else {}
 
 
 class ExecFailedException(JujuException):
@@ -853,8 +886,10 @@ class JujuHelper:
                 task = juju.run(name, action_name, action_params, wait=timeout)
             except jubilant.CLIError as e:
                 raise ActionFailedException(str(e))
+            except jubilant.TaskError as e:
+                raise ActionFailedException(str(e), results=e.task.results)
         if not task.success:
-            raise ActionFailedException(str(task))
+            raise ActionFailedException(str(task), results=task.results)
         return task.results
 
     def get_application_actions(self, application: str, model: str) -> list[str]:
@@ -1664,17 +1699,68 @@ class JujuHelper:
         :param trust: If true, grants cluster-scoped k8s RBAC trust before
             refresh so that upgrade-charm hooks can access the k8s API.
             On non-k8s models, trust is passed directly to juju refresh.
+
+        A refresh onto a revision that newly declares a file resource aborts
+        with ``new resource "..." was missing``; juju demands exactly the
+        resources the target revision declares and the application has not
+        uploaded yet, so those are supplied as EMPTY files ("no override").
+        An already attached resource is never passed along: ``juju refresh
+        --resource`` would overwrite the operator's live override.  What the
+        application has attached is looked up only when juju refuses the
+        refresh over an override resource; a refresh juju accepts, or refuses
+        over anything else, is never asked about resources.
         """
         if trust and self.is_k8s_model(model):
             self.charm_trust(application_name, model)
-        with self._model(model) as juju:
-            juju.refresh(
-                application_name,
-                channel=channel,
-                revision=revision,
-                base=base,
-                trust=trust,
-            )
+        with tempfile.TemporaryDirectory() as tmp:
+            resources: dict[str, str] = {}
+            for _ in range(len(OVERRIDE_RESOURCE_FILENAMES) + 1):
+                try:
+                    with self._model(model) as juju:
+                        # Only pass resources once there is one to supply:
+                        # ``juju refresh --resource`` would overwrite the
+                        # operator's live override.
+                        refresh_kwargs: dict[str, typing.Any] = (
+                            {"resources": resources} if resources else {}
+                        )
+                        juju.refresh(
+                            application_name,
+                            channel=channel,
+                            revision=revision,
+                            base=base,
+                            trust=trust,
+                            **refresh_kwargs,
+                        )
+                    return
+                except jubilant.CLIError as e:
+                    missing = _missing_override_resources(e) - resources.keys()
+                    if not missing:
+                        raise
+                    # Filter out what the operator attached with the
+                    # ``attach-overrides`` action: ``juju refresh
+                    # --resource`` would overwrite that live override. The
+                    # lookup runs only for a refresh juju refused over one
+                    # of these resources, so a charm that declares none --
+                    # or one refused over anything else -- is never asked
+                    # about its resources.
+                    try:
+                        attached = {
+                            str(r.get("name", ""))
+                            for r in self.get_application_resources(
+                                application_name, model
+                            )
+                        }
+                    except Exception:
+                        # What is attached cannot be told: let juju report
+                        # instead of overwriting a live override.
+                        attached = missing
+                    missing -= attached
+                    if not missing:
+                        raise
+                    for name in sorted(missing):
+                        path = Path(tmp) / OVERRIDE_RESOURCE_FILENAMES[name]
+                        path.write_text("")
+                        resources[name] = str(path)
 
     def get_available_charm_revisions(
         self,

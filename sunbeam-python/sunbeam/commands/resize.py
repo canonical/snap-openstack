@@ -10,6 +10,7 @@ from rich.console import Console
 from sunbeam.clusterd.client import Client
 from sunbeam.core.checks import JujuLoginCheck, run_preflight_checks
 from sunbeam.core.common import click_option_topology, run_plan
+from sunbeam.core.config_overrides import check_stale_overrides
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import JujuHelper
 from sunbeam.core.terraform import TerraformInitStep
@@ -72,6 +73,10 @@ def resize(
 
     jhelper = JujuHelper(deployment.juju_controller)
 
+    # A resize changes the configuration the services run with; make sure the
+    # stored config-file overrides still validate before touching the cloud.
+    check_stale_overrides(deployment, console, fail=True)
+
     plan: list = []
     if len(storage_nodes):
         # Change default-pool-size based on number of storage nodes
@@ -126,5 +131,8 @@ def resize(
         )
 
     run_plan(plan, console, show_hints)
+
+    # Resize applied; report overrides that stopped validating because of it.
+    check_stale_overrides(deployment, console, fail=False)
 
     click.echo("Resize complete.")
