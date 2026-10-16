@@ -12,7 +12,7 @@ from rich.console import Console
 
 from sunbeam.core.manifest import StorageBackendConfig
 from sunbeam.storage.base import StorageBackendBase
-from sunbeam.storage.models import SecretDictField
+from sunbeam.storage.models import PEMCertificates, SecretDictField
 
 LOG = logging.getLogger(__name__)
 console = Console()
@@ -63,8 +63,13 @@ class NimbleConfig(StorageBackendConfig):
         Field(description="Whether to verify Nimble SSL Certificate"),
     ] = None
     nimble_verify_cert_path: Annotated[
-        str | None,
-        Field(description="Path to Nimble Array SSL certificate"),
+        PEMCertificates | None,
+        Field(
+            description=(
+                "PEM-encoded certificate or CA bundle content used to verify "
+                "the Nimble array."
+            )
+        ),
     ] = None
     san_thin_provision: Annotated[
         bool | None,

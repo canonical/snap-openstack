@@ -52,6 +52,10 @@ class SolidFireConfig(StorageBackendConfig):
             description="Front-end protocol (Cinder SolidFire driver uses iSCSI).",
         ),
     ] = None
+    driver_ssl_cert_verify: Annotated[
+        bool | None,
+        Field(description="Verify HTTPS certificates using the system trust store."),
+    ] = None
     sf_emulate_512: Annotated[
         bool | None,
         Field(description="Set 512 byte emulation on volume creation."),
