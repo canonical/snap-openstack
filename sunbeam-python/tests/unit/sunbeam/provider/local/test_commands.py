@@ -212,3 +212,125 @@ class TestJoinNodeValidation:
         assert run_plan.call_count == 1
         first_plan = run_plan.call_args_list[0][0][0]
         assert first_plan[0].__class__.__name__ == "ClusterJoinNodeStep"
+
+
+class TestConfigureSRIOVInfraValidation:
+    """The INFRA_APPS gate runs before sriov config and manifest storage.
+
+    The gate only runs on the path that reapplies the openstack plan
+    (PCI aliases in the manifest): the hypervisor-only path leaves
+    INFRA_APPS alone and must not be blocked on unrelated drift.
+    """
+
+    def _deployment(self, pci_aliases=None):
+        deployment = Mock()
+        client = deployment.get_client.return_value
+        client.cluster.get_node_info.return_value = {"role": ["compute"]}
+        manifest = deployment.get_manifest.return_value
+        if pci_aliases is None:
+            manifest.core.config.pci = None
+        else:
+            manifest.core.config.pci = Mock(aliases=pci_aliases)
+        deployment.get_tfhelper.side_effect = lambda plan: Mock()
+        deployment.openstack_machines_model = "openstack-machines"
+        return deployment
+
+    @patch("sunbeam.provider.local.commands.retrieve_admin_credentials")
+    @patch("sunbeam.provider.local.commands.run_preflight_checks")
+    @patch("sunbeam.provider.local.commands.utils.get_fqdn", return_value="node-2")
+    @patch("sunbeam.provider.local.commands.run_plan")
+    def test_gate_precedes_config_and_manifest_storage(
+        self, run_plan, _fqdn, _preflight, _creds
+    ):
+        from sunbeam.provider.local.commands import configure_sriov
+        from sunbeam.steps.openstack import ValidateInfraAppsStep
+
+        deployment = self._deployment(pci_aliases=["0000:00:05.0"])
+        manifest_path = Mock()
+        ctx = click.Context(configure_sriov, obj=deployment)
+        with ctx:
+            configure_sriov.callback(
+                manifest_path=manifest_path,
+                accept_defaults=False,
+                show_hints=False,
+                clear_previous_config=False,
+            )
+        # Order: gate, manifest storage, then the sriov config plan.
+        assert run_plan.call_count == 3
+        gate_plan = run_plan.call_args_list[0][0][0]
+        assert gate_plan[0].__class__.__name__ == "TerraformInitStep"
+        assert isinstance(gate_plan[1], ValidateInfraAppsStep)
+        storage_plan = run_plan.call_args_list[1][0][0]
+        assert storage_plan[0].__class__.__name__ == "AddManifestStep"
+        config_plan = run_plan.call_args_list[2][0][0]
+        assert config_plan[0].__class__.__name__ == "LocalConfigSRIOVStep"
+
+    @patch("sunbeam.provider.local.commands.retrieve_admin_credentials")
+    @patch("sunbeam.provider.local.commands.run_preflight_checks")
+    @patch("sunbeam.provider.local.commands.utils.get_fqdn", return_value="node-2")
+    @patch("sunbeam.provider.local.commands.run_plan")
+    def test_hypervisor_only_path_is_not_gated(
+        self, run_plan, _fqdn, _preflight, _creds
+    ):
+        """Without PCI aliases the openstack plan is not reapplied: no gate.
+
+        Unrelated INFRA_APP drift must not block configuring a compute
+        node whose operation leaves those applications unchanged.
+        """
+        from sunbeam.provider.local.commands import configure_sriov
+        from sunbeam.steps.openstack import ValidateInfraAppsStep
+
+        deployment = self._deployment()
+        ctx = click.Context(configure_sriov, obj=deployment)
+        with ctx:
+            configure_sriov.callback(
+                manifest_path=Mock(),
+                accept_defaults=False,
+                show_hints=False,
+                clear_previous_config=False,
+            )
+        # Order: manifest storage, then the sriov config plan. No gate.
+        assert run_plan.call_count == 2
+        for call in run_plan.call_args_list:
+            assert not any(
+                isinstance(step, ValidateInfraAppsStep) for step in call.args[0]
+            )
+        storage_plan = run_plan.call_args_list[0][0][0]
+        assert storage_plan[0].__class__.__name__ == "AddManifestStep"
+        config_plan = run_plan.call_args_list[1][0][0]
+        assert config_plan[0].__class__.__name__ == "LocalConfigSRIOVStep"
+
+    @patch("sunbeam.provider.local.commands.LocalConfigSRIOVStep")
+    @patch("sunbeam.provider.local.commands.AddManifestStep")
+    @patch("sunbeam.provider.local.commands.retrieve_admin_credentials")
+    @patch("sunbeam.provider.local.commands.run_preflight_checks")
+    @patch("sunbeam.provider.local.commands.utils.get_fqdn", return_value="node-2")
+    def test_gate_failure_skips_manifest_storage_and_config(
+        self, _fqdn, _preflight, _creds, add_manifest_step, local_config_step
+    ):
+        """A failed gate must not store the manifest or configure sriov."""
+        import click as _click
+
+        from sunbeam.core.common import Result
+        from sunbeam.provider.local.commands import configure_sriov
+
+        deployment = self._deployment(pci_aliases=["0000:00:05.0"])
+        ctx = click.Context(configure_sriov, obj=deployment)
+        with (
+            ctx,
+            patch(
+                "sunbeam.steps.openstack.ValidateInfraAppsStep.run",
+                return_value=Result(ResultType.FAILED, "pending infra changes"),
+            ),
+        ):
+            with pytest.raises(_click.ClickException, match="pending infra"):
+                configure_sriov.callback(
+                    manifest_path=Mock(),
+                    accept_defaults=False,
+                    show_hints=False,
+                    clear_previous_config=False,
+                )
+        # The drifted manifest was never stored and nothing was
+        # configured on the node.
+        add_manifest_step.assert_not_called()
+        local_config_step.assert_not_called()

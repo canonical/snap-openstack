@@ -28,8 +28,13 @@ from sunbeam.core.terraform import TerraformInitStep
 from sunbeam.features.interface.v1.base import is_maas_deployment
 from sunbeam.features.tls.ca import CaTlsFeature
 from sunbeam.steps.horizon import AttachHorizonThemeStep
+from sunbeam.steps.ingress import (
+    IngressCharmRefreshStep,
+    ReapplyIngressTerraformPlanStep,
+)
 from sunbeam.steps.k8s import DeployK8SApplicationStep
 from sunbeam.steps.k8s_upgrade import K8SCharmUpgradeStep
+from sunbeam.steps.openstack import ValidateInfraAppsStep
 from sunbeam.steps.upgrades.base import UpgradeCoordinator
 from sunbeam.steps.upgrades.inter_channel import ChannelUpgradeCoordinator
 from sunbeam.steps.upgrades.intra_channel import (
@@ -185,6 +190,21 @@ def refresh(
         run_plan([AddManifestStep(client, clear=True)], console, show_hints)
     elif manifest_path:
         manifest = deployment.get_manifest(manifest_path)
+        if not upgrade_release:
+            # The latest-in-channel flow refuses to change INFRA_APPS:
+            # validate the manifest against the deployment and store it
+            # in the cluster database only after the gate accepts it
+            # (release upgrades are exempt: they intentionally move
+            # INFRA_APPS too).
+            tfhelper = deployment.get_tfhelper("openstack-plan")
+            run_plan(
+                [
+                    TerraformInitStep(tfhelper),
+                    ValidateInfraAppsStep(client, tfhelper, manifest),
+                ],
+                console,
+                show_hints,
+            )
         run_plan([AddManifestStep(client, manifest_path)], console, show_hints)
 
     if not manifest:
@@ -264,7 +284,6 @@ def refresh_mysql(
     manifest = None
     if manifest_path:
         manifest = deployment.get_manifest(manifest_path)
-        run_plan([AddManifestStep(client, manifest_path)], console, show_hints)
 
     if not manifest:
         LOG.debug("Getting latest manifest from cluster db")
@@ -287,6 +306,20 @@ def refresh_mysql(
         deployment, client, jhelper, manifest, reset_mysql_upgrade_state
     )
     upgrade_coordinator.run_plan(show_hints)
+
+    if manifest_path:
+        # Store the user manifest only after the refresh succeeded: the
+        # refresh can reject the manifest (e.g. a track change, refused
+        # inside MySQLCharmUpgradeStep) and a rejected manifest must not
+        # become the cluster's latest stored manifest -- every later
+        # command without -m inherits it.  Storing after the rejection
+        # checks instead is not possible: they are embedded in the apply
+        # steps, so there is no validate-then-apply point.  A mid-flight
+        # failure therefore leaves the stored manifest behind a partially
+        # refreshed charm; the INFRA_APPS gate blocks any reapply that
+        # would revert it, and recovery is rerunning this command with
+        # the same manifest (same ordering as refresh vault/ingress).
+        run_plan([AddManifestStep(client, manifest_path)], console, show_hints)
     click.echo("MySQL refresh complete.")
 
 
@@ -317,7 +350,6 @@ def refresh_vault(
     manifest = None
     if manifest_path:
         manifest = deployment.get_manifest(manifest_path)
-        run_plan([AddManifestStep(client, manifest_path)], console, show_hints)
 
     if not manifest:
         LOG.debug("Getting latest manifest from cluster db")
@@ -339,10 +371,75 @@ def refresh_vault(
         show_hints,
     )
 
+    if manifest_path:
+        # Store the user manifest only after the refresh succeeded: the
+        # charm refresh can reject the manifest (e.g. unsupported track
+        # change) and a rejected manifest must not become the cluster's
+        # latest stored manifest.
+        run_plan([AddManifestStep(client, manifest_path)], console, show_hints)
+
     message = get_step_message(plan_results, VaultCharmUpgradeStep)
     if message:
         click.echo(message)
     click.echo("Vault refresh complete.")
+
+
+@refresh.command("ingress")
+@click.option(
+    "-m",
+    "--manifest",
+    "manifest_path",
+    help="Manifest file.",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+)
+@click_option_show_hints
+@click.pass_context
+def refresh_ingress(
+    ctx: click.Context,
+    manifest_path: Path | None = None,
+    show_hints: bool = False,
+) -> None:
+    """Upgrade traefik-k8s charms (ingress) to latest revision in channel."""
+    deployment: Deployment = ctx.obj
+    client = deployment.get_client()
+
+    # Login to the Juju controller
+    run_preflight_checks([JujuLoginCheck(deployment.juju_account)], console)
+
+    manifest = None
+    if manifest_path:
+        manifest = deployment.get_manifest(manifest_path)
+
+    if not manifest:
+        LOG.debug("Getting latest manifest from cluster db")
+        manifest = deployment.get_manifest()
+
+    jhelper = JujuHelper(deployment.juju_controller)
+    tfhelper = deployment.get_tfhelper("openstack-plan")
+
+    run_plan(
+        [
+            TerraformInitStep(tfhelper),
+            refresh_step := IngressCharmRefreshStep(deployment, jhelper, manifest),
+            ReapplyIngressTerraformPlanStep(
+                deployment,
+                client,
+                tfhelper,
+                jhelper,
+                manifest,
+                refresh_step=refresh_step,
+            ),
+        ],
+        console,
+        show_hints,
+    )
+    if manifest_path:
+        # Store the user manifest only after the refresh succeeded: the
+        # scope validation can reject the plan after the charm refresh,
+        # and a rejected manifest must not become the cluster's latest
+        # stored manifest.
+        run_plan([AddManifestStep(client, manifest_path)], console, show_hints)
+    click.echo("Ingress refresh complete.")
 
 
 @refresh.command("k8s")
