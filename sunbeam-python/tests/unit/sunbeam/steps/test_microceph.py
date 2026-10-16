@@ -28,6 +28,14 @@ def _configured_disks(disks):
     return json.dumps({"ConfiguredDisks": disks})
 
 
+# OSDs on other nodes, so removing the target keeps the MicroCeph minimum.
+_OTHER_DISKS = [
+    {"osd": 20, "location": "node-2"},
+    {"osd": 21, "location": "node-3"},
+    {"osd": 22, "location": "node-4"},
+]
+
+
 def _crush_tree(hostname=None, children=None):
     nodes = []
     if hostname is not None:
@@ -138,6 +146,7 @@ class TestRemoveMicrocephOSDsStep:
                         {"osd": 5, "location": "node-1.maas"},
                         {"osd": 2, "location": "node-1"},
                         {"osd": 9, "location": "node-2"},
+                        *_OTHER_DISKS,
                     ]
                 )
             ),
@@ -209,6 +218,29 @@ class TestRemoveMicrocephOSDsStep:
         assert result.result_type == ResultType.FAILED
         assert jhelper.run_cmd_on_machine_unit_payload.call_count == 2
 
+    @pytest.mark.parametrize("force", [False, True])
+    def test_too_few_remaining_osds_aborts_before_removal(
+        self, cclient, jhelper, step_context, force
+    ):
+        step = _cleanup_step(cclient, jhelper, force=force)
+        jhelper.run_cmd_on_machine_unit_payload.side_effect = [
+            _command_result(
+                _configured_disks(
+                    [
+                        {"osd": 2, "location": "node-1"},
+                        {"osd": 3, "location": "node-1.maas"},
+                        *_OTHER_DISKS[:2],
+                    ]
+                )
+            ),
+            _command_result(_crush_tree("node-1", [2, 3])),
+        ]
+
+        result = step.run(step_context)
+
+        assert result.result_type == ResultType.FAILED
+        assert jhelper.run_cmd_on_machine_unit_payload.call_count == 2
+
     @pytest.mark.parametrize(
         "hostname, remaining_hostname, expected",
         [
@@ -248,7 +280,9 @@ class TestRemoveMicrocephOSDsStep:
     def test_force_does_not_bypass_safety_checks(self, cclient, jhelper, step_context):
         step = _cleanup_step(cclient, jhelper, force=True)
         jhelper.run_cmd_on_machine_unit_payload.side_effect = [
-            _command_result(_configured_disks([{"osd": 2, "location": "node-1"}])),
+            _command_result(
+                _configured_disks([{"osd": 2, "location": "node-1"}, *_OTHER_DISKS])
+            ),
             _command_result(_crush_tree("node-1", [2])),
             _command_result(),
             _command_result(_configured_disks([])),
@@ -270,7 +304,9 @@ class TestRemoveMicrocephOSDsStep:
         step = _cleanup_step(cclient, jhelper)
         jhelper.run_cmd_on_machine_unit_payload.side_effect = [
             _command_result(
-                _configured_disks([{"osd": osd, "location": hostname} for osd in osds])
+                _configured_disks(
+                    [{"osd": osd, "location": hostname} for osd in osds] + _OTHER_DISKS
+                )
             ),
             _command_result(_crush_tree(hostname, osds)),
             ExecFailedException("remove failed"),
@@ -299,7 +335,9 @@ class TestRemoveMicrocephOSDsStep:
         self, cclient, jhelper, step_context, remaining_disks
     ):
         step = _cleanup_step(cclient, jhelper)
-        configured = _configured_disks([{"osd": 2, "location": "node-1"}])
+        configured = _configured_disks(
+            [{"osd": 2, "location": "node-1"}, *_OTHER_DISKS]
+        )
         tree = _crush_tree("node-1", [2])
         jhelper.run_cmd_on_machine_unit_payload.side_effect = [
             _command_result(configured),

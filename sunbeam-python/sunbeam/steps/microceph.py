@@ -250,6 +250,9 @@ class RemoveMicrocephOSDsStep(BaseStep):
     # Juju cancels the command when its wait expires, so let MicroCeph reach
     # its own timeout first and report that error.
     _COMMAND_TIMEOUT = _OSD_REMOVE_TIMEOUT + 60
+    # `microceph disk remove` refuses to leave fewer OSDs than this unless its
+    # safety checks are bypassed.
+    _MIN_OSDS = 3
 
     def __init__(
         self,
@@ -314,15 +317,16 @@ class RemoveMicrocephOSDsStep(BaseStep):
 
         return result.stdout
 
-    def _list_configured_osd_ids(self) -> list[int]:
-        """Return target OSD IDs that still exist in the MicroCeph database."""
+    def _list_configured_osd_ids(self) -> tuple[list[int], int]:
+        """Return target OSD IDs in the MicroCeph database and the OSD count."""
         try:
             disks = json.loads(self._run_command("microceph disk list --json"))[
                 "ConfiguredDisks"
             ]
-            return sorted(
+            target_osds = sorted(
                 {disk["osd"] for disk in disks if disk["location"] in self._hostnames}
             )
+            return target_osds, len(disks)
         except (json.JSONDecodeError, KeyError, TypeError) as e:
             raise SunbeamException(
                 f"Failed to parse configured disk listing: {e}"
@@ -352,9 +356,10 @@ class RemoveMicrocephOSDsStep(BaseStep):
             if hostname in self._hostnames
         }
 
-    def _list_target_osds(self) -> tuple[list[int], dict[str, list[int]]]:
+    def _list_target_osds(self) -> tuple[list[int], int, dict[str, list[int]]]:
         """Read both OSD sources before changing either source."""
-        return self._list_configured_osd_ids(), self._list_crush_hosts()
+        configured_osds, osd_count = self._list_configured_osd_ids()
+        return configured_osds, osd_count, self._list_crush_hosts()
 
     def run(self, context: StepContext) -> Result:
         """Remove DB-backed OSDs and verify both MicroCeph and CRUSH state."""
@@ -364,7 +369,7 @@ class RemoveMicrocephOSDsStep(BaseStep):
                 return preparation
 
         try:
-            configured_osds, all_crush_hosts = self._list_target_osds()
+            configured_osds, osd_count, all_crush_hosts = self._list_target_osds()
             crush_hosts = self._target_crush_hosts(all_crush_hosts)
             crush_osds = {osd for children in crush_hosts.values() for osd in children}
             crush_only_osds = sorted(crush_osds - set(configured_osds))
@@ -387,6 +392,15 @@ class RemoveMicrocephOSDsStep(BaseStep):
                     f"OSDs for {self.node} are under other CRUSH hosts: "
                     f"{conflicting_osds}",
                 )
+            remaining_osds = osd_count - len(configured_osds)
+            if configured_osds and remaining_osds < self._MIN_OSDS:
+                return Result(
+                    ResultType.FAILED,
+                    f"Removing OSDs {configured_osds} from {self.node} would "
+                    f"leave {remaining_osds}; MicroCeph requires at least "
+                    f"{self._MIN_OSDS}. Remove them with `microceph disk remove "
+                    "--bypass-safety-checks` to continue.",
+                )
 
             for osd_id in configured_osds:
                 command = (
@@ -398,7 +412,7 @@ class RemoveMicrocephOSDsStep(BaseStep):
                 self._run_command(command)
 
             if configured_osds:
-                remaining_configured, all_crush_hosts = self._list_target_osds()
+                remaining_configured, _, all_crush_hosts = self._list_target_osds()
                 crush_hosts = self._target_crush_hosts(all_crush_hosts)
                 if remaining_configured:
                     return Result(
