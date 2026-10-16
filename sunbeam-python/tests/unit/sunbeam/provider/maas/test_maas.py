@@ -2283,6 +2283,87 @@ class TestIsMaasDeployment:
         assert is_maas_deployment(deployment) is False
 
 
+class TestConfigureSRIOVInfraValidation:
+    """The INFRA_APPS gate only runs when the openstack plan is reapplied.
+
+    Without PCI aliases the command only reapplies the hypervisor plan:
+    unrelated INFRA_APP drift must not block it.
+    """
+
+    def _deployment(self, pci_aliases=None):
+        deployment = Mock()
+        manifest = deployment.get_manifest.return_value
+        if pci_aliases is None:
+            manifest.core.config.pci = None
+        else:
+            manifest.core.config.pci = Mock(aliases=pci_aliases)
+        deployment.get_tfhelper.side_effect = lambda plan: Mock()
+        deployment.openstack_machines_model = "openstack-machines"
+        return deployment
+
+    @patch("sunbeam.provider.maas.steps.maas_client")
+    @patch("sunbeam.provider.maas.commands.retrieve_admin_credentials")
+    @patch("sunbeam.provider.maas.commands.run_preflight_checks")
+    @patch("sunbeam.provider.maas.commands.run_plan")
+    def test_gate_precedes_config_and_manifest_storage(
+        self, run_plan, _preflight, _creds, _maas_client
+    ):
+        import click
+
+        from sunbeam.provider.maas.commands import configure_sriov
+        from sunbeam.steps.openstack import ValidateInfraAppsStep
+
+        deployment = self._deployment(pci_aliases=["0000:00:05.0"])
+        ctx = click.Context(configure_sriov, obj=deployment)
+        with ctx:
+            configure_sriov.callback(
+                manifest_path=Mock(),
+                accept_defaults=False,
+                show_hints=False,
+            )
+        # Order: gate, manifest storage, then the sriov config plan.
+        assert run_plan.call_count == 3
+        gate_plan = run_plan.call_args_list[0][0][0]
+        assert gate_plan[0].__class__.__name__ == "TerraformInitStep"
+        assert isinstance(gate_plan[1], ValidateInfraAppsStep)
+        storage_plan = run_plan.call_args_list[1][0][0]
+        assert storage_plan[0].__class__.__name__ == "AddManifestStep"
+        config_plan = run_plan.call_args_list[2][0][0]
+        assert config_plan[0].__class__.__name__ == "MaasConfigSRIOVStep"
+
+    @patch("sunbeam.provider.maas.steps.maas_client")
+    @patch("sunbeam.provider.maas.commands.retrieve_admin_credentials")
+    @patch("sunbeam.provider.maas.commands.run_preflight_checks")
+    @patch("sunbeam.provider.maas.commands.run_plan")
+    def test_hypervisor_only_path_is_not_gated(
+        self, run_plan, _preflight, _creds, _maas_client
+    ):
+        """Without PCI aliases the openstack plan is not reapplied: no gate."""
+        import click
+
+        from sunbeam.provider.maas.commands import configure_sriov
+        from sunbeam.steps.openstack import ValidateInfraAppsStep
+
+        deployment = self._deployment()
+        ctx = click.Context(configure_sriov, obj=deployment)
+        with ctx:
+            configure_sriov.callback(
+                manifest_path=Mock(),
+                accept_defaults=False,
+                show_hints=False,
+            )
+        # Order: manifest storage, then the sriov config plan. No gate.
+        assert run_plan.call_count == 2
+        for call in run_plan.call_args_list:
+            assert not any(
+                isinstance(step, ValidateInfraAppsStep) for step in call.args[0]
+            )
+        storage_plan = run_plan.call_args_list[0][0][0]
+        assert storage_plan[0].__class__.__name__ == "AddManifestStep"
+        config_plan = run_plan.call_args_list[1][0][0]
+        assert config_plan[0].__class__.__name__ == "MaasConfigSRIOVStep"
+
+
 class TestMaasConfigSRIOVStep:
     @pytest.fixture
     def step(self, mocker):

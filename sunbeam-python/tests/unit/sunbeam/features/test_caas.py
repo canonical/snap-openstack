@@ -153,6 +153,34 @@ class TestPatchCaaphProxyStep:
         assert result.result_type == ResultType.FAILED
 
 
+class TestCaasDisablePlans:
+    """The INFRA_APPS gate must run before the destructive teardown."""
+
+    @patch("sunbeam.features.caas.feature.DeleteKubeConfigSecretStep")
+    @patch("sunbeam.features.caas.feature.DeleteClusterAPI")
+    @patch("sunbeam.features.caas.feature.JujuHelper")
+    @patch("sunbeam.features.caas.feature.run_plan")
+    def test_disable_gates_before_clusterctl_teardown(
+        self, mock_run_plan, _mock_jhelper, _mock_delete_capi, _mock_delete_secret
+    ):
+        from sunbeam.features.caas.feature import CaasFeature
+        from sunbeam.steps.openstack import ValidateInfraAppsStep
+
+        feature = CaasFeature()
+        feature._manifest = Mock()
+        deployment = MagicMock()
+        with patch.object(
+            CaasFeature, "_get_kubeconfig", return_value="kubeconfig"
+        ) as mock_get_kubeconfig:
+            feature.run_disable_plans(deployment, show_hints=False)
+        mock_get_kubeconfig.assert_called_once()
+        calls = [call.args[0] for call in mock_run_plan.call_args_list if call.args]
+        assert calls, "run_plan must be called"
+        assert any(isinstance(step, ValidateInfraAppsStep) for step in calls[0]), (
+            "the INFRA_APPS gate must run in the first plan, before the teardown"
+        )
+
+
 def _provider(name, version, namespace=None):
     return {
         "metadata": {"name": name, "namespace": namespace or f"{name}-system"},
