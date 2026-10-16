@@ -182,6 +182,7 @@ from sunbeam.steps.openstack import (
     PromptDatabaseTopologyStep,
     PromptRegionStep,
     ReapplyOpenStackTerraformPlanStep,
+    ValidateInfraAppsStep,
 )
 from sunbeam.steps.role_distributor import (
     DeployRoleDistributorApplicationStep,
@@ -1056,6 +1057,27 @@ def configure_sriov(
     tfhelper_hypervisor = deployment.get_tfhelper("hypervisor-plan")
     tfhelper_openstack = deployment.get_tfhelper("openstack-plan")
 
+    # The openstack plan is only reapplied to apply PCI aliases: the
+    # hypervisor-only path leaves INFRA_APPS alone and must not be
+    # blocked on unrelated pending changes.
+    reapplies_openstack = bool(
+        manifest and manifest.core.config.pci and manifest.core.config.pci.aliases
+    )
+    if reapplies_openstack:
+        # This command must not upgrade INFRA_APPS: validate the manifest
+        # against the deployment before changing anything on it, and before
+        # storing the manifest in the cluster database.
+        run_plan(
+            [
+                TerraformInitStep(tfhelper_openstack),
+                ValidateInfraAppsStep(client, tfhelper_openstack, manifest),
+            ],
+            console,
+            show_hints,
+        )
+    if manifest_path:
+        run_plan([AddManifestStep(client, manifest_path)], console, show_hints)
+
     plan: list[BaseStep] = [
         LocalConfigSRIOVStep(
             client,
@@ -1075,7 +1097,7 @@ def configure_sriov(
             model=deployment.openstack_machines_model,
         ),
     ]
-    if manifest and manifest.core.config.pci and manifest.core.config.pci.aliases:
+    if reapplies_openstack:
         plan.append(
             ReapplyOpenStackTerraformPlanStep(
                 deployment,
@@ -1496,6 +1518,18 @@ def join(  # noqa: C901
     deployment.reload_credentials()
     # Get manifest object once the cluster is joined
     manifest = deployment.get_manifest()
+    # This command must not upgrade INFRA_APPS: refuse to join with a
+    # manifest that would drift them before anything is deployed.
+    run_plan(
+        [
+            TerraformInitStep(deployment.get_tfhelper("openstack-plan")),
+            ValidateInfraAppsStep(
+                client, deployment.get_tfhelper("openstack-plan"), manifest
+            ),
+        ],
+        console,
+        show_hints,
+    )
     proxy_settings = deployment.get_proxy_settings()
     sunbeam_machine_tfhelper = deployment.get_tfhelper("sunbeam-machine-plan")
     k8s_tfhelper = deployment.get_tfhelper("k8s-plan")
@@ -1658,7 +1692,8 @@ def join(  # noqa: C901
                 )
             )
 
-            # Redeploy control plane with enable-ceph=true
+            # Redeploy control plane with enable-ceph=true.  INFRA_APPS
+            # drift was already validated before plan4 started.
             plan4.append(
                 DeployControlPlaneStep(
                     deployment,

@@ -51,6 +51,7 @@ from sunbeam.core.common import (
     click_option_database,
     click_option_topology,
     get_step_message,
+    read_config,
     run_plan,
     str_presenter,
 )
@@ -183,6 +184,7 @@ from sunbeam.steps.microovn import (
     RemoveMicroOVNUnitsStep,
 )
 from sunbeam.steps.openstack import (
+    CONFIG_KEY,
     DeployControlPlaneStep,
     DestroyControlPlaneStep,
     OpenStackPatchLoadBalancerServicesIPPoolStep,
@@ -190,6 +192,7 @@ from sunbeam.steps.openstack import (
     PromptDatabaseTopologyStep,
     PromptRegionStep,
     ReapplyOpenStackTerraformPlanStep,
+    ValidateInfraAppsStep,
 )
 from sunbeam.steps.role_distributor import (
     DeployRoleDistributorApplicationStep,
@@ -643,6 +646,28 @@ def deploy(
     tfhelper_microovn = deployment.get_tfhelper("microovn-plan")
 
     ovn_manager = deployment.get_ovn_manager()
+
+    # This command must not upgrade INFRA_APPS: validate the manifest
+    # against the deployment before storing it in the cluster database
+    # or deploying any machines.  Skipped on a fresh deployment: the
+    # openstack plan has never been applied (no stored TerraformVarsOpenstack,
+    # its required variables like external-ovsdb-cms-offer-url are only
+    # computed by DeployControlPlaneStep) and there are no INFRA_APPS
+    # deployed yet to drift from.
+    try:
+        read_config(client, CONFIG_KEY)
+    except ConfigItemNotFoundException:
+        LOG.debug("Skipping INFRA_APPS validation: openstack plan not applied yet")
+    else:
+        run_plan(
+            [
+                TerraformInitStep(tfhelper_openstack_deploy),
+                ValidateInfraAppsStep(client, tfhelper_openstack_deploy, manifest),
+            ],
+            console,
+            show_hints,
+        )
+
     plan: list[BaseStep] = []
     plan.append(AddManifestStep(client, manifest_path))
     plan.append(SyncFeatureGatesToCluster(client))
@@ -1985,6 +2010,27 @@ def configure_sriov(
     tfhelper_hypervisor = deployment.get_tfhelper("hypervisor-plan")
     tfhelper_openstack = deployment.get_tfhelper("openstack-plan")
 
+    # The openstack plan is only reapplied to apply PCI aliases: the
+    # hypervisor-only path leaves INFRA_APPS alone and must not be
+    # blocked on unrelated pending changes.
+    reapplies_openstack = bool(
+        manifest and manifest.core.config.pci and manifest.core.config.pci.aliases
+    )
+    if reapplies_openstack:
+        # This command must not upgrade INFRA_APPS: validate the manifest
+        # against the deployment before changing anything on it, and before
+        # storing the manifest in the cluster database.
+        run_plan(
+            [
+                TerraformInitStep(tfhelper_openstack),
+                ValidateInfraAppsStep(client, tfhelper_openstack, manifest),
+            ],
+            console,
+            show_hints,
+        )
+    if manifest_path:
+        run_plan([AddManifestStep(client, manifest_path)], console, show_hints)
+
     plan: list[BaseStep] = [
         MaasConfigSRIOVStep(
             deployment,
@@ -2002,7 +2048,7 @@ def configure_sriov(
             model=deployment.openstack_machines_model,
         ),
     ]
-    if manifest and manifest.core.config.pci and manifest.core.config.pci.aliases:
+    if reapplies_openstack:
         plan.append(
             ReapplyOpenStackTerraformPlanStep(
                 deployment,
