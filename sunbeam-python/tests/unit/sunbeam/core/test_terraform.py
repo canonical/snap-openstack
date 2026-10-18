@@ -3,6 +3,8 @@
 
 import functools
 import json
+import os
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, Mock, patch
 
@@ -1452,3 +1454,36 @@ class TestRunTerraformCommand:
                 env={},
                 reporter=None,
             )
+
+    def test_timeout_interrupts_hung_command(self, mocker, snap, tmp_path):
+        helper = self._make_helper(mocker, snap, tmp_path)
+        start = time.monotonic()
+
+        with pytest.raises(TerraformException, match="timed out after 1s"):
+            helper._run_terraform_command(
+                cmd=["sh", "-c", "echo started; exec sleep 30"],
+                env=os.environ.copy(),
+                reporter=NoOpReporter(),
+                timeout=1,
+            )
+
+        assert time.monotonic() - start < 10
+
+    def test_timeout_kills_command_ignoring_sigint(self, mocker, snap, tmp_path):
+        helper = self._make_helper(mocker, snap, tmp_path)
+        mocker.patch.object(terraform_mod, "TERRAFORM_INTERRUPT_GRACE", 1)
+        start = time.monotonic()
+
+        with pytest.raises(TerraformException, match="timed out"):
+            helper._run_terraform_command(
+                cmd=[
+                    "sh",
+                    "-c",
+                    "trap '' INT; echo started; while :; do sleep 1; done",
+                ],
+                env=os.environ.copy(),
+                reporter=NoOpReporter(),
+                timeout=1,
+            )
+
+        assert time.monotonic() - start < 10
