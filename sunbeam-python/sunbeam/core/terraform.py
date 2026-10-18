@@ -30,7 +30,7 @@ from sunbeam.core.progress import ProgressEvent, ProgressReporter
 from sunbeam.versions import VarMap
 
 LOG = logging.getLogger(__name__)
-TERRAFORM_APPLY_TIMEOUT = 1200  # 20 minutes
+TERRAFORM_APPLY_TIMEOUT = 3600  # 60 minutes
 TERRAFORM_INTERRUPT_GRACE = 60
 _TF_UI_EVENT_TYPES = {
     "apply_start",
