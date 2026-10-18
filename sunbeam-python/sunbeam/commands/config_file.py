@@ -212,7 +212,14 @@ def enable(ctx: click.Context, app: str, show_hints: bool) -> None:
     record = get_override(client, app)
     _preflight_checks(deployment)
     jhelper = _jhelper(deployment)
-    attach_overrides(jhelper, app, record.get("config"), record.get("policy"))
+    config_text = record.get("config")
+    policy_text = record.get("policy")
+    check_charm_support(jhelper, app, policy=policy_text is not None)
+    if not _validate_unit(jhelper, app, config_text, policy_text):
+        raise ConfigOverridesError(
+            f"Validation failed for {app}; override not applied."
+        )
+    attach_overrides(jhelper, app, config_text, policy_text)
     _enable(deployment, jhelper, app, record)
 
 

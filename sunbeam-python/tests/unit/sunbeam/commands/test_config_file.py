@@ -341,6 +341,7 @@ def test_enable_invalid_not_applied(
     assert result.exit_code != 0
     assert "bad config" in result.output
     assert "Validation failed" in result.output
+    helper.attach_resource.assert_not_called()
     client.cluster.update_config.assert_not_called()
 
 
