@@ -33,6 +33,7 @@ from sunbeam.steps.k8s import (
     K8S_CLOUD_SUFFIX,
     AddK8SCloudStep,
     AddK8SCredentialStep,
+    CordonK8SUnitStep,
     DeployK8SApplicationStep,
     EnsureCiliumDeviceByHostStep,
     EnsureDefaultL2AdvertisementMutedStep,
@@ -2013,3 +2014,49 @@ class TestEnsureCiliumDeviceByHostStep:
         step.kube.delete.assert_called_once()
         # Step completes (restart failure is swallowed for delete path)
         assert result.result_type == ResultType.COMPLETED
+
+
+class TestCordonK8SUnitStepNodeResolution:
+    """Cordon/drain/uncordon steps act on the k8s node name (LP#2129793).
+
+    The steps receive the clusterd node name, but the k8s API needs the k8s
+    node name, which can differ (short hostname vs FQDN). skip_checks()
+    resolves the k8s name via find_node and run() must use it.
+    """
+
+    def _step(self):
+        client = Mock()
+        client.cluster.get_node_info.return_value = {
+            "role": ["control"],
+            "machineid": 0,
+        }
+        jhelper = Mock()
+        jhelper.get_application.return_value = Mock(units={"k8s/0": Mock(machine="0")})
+        return CordonK8SUnitStep(client, "node1.example.com", jhelper, "model")
+
+    def test_skip_checks_resolves_k8s_node_name(self):
+        """skip_checks stores the resolved k8s node name."""
+        step = self._step()
+        node = Mock()
+        node.metadata.name = "node1"
+        with (
+            patch("sunbeam.steps.k8s.read_config", return_value={}),
+            patch("sunbeam.steps.k8s.l_kubeconfig"),
+            patch("sunbeam.steps.k8s.l_client"),
+            patch("sunbeam.steps.k8s.find_node", return_value=node),
+        ):
+            result = step.is_skip(Mock())
+
+        assert result.result_type == ResultType.COMPLETED
+        assert step.k8s_node_name == "node1"
+
+    def test_cordon_uses_resolved_k8s_node_name(self):
+        """run() cordons the resolved k8s node, not the clusterd name."""
+        step = self._step()
+        step.kube = Mock()
+        step.k8s_node_name = "node1"
+        with patch("sunbeam.steps.k8s.cordon") as mock_cordon:
+            result = step.run(Mock())
+
+        assert result.result_type == ResultType.COMPLETED
+        mock_cordon.assert_called_once_with(step.kube, "node1")
