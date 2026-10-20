@@ -28,6 +28,7 @@ from sunbeam.core.common import (
     StepContext,
     friendly_terraform_lock_retry_callback,
     read_config,
+    run_plan,
     update_config,
 )
 from sunbeam.core.deployment import Deployment, Networks
@@ -38,6 +39,7 @@ from sunbeam.core.juju import (
     JujuHelper,
 )
 from sunbeam.core.manifest import Manifest
+from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.core.questions import (
     ConfirmQuestion,
     PasswordPromptQuestion,
@@ -58,6 +60,7 @@ from sunbeam.steps.cinder_volume import (
     get_mandatory_control_plane_offers,
     get_optional_control_plane_offers,
 )
+from sunbeam.steps.juju import RemoveSaasApplicationsStep
 from sunbeam.storage.models import SecretDictField
 from sunbeam.versions import CINDER_VOLUME_CHARM
 
@@ -889,6 +892,19 @@ class DestroySpecificCinderVolumeStep(BaseStep):
 
     def run(self, context: StepContext) -> Result:
         """Destroy the specific cinder-volume application."""
+        run_plan(
+            [
+                RemoveSaasApplicationsStep(
+                    self.jhelper,
+                    OPENSTACK_MODEL,
+                    self.model,
+                    saas_apps_to_delete=[self.principal_application],
+                    wait_timeout=self.get_application_timeout(),
+                )
+            ],
+            console,
+        )
+
         try:
             tfvars = read_config(self.client, self.backend_instance.tfvar_config_key)
         except ConfigItemNotFoundException:

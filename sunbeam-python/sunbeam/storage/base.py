@@ -604,6 +604,14 @@ class StorageBackendBase(FeatureGateMixin, typing.Generic[BackendConfig]):
                 backend_name,
                 deployment.openstack_machines_model,
             ),
+            DeployControlPlaneStep(
+                deployment,
+                openstack_tfhelper,
+                jhelper,
+                self.manifest,
+                "auto",
+                deployment.openstack_machines_model,
+            ),
             DestroySpecificCinderVolumeStep(
                 deployment,
                 client,
@@ -614,14 +622,6 @@ class StorageBackendBase(FeatureGateMixin, typing.Generic[BackendConfig]):
                 self,
                 deployment.openstack_machines_model,
                 principal_application=principal,
-            ),
-            DeployControlPlaneStep(
-                deployment,
-                openstack_tfhelper,
-                jhelper,
-                self.manifest,
-                "auto",
-                deployment.openstack_machines_model,
             ),
         ]
 
