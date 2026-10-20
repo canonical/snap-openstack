@@ -40,6 +40,7 @@ from sunbeam.core.juju import (
     JujuHelper,
 )
 from sunbeam.core.manifest import Manifest
+from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.core.questions import (
     ConfirmQuestion,
     PasswordPromptQuestion,
@@ -60,6 +61,7 @@ from sunbeam.steps.cinder_volume import (
     get_mandatory_control_plane_offers,
     get_optional_control_plane_offers,
 )
+from sunbeam.steps.juju import RemoveSaasApplicationsStep
 from sunbeam.storage.models import (
     BackendValidationException,
     SecretDictField,
@@ -1015,6 +1017,58 @@ class DeploySpecificCinderVolumeStep(BaseStep):
         return CINDER_VOLUME_APP_TIMEOUT  # 20 minutes, same as cinder-volume
 
 
+def _is_principal_shared(client: Client, principal_application: str) -> bool:
+    """Return True when a recorded backend still uses the principal."""
+    backends = client.cluster.get_storage_backends()
+    return any(principal_application == b.principal for b in backends.root)
+
+
+class RemoveCinderVolumeSaasStep(RemoveSaasApplicationsStep):
+    """Remove the control plane's consumed offer of a specific cinder-volume.
+
+    Terraform cannot delete the cinder-volume offer while the openstack
+    model still consumes it, so the SAAS must be removed first.
+    """
+
+    def __init__(
+        self,
+        client: Client,
+        jhelper: JujuHelper,
+        backend_name: str,
+        backend_instance: "StorageBackendBase",
+        model: str,
+        principal_application: str | None = None,
+    ):
+        principal = principal_application or backend_instance.principal_application
+        super().__init__(
+            jhelper,
+            OPENSTACK_MODEL,
+            offering_model=model,
+            saas_apps_to_delete=[principal],
+            wait_timeout=CINDER_VOLUME_APP_TIMEOUT,
+        )
+        self.client = client
+        self.backend_name = backend_name
+        self.principal_application = principal
+
+    def is_skip(self, context: StepContext) -> Result:
+        """Skip when the specific cinder-volume is still needed."""
+        if self.principal_application == APPLICATION:
+            return Result(
+                ResultType.SKIPPED,
+                f"Backend {self.backend_name} does not use specific cinder-volume;"
+                " skipping SAAS removal.",
+            )
+        if _is_principal_shared(self.client, self.principal_application):
+            return Result(
+                ResultType.SKIPPED,
+                "Another backend is using the same cinder-volume instance;"
+                " skipping SAAS removal.",
+            )
+
+        return super().is_skip(context)
+
+
 class DestroySpecificCinderVolumeStep(BaseStep):
     """Step to destroy the specific cinder-volume application.
 
@@ -1064,14 +1118,12 @@ class DestroySpecificCinderVolumeStep(BaseStep):
                 f"Backend {self.backend_name} does not use specific cinder-volume;"
                 " skipping specific cinder-volume destruction.",
             )
-        backends = self.client.cluster.get_storage_backends()
-        for backend in backends.root:
-            if self.principal_application == backend.principal:
-                return Result(
-                    ResultType.SKIPPED,
-                    "Another backend is using the same cinder-volume instance;"
-                    " skipping specific cinder-volume destruction.",
-                )
+        if _is_principal_shared(self.client, self.principal_application):
+            return Result(
+                ResultType.SKIPPED,
+                "Another backend is using the same cinder-volume instance;"
+                " skipping specific cinder-volume destruction.",
+            )
 
         return Result(ResultType.COMPLETED)
 

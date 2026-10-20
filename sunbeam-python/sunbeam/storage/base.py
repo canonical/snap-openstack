@@ -49,6 +49,7 @@ from sunbeam.storage.steps import (
     BaseStorageBackendDestroyStep,
     DeploySpecificCinderVolumeStep,
     DestroySpecificCinderVolumeStep,
+    RemoveCinderVolumeSaasStep,
     ValidateStoragePrerequisitesStep,
     prompt_backend_config,
 )
@@ -606,6 +607,24 @@ class StorageBackendBase(FeatureGateMixin, typing.Generic[BackendConfig]):
                 backend_name,
                 deployment.openstack_machines_model,
             ),
+            # Remove the Cinder integration before destroying its offer.
+            # Terraform cannot delete an offer while the control plane consumes it.
+            DeployControlPlaneStep(
+                deployment,
+                openstack_tfhelper,
+                jhelper,
+                self.manifest,
+                "auto",
+                deployment.openstack_machines_model,
+            ),
+            RemoveCinderVolumeSaasStep(
+                client,
+                jhelper,
+                backend_name,
+                self,
+                deployment.openstack_machines_model,
+                principal_application=principal,
+            ),
             DestroySpecificCinderVolumeStep(
                 deployment,
                 client,
@@ -616,14 +635,6 @@ class StorageBackendBase(FeatureGateMixin, typing.Generic[BackendConfig]):
                 self,
                 deployment.openstack_machines_model,
                 principal_application=principal,
-            ),
-            DeployControlPlaneStep(
-                deployment,
-                openstack_tfhelper,
-                jhelper,
-                self.manifest,
-                "auto",
-                deployment.openstack_machines_model,
             ),
         ]
 

@@ -15,13 +15,17 @@ from sunbeam.clusterd.service import (
     ConfigItemNotFoundException,
 )
 from sunbeam.core.common import ResultType
+from sunbeam.core.juju import JujuException
+from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.core.questions import PasswordPromptQuestion, PromptQuestion
 from sunbeam.core.steps import DeployMachineApplicationStep
+from sunbeam.steps.cinder_volume import CINDER_VOLUME_APP_TIMEOUT
 from sunbeam.storage.models import BackendValidationException, SecretDictField
 from sunbeam.storage.steps import (
     BaseStorageBackendDeployStep,
     DeploySpecificCinderVolumeStep,
     DestroySpecificCinderVolumeStep,
+    RemoveCinderVolumeSaasStep,
     basemodel_validator,
     generate_questions_from_config,
     prompt_backend_config,
@@ -115,6 +119,137 @@ class TestDestroySpecificCinderVolumeStep:
             test_model,
         )
         assert step.principal_application == "cinder-volume-noha"
+
+    @pytest.fixture
+    def destroy_step(
+        self,
+        basic_deployment,
+        basic_client,
+        basic_tfhelper,
+        basic_jhelper,
+        basic_manifest,
+        test_model,
+        mock_backend_instance,
+    ):
+        """Build a destroy step for the recorded non-HA principal."""
+        basic_client.cluster.get_storage_backends.return_value.root = []
+        return DestroySpecificCinderVolumeStep(
+            basic_deployment,
+            basic_client,
+            basic_tfhelper,
+            basic_jhelper,
+            basic_manifest,
+            "test-backend",
+            mock_backend_instance,
+            test_model,
+            principal_application="cinder-volume-noha",
+        )
+
+    def test_other_backend_keeps_principal(self, destroy_step):
+        """Do not destroy a principal still serving another backend."""
+        destroy_step.client.cluster.get_storage_backends.return_value.root = [
+            Mock(principal="cinder-volume-noha")
+        ]
+
+        assert destroy_step.is_skip(Mock()).result_type == ResultType.SKIPPED
+
+    def test_regular_cinder_volume_is_protected(self, destroy_step):
+        """Do not destroy the regular cinder-volume."""
+        destroy_step.principal_application = "cinder-volume"
+
+        assert destroy_step.is_skip(Mock()).result_type == ResultType.SKIPPED
+
+
+class TestRemoveCinderVolumeSaasStep:
+    """Tests for RemoveCinderVolumeSaasStep."""
+
+    @pytest.fixture
+    def mock_backend_instance(self):
+        backend = Mock()
+        backend.principal_application = "cinder-volume-noha"
+        return backend
+
+    @pytest.fixture
+    def saas_step(self, basic_client, basic_jhelper, test_model, mock_backend_instance):
+        """Build a SAAS removal step for the recorded non-HA principal."""
+        basic_client.cluster.get_storage_backends.return_value.root = []
+        basic_jhelper.get_model_status.return_value.app_endpoints = {
+            "cinder-volume-noha": Mock(url=f"admin/{test_model}.cinder-volume-noha"),
+            "other-app": Mock(url=f"admin/{test_model}.other-app"),
+            "wrong-model": Mock(url="admin/other.cinder-volume-noha"),
+        }
+        return RemoveCinderVolumeSaasStep(
+            basic_client,
+            basic_jhelper,
+            "test-backend",
+            mock_backend_instance,
+            test_model,
+            principal_application="cinder-volume-noha",
+        )
+
+    def test_principal_defaults_to_backend_property(
+        self, basic_client, basic_jhelper, test_model, mock_backend_instance
+    ):
+        step = RemoveCinderVolumeSaasStep(
+            basic_client,
+            basic_jhelper,
+            "test-backend",
+            mock_backend_instance,
+            test_model,
+        )
+        assert step.principal_application == "cinder-volume-noha"
+
+    def test_removes_only_intended_saas_and_waits(
+        self, saas_step, basic_jhelper, test_model
+    ):
+        """Remove only the intended SAAS from the openstack model, then wait."""
+        context = Mock()
+        assert saas_step.is_skip(context).result_type == ResultType.COMPLETED
+        result = saas_step.run(context)
+
+        assert result.result_type == ResultType.COMPLETED
+        basic_jhelper.remove_saas.assert_called_once_with(
+            OPENSTACK_MODEL, "cinder-volume-noha"
+        )
+        basic_jhelper.wait_app_endpoint_gone.assert_called_once_with(
+            ["cinder-volume-noha"],
+            OPENSTACK_MODEL,
+            timeout=CINDER_VOLUME_APP_TIMEOUT,
+        )
+
+    def test_other_backend_keeps_saas(self, saas_step):
+        """Do not remove a SAAS still used by another backend."""
+        saas_step.client.cluster.get_storage_backends.return_value.root = [
+            Mock(principal="cinder-volume-noha")
+        ]
+
+        assert saas_step.is_skip(Mock()).result_type == ResultType.SKIPPED
+
+    def test_regular_cinder_volume_is_protected(self, saas_step):
+        """Do not remove the regular cinder-volume consumer."""
+        saas_step.principal_application = "cinder-volume"
+
+        assert saas_step.is_skip(Mock()).result_type == ResultType.SKIPPED
+
+    def test_remove_saas_failure_fails(self, saas_step, basic_jhelper):
+        """A failed SAAS removal fails the step without waiting."""
+        basic_jhelper.remove_saas.side_effect = JujuException("remove failed")
+        saas_step.is_skip(Mock())
+
+        result = saas_step.run(Mock())
+
+        assert result.result_type == ResultType.FAILED
+        assert "remove failed" in result.message
+        basic_jhelper.wait_app_endpoint_gone.assert_not_called()
+
+    def test_wait_timeout_fails(self, saas_step, basic_jhelper):
+        """A timed-out wait fails the step."""
+        basic_jhelper.wait_app_endpoint_gone.side_effect = TimeoutError("timed out")
+        saas_step.is_skip(Mock())
+
+        result = saas_step.run(Mock())
+
+        assert result.result_type == ResultType.FAILED
 
 
 class TestBasemodelValidator:
