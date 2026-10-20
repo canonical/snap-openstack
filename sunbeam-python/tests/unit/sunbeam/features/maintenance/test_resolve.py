@@ -58,9 +58,9 @@ class TestResolvedNode:
         jhelper = Mock()
         with pytest.MonkeyPatch.context() as mp:
             conn = Mock()
-            conn.compute.hypervisors.return_value = [
-                Mock(hypervisor_hostname="node1.example.com")
-            ]
+            hyp = Mock()
+            hyp.name = "node1.example.com"
+            conn.compute.hypervisors.return_value = [hyp]
             mp.setattr(
                 "sunbeam.features.maintenance.resolve.get_admin_connection",
                 lambda jh, d: conn,

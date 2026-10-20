@@ -76,7 +76,7 @@ class ResolvedNode:
         """Nova hypervisor hostname."""
         conn = get_admin_connection(self.jhelper, self.deployment)
         for hypervisor in conn.compute.hypervisors():
-            hostname = hypervisor.hypervisor_hostname
+            hostname = hypervisor.name
             if hostname and hostnames_match(self.hostname, hostname):
                 return hostname
         raise click.ClickException(f"No nova hypervisor found for node '{self.name}'.")
