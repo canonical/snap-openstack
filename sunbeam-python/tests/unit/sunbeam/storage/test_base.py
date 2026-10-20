@@ -15,12 +15,18 @@ import pytest
 from packaging.version import Version
 
 from sunbeam.core.manifest import StorageBackendConfig
+from sunbeam.steps.openstack import DeployControlPlaneStep
 from sunbeam.storage.base import (
     FQDN_PATTERN,
     JUJU_APP_NAME_PATTERN,
     validate_juju_application_name,
 )
 from sunbeam.storage.cli_base import StorageBackendCLIBase
+from sunbeam.storage.steps import (
+    BaseStorageBackendDestroyStep,
+    DestroySpecificCinderVolumeStep,
+    ValidateStoragePrerequisitesStep,
+)
 
 
 class TestJujuApplicationNameValidation:
@@ -415,6 +421,8 @@ class TestStorageBackendBase(BaseStorageBackendTests):
         mock_manifest = Mock()
         mock_manifest.storage.root = {}
 
+        mock_deployment.get_client.return_value.cluster.get_storage_backend.return_value.principal = "cinder-volume-noha"
+
         # Mock the plan directory
         mock_deployment.plans_directory = tmp_path / "plans"
         mock_deployment.plans_directory.mkdir(parents=True, exist_ok=True)
@@ -429,10 +437,19 @@ class TestStorageBackendBase(BaseStorageBackendTests):
                 mock_jhelper_class.return_value = mock_jhelper
 
                 with patch.object(backend, "register_terraform_plan"):
-                    with patch("sunbeam.storage.base.run_plan"):
+                    with patch("sunbeam.storage.base.run_plan") as mock_run_plan:
                         backend.remove_backend(
                             mock_deployment, backend_name, mock_console
                         )
+
+        plan = mock_run_plan.call_args.args[0]
+        assert isinstance(plan[0], ValidateStoragePrerequisitesStep)
+        assert [type(step) for step in plan[4:]] == [
+            BaseStorageBackendDestroyStep,
+            DeployControlPlaneStep,
+            DestroySpecificCinderVolumeStep,
+        ]
+        assert plan[-1].principal_application == "cinder-volume-noha"
 
     def test_build_terraform_vars(self, backend, mock_deployment, mock_manifest):
         """Test Terraform variables generation."""
