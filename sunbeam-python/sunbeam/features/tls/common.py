@@ -400,13 +400,13 @@ def certificate_questions(app: str, unit: str | None, subject: str):
     # with unit name else with app name
     if unit:
         return {
-            "certificate": questions.PromptQuestion(
+            "certificate": questions.LargeInputPromptQuestion(
                 f"Base64 encoded Certificate for unit {unit} CSR Unique ID: {subject}",
             ),
         }
     else:
         return {
-            "certificate": questions.PromptQuestion(
+            "certificate": questions.LargeInputPromptQuestion(
                 f"Base64 encoded Certificate for app {app} CSR Unique ID: {subject}",
             ),
         }

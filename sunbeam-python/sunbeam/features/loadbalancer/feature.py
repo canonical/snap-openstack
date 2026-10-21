@@ -419,18 +419,18 @@ def _amphora_certificate_questions(
         )
 
     base: dict[str, questions.Question] = {
-        "certificate": questions.PromptQuestion(
+        "certificate": questions.LargeInputPromptQuestion(
             cert_prompt, description=cert_description
         )
     }
-    base["ca_certificate"] = questions.PromptQuestion(
+    base["ca_certificate"] = questions.LargeInputPromptQuestion(
         "CA certificate (base64 PEM)",
         description=(
             "The CA certificate that signed the certificate above, base64-encoded."
             " This is passed to Octavia as the issuing CA."
         ),
     )
-    base["ca_chain"] = questions.PromptQuestion(
+    base["ca_chain"] = questions.LargeInputPromptQuestion(
         "CA chain (base64 PEM, optional)",
         description=(
             "Full certificate chain (intermediate + root CAs) base64-encoded."
