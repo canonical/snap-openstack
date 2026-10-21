@@ -9,7 +9,7 @@ from snaphelpers import Snap  # noqa: F401 - required for test mocks
 from sunbeam.core.common import SunbeamException
 from sunbeam.core.juju import CONTROLLER
 from sunbeam.lazy import LazyImport
-from sunbeam.utils import hostnames_match
+from sunbeam.utils import match_hostname
 
 if TYPE_CHECKING:
     import lightkube.core.client as l_client
@@ -193,21 +193,29 @@ def list_nodes(client: "l_client.Client", labels: dict) -> list["core_v1.Node"]:
 def find_node(client: "l_client.Client", name: str) -> "core_v1.Node":
     """Find a node by name, falling back to a short hostname match.
 
-    The k8s node name can differ from the hostname other subsystems use
-    (short hostname vs FQDN), see LP#2129793.
+    The k8s node name can differ from the hostname other subsystems
+    use (short hostname vs FQDN), see LP#2129793. A short hostname
+    match is only used when it is unique, so the result never depends
+    on the order the API lists nodes in.
     """
     try:
         return client.get(core_v1.Node, name)
     except l_exceptions.ApiError as e:
         if e.status.code == 404:
-            for node in list_nodes(client, labels={}):
-                if (
-                    node.metadata
-                    and node.metadata.name
-                    and hostnames_match(node.metadata.name, name)
-                ):
-                    return node
-            raise K8SNodeNotFoundError(f"Node {name} not found")
+            nodes = list(list_nodes(client, labels={}))
+            match = match_hostname(
+                name,
+                (
+                    node.metadata.name
+                    for node in nodes
+                    if node.metadata and node.metadata.name
+                ),
+            )
+            if match is None:
+                raise K8SNodeNotFoundError(f"Node {name} not found")
+            return next(
+                node for node in nodes if node.metadata and node.metadata.name == match
+            )
         raise K8SError(f"Failed to get node {name}") from e
 
 

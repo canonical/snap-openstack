@@ -886,11 +886,25 @@ class _CommonK8SStepMixin:
             return Result(ResultType.FAILED, str(e))
         if node.metadata and node.metadata.name:
             # The k8s node name can differ from the name clusterd knows the
-            # node by (short hostname vs FQDN, LP#2129793); run() must act on
-            # the resolved k8s name, not on self.node.
+            # node by (short hostname vs FQDN); run() must act on the
+            # resolved k8s name, not on self.node.
             self.k8s_node_name = node.metadata.name
 
         return Result(ResultType.COMPLETED)
+
+    def _k8s_node_unresolved_result(self) -> Result | None:
+        """FAILED Result when the k8s node name was not resolved.
+
+        run_plan() runs is_skip() (which calls skip_checks()) before run(),
+        so the name is always resolved on the normal path; a direct run()
+        call must not cordon or drain an empty node name.
+        """
+        if not self.k8s_node_name:
+            return Result(
+                ResultType.FAILED,
+                f"k8s node name for '{self.node}' was not resolved",
+            )
+        return None
 
 
 class MigrateK8SKubeconfigStep(BaseStep, _CommonK8SStepMixin):
@@ -1125,6 +1139,8 @@ class CordonK8SUnitStep(BaseStep, _CommonK8SStepMixin):
 
     def run(self, context: StepContext) -> Result:
         """Cordon the unit."""
+        if failed := self._k8s_node_unresolved_result():
+            return failed
         self.update_status(context, "Cordoning unit")
         try:
             cordon(self.kube, self.k8s_node_name)
@@ -1155,6 +1171,8 @@ class UncordonK8SUnitStep(BaseStep, _CommonK8SStepMixin):
 
     def run(self, context: StepContext) -> Result:
         """Uncordon the unit."""
+        if failed := self._k8s_node_unresolved_result():
+            return failed
         self.update_status(context, "Uncordoning unit")
         try:
             uncordon(self.kube, self.k8s_node_name)
@@ -1206,6 +1224,8 @@ class DrainK8SUnitStep(BaseStep, _CommonK8SStepMixin):
 
     def run(self, context: StepContext) -> Result:
         """Drain the unit."""
+        if failed := self._k8s_node_unresolved_result():
+            return failed
         self.update_status(context, "Evicting workloads")
         try:
             drain(self.kube, self.k8s_node_name, remove_pvc=self.remove_pvc)

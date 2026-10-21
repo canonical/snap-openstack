@@ -41,3 +41,19 @@ class TestFindNode:
 
         with pytest.raises(K8SNodeNotFoundError):
             find_node(client, "nope")
+
+    def test_find_node_ambiguous_short_hostname(self, monkeypatch):
+        """Ambiguous short hostname matches raise instead of picking one."""
+        fake_exceptions = Mock()
+        fake_exceptions.ApiError = _Api404Error
+        monkeypatch.setattr("sunbeam.core.k8s.l_exceptions", fake_exceptions)
+
+        client = Mock()
+        client.get.side_effect = _Api404Error()
+        node_a, node_b = Mock(), Mock()
+        node_a.metadata.name = "node1.a.example.com"
+        node_b.metadata.name = "node1.b.example.com"
+        client.list.return_value = iter([node_a, node_b])
+
+        with pytest.raises(K8SNodeNotFoundError):
+            find_node(client, "node1")

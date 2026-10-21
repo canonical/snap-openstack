@@ -37,11 +37,30 @@ def hostnames_match(name: str, other: str) -> bool:
     """Check whether two hostnames refer to the same machine.
 
     The same machine may be known by its short hostname or its FQDN
-    depending on the subsystem, see LP#2129793. Only the two forms of the
-    same name match: node1 matches node1.example.com, but node1.maas does
-    not match node1.other.com.
+    depending on the subsystem. Only the two forms of the same name
+    match: node1 matches node1.example.com, but node1.maas does not match
+    node1.other.com.
     """
     return name == other or name.startswith(other + ".") or other.startswith(name + ".")
+
+
+def match_hostname(name: str, candidates: typing.Iterable[str]) -> str | None:
+    """Return the candidate that *name* refers to, deterministically.
+
+    An exact match wins over short-hostname matches, and a
+    short-hostname match is only accepted when it is unique, so the
+    result never depends on the order of *candidates*. Returns None
+    when there is no match or the short-hostname matches are
+    ambiguous.
+    """
+    candidates = list(candidates)
+    for candidate in candidates:
+        if candidate == name:
+            return candidate
+    matches = {
+        candidate for candidate in candidates if hostnames_match(name, candidate)
+    }
+    return matches.pop() if len(matches) == 1 else None
 
 
 def get_hypervisor_hostname() -> str:

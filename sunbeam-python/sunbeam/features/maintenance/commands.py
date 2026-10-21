@@ -129,34 +129,54 @@ class EnableMaintenance(MaintenanceCommand):
         self.model = deployment.openstack_machines_model
         self.client = deployment.get_client()
         self.jhelper = JujuHelper(deployment.juju_controller)
+        self.hypervisor_name: str | None = None
 
     @functools.cached_property
     def ops_viewer(self) -> OperationViewer:
         """Operation viewer, resolved lazily so unknown nodes fail in check()."""
         return OperationViewer(self.resolved.hostname, OperationGoal.EnableMaintenance)
 
+    def _get_hypervisor_name(self) -> str | None:
+        """Resolve the nova hypervisor name, or skip the nova steps under --force.
+
+        A node nova does not know about can not be checked; --force skips
+        the nova checks and watcher steps instead of failing. check()
+        resolves this before anything is applied; later phases reuse the
+        cached resolution.
+        """
+        if self.hypervisor_name is None:
+            try:
+                self.hypervisor_name = self.resolved.hypervisor_name
+            except click.ClickException as e:
+                if not self.force:
+                    raise
+                LOG.warning("Ignoring: %s (--force)", e.message)
+        return self.hypervisor_name
+
     def check(self, console: Console) -> None:
         """Run pre-flight checks."""
         node_status = self.cluster_status.get(self.resolved.hostname, "")
 
         preflight_checks: list[Check] = [
-            checks.NodeExistCheck(self.resolved.hostname, self.cluster_status),
             checks.NoLastNodeCheck(self.cluster_status, force=self.force),
         ]
 
-        if "compute" in node_status:
+        if (
+            "compute" in node_status
+            and (hypervisor_name := self._get_hypervisor_name()) is not None
+        ):
             preflight_checks += [
                 checks.WatcherApplicationExistsCheck(self.jhelper),
                 checks.InstancesStatusCheck(
                     jhelper=self.jhelper,
                     deployment=self.deployment,
-                    node=self.resolved.hypervisor_name,
+                    node=hypervisor_name,
                     force=self.force,
                 ),
                 checks.NoEphemeralDiskCheck(
                     jhelper=self.jhelper,
                     deployment=self.deployment,
-                    node=self.resolved.hypervisor_name,
+                    node=hypervisor_name,
                     force=self.force,
                 ),
             ]
@@ -213,7 +233,7 @@ class EnableMaintenance(MaintenanceCommand):
 
         operation_plan: list[BaseStep] = []
 
-        if "compute" in node_status:
+        if "compute" in node_status and self._get_hypervisor_name() is not None:
             audit_info = get_step_message(
                 plan_results, CreateWatcherHostMaintenanceAuditStep
             )
@@ -271,18 +291,21 @@ class EnableMaintenance(MaintenanceCommand):
 
         post_checks: list[Check] = []
 
-        if "compute" in node_status:
+        if (
+            "compute" in node_status
+            and (hypervisor_name := self._get_hypervisor_name()) is not None
+        ):
             post_checks += [
                 checks.NovaInDisableStatusCheck(
                     jhelper=self.jhelper,
                     deployment=self.deployment,
-                    node=self.resolved.hypervisor_name,
+                    node=hypervisor_name,
                     force=self.force,
                 ),
                 checks.NoInstancesOnNodeCheck(
                     jhelper=self.jhelper,
                     deployment=self.deployment,
-                    node=self.resolved.hypervisor_name,
+                    node=hypervisor_name,
                     force=self.force,
                 ),
             ]
@@ -304,11 +327,14 @@ class EnableMaintenance(MaintenanceCommand):
 
         generate_operation_plan: list[BaseStep] = []
 
-        if "compute" in node_status:
+        if (
+            "compute" in node_status
+            and (hypervisor_name := self._get_hypervisor_name()) is not None
+        ):
             generate_operation_plan.append(
                 CreateWatcherHostMaintenanceAuditStep(
                     deployment=self.deployment,
-                    node=self.resolved.hypervisor_name,
+                    node=hypervisor_name,
                     disable_live_migration=self.disable_live_migration,
                     disable_cold_migration=self.disable_cold_migration,
                 )
@@ -354,9 +380,6 @@ class EnableMaintenance(MaintenanceCommand):
             generate_operation_plan, console, show_hints
         )
 
-        audit_info = get_step_message(
-            generate_operation_plan_results, CreateWatcherHostMaintenanceAuditStep
-        )
         microceph_enter_maintenance_dry_run_action_result = get_step_message(
             generate_operation_plan_results, MicroCephActionStep
         )
@@ -367,7 +390,10 @@ class EnableMaintenance(MaintenanceCommand):
             generate_operation_plan_results, CordonControlRoleNodeStep
         )
 
-        if "compute" in node_status:
+        if "compute" in node_status and self._get_hypervisor_name() is not None:
+            audit_info = get_step_message(
+                generate_operation_plan_results, CreateWatcherHostMaintenanceAuditStep
+            )
             self.ops_viewer.add_watch_actions(actions=audit_info["actions"])
         if "storage" in node_status:
             self.ops_viewer.add_maintenance_action_steps(
@@ -414,10 +440,20 @@ class DisableMaintenance(MaintenanceCommand):
         """Run pre-flight checks."""
         node_status = self.cluster_status.get(self.resolved.hostname, "")
 
+        # Resolve the names the node's roles need up front: verify() runs
+        # after the uncordon is applied, so an unresolvable name must fail
+        # here, before any change is made.
+        if (
+            "compute" in node_status
+            or "storage" in node_status
+            or "control" in node_status
+        ):
+            self.resolved.clusterd_name
+        if "control" in node_status:
+            self.resolved.k8s_name
+
         # Run preflight_checks
-        preflight_checks: list[Check] = [
-            checks.NodeExistCheck(self.resolved.hostname, self.cluster_status),
-        ]
+        preflight_checks: list[Check] = []
 
         if "compute" in node_status:
             preflight_checks += [
@@ -515,7 +551,6 @@ class DisableMaintenance(MaintenanceCommand):
                 generate_operation_plan.append(
                     CreateWatcherWorkloadBalancingAuditStep(
                         deployment=self.deployment,
-                        node=self.resolved.hypervisor_name,
                     )
                 )
         if "storage" in node_status:

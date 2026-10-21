@@ -351,3 +351,72 @@ def test_wait_until_action_state_failed(
         watcher_helper.wait_until_action_state(
             mock_step, mock_audit, mock_client, mock_status
         )
+
+
+@patch("sunbeam.core.watcher.get_actions")
+@patch(
+    "sunbeam.core.watcher.tenacity.wait_fixed",
+    return_value=tenacity.wait_fixed(0),
+)
+@patch(
+    "sunbeam.core.watcher.tenacity.stop_after_delay",
+    return_value=tenacity.stop_after_attempt(10),
+)
+def test_wait_until_action_state_skipped(
+    mock_stop_after_delay,
+    mock_wait_fixed,
+    mock_get_actions,
+):
+    """SKIPPED actions count as completed and end the wait."""
+    mock_client = Mock()
+    mock_status = Mock()
+    mock_step = Mock()
+    mock_step.status = "fake-status-msg"
+    mock_audit = Mock()
+
+    actions = []
+    for state in ["SUCCEEDED", "SKIPPED"]:
+        action = Mock()
+        action.uuid = f"action-{len(actions)}"
+        action.state = state
+        actions.append(action)
+    mock_get_actions.return_value = actions
+
+    watcher_helper.wait_until_action_state(
+        mock_step, mock_audit, mock_client, mock_status
+    )
+
+
+@patch("sunbeam.core.watcher.get_actions")
+@patch(
+    "sunbeam.core.watcher.tenacity.wait_fixed",
+    return_value=tenacity.wait_fixed(0),
+)
+@patch(
+    "sunbeam.core.watcher.tenacity.stop_after_delay",
+    return_value=tenacity.stop_after_attempt(10),
+)
+def test_wait_until_action_state_failed_alongside_skipped(
+    mock_stop_after_delay,
+    mock_wait_fixed,
+    mock_get_actions,
+):
+    """A FAILED action still raises when other actions are SKIPPED."""
+    mock_client = Mock()
+    mock_status = Mock()
+    mock_step = Mock()
+    mock_step.status = "fake-status-msg"
+    mock_audit = Mock()
+
+    actions = []
+    for state in ["SKIPPED", "FAILED"]:
+        action = Mock()
+        action.uuid = f"action-{len(actions)}"
+        action.state = state
+        actions.append(action)
+    mock_get_actions.return_value = actions
+
+    with pytest.raises(watcher_helper.WatcherActionFailedException):
+        watcher_helper.wait_until_action_state(
+            mock_step, mock_audit, mock_client, mock_status
+        )
