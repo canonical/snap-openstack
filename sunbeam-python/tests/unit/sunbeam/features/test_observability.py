@@ -1154,6 +1154,46 @@ class TestExternalObservabilityEnablePlans:
         ) > step_types.index(observability_feature.DeployObservabilityAgentInfraStep)
 
 
+class TestEmbeddedObservabilityFeaturePreEnable:
+    def test_pre_enable_runs_cephfs_check(self, deployment, juju_helper_obs):
+        with patch(
+            "sunbeam.features.observability.feature.run_preflight_checks"
+        ) as run_preflight:
+            with patch.object(
+                observability_feature.OpenStackControlPlaneFeature,
+                "pre_enable",
+            ):
+                feature = observability_feature.EmbeddedObservabilityFeature()
+                feature.pre_enable(deployment, Mock(), False)
+
+        checks = run_preflight.call_args[0][0]
+        assert len(checks) == 1
+        assert isinstance(checks[0], observability_feature.MicrocephCephFSCheck)
+
+    def test_pre_disable_does_not_run_cephfs_check(self, deployment):
+        """A missing CephFS filesystem must not block the disable path."""
+        with patch(
+            "sunbeam.features.interface.v1.base.EnableDisableFeature.pre_disable"
+        ):
+            with patch(
+                "sunbeam.features.observability.feature.read_config",
+                side_effect=ConfigItemNotFoundException("no config"),
+            ):
+                with patch(
+                    "sunbeam.features.observability.feature.run_preflight_checks"
+                ) as run_preflight:
+                    feature = observability_feature.EmbeddedObservabilityFeature()
+                    feature.pre_disable(deployment, False)
+
+        cephfs_checks = [
+            check
+            for call in run_preflight.call_args_list
+            for check in call.args[0]
+            if isinstance(check, observability_feature.MicrocephCephFSCheck)
+        ]
+        assert not cephfs_checks
+
+
 class TestObservabilityFeatureTimeouts:
     """Test timeout calculation for ObservabilityFeature."""
 
