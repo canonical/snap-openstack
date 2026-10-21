@@ -1,10 +1,12 @@
 # SPDX-FileCopyrightText: 2024 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
+import ipaddress
 import typing
 
 from rich.console import Console
 
+from sunbeam.core.common import LB_INGRESS_RESERVED_ADDRESSES
 from sunbeam.core.questions import QuestionBank, show_questions
 
 OPENSTACK_MODEL = "openstack"
@@ -20,6 +22,45 @@ INGRESS_ENDPOINT_TERRAFORM_MAP = {
     "public": "traefik-public-config",
     "rgw": "traefik-rgw-config",
 }
+
+
+def ip_in_reserved_lb_prefix(
+    ip_address: (
+        ipaddress.IPv4Address | ipaddress.IPv6Address
+    ),
+    lb_range: (
+        tuple[
+            ipaddress.IPv4Address | ipaddress.IPv6Address,
+            ipaddress.IPv4Address | ipaddress.IPv6Address,
+        ]
+        | ipaddress.IPv4Network
+        | ipaddress.IPv6Network
+    ),
+    reserved: int = LB_INGRESS_RESERVED_ADDRESSES,
+) -> bool:
+    """Return whether ``ip_address`` is within the reserved low-end of a pool.
+
+    The first ``reserved`` addresses of a LoadBalancer pool are auto-allocated
+    to internal services, so an operator-configured endpoint IP must not use
+    them. ``lb_range`` may be either a CIDR/network or a ``(start, end)`` tuple
+    of addresses; both are normalised to their numeric ``[start, end]`` span
+    and compared as integers.
+    """
+    if isinstance(lb_range, (ipaddress.IPv4Network, ipaddress.IPv6Network)):
+        if ip_address.version != lb_range.version:
+            return False
+        start = int(lb_range.network_address)
+        end = int(lb_range.broadcast_address)
+    else:
+        start_ip, end_ip = lb_range
+        if ip_address.version != start_ip.version:
+            return False
+        start, end = int(start_ip), int(end_ip)
+
+    # The reserved region is [start, min(start + reserved - 1, end)]: it can
+    # never extend past the last address of the range, so a pool smaller than
+    # ``reserved`` is fully reserved.
+    return start <= int(ip_address) <= min(start + reserved - 1, end)
 
 
 def get_ingress_endpoint_key(endpoint_type: str) -> str:
