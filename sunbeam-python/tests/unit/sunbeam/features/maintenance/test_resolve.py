@@ -35,6 +35,33 @@ class TestResolvedNode:
         with pytest.raises(click.ClickException):
             ResolvedNode("nope", deployment, {"node1": "compute"}, Mock()).hostname
 
+    def test_hostname_exact_match_wins_over_dict_order(self):
+        """Resolution does not depend on the cluster status dict order.
+
+        'node1' must resolve to the exact 'node1' key whether it comes
+        before or after the 'node1.maas' key.
+        """
+        deployment = self._deployment()
+        resolved = ResolvedNode(
+            "node1", deployment, {"node1.maas": "compute", "node1": "compute"}, Mock()
+        )
+        assert resolved.hostname == "node1"
+        resolved = ResolvedNode(
+            "node1", deployment, {"node1": "compute", "node1.maas": "compute"}, Mock()
+        )
+        assert resolved.hostname == "node1"
+
+    def test_hostname_ambiguous_short_name_matches_fail(self):
+        """Multiple short-hostname matches are an error, not a first match."""
+        deployment = self._deployment()
+        with pytest.raises(click.ClickException):
+            ResolvedNode(
+                "node1",
+                deployment,
+                {"node1.maas": "compute", "node1.other.com": "compute"},
+                Mock(),
+            ).hostname
+
     def test_clusterd_name_via_machine_id(self):
         """The clusterd node name is resolved from the juju machine id.
 
@@ -58,9 +85,9 @@ class TestResolvedNode:
         jhelper = Mock()
         with pytest.MonkeyPatch.context() as mp:
             conn = Mock()
-            conn.compute.hypervisors.return_value = [
-                Mock(hypervisor_hostname="node1.example.com")
-            ]
+            hyp = Mock()
+            hyp.name = "node1.example.com"
+            conn.compute.hypervisors.return_value = [hyp]
             mp.setattr(
                 "sunbeam.features.maintenance.resolve.get_admin_connection",
                 lambda jh, d: conn,

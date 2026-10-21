@@ -111,7 +111,8 @@ class TestEnableMaintenance:
         disable_cold_migration,
     ):
         """Test dry_run creates CreateWatcherHostMaintenanceAuditStep correctly."""
-        hypervisor = Mock(hypervisor_hostname="test-node")
+        hypervisor = Mock()
+        hypervisor.name = "test-node"
         with (
             patch(
                 "sunbeam.features.maintenance.commands.CreateWatcherHostMaintenanceAuditStep"
