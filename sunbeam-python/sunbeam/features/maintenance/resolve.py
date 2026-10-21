@@ -11,7 +11,7 @@ import click
 from sunbeam.core.k8s import HOSTNAME_LABEL, list_nodes
 from sunbeam.core.openstack_api import get_admin_connection
 from sunbeam.steps.k8s import get_kube_client
-from sunbeam.utils import hostnames_match
+from sunbeam.utils import hostnames_match, match_hostname
 
 if typing.TYPE_CHECKING:
     from sunbeam.core.deployment import Deployment
@@ -23,9 +23,9 @@ class ResolvedNode:
 
     The name shown by `sunbeam cluster list` (juju machine hostname), the
     clusterd node name, the nova hypervisor hostname and the k8s node name
-    can all differ for the same machine (short hostname vs FQDN),
-    see LP#2129793. Each property resolves the node name given on the CLI
-    against the subsystem that uses it.
+    can all differ for the same machine (short hostname vs FQDN). Each
+    property resolves the node name given on the CLI against the subsystem
+    that uses it.
     """
 
     def __init__(
@@ -43,9 +43,9 @@ class ResolvedNode:
     @functools.cached_property
     def hostname(self) -> str:
         """Juju machine hostname, as shown in `sunbeam cluster list`."""
-        for key in self.cluster_status:
-            if hostnames_match(self.name, key):
-                return key
+        match = match_hostname(self.name, self.cluster_status)
+        if match is not None:
+            return match
         raise click.ClickException(f"'{self.name}' does not exist in cluster.")
 
     @functools.cached_property
@@ -53,10 +53,16 @@ class ResolvedNode:
         """Juju machine id of the node."""
         machines = self.jhelper.get_machines(self.deployment.openstack_machines_model)
         for machine_id, machine in machines.items():
-            if hostnames_match(
-                self.hostname, machine.hostname or ""
-            ) or hostnames_match(self.name, machine.dns_name or ""):
+            if machine.hostname == self.hostname or machine.dns_name == self.name:
                 return machine_id
+        matches = {
+            machine_id
+            for machine_id, machine in machines.items()
+            if hostnames_match(self.hostname, machine.hostname or "")
+            or hostnames_match(self.name, machine.dns_name or "")
+        }
+        if len(matches) == 1:
+            return matches.pop()
         raise click.ClickException(f"Juju machine not found for node '{self.name}'.")
 
     @functools.cached_property
@@ -66,19 +72,25 @@ class ResolvedNode:
         for node in nodes:
             if str(node.get("machineid")) == self.machine_id:
                 return typing.cast(str, node["name"])
-        for node in nodes:
-            if hostnames_match(self.name, typing.cast(str, node["name"])):
-                return typing.cast(str, node["name"])
+        match = match_hostname(self.name, (typing.cast(str, n["name"]) for n in nodes))
+        if match is not None:
+            return match
         raise click.ClickException(f"'{self.name}' does not exist in cluster.")
 
     @functools.cached_property
     def hypervisor_name(self) -> str:
         """Nova hypervisor hostname."""
         conn = get_admin_connection(self.jhelper, self.deployment)
-        for hypervisor in conn.compute.hypervisors():
-            hostname = hypervisor.hypervisor_hostname
-            if hostname and hostnames_match(self.hostname, hostname):
-                return hostname
+        match = match_hostname(
+            self.hostname,
+            (
+                hypervisor.name
+                for hypervisor in conn.compute.hypervisors()
+                if hypervisor.name
+            ),
+        )
+        if match is not None:
+            return match
         raise click.ClickException(f"No nova hypervisor found for node '{self.name}'.")
 
     @functools.cached_property
@@ -91,11 +103,14 @@ class ResolvedNode:
         nodes = list_nodes(kube_client, labels={HOSTNAME_LABEL: self.clusterd_name})
         if len(nodes) == 1 and nodes[0].metadata and nodes[0].metadata.name:
             return nodes[0].metadata.name
-        for node in list_nodes(kube_client, labels={}):
-            if (
-                node.metadata
-                and node.metadata.name
-                and hostnames_match(self.hostname, node.metadata.name)
-            ):
-                return node.metadata.name
+        match = match_hostname(
+            self.hostname,
+            (
+                node.metadata.name
+                for node in list_nodes(kube_client, labels={})
+                if node.metadata and node.metadata.name
+            ),
+        )
+        if match is not None:
+            return match
         raise click.ClickException(f"No k8s node found for node '{self.name}'.")
