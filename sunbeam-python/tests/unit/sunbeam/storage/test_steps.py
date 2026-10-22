@@ -2,12 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from typing import Annotated
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, call, patch
 
+import click
 import pydantic
 import pytest
 
-from sunbeam.core.common import ResultType
+from sunbeam.core.common import ResultType, run_plan
+from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.core.questions import PasswordPromptQuestion, PromptQuestion
 from sunbeam.core.steps import DeployMachineApplicationStep
 from sunbeam.storage.models import SecretDictField
@@ -108,6 +110,119 @@ class TestDestroySpecificCinderVolumeStep:
             test_model,
         )
         assert step.principal_application == "cinder-volume-noha"
+
+    @pytest.fixture
+    def destroy_step(
+        self,
+        basic_deployment,
+        basic_client,
+        basic_tfhelper,
+        basic_jhelper,
+        basic_manifest,
+        test_model,
+        mock_backend_instance,
+    ):
+        """Build a destroy step for the recorded non-HA principal."""
+        step = DestroySpecificCinderVolumeStep(
+            basic_deployment,
+            basic_client,
+            basic_tfhelper,
+            basic_jhelper,
+            basic_manifest,
+            "test-backend",
+            mock_backend_instance,
+            test_model,
+            principal_application="cinder-volume-noha",
+        )
+        basic_client.cluster.get_storage_backends.return_value.root = []
+        basic_jhelper.get_model_status.return_value.app_endpoints = {
+            "cinder-volume-noha": Mock(url=f"admin/{test_model}.cinder-volume-noha"),
+            "other-app": Mock(url=f"admin/{test_model}.other-app"),
+            "wrong-model": Mock(url="admin/other.cinder-volume-noha"),
+        }
+        return step
+
+    def test_final_backend_removes_consumer_before_provider(
+        self, destroy_step, basic_jhelper, basic_tfhelper, test_model
+    ):
+        """Remove only the intended SaaS and wait before Terraform destruction."""
+        events = Mock()
+        basic_jhelper.remove_saas.side_effect = lambda *args: events.remove(*args)
+        basic_jhelper.wait_app_endpoint_gone.side_effect = lambda *args, **kwargs: (
+            events.wait(*args, **kwargs)
+        )
+        basic_tfhelper.update_tfvars_and_apply_tf.side_effect = lambda *args, **kwargs: (
+            events.apply(*args, **kwargs)
+        )
+        with patch(
+            "sunbeam.storage.steps.read_config", return_value={"cinder-volumes": {}}
+        ):
+            run_plan([destroy_step], MagicMock())
+
+        assert events.mock_calls[:2] == [
+            call.remove(OPENSTACK_MODEL, "cinder-volume-noha"),
+            call.wait(
+                ["cinder-volume-noha"],
+                OPENSTACK_MODEL,
+                timeout=destroy_step.get_application_timeout(),
+            ),
+        ]
+        assert events.mock_calls[2][0] == "apply"
+        basic_jhelper.wait_application_gone.assert_called_once_with(
+            ["cinder-volume-noha"],
+            test_model,
+            timeout=destroy_step.get_application_timeout(),
+        )
+
+    def test_other_backend_keeps_principal(
+        self, destroy_step, basic_jhelper, basic_tfhelper
+    ):
+        """Do not remove a principal still serving another backend."""
+        destroy_step.client.cluster.get_storage_backends.return_value.root = [
+            Mock(principal="cinder-volume-noha")
+        ]
+        run_plan([destroy_step], MagicMock())
+
+        basic_jhelper.remove_saas.assert_not_called()
+        basic_tfhelper.update_tfvars_and_apply_tf.assert_not_called()
+
+    def test_regular_cinder_volume_is_protected(
+        self, destroy_step, basic_jhelper, basic_tfhelper
+    ):
+        """Never remove the regular cinder-volume consumer or provider."""
+        destroy_step.principal_application = "cinder-volume"
+        run_plan([destroy_step], MagicMock())
+
+        basic_jhelper.remove_saas.assert_not_called()
+        basic_tfhelper.update_tfvars_and_apply_tf.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "failure", [RuntimeError("cleanup failed"), TimeoutError("timed out")]
+    )
+    def test_cleanup_failure_stops_provider_destruction(
+        self, destroy_step, basic_jhelper, basic_tfhelper, failure
+    ):
+        """A failed SaaS removal or wait must abort the Terraform apply."""
+        if isinstance(failure, TimeoutError):
+            basic_jhelper.wait_app_endpoint_gone.side_effect = failure
+        else:
+            basic_jhelper.remove_saas.side_effect = failure
+
+        with pytest.raises((click.ClickException, RuntimeError)):
+            run_plan([destroy_step], MagicMock())
+
+        basic_tfhelper.update_tfvars_and_apply_tf.assert_not_called()
+
+    def test_absent_saas_is_ok(self, destroy_step, basic_jhelper, basic_tfhelper):
+        """An already-absent reference does not block provider removal."""
+        basic_jhelper.get_model_status.return_value.app_endpoints = {}
+        with patch(
+            "sunbeam.storage.steps.read_config", return_value={"cinder-volumes": {}}
+        ):
+            run_plan([destroy_step], MagicMock())
+
+        basic_jhelper.remove_saas.assert_not_called()
+        basic_tfhelper.update_tfvars_and_apply_tf.assert_called_once()
 
 
 class TestBasemodelValidator:
