@@ -7,11 +7,60 @@ This module provides a base test class that can be inherited by backend-specific
 test classes to ensure all backends implement the required interface correctly.
 """
 
+import ipaddress
+import json
+
 import pytest
-from pydantic import BaseModel
+import yaml
+from pydantic import BaseModel, IPvAnyAddress, TypeAdapter, ValidationError
 
 from sunbeam.core.manifest import StorageBackendConfig
 from sunbeam.storage.base import StorageBackendBase
+
+# IP constraints from canonical/snap-cinder-volume, cinder_volume/configuration.py
+SNAP_IP_BACKENDS = {
+    "datera",
+    "dellpowermax",
+    "dellpowerstore",
+    "dellsc",
+    "dellunity",
+    "hitachi",
+    "hpe3par",
+    "ibmflashsystemcommon",
+    "ibmgpfs",
+    "ibmibmstorage",
+    "ibmstorwizesvc",
+    "infinidat",
+    "inspuras13000",
+    "inspurinstorage",
+    "nimble",
+    "purestorage",
+    "qnap",
+    "solidfire",
+    "toyouacs5000",
+}
+SNAP_STRING_BACKENDS = {
+    "datacore",
+    "dellpowervault",
+    "fujitsueternusdx",
+    "hpexp",
+    "huawei",
+    "ibmflashsystemiscsi",
+    "kaminario",
+    "linstor",
+    "macrosan",
+    "necv",
+    "netapp",
+    "nexenta",
+    "opene",
+    "prophetstor",
+    "sandstone",
+    "stx",
+    "synology",
+    "veritasaccess",
+    "yadro",
+    "zadara",
+}
 
 
 class BaseBackendTests:
@@ -99,6 +148,48 @@ class BaseBackendTests:
         """Test that config has san_ip field."""
         config_class = backend.config_type()
         assert "san_ip" in config_class.model_fields
+
+    @pytest.mark.parametrize("address", ["192.0.2.10", "2001:db8::10"])
+    def test_san_ip_validates_and_serializes(self, backend, address):
+        """Match downstream field types and dump addresses as wire strings."""
+        model = backend.config_type()
+        field = model.model_fields["san_ip"]
+        assert backend.backend_type in SNAP_IP_BACKENDS | SNAP_STRING_BACKENDS
+        requires_ip = backend.backend_type in SNAP_IP_BACKENDS
+        assert field.annotation is (IPvAnyAddress if requires_ip else str)
+        validated = TypeAdapter(field.annotation).validate_python(address)
+        assert validated == (ipaddress.ip_address(address) if requires_ip else address)
+        config = model.model_construct(san_ip=validated)
+        dumped = config.model_dump(by_alias=True, exclude_unset=True)
+        assert dumped == {"san-ip": address}
+        assert json.loads(json.dumps(dumped)) == dumped
+        assert yaml.safe_load(yaml.safe_dump(dumped)) == dumped
+
+    @pytest.mark.parametrize("address", ["192.0.2.10d2d", "300.1.2.3", "host.test"])
+    def test_san_ip_matches_downstream_validation(self, backend, address):
+        """Only impose IP constraints where the downstream model defines them."""
+        if backend.backend_type in SNAP_STRING_BACKENDS:
+            model = backend.config_type()
+            value = TypeAdapter(
+                model.model_fields["san_ip"].annotation
+            ).validate_python(address)
+            assert value == address
+            # Exercise model validation too; missing unrelated required fields
+            # must not introduce an IP validation failure for a string option.
+            try:
+                config = model.model_validate({"san-ip": address})
+            except ValidationError as exc:
+                assert all(error["loc"] != ("san-ip",) for error in exc.errors())
+            else:
+                assert config.san_ip == address
+            return
+        assert backend.backend_type in SNAP_IP_BACKENDS
+        with pytest.raises(ValidationError) as exc:
+            backend.config_type().model_validate({"san-ip": address})
+        assert any(
+            error["loc"] == ("san-ip",) and error["type"] == "ip_any_address"
+            for error in exc.value.errors()
+        )
 
     def test_config_has_protocol_field(self, backend):
         """Test that config has protocol field."""
