@@ -38,7 +38,7 @@ jobs:
     needs: build
     name: Functional test
     if: github.repository == 'canonical/snap-openstack'
-    runs-on: [self-hosted, large, noble, x64]
+    runs-on: self-hosted-linux-amd64-resolute-large
     steps:
       - name: Checkout
         uses: actions/checkout@v4
