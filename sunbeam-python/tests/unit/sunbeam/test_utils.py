@@ -284,3 +284,22 @@ class TestUtils:
 
         with pytest.raises(KeyError):
             utils.get_local_cidr_matching_token(token_b64)
+
+    def test_hostnames_match_same_name_forms(self):
+        """Test hostnames_match accepts the short and FQDN forms of a name."""
+        assert utils.hostnames_match("node1", "node1")
+        assert utils.hostnames_match("node1", "node1.example.com")
+        assert utils.hostnames_match("node1.example.com", "node1")
+        assert utils.hostnames_match("node1.maas", "node1")
+
+    def test_hostnames_match_different_machines(self):
+        """Test hostnames_match rejects different machines.
+
+        Sharing the first DNS label (or both being dotted strings such as
+        IPs) must not make two names match, see LP#2129793.
+        """
+        assert not utils.hostnames_match("node1.maas", "node1.other.com")
+        assert not utils.hostnames_match("node1", "node2")
+        assert not utils.hostnames_match("node1", "node10.example.com")
+        assert not utils.hostnames_match("10.0.0.5", "10.1.1.1")
+        assert not utils.hostnames_match("node1", "")
