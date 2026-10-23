@@ -89,7 +89,7 @@ class CreateWatcherAuditStepABC(ABC, BaseStep):
     def __init__(
         self,
         deployment: Deployment,
-        node: str,
+        node: str = "",
     ):
         super().__init__(self.name, self.description)
         self.node = node

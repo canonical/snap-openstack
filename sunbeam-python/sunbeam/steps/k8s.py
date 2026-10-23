@@ -816,6 +816,7 @@ class _CommonK8SStepMixin:
     jhelper: JujuHelper
     model: str
     node: str
+    k8s_node_name: str = ""
 
     def skip_checks(self, status: Status | None = None) -> Result:
         """Determines if the step should be skipped or not.
@@ -876,15 +877,34 @@ class _CommonK8SStepMixin:
             return Result(ResultType.FAILED, str(e))
 
         try:
-            find_node(self.kube, self.node)
+            node = find_node(self.kube, self.node)
         except K8SNodeNotFoundError as e:
             LOG.debug("Node not found in k8s cluster")
             return Result(ResultType.SKIPPED, str(e))
         except K8SError as e:
             LOG.debug("Failed to find node in k8s cluster", exc_info=True)
             return Result(ResultType.FAILED, str(e))
+        if node.metadata and node.metadata.name:
+            # The k8s node name can differ from the name clusterd knows the
+            # node by (short hostname vs FQDN); run() must act on the
+            # resolved k8s name, not on self.node.
+            self.k8s_node_name = node.metadata.name
 
         return Result(ResultType.COMPLETED)
+
+    def _k8s_node_unresolved_result(self) -> Result | None:
+        """FAILED Result when the k8s node name was not resolved.
+
+        run_plan() runs is_skip() (which calls skip_checks()) before run(),
+        so the name is always resolved on the normal path; a direct run()
+        call must not cordon or drain an empty node name.
+        """
+        if not self.k8s_node_name:
+            return Result(
+                ResultType.FAILED,
+                f"k8s node name for '{self.node}' was not resolved",
+            )
+        return None
 
 
 class MigrateK8SKubeconfigStep(BaseStep, _CommonK8SStepMixin):
@@ -1062,7 +1082,9 @@ class CheckApplicationK8SDistributionStep(BaseStep, _CommonK8SStepMixin):
 
         for app in apps:
             app_label = {"app.kubernetes.io/name": app}
-            pods = fetch_pods_for_eviction(self.kube, self.node, labels=app_label)
+            pods = fetch_pods_for_eviction(
+                self.kube, self.k8s_node_name, labels=app_label
+            )
             nb_pods = len(pods)
             LOG.debug("Node %s has %d %s pods", self.node, nb_pods, app)
             if nb_pods > 0:
@@ -1117,9 +1139,11 @@ class CordonK8SUnitStep(BaseStep, _CommonK8SStepMixin):
 
     def run(self, context: StepContext) -> Result:
         """Cordon the unit."""
+        if failed := self._k8s_node_unresolved_result():
+            return failed
         self.update_status(context, "Cordoning unit")
         try:
-            cordon(self.kube, self.node)
+            cordon(self.kube, self.k8s_node_name)
         except K8SError as e:
             LOG.debug("Failed to cordon unit", exc_info=True)
             return Result(ResultType.FAILED, str(e))
@@ -1147,9 +1171,11 @@ class UncordonK8SUnitStep(BaseStep, _CommonK8SStepMixin):
 
     def run(self, context: StepContext) -> Result:
         """Uncordon the unit."""
+        if failed := self._k8s_node_unresolved_result():
+            return failed
         self.update_status(context, "Uncordoning unit")
         try:
-            uncordon(self.kube, self.node)
+            uncordon(self.kube, self.k8s_node_name)
         except K8SError as e:
             LOG.debug("Failed to cordon unit", exc_info=True)
             return Result(ResultType.FAILED, str(e))
@@ -1198,15 +1224,17 @@ class DrainK8SUnitStep(BaseStep, _CommonK8SStepMixin):
 
     def run(self, context: StepContext) -> Result:
         """Drain the unit."""
+        if failed := self._k8s_node_unresolved_result():
+            return failed
         self.update_status(context, "Evicting workloads")
         try:
-            drain(self.kube, self.node, remove_pvc=self.remove_pvc)
+            drain(self.kube, self.k8s_node_name, remove_pvc=self.remove_pvc)
         except K8SError as e:
             LOG.debug("Failed to drain unit", exc_info=True)
             return Result(ResultType.FAILED, str(e))
 
         self.update_status(context, "Waiting for workloads to leave")
-        self._wait_for_evicted_pods(self.kube, self.node)
+        self._wait_for_evicted_pods(self.kube, self.k8s_node_name)
 
         return Result(ResultType.COMPLETED)
 

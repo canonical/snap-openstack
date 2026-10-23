@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import abc
+import functools
 import logging
 from typing import Any
 
@@ -17,6 +18,7 @@ from sunbeam.core.common import (
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import JujuHelper
 from sunbeam.features.maintenance import checks
+from sunbeam.features.maintenance.resolve import ResolvedNode
 from sunbeam.features.maintenance.utils import (
     OperationGoal,
     OperationViewer,
@@ -104,7 +106,7 @@ class EnableMaintenance(MaintenanceCommand):
 
     def __init__(
         self,
-        node: str,
+        resolved: ResolvedNode,
         deployment: Deployment,
         cluster_status: dict[str, Any],
         force: bool = False,
@@ -114,7 +116,7 @@ class EnableMaintenance(MaintenanceCommand):
         disable_live_migration: bool = False,
         disable_cold_migration: bool = False,
     ):
-        self.node = node
+        self.resolved = resolved
         self.deployment = deployment
         self.cluster_status = cluster_status
         self.force = force
@@ -127,30 +129,54 @@ class EnableMaintenance(MaintenanceCommand):
         self.model = deployment.openstack_machines_model
         self.client = deployment.get_client()
         self.jhelper = JujuHelper(deployment.juju_controller)
-        self.ops_viewer = OperationViewer(self.node, OperationGoal.EnableMaintenance)
+        self.hypervisor_name: str | None = None
+
+    @functools.cached_property
+    def ops_viewer(self) -> OperationViewer:
+        """Operation viewer, resolved lazily so unknown nodes fail in check()."""
+        return OperationViewer(self.resolved.hostname, OperationGoal.EnableMaintenance)
+
+    def _get_hypervisor_name(self) -> str | None:
+        """Resolve the nova hypervisor name, or skip the nova steps under --force.
+
+        A node nova does not know about can not be checked; --force skips
+        the nova checks and watcher steps instead of failing. check()
+        resolves this before anything is applied; later phases reuse the
+        cached resolution.
+        """
+        if self.hypervisor_name is None:
+            try:
+                self.hypervisor_name = self.resolved.hypervisor_name
+            except click.ClickException as e:
+                if not self.force:
+                    raise
+                LOG.warning("Ignoring: %s (--force)", e.message)
+        return self.hypervisor_name
 
     def check(self, console: Console) -> None:
         """Run pre-flight checks."""
-        node_status = self.cluster_status.get(self.node, "")
+        node_status = self.cluster_status.get(self.resolved.hostname, "")
 
         preflight_checks: list[Check] = [
-            checks.NodeExistCheck(self.node, self.cluster_status),
             checks.NoLastNodeCheck(self.cluster_status, force=self.force),
         ]
 
-        if "compute" in node_status:
+        if (
+            "compute" in node_status
+            and (hypervisor_name := self._get_hypervisor_name()) is not None
+        ):
             preflight_checks += [
                 checks.WatcherApplicationExistsCheck(self.jhelper),
                 checks.InstancesStatusCheck(
                     jhelper=self.jhelper,
                     deployment=self.deployment,
-                    node=self.node,
+                    node=hypervisor_name,
                     force=self.force,
                 ),
                 checks.NoEphemeralDiskCheck(
                     jhelper=self.jhelper,
                     deployment=self.deployment,
-                    node=self.node,
+                    node=hypervisor_name,
                     force=self.force,
                 ),
             ]
@@ -160,11 +186,11 @@ class EnableMaintenance(MaintenanceCommand):
                 checks.MicroCephMaintenancePreflightCheck(
                     client=self.client,
                     jhelper=self.jhelper,
-                    node=self.node,
+                    node=self.resolved.clusterd_name,
                     model=self.model,
                     force=self.force,
                     action_params={
-                        "name": self.node,
+                        "name": self.resolved.hostname,
                         "stop-osds": self.stop_osds,
                         "set-noout": not self.enable_ceph_crush_rebalancing,
                     },
@@ -179,17 +205,17 @@ class EnableMaintenance(MaintenanceCommand):
                     force=self.force,
                 ),
                 checks.K8sDqliteRedundancyCheck(
-                    self.node,
+                    self.resolved.clusterd_name,
                     self.jhelper,
                     self.deployment,
                     force=self.force,
                 ),
                 checks.NoJujuControllerPodCheck(
-                    self.node,
+                    self.resolved.k8s_name,
                     self.deployment,
                 ),
                 checks.ReplicasRedundancyCheck(
-                    self.node,
+                    self.resolved.k8s_name,
                     self.deployment,
                     force=self.allow_downtime,
                 ),
@@ -199,7 +225,7 @@ class EnableMaintenance(MaintenanceCommand):
 
     def apply(self, console: Console, show_hints: bool, plan_results: dict) -> None:
         """Run the core commands."""
-        node_status = self.cluster_status.get(self.node, "")
+        node_status = self.cluster_status.get(self.resolved.hostname, "")
 
         confirm = self.ops_viewer.prompt()
         if not confirm:
@@ -207,14 +233,14 @@ class EnableMaintenance(MaintenanceCommand):
 
         operation_plan: list[BaseStep] = []
 
-        if "compute" in node_status:
+        if "compute" in node_status and self._get_hypervisor_name() is not None:
             audit_info = get_step_message(
                 plan_results, CreateWatcherHostMaintenanceAuditStep
             )
             operation_plan.append(
                 RunWatcherAuditStep(
                     deployment=self.deployment,
-                    node=self.node,
+                    node=self.resolved.hostname,
                     audit=audit_info["audit"],
                 )
             )
@@ -223,12 +249,12 @@ class EnableMaintenance(MaintenanceCommand):
             operation_plan.append(
                 MicroCephActionStep(
                     client=self.client,
-                    node=self.node,
+                    node=self.resolved.clusterd_name,
                     jhelper=self.jhelper,
                     model=self.model,
                     action_name="enter-maintenance",
                     action_params={
-                        "name": self.node,
+                        "name": self.resolved.hostname,
                         "set-noout": not self.enable_ceph_crush_rebalancing,
                         "stop-osds": self.stop_osds,
                         "dry-run": False,
@@ -240,14 +266,14 @@ class EnableMaintenance(MaintenanceCommand):
         if "control" in node_status:
             operation_plan += [
                 CordonControlRoleNodeStep(
-                    self.node,
+                    self.resolved.clusterd_name,
                     self.client,
                     self.jhelper,
                     self.model,
                     dry_run=False,
                 ),
                 DrainControlRoleNodeStep(
-                    self.node,
+                    self.resolved.clusterd_name,
                     self.client,
                     self.jhelper,
                     self.model,
@@ -261,22 +287,25 @@ class EnableMaintenance(MaintenanceCommand):
 
     def verify(self, console: Console) -> None:
         """Run verification steps."""
-        node_status = self.cluster_status.get(self.node, "")
+        node_status = self.cluster_status.get(self.resolved.hostname, "")
 
         post_checks: list[Check] = []
 
-        if "compute" in node_status:
+        if (
+            "compute" in node_status
+            and (hypervisor_name := self._get_hypervisor_name()) is not None
+        ):
             post_checks += [
                 checks.NovaInDisableStatusCheck(
                     jhelper=self.jhelper,
                     deployment=self.deployment,
-                    node=self.node,
+                    node=hypervisor_name,
                     force=self.force,
                 ),
                 checks.NoInstancesOnNodeCheck(
                     jhelper=self.jhelper,
                     deployment=self.deployment,
-                    node=self.node,
+                    node=hypervisor_name,
                     force=self.force,
                 ),
             ]
@@ -284,25 +313,28 @@ class EnableMaintenance(MaintenanceCommand):
         if "control" in node_status:
             post_checks += [
                 checks.ControlRoleNodeCordonedCheck(
-                    self.node, self.deployment, force=self.force
+                    self.resolved.k8s_name, self.deployment, force=self.force
                 ),
             ]
 
         run_preflight_checks(post_checks, console)
 
-        console.print(f"Enable maintenance for node: {self.node}")
+        console.print(f"Enable maintenance for node: {self.resolved.hostname}")
 
     def dry_run(self, console: Console, show_hints: bool) -> dict:
         """Dry run command steps."""
-        node_status = self.cluster_status.get(self.node, "")
+        node_status = self.cluster_status.get(self.resolved.hostname, "")
 
         generate_operation_plan: list[BaseStep] = []
 
-        if "compute" in node_status:
+        if (
+            "compute" in node_status
+            and (hypervisor_name := self._get_hypervisor_name()) is not None
+        ):
             generate_operation_plan.append(
                 CreateWatcherHostMaintenanceAuditStep(
                     deployment=self.deployment,
-                    node=self.node,
+                    node=hypervisor_name,
                     disable_live_migration=self.disable_live_migration,
                     disable_cold_migration=self.disable_cold_migration,
                 )
@@ -312,12 +344,12 @@ class EnableMaintenance(MaintenanceCommand):
             generate_operation_plan.append(
                 MicroCephActionStep(
                     client=self.client,
-                    node=self.node,
+                    node=self.resolved.clusterd_name,
                     jhelper=self.jhelper,
                     model=self.model,
                     action_name="enter-maintenance",
                     action_params={
-                        "name": self.node,
+                        "name": self.resolved.hostname,
                         "set-noout": not self.enable_ceph_crush_rebalancing,
                         "stop-osds": self.stop_osds,
                         "dry-run": True,
@@ -329,14 +361,14 @@ class EnableMaintenance(MaintenanceCommand):
         if "control" in node_status:
             generate_operation_plan += [
                 CordonControlRoleNodeStep(
-                    self.node,
+                    self.resolved.clusterd_name,
                     self.client,
                     self.jhelper,
                     self.model,
                     dry_run=True,
                 ),
                 DrainControlRoleNodeStep(
-                    self.node,
+                    self.resolved.clusterd_name,
                     self.client,
                     self.jhelper,
                     self.model,
@@ -348,9 +380,6 @@ class EnableMaintenance(MaintenanceCommand):
             generate_operation_plan, console, show_hints
         )
 
-        audit_info = get_step_message(
-            generate_operation_plan_results, CreateWatcherHostMaintenanceAuditStep
-        )
         microceph_enter_maintenance_dry_run_action_result = get_step_message(
             generate_operation_plan_results, MicroCephActionStep
         )
@@ -361,7 +390,10 @@ class EnableMaintenance(MaintenanceCommand):
             generate_operation_plan_results, CordonControlRoleNodeStep
         )
 
-        if "compute" in node_status:
+        if "compute" in node_status and self._get_hypervisor_name() is not None:
+            audit_info = get_step_message(
+                generate_operation_plan_results, CreateWatcherHostMaintenanceAuditStep
+            )
             self.ops_viewer.add_watch_actions(actions=audit_info["actions"])
         if "storage" in node_status:
             self.ops_viewer.add_maintenance_action_steps(
@@ -385,12 +417,12 @@ class DisableMaintenance(MaintenanceCommand):
 
     def __init__(
         self,
-        node: str,
+        resolved: ResolvedNode,
         deployment: Deployment,
         cluster_status: dict[str, Any],
         disable_instance_rebalancing: bool = False,
     ):
-        self.node = node
+        self.resolved = resolved
         self.deployment = deployment
         self.cluster_status = cluster_status
         self.disable_instance_rebalancing = disable_instance_rebalancing
@@ -398,16 +430,30 @@ class DisableMaintenance(MaintenanceCommand):
         self.model = deployment.openstack_machines_model
         self.client = deployment.get_client()
         self.jhelper = JujuHelper(deployment.juju_controller)
-        self.ops_viewer = OperationViewer(node, OperationGoal.DisableMaintenance)
+
+    @functools.cached_property
+    def ops_viewer(self) -> OperationViewer:
+        """Operation viewer, resolved lazily so unknown nodes fail in check()."""
+        return OperationViewer(self.resolved.hostname, OperationGoal.DisableMaintenance)
 
     def check(self, console: Console) -> None:
         """Run pre-flight checks."""
-        node_status = self.cluster_status.get(self.node, "")
+        node_status = self.cluster_status.get(self.resolved.hostname, "")
+
+        # Resolve the names the node's roles need up front: verify() runs
+        # after the uncordon is applied, so an unresolvable name must fail
+        # here, before any change is made.
+        if (
+            "compute" in node_status
+            or "storage" in node_status
+            or "control" in node_status
+        ):
+            self.resolved.clusterd_name
+        if "control" in node_status:
+            self.resolved.k8s_name
 
         # Run preflight_checks
-        preflight_checks: list[Check] = [
-            checks.NodeExistCheck(self.node, self.cluster_status),
-        ]
+        preflight_checks: list[Check] = []
 
         if "compute" in node_status:
             preflight_checks += [
@@ -418,7 +464,7 @@ class DisableMaintenance(MaintenanceCommand):
 
     def apply(self, console: Console, show_hints: bool, plan_results: dict) -> None:
         """Run the core commands."""
-        node_status = self.cluster_status.get(self.node, "")
+        node_status = self.cluster_status.get(self.resolved.hostname, "")
 
         confirm = self.ops_viewer.prompt()
         if not confirm:
@@ -429,7 +475,7 @@ class DisableMaintenance(MaintenanceCommand):
             operation_plan += [
                 EnableHypervisorStep(
                     client=self.client,
-                    node=self.node,
+                    node=self.resolved.clusterd_name,
                     jhelper=self.jhelper,
                     model=self.model,
                 ),
@@ -442,7 +488,7 @@ class DisableMaintenance(MaintenanceCommand):
                 operation_plan += [
                     RunWatcherAuditStep(
                         deployment=self.deployment,
-                        node=self.node,
+                        node=self.resolved.hostname,
                         audit=audit_info["audit"],
                     ),
                 ]
@@ -450,12 +496,12 @@ class DisableMaintenance(MaintenanceCommand):
             operation_plan.append(
                 MicroCephActionStep(
                     client=self.client,
-                    node=self.node,
+                    node=self.resolved.clusterd_name,
                     jhelper=self.jhelper,
                     model=self.model,
                     action_name="exit-maintenance",
                     action_params={
-                        "name": self.node,
+                        "name": self.resolved.hostname,
                         "dry-run": False,
                         "ignore-check": True,
                     },
@@ -464,7 +510,7 @@ class DisableMaintenance(MaintenanceCommand):
         if "control" in node_status:
             operation_plan.append(
                 UncordonControlRoleNodeStep(
-                    self.node,
+                    self.resolved.clusterd_name,
                     self.client,
                     self.jhelper,
                     self.model,
@@ -477,14 +523,14 @@ class DisableMaintenance(MaintenanceCommand):
 
     def verify(self, console: Console) -> None:
         """Run verification steps."""
-        node_status = self.cluster_status.get(self.node, "")
+        node_status = self.cluster_status.get(self.resolved.hostname, "")
 
         post_checks: list[Check] = []
 
         if "control" in node_status:
             post_checks += [
                 checks.ControlRoleNodeUncordonedCheck(
-                    self.node,
+                    self.resolved.k8s_name,
                     self.deployment,
                     force=False,
                 ),
@@ -492,11 +538,11 @@ class DisableMaintenance(MaintenanceCommand):
 
         run_preflight_checks(post_checks, console)
 
-        console.print(f"Disable maintenance for node: {self.node}")
+        console.print(f"Disable maintenance for node: {self.resolved.hostname}")
 
     def dry_run(self, console: Console, show_hints: bool) -> dict:
         """Dry run command steps."""
-        node_status = self.cluster_status.get(self.node, "")
+        node_status = self.cluster_status.get(self.resolved.hostname, "")
 
         generate_operation_plan: list[BaseStep] = []
 
@@ -504,19 +550,19 @@ class DisableMaintenance(MaintenanceCommand):
             if not self.disable_instance_rebalancing:
                 generate_operation_plan.append(
                     CreateWatcherWorkloadBalancingAuditStep(
-                        deployment=self.deployment, node=self.node
+                        deployment=self.deployment,
                     )
                 )
         if "storage" in node_status:
             generate_operation_plan.append(
                 MicroCephActionStep(
                     client=self.client,
-                    node=self.node,
+                    node=self.resolved.clusterd_name,
                     jhelper=self.jhelper,
                     model=self.model,
                     action_name="exit-maintenance",
                     action_params={
-                        "name": self.node,
+                        "name": self.resolved.hostname,
                         "dry-run": True,
                         "ignore-check": True,
                     },
@@ -525,7 +571,7 @@ class DisableMaintenance(MaintenanceCommand):
         if "control" in node_status:
             generate_operation_plan.append(
                 UncordonControlRoleNodeStep(
-                    self.node,
+                    self.resolved.clusterd_name,
                     self.client,
                     self.jhelper,
                     self.model,
@@ -642,9 +688,10 @@ def enable(
     # Login to the Juju controller
     run_preflight_checks([JujuLoginCheck(deployment.juju_account)], console)
 
+    jhelper = JujuHelper(deployment.juju_controller)
     cluster_status = get_cluster_status(
         deployment=deployment,
-        jhelper=JujuHelper(deployment.juju_controller),
+        jhelper=jhelper,
         console=console,
         show_hints=show_hints,
     )
@@ -658,7 +705,7 @@ def enable(
         disable_cold_migration = disable_migration in ["both", "cold"]
 
     enable_maintenance = EnableMaintenance(
-        node,
+        ResolvedNode(node, deployment, cluster_status, jhelper),
         deployment,
         cluster_status,
         force=force,
@@ -703,15 +750,16 @@ def disable(
     # Login to the Juju controller
     run_preflight_checks([JujuLoginCheck(deployment.juju_account)], console)
 
+    jhelper = JujuHelper(deployment.juju_controller)
     cluster_status = get_cluster_status(
         deployment=deployment,
-        jhelper=JujuHelper(deployment.juju_controller),
+        jhelper=jhelper,
         console=console,
         show_hints=show_hints,
     )
 
     disable_maintenance = DisableMaintenance(
-        node,
+        ResolvedNode(node, deployment, cluster_status, jhelper),
         deployment,
         cluster_status,
         disable_instance_rebalancing=disable_instance_workload_rebalancing,
