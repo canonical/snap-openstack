@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+from pathlib import Path
 from unittest.mock import MagicMock, Mock, patch
 
 import jubilant
@@ -78,7 +79,11 @@ users:
 
 @pytest.fixture
 def juju():
-    yield Mock()
+    juju = Mock()
+    # Default: the application has no resources attached (used by
+    # charm_refresh's missing-resource checks).
+    juju.cli.return_value = json.dumps({"resources": []})
+    yield juju
 
 
 @pytest.fixture
@@ -237,6 +242,34 @@ def test_run_action_failure(jhelper, juju):
         jhelper.run_action("app/0", "test-model", "do-something")
 
 
+def test_run_action_failed_task(jhelper, juju):
+    """A failing action surfaces as ActionFailedException, not TaskError."""
+    juju.run = MagicMock(side_effect=jubilant.TaskError(MagicMock()))
+
+    with pytest.raises(jujulib.ActionFailedException):
+        jhelper.run_action("app/0", "test-model", "do-something")
+
+
+def test_run_action_failure_keeps_task_results(jhelper, juju):
+    """A failed action keeps the charm results for the caller to inspect."""
+    juju.run = MagicMock(return_value=Mock(success=False, results={"valid": "false"}))
+
+    with pytest.raises(jujulib.ActionFailedException) as excinfo:
+        jhelper.run_action("app/0", "test-model", "do-something")
+
+    assert excinfo.value.results == {"valid": "false"}
+
+
+def test_run_action_failed_task_keeps_task_results(jhelper, juju):
+    task = Mock(results={"valid": "false"})
+    juju.run = MagicMock(side_effect=jubilant.TaskError(task))
+
+    with pytest.raises(jujulib.ActionFailedException) as excinfo:
+        jhelper.run_action("app/0", "test-model", "do-something")
+
+    assert excinfo.value.results == {"valid": "false"}
+
+
 def test_run_cmd_on_unit_payload_success(jhelper, juju):
     juju._cli = MagicMock(
         return_value=(json.dumps({"app/0": {"results": {"out": "ok"}}}), "")
@@ -346,6 +379,145 @@ def test_charm_refresh_without_trust_does_not_call_juju_trust(jhelper, juju):
     """When trust=False (default), juju.trust must not be called."""
     jhelper.charm_refresh("app", "test-model")
     juju.trust.assert_not_called()
+
+
+_MISSING_CONFIG_MSG = (
+    'ERROR new resource "config-override" was missing, please provide it via --resource'
+)
+_MISSING_BOTH_MSG = (
+    _MISSING_CONFIG_MSG + "\n" + 'ERROR new resource "policy-override" was missing, '
+    "please provide it via --resource"
+)
+
+
+def _capture_resources(calls, captured, kwargs):
+    calls.append(kwargs)
+    for path in (kwargs.get("resources") or {}).values():
+        captured[Path(path).name] = Path(path).read_text()
+
+
+def test_charm_refresh_supplies_empty_resource_when_missing(jhelper, juju):
+    """Target declares the resource, app has none attached: empty default."""
+    juju.cli.return_value = json.dumps({"resources": []})
+    calls = []
+    captured = {}
+
+    def _refresh(app, **kwargs):
+        if len(calls) == 0:
+            calls.append(kwargs)
+            raise jubilant.CLIError(1, "refresh app", stderr=_MISSING_CONFIG_MSG)
+        _capture_resources(calls, captured, kwargs)
+
+    juju.refresh.side_effect = _refresh
+
+    jhelper.charm_refresh("app", "test-model")
+
+    assert "resources" not in calls[0]
+    assert set(calls[1]["resources"]) == {"config-override"}
+    assert captured == {"override.conf": ""}
+
+
+def test_charm_refresh_supplies_all_missing_resources(jhelper, juju):
+    """Both halves missing: both supplied empty, with the declared filenames."""
+    juju.cli.return_value = json.dumps({"resources": []})
+    calls = []
+    captured = {}
+
+    def _refresh(app, **kwargs):
+        if len(calls) == 0:
+            calls.append(kwargs)
+            raise jubilant.CLIError(1, "refresh app", stderr=_MISSING_BOTH_MSG)
+        _capture_resources(calls, captured, kwargs)
+
+    juju.refresh.side_effect = _refresh
+
+    jhelper.charm_refresh("app", "test-model")
+
+    assert set(calls[1]["resources"]) == {"config-override", "policy-override"}
+    assert captured == {"override.conf": "", "override.yaml": ""}
+
+
+def test_charm_refresh_does_not_look_up_resources(jhelper, juju):
+    """A refresh juju accepts needs no resource lookup.
+
+    ``juju resources --format json`` prints nothing for a charm that
+    declares no resources (certificate-authority in the CI job), so the
+    lookup must never stand in the way of an app being refreshed.
+    """
+    jhelper.charm_refresh("app", "test-model")
+
+    juju.cli.assert_not_called()
+    assert "resources" not in juju.refresh.call_args.kwargs
+
+
+def test_charm_refresh_never_supplies_attached_resource(jhelper, juju):
+    """Sharp guard: an attached resource is never passed, even if demanded."""
+    juju.cli.return_value = json.dumps(
+        {"resources": [{"name": "config-override", "type": "file"}]}
+    )
+    juju.refresh.side_effect = jubilant.CLIError(
+        1, "refresh app", stderr=_MISSING_CONFIG_MSG
+    )
+
+    with pytest.raises(jubilant.CLIError):
+        jhelper.charm_refresh("app", "test-model")
+
+    assert juju.refresh.call_count == 1
+    assert "resources" not in juju.refresh.call_args.kwargs
+
+
+def test_charm_refresh_without_override_resources(jhelper, juju):
+    """Charm that declares neither: nothing passed."""
+    juju.cli.return_value = json.dumps(
+        {"resources": [{"name": "custom-theme", "type": "file"}]}
+    )
+
+    jhelper.charm_refresh("app", "test-model")
+
+    assert "resources" not in juju.refresh.call_args.kwargs
+
+
+def test_charm_refresh_foreign_missing_resource_not_supplied(jhelper, juju):
+    """Unknown resource names are not guessed; the juju error surfaces."""
+    juju.cli.return_value = json.dumps({"resources": []})
+    juju.refresh.side_effect = jubilant.CLIError(
+        1,
+        "refresh app",
+        stderr='ERROR new resource "custom-theme" was missing, '
+        "please provide it via --resource",
+    )
+
+    with pytest.raises(jubilant.CLIError):
+        jhelper.charm_refresh("app", "test-model")
+
+    assert juju.refresh.call_count == 1
+    assert "resources" not in juju.refresh.call_args.kwargs
+
+
+def test_charm_refresh_other_error_does_not_look_up_resources(jhelper, juju):
+    """Juju refusing over anything but an override resource: no lookup."""
+    juju.refresh.side_effect = jubilant.CLIError(
+        1, "refresh app", stderr="ERROR cannot refresh: no revision"
+    )
+
+    with pytest.raises(jubilant.CLIError):
+        jhelper.charm_refresh("app", "test-model")
+
+    juju.cli.assert_not_called()
+
+
+def test_charm_refresh_lookup_failure_does_not_mask_juju_error(jhelper, juju):
+    """Unusable resource listing: juju's error surfaces, nothing passed."""
+    juju.cli.side_effect = json.JSONDecodeError("Expecting value", "", 0)
+    juju.refresh.side_effect = jubilant.CLIError(
+        1, "refresh app", stderr=_MISSING_CONFIG_MSG
+    )
+
+    with pytest.raises(jubilant.CLIError, match="was missing"):
+        jhelper.charm_refresh("app", "test-model")
+
+    assert juju.refresh.call_count == 1
+    assert "resources" not in juju.refresh.call_args.kwargs
 
 
 def test_charm_trust(jhelper, juju):
