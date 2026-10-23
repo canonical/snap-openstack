@@ -5,6 +5,7 @@ import contextlib
 import json
 import logging
 import os
+import signal
 import subprocess
 import threading
 import uuid
@@ -29,7 +30,8 @@ from sunbeam.core.progress import ProgressEvent, ProgressReporter
 from sunbeam.versions import VarMap
 
 LOG = logging.getLogger(__name__)
-TERRAFORM_APPLY_TIMEOUT = 1200  # 20 minutes
+TERRAFORM_APPLY_TIMEOUT = 3600  # 60 minutes
+TERRAFORM_INTERRUPT_GRACE = 60
 _TF_UI_EVENT_TYPES = {
     "apply_start",
     "apply_complete",
@@ -917,6 +919,8 @@ class TerraformHelper:
 
         Reads stdout line-by-line, parses JSON events, and reports them.
         Reads stderr in a separate thread to avoid pipe buffer deadlock.
+        A watchdog timer interrupts terraform (SIGINT, then SIGKILL after
+        TERRAFORM_INTERRUPT_GRACE) once ``timeout`` seconds have elapsed.
         """
         LOG.debug("Running command %s with cwd: %s", " ".join(cmd), self.path)
 
@@ -942,24 +946,48 @@ class TerraformHelper:
         if process.stdout is None:
             raise TerraformException("stdout pipe not available")
 
-        with contextlib.ExitStack() as stack:
-            if reporter is not None and hasattr(reporter, "__enter__"):
-                stack.enter_context(reporter)  # type: ignore[arg-type]
-            for line in process.stdout:
-                line = line.rstrip("\n")
-                if not line:
-                    continue
-                event = self._parse_terraform_event(line, state_lock_flag)
-                if event is not None and reporter is not None:
-                    reporter.report(event)
+        timed_out = threading.Event()
 
-        process.wait(timeout=timeout)
+        def _interrupt():
+            timed_out.set()
+            LOG.warning("Terraform exceeded %ss, interrupting it", timeout)
+            process.send_signal(signal.SIGINT)
+            try:
+                process.wait(timeout=TERRAFORM_INTERRUPT_GRACE)
+            except subprocess.TimeoutExpired:
+                process.kill()
+
+        watchdog = threading.Timer(timeout, _interrupt)
+        watchdog.daemon = True
+        watchdog.start()
+
+        try:
+            with contextlib.ExitStack() as stack:
+                if reporter is not None and hasattr(reporter, "__enter__"):
+                    stack.enter_context(reporter)  # type: ignore[arg-type]
+                for line in process.stdout:
+                    line = line.rstrip("\n")
+                    if not line:
+                        continue
+                    event = self._parse_terraform_event(line, state_lock_flag)
+                    if event is not None and reporter is not None:
+                        reporter.report(event)
+
+            process.wait()
+        finally:
+            watchdog.cancel()
         stderr_thread.join(timeout=10)
         stderr_output = "".join(stderr_lines)
 
         LOG.debug("Command finished. returncode=%s", process.returncode)
         if stderr_output:
             LOG.debug("stderr: %s", stderr_output)
+
+        if timed_out.is_set() and process.returncode != 0:
+            raise TerraformException(
+                f"terraform command timed out after {timeout}s and was "
+                f"interrupted: {' '.join(cmd)}\nstderr: {stderr_output}"
+            )
 
         if process.returncode != 0:
             if state_lock_flag[0] or "remote state already locked" in stderr_output:
