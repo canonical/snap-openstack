@@ -61,6 +61,12 @@ LOG = logging.getLogger(__name__)
 console = Console()
 
 
+class Certificate(pydantic.BaseModel):
+    model_config = pydantic.ConfigDict(extra="forbid")
+
+    certificate: str
+
+
 class TlsFeatureConfig(FeatureConfig):
     ca: str | None = None
     ca_chain: str | None = None

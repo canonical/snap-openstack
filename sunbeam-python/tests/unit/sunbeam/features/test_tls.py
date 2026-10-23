@@ -5,9 +5,11 @@ import json
 from unittest.mock import Mock, patch
 
 import click
+import pydantic
 import pytest
 
 import sunbeam.core.questions
+import sunbeam.features.tls.ca as ca
 import sunbeam.features.tls.common as tls
 import sunbeam.features.tls.self_signed as self_signed
 import sunbeam.features.tls.vault as vault
@@ -82,6 +84,24 @@ def vault_is_certificate_valid():
     """Patch the Vault version of is_certificate_valid."""
     with patch.object(vault, "is_certificate_valid") as p:
         yield p
+
+
+class TestTlsFeatureConfig:
+    @pytest.mark.parametrize(
+        "config_type",
+        [ca.CaTlsFeatureConfig, vault.VaultTlsFeatureConfig],
+    )
+    def test_rejects_unknown_certificate_fields(self, config_type):
+        with pytest.raises(pydantic.ValidationError, match="extra_forbidden"):
+            config_type.model_validate(
+                {
+                    "certificates": {
+                        "subject": {
+                            "certifcate": "certificate-data",
+                        },
+                    },
+                }
+            )
 
 
 class TestAddCACertsToKeystoneStep:
