@@ -25,7 +25,15 @@ from sunbeam.core.common import (
     get_host_total_cores,
     get_host_total_ram,
 )
-from sunbeam.core.juju import JujuAccount, JujuStepHelper
+from sunbeam.core.juju import (
+    ApplicationNotFoundException,
+    ExecFailedException,
+    JujuAccount,
+    JujuException,
+    JujuHelper,
+    JujuStepHelper,
+    LeaderNotFoundException,
+)
 from sunbeam.core.progress import (
     CompositeProgressReporter,
     LoggingProgressReporter,
@@ -670,6 +678,60 @@ class LXDJujuControllerRegistrationCheck(Check):
                 "    juju bootstrap localhost"
                 "\n"
             )
+            return False
+
+        return True
+
+
+class MicrocephCephFSCheck(Check):
+    """Check if the MicroCeph filesystem is provisioned."""
+
+    def __init__(self, jhelper: JujuHelper, model: str):
+        super().__init__(
+            "Check MicroCeph filesystem",
+            "Checking if the MicroCeph filesystem is provisioned",
+        )
+        self.jhelper = jhelper
+        self.model = model
+
+    def run(self, check_status: Status | None = None) -> bool:
+        """Return false if MicroCeph filesystem is not provisioned.
+
+        Checks:
+            - MicroCeph application is deployed and has a leader unit.
+            - MicroCeph filesystem is provisioned and can be listed.
+        """
+        try:
+            unit = self.jhelper.get_leader_unit("microceph", self.model)
+            task = self.jhelper.run_cmd_on_machine_unit_payload(
+                unit,
+                self.model,
+                "microceph.ceph fs ls --format json",
+                timeout=60,
+            )
+        except ApplicationNotFoundException:
+            self.message = (
+                f"MicroCeph application is not deployed in model {self.model!r}."
+            )
+            return False
+        except LeaderNotFoundException:
+            self.message = "MicroCeph application has no leader unit."
+            return False
+        except ExecFailedException as e:
+            self.message = f"Failed to query the MicroCeph filesystem: {e}"
+            return False
+        except JujuException as e:
+            self.message = f"Failed to reach the MicroCeph application: {e}"
+            return False
+
+        try:
+            filesystems = json.loads(task.stdout)
+        except json.JSONDecodeError:
+            self.message = "Failed to parse the MicroCeph filesystem output."
+            return False
+
+        if not filesystems:
+            self.message = "MicroCeph filesystem is not provisioned."
             return False
 
         return True
