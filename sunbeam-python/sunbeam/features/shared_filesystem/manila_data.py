@@ -126,6 +126,11 @@ class DeployManilaDataApplicationStep(DeployMachineApplicationStep):
                     "endpoint": "identity-credentials",
                     "space": self.deployment.get_space(Networks.INTERNAL),
                 },
+                {
+                    # IP address granted access to shares during migration
+                    "endpoint": "storage",
+                    "space": self.deployment.get_space(Networks.STORAGE),
+                },
             ],
             "charm-manila-data-config": {},
             "machine_ids": list(machine_ids),
