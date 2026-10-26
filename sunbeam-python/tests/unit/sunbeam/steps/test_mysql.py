@@ -238,6 +238,52 @@ class TestMySQLCharmUpgradeStep:
         assert step.original_scale == 3
         assert step.state == MySQLUpgradeState.ORIGINAL_STATE_RECORDED
 
+    def test_record_original_state_includes_application(
+        self,
+        basic_deployment,
+        basic_client,
+        basic_jhelper,
+        basic_manifest,
+        step_context,
+    ):
+        step = MySQLCharmUpgradeStep(
+            basic_deployment,
+            basic_client,
+            basic_jhelper,
+            basic_manifest,
+            application="keystone-mysql",
+        )
+        basic_jhelper.get_application.return_value = Mock(charm_rev=255, scale=1)
+
+        step.record_original_state(step_context)
+
+        state = json.loads(basic_client.cluster.update_config.call_args.args[1])
+        assert state["application"] == "keystone-mysql"
+
+    def test_is_skip_resumes_in_progress_application(
+        self,
+        basic_deployment,
+        basic_client,
+        basic_jhelper,
+        basic_manifest,
+        step_context,
+    ):
+        step = MySQLCharmUpgradeStep(
+            basic_deployment,
+            basic_client,
+            basic_jhelper,
+            basic_manifest,
+            application="keystone-mysql",
+        )
+        basic_client.cluster.get_config.return_value = json.dumps(
+            {"application": "keystone-mysql", "state": "SCALED_UP"}
+        )
+
+        result = step.is_skip(step_context)
+
+        assert result.result_type == ResultType.COMPLETED
+        basic_manifest.find_charm.assert_not_called()
+
     def test_scale_up_happy_path(self, step, basic_jhelper, step_context):
         step.original_scale = 2
         basic_jhelper.wait_until_active.return_value = None
@@ -409,11 +455,10 @@ class TestReapplyMySQLTerraformPlanStep:
             basic_deployment, basic_client, tfhelper, basic_jhelper, basic_manifest
         )
 
-        # Mock get_application_names
-        basic_jhelper.get_application_names.return_value = [
-            "mysql-k8s",
-            "keystone-mysql-router",
-        ]
+        basic_jhelper.get_model_status.return_value.apps = {
+            "mysql": Mock(charm_name="mysql-k8s"),
+            "keystone-mysql-router": Mock(charm_name="mysql-router-k8s"),
+        }
         tfhelper.state_list.return_value = [
             "module.keystone[0].juju_application.mysql-router",
             "module.keystone[0].juju_integration.mysql-router-to-mysql",
@@ -437,9 +482,38 @@ class TestReapplyMySQLTerraformPlanStep:
         # Check that we waited for the right applications
         basic_jhelper.wait_until_active.assert_called_once()
         call_args = basic_jhelper.wait_until_active.call_args
-        assert call_args.kwargs["apps"] == ["mysql", "keystone-mysql-router"]
+        assert call_args.kwargs["apps"] == ["keystone-mysql-router", "mysql"]
 
         assert result.result_type == ResultType.COMPLETED
+
+    def test_run_waits_for_multi_mysql_apps(
+        self, basic_deployment, basic_client, basic_jhelper, basic_manifest
+    ):
+        """Wait for every database and router in a multi-MySQL deployment."""
+        from sunbeam.steps.mysql import ReapplyMySQLTerraformPlanStep
+
+        tfhelper = Mock()
+        tfhelper.state_list.return_value = []
+        step = ReapplyMySQLTerraformPlanStep(
+            basic_deployment, basic_client, tfhelper, basic_jhelper, basic_manifest
+        )
+        basic_jhelper.get_model_status.return_value.apps = {
+            "keystone-mysql": Mock(charm_name="mysql-k8s"),
+            "nova-mysql": Mock(charm_name="mysql-k8s"),
+            "keystone-mysql-router": Mock(charm_name="mysql-router-k8s"),
+            "nova-api-mysql-router": Mock(charm_name="mysql-router-k8s"),
+            "keystone": Mock(charm_name="keystone-k8s"),
+        }
+
+        result = step.run(Mock())
+
+        assert result.result_type == ResultType.COMPLETED
+        assert basic_jhelper.wait_until_active.call_args.kwargs["apps"] == [
+            "keystone-mysql",
+            "keystone-mysql-router",
+            "nova-api-mysql-router",
+            "nova-mysql",
+        ]
 
     def test_run_terraform_failure(
         self, basic_deployment, basic_client, basic_jhelper, basic_manifest
@@ -478,7 +552,9 @@ class TestReapplyMySQLTerraformPlanStep:
         )
 
         # Mock successful terraform but timeout on wait
-        basic_jhelper.get_application_names.return_value = ["mysql-k8s"]
+        basic_jhelper.get_model_status.return_value.apps = {
+            "mysql": Mock(charm_name="mysql-k8s")
+        }
         tfhelper.state_list.return_value = []
         basic_jhelper.wait_until_active.side_effect = JujuWaitException(
             "Timeout waiting"

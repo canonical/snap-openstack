@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2023 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import sys
 from copy import deepcopy
 from types import SimpleNamespace
@@ -1266,14 +1267,43 @@ class TestLatestInChannelCoordinator:
 class TestMySQLInChannelUpgradeCoordinator:
     def test_get_plan_refreshes_router_before_mysql(self):
         """mysql-router must be refreshed before mysql-k8s"""
+        jhelper = Mock()
+        jhelper.get_model_status.return_value.apps = {
+            "mysql": Mock(charm_name="mysql-k8s")
+        }
         coordinator = MySQLInChannelUpgradeCoordinator(
-            Mock(), Mock(), Mock(), Mock(), reset_mysql_upgrade_state=False
+            Mock(), Mock(), jhelper, Mock(), reset_mysql_upgrade_state=False
         )
         step_types = [type(step) for step in coordinator.get_plan()]
 
         assert step_types.index(MySQLRouterCharmRefreshStep) < step_types.index(
             MySQLCharmUpgradeStep
         )
+
+    def test_get_plan_refreshes_all_mysql_apps_with_in_progress_first(self):
+        """Resume an interrupted database before refreshing the others."""
+        client = Mock()
+        client.cluster.get_config.return_value = json.dumps(
+            {"application": "nova-mysql", "state": "SCALED_UP"}
+        )
+        jhelper = Mock()
+        jhelper.get_model_status.return_value.apps = {
+            "keystone-mysql": Mock(charm_name="mysql-k8s"),
+            "nova-mysql": Mock(charm_name="mysql-k8s"),
+            "nova-mysql-router": Mock(charm_name="mysql-router-k8s"),
+        }
+        coordinator = MySQLInChannelUpgradeCoordinator(
+            Mock(), client, jhelper, Mock(), reset_mysql_upgrade_state=False
+        )
+
+        plan = coordinator.get_plan()
+        upgrades = [step for step in plan if isinstance(step, MySQLCharmUpgradeStep)]
+
+        assert [step.application for step in upgrades] == [
+            "nova-mysql",
+            "keystone-mysql",
+        ]
+        assert isinstance(plan[0], MySQLRouterCharmRefreshStep)
 
 
 class TestReapplyInfraModelConfigStep:
