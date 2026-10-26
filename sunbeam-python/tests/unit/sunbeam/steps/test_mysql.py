@@ -238,6 +238,127 @@ class TestMySQLCharmUpgradeStep:
         assert step.original_scale == 3
         assert step.state == MySQLUpgradeState.ORIGINAL_STATE_RECORDED
 
+    def test_record_original_state_includes_application(
+        self,
+        basic_deployment,
+        basic_client,
+        basic_jhelper,
+        basic_manifest,
+        step_context,
+    ):
+        step = MySQLCharmUpgradeStep(
+            basic_deployment,
+            basic_client,
+            basic_jhelper,
+            basic_manifest,
+            application="keystone-mysql",
+        )
+        basic_jhelper.get_application.return_value = Mock(charm_rev=255, scale=1)
+
+        step.record_original_state(step_context)
+
+        state = json.loads(basic_client.cluster.update_config.call_args.args[1])
+        assert state["application"] == "keystone-mysql"
+
+    def test_is_skip_resumes_in_progress_application(
+        self,
+        basic_deployment,
+        basic_client,
+        basic_jhelper,
+        basic_manifest,
+        step_context,
+    ):
+        step = MySQLCharmUpgradeStep(
+            basic_deployment,
+            basic_client,
+            basic_jhelper,
+            basic_manifest,
+            application="keystone-mysql",
+        )
+        basic_client.cluster.get_config.return_value = json.dumps(
+            {"application": "keystone-mysql", "state": "SCALED_UP"}
+        )
+
+        result = step.is_skip(step_context)
+
+        assert result.result_type == ResultType.COMPLETED
+        basic_manifest.find_charm.assert_not_called()
+
+    def test_is_skip_resumes_legacy_state_for_mysql(
+        self, step, basic_client, basic_manifest, step_context
+    ):
+        """State saved before app names were tracked belongs to mysql."""
+        basic_client.cluster.get_config.return_value = json.dumps(
+            {"state": "SCALED_UP", "original_scale": 1, "original_revision": 255}
+        )
+
+        result = step.is_skip(step_context)
+
+        assert result.result_type == ResultType.COMPLETED
+        basic_manifest.find_charm.assert_not_called()
+
+    def test_is_skip_fails_when_another_application_is_in_progress(
+        self, step, basic_client, basic_manifest, step_context
+    ):
+        """Do not start mysql while another database has unfinished state."""
+        basic_client.cluster.get_config.return_value = json.dumps(
+            {"application": "nova-mysql", "state": "SCALED_UP"}
+        )
+
+        result = step.is_skip(step_context)
+
+        assert result.result_type == ResultType.FAILED
+        assert "nova-mysql must finish before refreshing mysql" in result.message
+        basic_manifest.find_charm.assert_not_called()
+
+    def test_run_resumes_and_scales_back(
+        self,
+        basic_deployment,
+        basic_client,
+        basic_jhelper,
+        basic_manifest,
+        step_context,
+    ):
+        """Resume a saved upgrade without repeating completed transitions."""
+        step = MySQLCharmUpgradeStep(
+            basic_deployment,
+            basic_client,
+            basic_jhelper,
+            basic_manifest,
+            application="nova-mysql",
+        )
+        basic_client.cluster.get_config.return_value = json.dumps(
+            {
+                "application": "nova-mysql",
+                "state": "UNITS_SETTLED",
+                "original_revision": 255,
+                "original_scale": 1,
+            }
+        )
+        basic_jhelper.get_application.return_value = Mock(scale=3)
+
+        result = step.run(step_context)
+
+        assert result.result_type == ResultType.COMPLETED
+        basic_jhelper.charm_refresh.assert_not_called()
+        basic_jhelper.run_action.assert_not_called()
+        basic_jhelper.scale_application.assert_called_once_with(
+            step.model, "nova-mysql", 1
+        )
+        basic_jhelper.wait_until_active.assert_called_once_with(
+            step.model, apps=["nova-mysql"]
+        )
+        state = json.loads(basic_client.cluster.update_config.call_args.args[1])
+        assert state == {
+            "application": "nova-mysql",
+            "state": "SCALED_BACK",
+            "original_revision": 255,
+            "original_scale": 1,
+        }
+        basic_client.cluster.delete_config.assert_called_once_with(
+            MYSQL_UPGRADE_CONFIG_KEY
+        )
+
     def test_scale_up_happy_path(self, step, basic_jhelper, step_context):
         step.original_scale = 2
         basic_jhelper.wait_until_active.return_value = None
@@ -409,11 +530,10 @@ class TestReapplyMySQLTerraformPlanStep:
             basic_deployment, basic_client, tfhelper, basic_jhelper, basic_manifest
         )
 
-        # Mock get_application_names
-        basic_jhelper.get_application_names.return_value = [
-            "mysql-k8s",
-            "keystone-mysql-router",
-        ]
+        basic_jhelper.get_model_status.return_value.apps = {
+            "mysql": Mock(charm_name="mysql-k8s"),
+            "keystone-mysql-router": Mock(charm_name="mysql-router-k8s"),
+        }
         tfhelper.state_list.return_value = [
             "module.keystone[0].juju_application.mysql-router",
             "module.keystone[0].juju_integration.mysql-router-to-mysql",
@@ -437,9 +557,38 @@ class TestReapplyMySQLTerraformPlanStep:
         # Check that we waited for the right applications
         basic_jhelper.wait_until_active.assert_called_once()
         call_args = basic_jhelper.wait_until_active.call_args
-        assert call_args.kwargs["apps"] == ["mysql", "keystone-mysql-router"]
+        assert call_args.kwargs["apps"] == ["keystone-mysql-router", "mysql"]
 
         assert result.result_type == ResultType.COMPLETED
+
+    def test_run_waits_for_multi_mysql_apps(
+        self, basic_deployment, basic_client, basic_jhelper, basic_manifest
+    ):
+        """Wait for every database and router in a multi-MySQL deployment."""
+        from sunbeam.steps.mysql import ReapplyMySQLTerraformPlanStep
+
+        tfhelper = Mock()
+        tfhelper.state_list.return_value = []
+        step = ReapplyMySQLTerraformPlanStep(
+            basic_deployment, basic_client, tfhelper, basic_jhelper, basic_manifest
+        )
+        basic_jhelper.get_model_status.return_value.apps = {
+            "keystone-mysql": Mock(charm_name="mysql-k8s"),
+            "nova-mysql": Mock(charm_name="mysql-k8s"),
+            "keystone-mysql-router": Mock(charm_name="mysql-router-k8s"),
+            "nova-api-mysql-router": Mock(charm_name="mysql-router-k8s"),
+            "keystone": Mock(charm_name="keystone-k8s"),
+        }
+
+        result = step.run(Mock())
+
+        assert result.result_type == ResultType.COMPLETED
+        assert basic_jhelper.wait_until_active.call_args.kwargs["apps"] == [
+            "keystone-mysql",
+            "keystone-mysql-router",
+            "nova-api-mysql-router",
+            "nova-mysql",
+        ]
 
     def test_run_terraform_failure(
         self, basic_deployment, basic_client, basic_jhelper, basic_manifest
@@ -464,6 +613,8 @@ class TestReapplyMySQLTerraformPlanStep:
 
         assert result.result_type == ResultType.FAILED
         assert "Terraform apply failed" in result.message
+        basic_jhelper.get_model_status.assert_not_called()
+        basic_jhelper.wait_until_active.assert_not_called()
 
     def test_run_wait_timeout(
         self, basic_deployment, basic_client, basic_jhelper, basic_manifest
@@ -478,7 +629,9 @@ class TestReapplyMySQLTerraformPlanStep:
         )
 
         # Mock successful terraform but timeout on wait
-        basic_jhelper.get_application_names.return_value = ["mysql-k8s"]
+        basic_jhelper.get_model_status.return_value.apps = {
+            "mysql": Mock(charm_name="mysql-k8s")
+        }
         tfhelper.state_list.return_value = []
         basic_jhelper.wait_until_active.side_effect = JujuWaitException(
             "Timeout waiting"
