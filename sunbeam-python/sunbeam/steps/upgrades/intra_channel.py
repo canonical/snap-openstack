@@ -4,14 +4,17 @@
 import logging
 import queue
 
+from requests.exceptions import RequestException
 from rich.console import Console
 
 from sunbeam.clusterd.client import Client
+from sunbeam.clusterd.service import RemoteException
 from sunbeam.core.common import (
     BaseStep,
     Result,
     ResultType,
     StepContext,
+    SunbeamException,
     update_status_background,
 )
 from sunbeam.core.deployment import Deployment, Networks
@@ -48,6 +51,12 @@ from sunbeam.steps.openstack import (
 from sunbeam.steps.role_distributor import DeployRoleDistributorApplicationStep
 from sunbeam.steps.sunbeam_machine import DeploySunbeamMachineApplicationStep
 from sunbeam.steps.upgrades.base import UpgradeCoordinator, UpgradeFeatures
+from sunbeam.storage.base import StorageBackendBase
+from sunbeam.storage.manager import StorageBackendManager
+from sunbeam.storage.steps import (
+    PRINCIPAL_NON_HA_APPLICATION,
+    DeploySpecificCinderVolumeStep,
+)
 
 LOG = logging.getLogger(__name__)
 console = Console()
@@ -66,6 +75,7 @@ SNAP_APPS_MACHINE_MODEL: list[str] = [
     "openstack-hypervisor",
     "openstack-network-agents",
     "cinder-volume",
+    "cinder-volume-noha",
     "epa-orchestrator",
     "manila-data",
     # consul-client apps deployed by the instance-recovery feature;
@@ -416,6 +426,48 @@ class RefreshSnapStep(BaseStep, JujuStepHelper):
         return Result(ResultType.COMPLETED)
 
 
+def _get_shared_non_ha_cinder_volume_backend(
+    client: Client,
+) -> tuple[str, StorageBackendBase] | None:
+    """Return (backend_name, backend_instance) for the shared non-HA backend.
+
+    Non-HA storage backends (added via `sunbeam storage add`) all share a
+    single principal application, `cinder-volume-noha`. Its charm config
+    (including `snap-channel`) is only ever written by the storage-backend
+    Terraform plan, which is otherwise only touched by `sunbeam storage
+    add`/`sunbeam storage remove`. If any such backend is deployed, return
+    one of them (any instance works, since the principal application and
+    its config are shared) so its config can be reapplied from the manifest.
+    """
+    try:
+        backends = client.cluster.get_storage_backends().root
+    except (RemoteException, RequestException, ValueError) as e:
+        raise SunbeamException(
+            "Unable to list storage backends for cinder-volume-noha refresh. "
+            "Check clusterd connectivity and retry cluster refresh."
+        ) from e
+
+    non_ha_backend = next(
+        (b for b in backends if b.principal == PRINCIPAL_NON_HA_APPLICATION),
+        None,
+    )
+    if non_ha_backend is None:
+        return None
+
+    manager = StorageBackendManager()
+    try:
+        backend_instance = manager.get_backend(non_ha_backend.type)
+    except ValueError as e:
+        raise SunbeamException(
+            f"Storage backend type {non_ha_backend.type!r} for "
+            f"{non_ha_backend.name!r} is not registered. Cannot reapply "
+            "cinder-volume-noha config; restore support for this backend "
+            "before retrying cluster refresh."
+        ) from e
+
+    return non_ha_backend.name, backend_instance
+
+
 class LatestInChannelCoordinator(UpgradeCoordinator):
     """Coordinator for refreshing charms in their current channel."""
 
@@ -424,37 +476,68 @@ class LatestInChannelCoordinator(UpgradeCoordinator):
         plan = [
             LatestInChannel(self.deployment, self.jhelper, self.manifest),
             ReapplyInfraModelConfigStep(self.deployment, self.jhelper, self.manifest),
-            RefreshSnapStep(self.deployment, self.jhelper),
-            # Microceph introduces new offer urls for rgw and so microceph
-            # plan need to be applied before openstack plan
-            TerraformInitStep(self.deployment.get_tfhelper("microceph-plan")),
-            DeployMicrocephApplicationStep(
-                self.deployment,
-                self.client,
-                self.deployment.get_tfhelper("microceph-plan"),
-                self.jhelper,
-                self.manifest,
-                self.deployment.openstack_machines_model,
-            ),
-            TerraformInitStep(self.deployment.get_tfhelper("openstack-plan")),
-            ReapplyOpenStackTerraformPlanStep(
-                self.deployment,
-                self.client,
-                self.deployment.get_tfhelper("openstack-plan"),
-                self.jhelper,
-                self.manifest,
-                self.deployment.openstack_machines_model,
-            ),
-            TerraformInitStep(self.deployment.get_tfhelper("sunbeam-machine-plan")),
-            DeploySunbeamMachineApplicationStep(
-                self.deployment,
-                self.client,
-                self.deployment.get_tfhelper("sunbeam-machine-plan"),
-                self.jhelper,
-                self.manifest,
-                self.deployment.openstack_machines_model,
-            ),
         ]
+
+        # Reapply manifest-driven config (e.g. snap-channel) to the shared
+        # cinder-volume-noha application *before* RefreshSnapStep runs the
+        # refresh-snap action against it, so the action picks up any
+        # manifest changes rather than stale config.
+        non_ha_backend = _get_shared_non_ha_cinder_volume_backend(self.client)
+        if non_ha_backend is not None:
+            backend_name, backend_instance = non_ha_backend
+            backend_instance.register_terraform_plan(self.deployment)
+            tfhelper = self.deployment.get_tfhelper(backend_instance.tfplan)
+            plan.extend(
+                [
+                    TerraformInitStep(tfhelper),
+                    DeploySpecificCinderVolumeStep(
+                        self.deployment,
+                        self.client,
+                        tfhelper,
+                        self.jhelper,
+                        self.manifest,
+                        backend_name,
+                        backend_instance,
+                        self.deployment.openstack_machines_model,
+                        supports_ha=False,
+                    ),
+                ]
+            )
+
+        plan.append(RefreshSnapStep(self.deployment, self.jhelper))
+        plan.extend(
+            [
+                # Microceph introduces new offer urls for rgw and so microceph
+                # plan need to be applied before openstack plan
+                TerraformInitStep(self.deployment.get_tfhelper("microceph-plan")),
+                DeployMicrocephApplicationStep(
+                    self.deployment,
+                    self.client,
+                    self.deployment.get_tfhelper("microceph-plan"),
+                    self.jhelper,
+                    self.manifest,
+                    self.deployment.openstack_machines_model,
+                ),
+                TerraformInitStep(self.deployment.get_tfhelper("openstack-plan")),
+                ReapplyOpenStackTerraformPlanStep(
+                    self.deployment,
+                    self.client,
+                    self.deployment.get_tfhelper("openstack-plan"),
+                    self.jhelper,
+                    self.manifest,
+                    self.deployment.openstack_machines_model,
+                ),
+                TerraformInitStep(self.deployment.get_tfhelper("sunbeam-machine-plan")),
+                DeploySunbeamMachineApplicationStep(
+                    self.deployment,
+                    self.client,
+                    self.deployment.get_tfhelper("sunbeam-machine-plan"),
+                    self.jhelper,
+                    self.manifest,
+                    self.deployment.openstack_machines_model,
+                ),
+            ]
+        )
 
         if is_maas_deployment(self.deployment):
             from sunbeam.provider.maas.client import MaasClient  # noqa: PLC0415
