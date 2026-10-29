@@ -209,6 +209,19 @@ class TestManifest:
         )
         assert manifest.find_charm("grafana-k8s") is charm
 
+    def test_get_feature_in_feature_group_by_qualified_name(self):
+        feature = manifest_mod.FeatureManifest()
+        manifest = manifest_mod.Manifest(
+            features={
+                "observability": manifest_mod.FeatureGroupManifest(
+                    root={"embedded": feature}
+                )
+            }
+        )
+
+        assert manifest.get_feature("embedded") is feature
+        assert manifest.get_feature("observability.embedded") is feature
+
     def test_find_charm_not_found(self):
         manifest = manifest_mod.Manifest(
             core=manifest_mod.CoreManifest(
