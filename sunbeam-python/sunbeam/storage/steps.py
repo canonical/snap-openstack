@@ -13,11 +13,13 @@ from typing import TYPE_CHECKING, Any, Callable
 
 import pydantic
 import tenacity
+from requests.exceptions import RequestException
 from rich.console import Console
 
 from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import (
     ConfigItemNotFoundException,
+    RemoteException,
     StorageBackendNotFoundException,
 )
 from sunbeam.core.common import (
@@ -700,9 +702,44 @@ class DeploySpecificCinderVolumeStep(BaseStep):
     def run(self, context: StepContext) -> Result:
         """Deploy the specific cinder-volume application."""
         try:
-            tfvars = read_config(self.client, self.backend_instance.tfvar_config_key)
-        except ConfigItemNotFoundException:
-            tfvars = {}
+            recorded_backends = self.client.cluster.get_storage_backends().root
+            try:
+                tfvars = read_config(
+                    self.client, self.backend_instance.tfvar_config_key
+                )
+            except ConfigItemNotFoundException:
+                tfvars = {}
+        except (RemoteException, RequestException, ValueError) as e:
+            return Result(
+                ResultType.FAILED,
+                f"Unable to read storage backend configuration: {e}",
+            )
+
+        # This plan manages all storage backends, not just this principal.
+        # An empty configuration is valid for the first backend deployment,
+        # but omitting an existing backend could destroy its resources.
+        backends = tfvars.get("backends", {}) if isinstance(tfvars, dict) else None
+        if not isinstance(backends, dict):
+            return Result(
+                ResultType.FAILED,
+                f"Invalid saved storage backend variables in "
+                f"{self.backend_instance.tfvar_config_key}. "
+                "Restore the saved variables before retrying.",
+            )
+        missing_backends = sorted(
+            backend.name
+            for backend in recorded_backends
+            if not isinstance(backends.get(backend.name), dict)
+            or not backends[backend.name]
+        )
+        if missing_backends:
+            return Result(
+                ResultType.FAILED,
+                f"Missing saved storage backend variables in "
+                f"{self.backend_instance.tfvar_config_key} for: "
+                f"{', '.join(missing_backends)}. "
+                "Restore the saved variables before retrying.",
+            )
 
         application_name = (
             PRINCIPAL_HA_APPLICATION
