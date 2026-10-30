@@ -69,9 +69,9 @@ func (c *cmdDaemon) Run(_ *cobra.Command, _ []string) error {
 
 	// Placeholder for post-action hooks that can be run by MicroCluster.
 	h := &state.Hooks{
-		// PreBootstrap is before after the daemon is initialized and bootstrapped.
-		PreBootstrap: func(_ context.Context, _ state.State, _ map[string]string) error {
-			logger.Info("This is a hook that runs before the daemon is initialized and bootstrapped")
+		// PreInit is run before the daemon is initialized (bootstrap or join).
+		PreInit: func(_ context.Context, _ state.State, _ bool, _ map[string]string) error {
+			logger.Info("This is a hook that runs before the daemon is initialized")
 
 			return nil
 		},
