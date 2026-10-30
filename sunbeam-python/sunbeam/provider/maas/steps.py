@@ -9,9 +9,11 @@ import ipaddress
 import json
 import logging
 import re
+import shutil
 import ssl
 import textwrap
 import typing
+from datetime import datetime
 from pathlib import Path
 from typing import Sequence, Tuple
 
@@ -1324,6 +1326,111 @@ class MaasSaveControllerStep(SaveControllerStep):
         return super().is_skip(context)
 
 
+class ClusterdCredentials(typing.NamedTuple):
+    """Credentials to reach clusterd remotely."""
+
+    url: str
+    certificate_authority: str
+    certpair: CertPair
+
+
+def get_clusterd_credentials(jhelper: JujuHelper, model: str) -> ClusterdCredentials:
+    """Retrieve clusterd credentials from the clusterd leader unit.
+
+    :raises ValueError: if the credentials could not be retrieved
+    """
+    try:
+        leader_unit = jhelper.get_leader_unit(CLUSTERD_APPLICATION, model)
+        credentials = jhelper.run_action(leader_unit, model, "get-credentials")
+    except (LeaderNotFoundException, ValueError, ActionFailedException) as e:
+        raise ValueError(str(e)) from e
+
+    url = credentials.get("url")
+    if url is None:
+        raise ValueError("Failed to retrieve clusterd url")
+
+    certificate_authority = credentials.get("certificate-authority")
+    certificate = credentials.get("certificate")
+    private_key = None
+    if private_key_secret := credentials.get("private-key-secret"):
+        try:
+            secret = jhelper.get_secret(model, private_key_secret)
+        except JujuSecretNotFound as e:
+            raise ValueError(str(e)) from e
+        private_key = secret["private-key"]
+
+    if not certificate_authority or not certificate or not private_key:
+        raise ValueError("Failed to retrieve clusterd credentials")
+
+    return ClusterdCredentials(
+        url=url,
+        certificate_authority=certificate_authority,
+        certpair=CertPair(certificate=certificate, private_key=private_key),
+    )
+
+
+class MaasBackupClusterdCredentialsStep(BaseStep):
+    """Back up deployments configuration holding clusterd credentials."""
+
+    def __init__(
+        self,
+        jhelper: JujuHelper,
+        deployment_name: str,
+        deployments_config: DeploymentsConfig,
+    ):
+        super().__init__(
+            "Backup clusterd credentials",
+            "Backing up clusterd credentials",
+        )
+        self.jhelper = jhelper
+        self.deployment_name = deployment_name
+        self.deployments_config = deployments_config
+
+    def is_skip(self, context: StepContext) -> Result:
+        """Determines if the step should be skipped or not."""
+        deployment = self.deployments_config.get_deployment(self.deployment_name)
+        if not maas_deployment.is_maas_deployment(deployment):
+            return Result(ResultType.SKIPPED)
+        if not (
+            deployment.clusterd_address
+            or deployment.clusterd_certificate_authority
+            or deployment.clusterd_certpair
+        ):
+            LOG.debug("No clusterd credentials stored, nothing to back up")
+            return Result(ResultType.SKIPPED)
+
+        try:
+            credentials = get_clusterd_credentials(self.jhelper, deployment.infra_model)
+        except ValueError as e:
+            return Result(ResultType.FAILED, str(e))
+        if (
+            deployment.clusterd_address == credentials.url
+            and deployment.clusterd_certificate_authority
+            == credentials.certificate_authority
+            and deployment.clusterd_certpair == credentials.certpair
+        ):
+            LOG.debug("Stored clusterd credentials are up to date, skipping backup")
+            return Result(ResultType.SKIPPED)
+        return Result(ResultType.COMPLETED)
+
+    def run(self, context: StepContext) -> Result:
+        """Back up deployments configuration file.
+
+        Create backup file in same directory with extension bk.{timestamp}.
+        The result message is the path to the backup file.
+        """
+        path = self.deployments_config.path
+        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        backup_path = path.with_name(f"{path.name}.bk.{timestamp}")
+        LOG.debug("Backing up %s to %s", path, backup_path)
+        try:
+            shutil.copy(path, backup_path)
+            backup_path.chmod(0o600)
+        except OSError as e:
+            return Result(ResultType.FAILED, f"Failed to back up {path}: {e}")
+        return Result(ResultType.COMPLETED, str(backup_path))
+
+
 class MaasSaveClusterdCredentialsStep(BaseStep):
     """Save clusterd credentials locally."""
 
@@ -1352,36 +1459,16 @@ class MaasSaveClusterdCredentialsStep(BaseStep):
     def run(self, context: StepContext) -> Result:
         """Save clusterd address to deployment information."""
         try:
-            leader_unit = self.jhelper.get_leader_unit(
-                CLUSTERD_APPLICATION,
-                self.model,
-            )
-            credentials = self.jhelper.run_action(
-                leader_unit, self.model, "get-credentials"
-            )
-        except (LeaderNotFoundException, ValueError, ActionFailedException) as e:
+            credentials = get_clusterd_credentials(self.jhelper, self.model)
+        except ValueError as e:
             return Result(ResultType.FAILED, str(e))
-
-        url = credentials.get("url")
-        if url is None:
-            return Result(ResultType.FAILED, "Failed to retrieve clusterd url")
-
-        certificate_authority = credentials.get("certificate-authority")
-        certificate = credentials.get("certificate")
-        private_key = None
-        if private_key_secret := credentials.get("private-key-secret"):
-            try:
-                secret = self.jhelper.get_secret(self.model, private_key_secret)
-            except JujuSecretNotFound as e:
-                return Result(ResultType.FAILED, str(e))
-            private_key = secret["private-key"]
-
-        if not certificate_authority or not certificate or not private_key:
-            return Result(ResultType.FAILED, "Failed to retrieve clusterd credentials")
 
         try:
             client = Client.from_http(
-                url, certificate_authority, certificate, private_key
+                credentials.url,
+                credentials.certificate_authority,
+                credentials.certpair.certificate,
+                credentials.certpair.private_key,
             )
         except ValueError:
             LOG.debug("Failed to instantiate client", exc_info=True)
@@ -1395,11 +1482,9 @@ class MaasSaveClusterdCredentialsStep(BaseStep):
         if not maas_deployment.is_maas_deployment(deployment):
             return Result(ResultType.FAILED)
 
-        deployment.clusterd_address = url
-        deployment.clusterd_certificate_authority = certificate_authority
-        deployment.clusterd_certpair = CertPair(
-            certificate=certificate, private_key=private_key
-        )
+        deployment.clusterd_address = credentials.url
+        deployment.clusterd_certificate_authority = credentials.certificate_authority
+        deployment.clusterd_certpair = credentials.certpair
         self.deployments_config.write()
         return Result(ResultType.COMPLETED)
 
