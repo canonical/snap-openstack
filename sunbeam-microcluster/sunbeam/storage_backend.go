@@ -19,7 +19,7 @@ func ListStorageBackends(ctx context.Context, s state.State) (apitypes.StorageBa
 	err := s.Database().Transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		records, err := database.GetStorageBackends(ctx, tx)
 		if err != nil {
-			return fmt.Errorf("Failed to fetch storage backends: %w", err)
+			return fmt.Errorf("failed to fetch storage backends: %w", err)
 		}
 
 		for _, backend := range records {
@@ -78,7 +78,7 @@ func AddStorageBackend(ctx context.Context, s state.State, name string, backendT
 			Config:    config,
 		})
 		if err != nil {
-			return fmt.Errorf("Failed to record storage backend: %w", err)
+			return fmt.Errorf("failed to record storage backend: %w", err)
 		}
 
 		return nil
@@ -91,7 +91,7 @@ func UpdateStorageBackend(ctx context.Context, s state.State, name string, backe
 	err := s.Database().Transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		backend, err := database.GetStorageBackend(ctx, tx, name)
 		if err != nil {
-			return fmt.Errorf("Failed to retrieve storage backend details: %w", err)
+			return fmt.Errorf("failed to retrieve storage backend details: %w", err)
 		}
 
 		if backendType == "" {
@@ -109,7 +109,7 @@ func UpdateStorageBackend(ctx context.Context, s state.State, name string, backe
 
 		err = database.UpdateStorageBackend(ctx, tx, name, database.StorageBackend{Name: name, Type: backendType, Principal: principal, ModelUUID: modelUUID, Config: config})
 		if err != nil {
-			return fmt.Errorf("Failed to update record storage backend: %w", err)
+			return fmt.Errorf("failed to update record storage backend: %w", err)
 		}
 
 		return nil
