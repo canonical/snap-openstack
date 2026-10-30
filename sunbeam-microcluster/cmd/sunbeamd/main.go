@@ -3,7 +3,10 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
+	"crypto/x509"
 	"math/rand"
+	"net/http"
 	"os"
 	"time"
 
@@ -134,6 +137,8 @@ func (c *cmdDaemon) Run(_ *cobra.Command, _ []string) error {
 
 			return nil
 		},
+
+		OnAuthenticate: authenticateClient,
 	}
 	daemonArgs := microcluster.DaemonArgs{
 		Verbose:          c.global.flagLogVerbose,
@@ -147,6 +152,47 @@ func (c *cmdDaemon) Run(_ *cobra.Command, _ []string) error {
 	}
 
 	return m.Start(context.Background(), daemonArgs)
+}
+
+// authenticateClient replaces the regular mTLS check for network requests.
+// Never return an error here: microcluster renders a hook error as a
+// pre-dispatch 403 before handleRequest runs, so the endpoint's own
+// AccessHandler (e.g. access.AuthenticateClusterCAHandler) is never
+// reached. Only ever return (true, nil) or (false, nil).
+func authenticateClient(_ context.Context, _ state.State, r *http.Request, trustedCerts map[string]x509.Certificate) (bool, error) {
+	if r.TLS == nil {
+		return false, nil
+	}
+
+	if len(r.TLS.PeerCertificates) == 0 {
+		return false, nil
+	}
+
+	peerCertificate := r.TLS.PeerCertificates[0]
+
+	now := time.Now()
+	if now.Before(peerCertificate.NotBefore) {
+		logger.Debugf("Rejecting request from %q: certificate is not yet valid", r.RemoteAddr)
+
+		return false, nil
+	}
+
+	if now.After(peerCertificate.NotAfter) {
+		logger.Debugf("Rejecting request from %q: certificate has expired", r.RemoteAddr)
+
+		return false, nil
+	}
+
+	// Check whether client certificate is in the map of trusted certs.
+	for fingerprint, v := range trustedCerts {
+		if subtle.ConstantTimeCompare(peerCertificate.Raw, v.Raw) == 1 {
+			logger.Debugf("Matched trusted cert with fingerprint %q", fingerprint)
+
+			return true, nil
+		}
+	}
+
+	return false, nil
 }
 
 func init() {
