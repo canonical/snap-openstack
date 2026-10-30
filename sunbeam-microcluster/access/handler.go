@@ -17,7 +17,7 @@ import (
 )
 
 // AuthenticateClusterCAHandler authenticates the cluster CA for incoming requests.
-// It checks if the request is trusted and verifies the client certificate against the cluster CA.
+// It checks if the request is trusted and verifies the client's leaf certificate against the cluster CA.
 // If the request is trusted or the client certificate is successfully verified, it allows the request.
 // Otherwise, it returns a forbidden response.
 func AuthenticateClusterCAHandler(state state.State, r *http.Request) (bool, response.Response) {
@@ -59,26 +59,45 @@ func AuthenticateClusterCAHandler(state state.State, r *http.Request) (bool, res
 		return false, response.Forbidden(nil)
 	}
 
+	if len(r.TLS.PeerCertificates) == 0 {
+		logger.Debug("Rejecting request without peer certificates")
+		return false, response.Forbidden(nil)
+	}
+
 	if len(r.TLS.PeerCertificates) > 10 {
 		logger.Error("Rejecting request with too many certificates")
 		return false, response.Forbidden(nil)
 	}
 
-	opts := x509.VerifyOptions{
-		Roots:         roots,
-		Intermediates: x509.NewCertPool(),
-		KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
-	}
-
-	for _, cert := range r.TLS.PeerCertificates {
-		_, err := cert.Verify(opts)
-		if err == nil {
-			logger.Debug("Allowing request authenticated using cluster CA")
-			return true, nil
-		}
+	if verifyLeafChainsToRoot(r.TLS.PeerCertificates, roots) {
+		logger.Debug("Allowing request authenticated using cluster CA")
+		return true, nil
 	}
 
 	return false, response.Forbidden(nil)
+}
+
+// verifyLeafChainsToRoot reports whether the peer's leaf certificate chains to the given root pool.
+// Only the leaf is verified: the TLS handshake proves possession of the leaf's private key alone,
+// so verifying non-leaf certificates would let an attacker authenticate by appending any public
+// CA-signed certificate to its presented chain.
+func verifyLeafChainsToRoot(peerCerts []*x509.Certificate, roots *x509.CertPool) bool {
+	if len(peerCerts) == 0 {
+		return false
+	}
+
+	intermediates := x509.NewCertPool()
+	for _, cert := range peerCerts[1:] {
+		intermediates.AddCert(cert)
+	}
+
+	_, err := peerCerts[0].Verify(x509.VerifyOptions{
+		Roots:         roots,
+		Intermediates: intermediates,
+		KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
+	})
+
+	return err == nil
 }
 
 // AuthenticateUnixHandler only allow requests coming from the unix socket.
