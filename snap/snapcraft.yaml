@@ -161,7 +161,11 @@ parts:
     after: [terraform]
     plugin: dump
     source: https://github.com/canonical/sunbeam-terraform
-    source-branch: stable/2024.1
+    # release/2024.1 is the stable-channel content line for the openstack
+    # plan; it advances only at gated promotions. Building the release line
+    # from stable/2024.1 would silently pick up unreviewed plan drift (the
+    # branch moves independently of this repo).
+    source-branch: release/2024.1
     source-depth: 1
     source-type: git
     organize:
