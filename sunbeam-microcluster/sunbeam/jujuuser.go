@@ -19,7 +19,7 @@ func ListJujuUsers(ctx context.Context, s state.State) (apitypes.JujuUsers, erro
 	err := s.Database().Transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		records, err := database.GetJujuUsers(ctx, tx)
 		if err != nil {
-			return fmt.Errorf("Failed to fetch juju user: %w", err)
+			return fmt.Errorf("failed to fetch juju user: %w", err)
 		}
 
 		for _, user := range records {
@@ -62,7 +62,7 @@ func AddJujuUser(ctx context.Context, s state.State, name string, token string) 
 	err := s.Database().Transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		_, err := database.CreateJujuUser(ctx, tx, database.JujuUser{Username: name, Token: token})
 		if err != nil {
-			return fmt.Errorf("Failed to record juju user: %w", err)
+			return fmt.Errorf("failed to record juju user: %w", err)
 		}
 
 		return nil
@@ -80,7 +80,7 @@ func DeleteJujuUser(ctx context.Context, s state.State, name string) error {
 	err := s.Database().Transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		err := database.DeleteJujuUser(ctx, tx, name)
 		if err != nil {
-			return fmt.Errorf("Failed to delete juju user: %w", err)
+			return fmt.Errorf("failed to delete juju user: %w", err)
 		}
 
 		return nil

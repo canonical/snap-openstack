@@ -58,7 +58,7 @@ func CreateConfig(ctx context.Context, s state.State, key string, value string) 
 	return s.Database().Transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		_, err := database.CreateConfigItem(ctx, tx, database.ConfigItem{Key: key, Value: value})
 		if err != nil {
-			return fmt.Errorf("Failed to record config item: %w", err)
+			return fmt.Errorf("failed to record config item: %w", err)
 		}
 		return nil
 	})
@@ -74,7 +74,7 @@ func UpdateConfig(ctx context.Context, s state.State, key string, value string) 
 			_, err = database.CreateConfigItem(ctx, tx, configItem)
 		}
 		if err != nil {
-			return fmt.Errorf("Failed to record config item: %w", err)
+			return fmt.Errorf("failed to record config item: %w", err)
 		}
 
 		return nil
