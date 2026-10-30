@@ -21,7 +21,7 @@ func ListNodes(ctx context.Context, s state.State, roles []string) (apitypes.Nod
 	err := s.Database().Transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		records, err := database.GetNodesFromRoles(ctx, tx, roles)
 		if err != nil {
-			return fmt.Errorf("Failed to fetch nodes: %w", err)
+			return fmt.Errorf("failed to fetch nodes: %w", err)
 		}
 
 		for _, node := range records {
@@ -91,7 +91,7 @@ func AddNode(ctx context.Context, s state.State, name string, role []string, mac
 		}
 		_, err := database.CreateNode(ctx, tx, database.Node{Member: s.Name(), Name: name, Role: nodeRole, MachineID: machineid, SystemID: systemid, Arch: arch, IsDPU: isDPU, ImageName: imageName})
 		if err != nil {
-			return fmt.Errorf("Failed to record node: %w", err)
+			return fmt.Errorf("failed to record node: %w", err)
 		}
 
 		return nil
@@ -113,7 +113,7 @@ func UpdateNode(ctx context.Context, s state.State, name string, role []string, 
 	err = s.Database().Transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		node, err := database.GetNode(ctx, tx, name)
 		if err != nil {
-			return fmt.Errorf("Failed to retrieve node details: %w", err)
+			return fmt.Errorf("failed to retrieve node details: %w", err)
 		}
 
 		if role == nil {
@@ -140,7 +140,7 @@ func UpdateNode(ctx context.Context, s state.State, name string, role []string, 
 
 		err = database.UpdateNode(ctx, tx, name, database.Node{Member: s.Name(), Name: name, Role: nodeRole, MachineID: machineid, SystemID: systemid, Arch: nodeArch, IsDPU: nodeIsDPU, ImageName: nodeImageName})
 		if err != nil {
-			return fmt.Errorf("Failed to update record node: %w", err)
+			return fmt.Errorf("failed to update record node: %w", err)
 		}
 
 		return nil
@@ -158,7 +158,7 @@ func DeleteNode(ctx context.Context, s state.State, name string) error {
 	err := s.Database().Transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		err := database.DeleteNode(ctx, tx, name)
 		if err != nil {
-			return fmt.Errorf("Failed to delete node: %w", err)
+			return fmt.Errorf("failed to delete node: %w", err)
 		}
 
 		return nil
@@ -175,7 +175,7 @@ func roleToStr(role []string) (string, error) {
 	sort.Strings(role)
 	roleJSON, err := json.Marshal(role)
 	if err != nil {
-		return "", fmt.Errorf("Failed to marshal role: %w", err)
+		return "", fmt.Errorf("failed to marshal role: %w", err)
 	}
 	return string(roleJSON), nil
 }
@@ -185,7 +185,7 @@ func roleFromStr(roleStr string) ([]string, error) {
 	var role []string
 	err := json.Unmarshal([]byte(roleStr), &role)
 	if err != nil {
-		return nil, fmt.Errorf("Failed to unmarshal role: %w", err)
+		return nil, fmt.Errorf("failed to unmarshal role: %w", err)
 	}
 	sort.Strings(role)
 	return role, nil

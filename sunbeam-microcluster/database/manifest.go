@@ -57,7 +57,7 @@ func CreateManifestItem(ctx context.Context, tx *sql.Tx, object ManifestItem) (i
 	// Check if a ManifestItem with the same key exists.
 	exists, err := ManifestItemExists(ctx, tx, object.ManifestID)
 	if err != nil {
-		return -1, fmt.Errorf("Failed to check for duplicates: %w", err)
+		return -1, fmt.Errorf("failed to check for duplicates: %w", err)
 	}
 
 	if exists {
@@ -73,18 +73,18 @@ func CreateManifestItem(ctx context.Context, tx *sql.Tx, object ManifestItem) (i
 	// Prepared statement to use.
 	stmt, err := cluster.Stmt(tx, manifestItemCreate)
 	if err != nil {
-		return -1, fmt.Errorf("Failed to get \"manifestItemCreate\" prepared statement: %w", err)
+		return -1, fmt.Errorf("failed to get \"manifestItemCreate\" prepared statement: %w", err)
 	}
 
 	// Execute the statement.
 	result, err := stmt.Exec(args...)
 	if err != nil {
-		return -1, fmt.Errorf("Failed to create \"manifest\" entry: %w", err)
+		return -1, fmt.Errorf("failed to create \"manifest\" entry: %w", err)
 	}
 
 	id, err := result.LastInsertId()
 	if err != nil {
-		return -1, fmt.Errorf("Failed to fetch \"manifest\" entry ID: %w", err)
+		return -1, fmt.Errorf("failed to fetch \"manifest\" entry ID: %w", err)
 	}
 
 	return id, nil
@@ -99,14 +99,14 @@ func GetLatestManifestItem(ctx context.Context, tx *sql.Tx) (*ManifestItem, erro
 
 	sqlStmt, err = cluster.Stmt(tx, latestManifestItemObject)
 	if err != nil {
-		return nil, fmt.Errorf("Failed to get \"manifestItemObjects\" prepared statement: %w", err)
+		return nil, fmt.Errorf("failed to get \"manifestItemObjects\" prepared statement: %w", err)
 	}
 
 	// Result slice.
 	// objects := make([]ManifestItem, 0)
 	objects, err := getManifestItems(ctx, sqlStmt)
 	if err != nil {
-		return nil, fmt.Errorf("Failed to fetch from \"manifest\" table: %w", err)
+		return nil, fmt.Errorf("failed to fetch from \"manifest\" table: %w", err)
 	}
 
 	objectsLen := len(objects)
