@@ -19,7 +19,7 @@ func ListManifests(ctx context.Context, s state.State) (apitypes.Manifests, erro
 	err := s.Database().Transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		records, err := database.GetManifestItems(ctx, tx)
 		if err != nil {
-			return fmt.Errorf("Failed to fetch manifests: %w", err)
+			return fmt.Errorf("failed to fetch manifests: %w", err)
 		}
 
 		for _, manifest := range records {
@@ -72,7 +72,7 @@ func AddManifest(ctx context.Context, s state.State, manifestid string, data str
 	err := s.Database().Transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		_, err := database.CreateManifestItem(ctx, tx, database.ManifestItem{ManifestID: manifestid, Data: data})
 		if err != nil {
-			return fmt.Errorf("Failed to record manifest: %w", err)
+			return fmt.Errorf("failed to record manifest: %w", err)
 		}
 
 		return nil
@@ -90,7 +90,7 @@ func DeleteManifest(ctx context.Context, s state.State, manifestid string) error
 	err := s.Database().Transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		err := database.DeleteManifestItem(ctx, tx, manifestid)
 		if err != nil {
-			return fmt.Errorf("Failed to delete manifest: %w", err)
+			return fmt.Errorf("failed to delete manifest: %w", err)
 		}
 
 		return nil
