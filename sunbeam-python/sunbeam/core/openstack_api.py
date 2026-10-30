@@ -34,6 +34,7 @@ def get_admin_connection(
         project_name=admin_auth_info.get("OS_PROJECT_NAME"),
         user_domain_name=admin_auth_info.get("OS_USER_DOMAIN_NAME"),
         project_domain_name=admin_auth_info.get("OS_PROJECT_DOMAIN_NAME"),
+        cacert=admin_auth_info.get("OS_CACERT"),
     )
     return conn
 
