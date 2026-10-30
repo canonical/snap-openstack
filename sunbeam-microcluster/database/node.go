@@ -54,7 +54,7 @@ func GetNodesFromRoles(ctx context.Context, tx *sql.Tx, roles []string) ([]Node,
 	stmt, err := cluster.StmtString(nodeObjects)
 
 	if err != nil {
-		return nil, fmt.Errorf("Failed to fetch prepared statement nodeObjets: %v", err)
+		return nil, fmt.Errorf("failed to fetch prepared statement nodeObjets: %v", err)
 	}
 
 	queryParts := strings.SplitN(stmt, "ORDER BY", 2)
@@ -77,7 +77,7 @@ func GetNodesFromRoles(ctx context.Context, tx *sql.Tx, roles []string) ([]Node,
 
 	nodes, err := getNodesRaw(ctx, tx, stmt, args...)
 	if err != nil {
-		return nil, fmt.Errorf("Failed to fetch from \"nodes\" table: %w", err)
+		return nil, fmt.Errorf("failed to fetch from \"nodes\" table: %w", err)
 	}
 
 	return nodes, nil
