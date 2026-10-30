@@ -3,8 +3,15 @@
 
 """Tests for Hitachi VSP storage backend."""
 
-import pytest
+import ipaddress
+from unittest.mock import Mock, patch
 
+import pytest
+import yaml
+
+from sunbeam.storage.cli_base import StorageBackendCLIBase
+from sunbeam.storage.models import BackendValidationException
+from sunbeam.storage.steps import generate_questions_from_config, prompt_backend_config
 from tests.unit.sunbeam.storage.backends.test_common import BaseBackendTests
 
 
@@ -240,3 +247,120 @@ class TestHitachiConfigValidation:
         )
         assert config.hitachi_discard_zero_page is False
         assert config.hitachi_group_create is True
+
+    def test_charm_config_keeps_bool_and_int(
+        self, hitachi_backend, mock_deployment, mock_manifest
+    ):
+        """Keep model values typed until Terraform converts its input map."""
+        backend_name = "hitachi-backend"
+        charm_manifest = Mock(channel="2025.1/edge", revision=None)
+        backend_manifest = Mock()
+        backend_manifest.software.charms = {hitachi_backend.charm_name: charm_manifest}
+        mock_manifest.storage.root = {
+            hitachi_backend.backend_type: Mock(root={backend_name: backend_manifest})
+        }
+        config = hitachi_backend.config_type().model_validate(
+            {
+                "protocol": "iscsi",
+                "san_ip": "192.0.2.10",
+                "hitachi_storage_id": "hit1",
+                "hitachi_pools": "pool1,pool2",
+                "hitachi_target_ports": "port1",
+                "hitachi_group_create": True,
+                "hitachi_rest_timeout": 30,
+                "hitachi_discard_zero_page": False,
+                "san_login": "admin",
+                "san_password": "password",
+            },
+            by_name=True,
+        )
+
+        tfvars = hitachi_backend.build_terraform_vars(
+            mock_deployment, mock_manifest, backend_name, config
+        )
+        charm_config = tfvars["charm_config"]
+
+        assert charm_config["hitachi-group-create"] is True
+        assert charm_config["hitachi-discard-zero-page"] is False
+        assert charm_config["hitachi-rest-timeout"] == 30
+        assert charm_config["hitachi-target-ports"] == "port1"
+
+
+class TestHitachiIPValidation:
+    """IP validation must apply before configuration reaches the snap."""
+
+    @pytest.fixture
+    def config_values(self):
+        return {
+            "protocol": "iscsi",
+            "san_ip": "192.0.2.10",
+            "hitachi_storage_id": "hit1",
+            "hitachi_pools": "pool1,pool2",
+            "san_login": "admin",
+            "san_password": "secret",
+        }
+
+    @pytest.mark.parametrize("address", ["192.0.2.10", "2001:db8::10"])
+    def test_valid_address_serializes_to_string(
+        self, hitachi_backend, config_values, address
+    ):
+        config_values["san_ip"] = address
+        config = hitachi_backend.config_type().model_validate(
+            config_values, by_name=True
+        )
+        assert config.model_dump(by_alias=True)["san-ip"] == address
+        assert config.san_ip == ipaddress.ip_address(address)
+
+    @pytest.mark.parametrize("source", ["file", "saved"])
+    @pytest.mark.parametrize("address", ["192.0.2.10d2d", "array.example.com"])
+    def test_noninteractive_rejects_invalid_address(
+        self, hitachi_backend, config_values, tmp_path, source, address
+    ):
+        config_values["san_ip"] = address
+        preseed = {}
+        saved = {}
+        if source == "file":
+            config_file = tmp_path / "hitachi.yaml"
+            config_file.write_text(yaml.safe_dump(config_values))
+            preseed = StorageBackendCLIBase(hitachi_backend)._load_config_file(
+                config_file
+            )
+        else:
+            saved = config_values
+        manifest = Mock(storage=None)
+        with (
+            patch("sunbeam.storage.steps.load_answers", return_value=saved),
+            patch("sunbeam.storage.steps.write_answers") as write_answers,
+            patch(
+                "sunbeam.core.questions.Question.ask",
+                side_effect=AssertionError(
+                    "Non-interactive validation must not prompt"
+                ),
+            ),
+            pytest.raises(
+                BackendValidationException,
+                match=r"san_ip.*not a valid IPv4 or IPv6 address",
+            ),
+        ):
+            prompt_backend_config(
+                Mock(),
+                hitachi_backend,
+                manifest,
+                "hitachi-test",
+                preseed,
+                accept_defaults=True,
+            )
+        write_answers.assert_not_called()
+
+    def test_interactive_reprompts_invalid_address(self, hitachi_backend, caplog):
+        question = generate_questions_from_config(hitachi_backend.config_type())[
+            "san_ip"
+        ]
+        with patch(
+            "sunbeam.core.questions.Prompt.ask",
+            side_effect=["192.0.2.10d2d", "192.0.2.10"],
+        ) as prompt:
+            assert question.ask() == "192.0.2.10"
+        assert prompt.call_count == 2
+        assert "san_ip" in caplog.text
+        assert "not a valid IPv4 or IPv6 address" in caplog.text
