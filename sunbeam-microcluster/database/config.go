@@ -66,7 +66,7 @@ func GetConfigItemKeys(ctx context.Context, tx *sql.Tx, prefix *string) ([]strin
 
 	err := query.Scan(ctx, tx, stmt, dest, args...)
 	if err != nil {
-		return nil, fmt.Errorf("Failed to fetch from \"config\" table: %w", err)
+		return nil, fmt.Errorf("failed to fetch from \"config\" table: %w", err)
 	}
 
 	return configs, nil

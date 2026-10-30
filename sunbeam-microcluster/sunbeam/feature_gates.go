@@ -19,7 +19,7 @@ func ListFeatureGates(ctx context.Context, s state.State) (apitypes.FeatureGates
 	err := s.Database().Transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		records, err := database.GetFeatureGates(ctx, tx)
 		if err != nil {
-			return fmt.Errorf("Failed to fetch feature gates: %w", err)
+			return fmt.Errorf("failed to fetch feature gates: %w", err)
 		}
 
 		for _, gate := range records {
@@ -67,7 +67,7 @@ func AddFeatureGate(ctx context.Context, s state.State, gateKey string, enabled 
 			Enabled: enabled,
 		})
 		if err != nil {
-			return fmt.Errorf("Failed to record feature gate: %w", err)
+			return fmt.Errorf("failed to record feature gate: %w", err)
 		}
 
 		return nil
@@ -80,7 +80,7 @@ func UpdateFeatureGate(ctx context.Context, s state.State, gateKey string, enabl
 	err := s.Database().Transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		_, err := database.GetFeatureGate(ctx, tx, gateKey)
 		if err != nil {
-			return fmt.Errorf("Failed to retrieve feature gate details: %w", err)
+			return fmt.Errorf("failed to retrieve feature gate details: %w", err)
 		}
 
 		return database.UpdateFeatureGate(ctx, tx, gateKey, database.FeatureGate{
@@ -90,7 +90,7 @@ func UpdateFeatureGate(ctx context.Context, s state.State, gateKey string, enabl
 	})
 
 	if err != nil {
-		return fmt.Errorf("Failed to update feature gate %s: %w", gateKey, err)
+		return fmt.Errorf("failed to update feature gate %s: %w", gateKey, err)
 	}
 
 	return nil
@@ -102,7 +102,7 @@ func DeleteFeatureGate(ctx context.Context, s state.State, gateKey string) error
 	return s.Database().Transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		err := database.DeleteFeatureGate(ctx, tx, gateKey)
 		if err != nil {
-			return fmt.Errorf("Failed to delete feature gate: %w", err)
+			return fmt.Errorf("failed to delete feature gate: %w", err)
 		}
 
 		return nil
