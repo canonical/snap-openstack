@@ -528,7 +528,7 @@ def test_deploy_simple(jhelper, juju):
         revision=None,
         config=None,
         num_units=1,
-        base="ubuntu@24.04",
+        base="ubuntu@26.04",
         to=None,
     )
 
@@ -736,12 +736,12 @@ def test_get_available_charm_revisions(jhelper: jujulib.JujuHelper, juju):
                     {
                         "revision": 121,
                         "architectures": ["amd64"],
-                        "bases": [{"name": "ubuntu", "channel": "24.04"}],
+                        "bases": [{"name": "ubuntu", "channel": "26.04"}],
                     },
                     {
                         "revision": 122,
                         "architectures": ["arm64"],
-                        "bases": [{"name": "ubuntu", "channel": "24.04"}],
+                        "bases": [{"name": "ubuntu", "channel": "26.04"}],
                     },
                 ]
             }
@@ -763,7 +763,7 @@ def test_get_available_charm_revisions_branch_channel(
                     {
                         "revision": 200,
                         "architectures": ["amd64"],
-                        "bases": [{"name": "ubuntu", "channel": "24.04"}],
+                        "bases": [{"name": "ubuntu", "channel": "26.04"}],
                     },
                 ]
             }

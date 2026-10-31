@@ -38,10 +38,10 @@ class TestK8SCharmUpgradeStepIsSkip:
     def test_skip_when_already_at_pinned_revision(
         self, step, basic_jhelper, basic_manifest, step_context
     ):
-        app = Mock(charm_rev=100, charm_channel="1.32/stable", base=None)
+        app = Mock(charm_rev=100, charm_channel="1.36/stable", base=None)
         basic_jhelper.get_application.return_value = app
         basic_manifest.find_charm.return_value = Mock(
-            channel="1.32/stable", revision=100
+            channel="1.36/stable", revision=100
         )
 
         result = step.is_skip(step_context)
@@ -52,10 +52,10 @@ class TestK8SCharmUpgradeStepIsSkip:
     def test_not_skipped_when_revision_differs_from_pinned(
         self, step, basic_jhelper, basic_manifest, step_context
     ):
-        app = Mock(charm_rev=99, charm_channel="1.32/stable", base=None)
+        app = Mock(charm_rev=99, charm_channel="1.36/stable", base=None)
         basic_jhelper.get_application.return_value = app
         basic_manifest.find_charm.return_value = Mock(
-            channel="1.32/stable", revision=100
+            channel="1.36/stable", revision=100
         )
 
         result = step.is_skip(step_context)
@@ -193,28 +193,28 @@ class TestK8SCharmUpgradeStepIsSkip:
     def test_fails_for_track_change(
         self, step, basic_jhelper, basic_manifest, step_context
     ):
-        """When the channel track changes (e.g. 1.31 -> 1.32), return FAILED."""
-        app = Mock(charm_rev=100, charm_channel="1.31/stable", base=None)
+        """When the channel track changes (e.g. 1.35 -> 1.36), return FAILED."""
+        app = Mock(charm_rev=100, charm_channel="1.35/stable", base=None)
         basic_jhelper.get_application.return_value = app
         basic_manifest.find_charm.return_value = Mock(
-            channel="1.32/stable", revision=None
+            channel="1.36/stable", revision=None
         )
 
         result = step.is_skip(step_context)
 
         assert result.result_type == ResultType.FAILED
         assert "track change" in result.message
-        assert "1.31" in result.message
-        assert "1.32" in result.message
+        assert "1.35" in result.message
+        assert "1.36" in result.message
 
     def test_not_skipped_for_risk_change(
         self, step, basic_jhelper, basic_manifest, step_context
     ):
         """When only the risk level changes (same track), proceed with --channel."""
-        app = Mock(charm_rev=100, charm_channel="1.32/stable", base=None)
+        app = Mock(charm_rev=100, charm_channel="1.36/stable", base=None)
         basic_jhelper.get_application.return_value = app
         basic_manifest.find_charm.return_value = Mock(
-            channel="1.32/edge", revision=None
+            channel="1.36/edge", revision=None
         )
 
         result = step.is_skip(step_context)
