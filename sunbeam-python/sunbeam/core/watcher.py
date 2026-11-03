@@ -193,7 +193,7 @@ def wait_until_action_state(
     audit: "watcher.Audit",
     client: "watcher_client.Client",
     status: Status | None,
-    expected_state: Iterable[str] = ["SUCCEEDED"],
+    expected_state: Iterable[str] = ["SUCCEEDED", "SKIPPED"],
 ):
     actions = get_actions(client=client, audit=audit)
     nb_completed_actions = 0
