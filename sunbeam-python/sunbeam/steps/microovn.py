@@ -327,6 +327,15 @@ class ReapplyMicroOVNTerraformPlanStep(BaseStep):
     )
     def run(self, context: StepContext) -> Result:
         """Apply terraform configuration to deploy MicroOVN."""
+        machines_by_arch = self.ovn_manager.get_machines_by_architecture()
+        self.extra_tfvars["microovn_machine_ids_by_architecture"] = {
+            ovn.DEFAULT_ARCHITECTURE: [],
+            ovn.ARM64_ARCHITECTURE: [],
+            **machines_by_arch,
+        }
+        distributor_ids = self.ovn_manager.get_token_distributor_machines()
+        self.extra_tfvars["token_distributor_machine_ids"] = distributor_ids[:1]
+
         # Apply Network configs everytime reapply is called
         network_configs = get_external_network_configs(self.client)
         if "charm_openstack_network_agents_config" not in self.extra_tfvars:
@@ -353,7 +362,6 @@ class ReapplyMicroOVNTerraformPlanStep(BaseStep):
         except TerraformException as e:
             return Result(ResultType.FAILED, str(e))
 
-        machines_by_arch = self.ovn_manager.get_machines_by_architecture()
         apps_to_wait = _microovn_applications_to_wait(machines_by_arch)
         try:
             for application in apps_to_wait:

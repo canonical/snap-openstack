@@ -455,6 +455,7 @@ class TestReapplyMicroOVNTerraformPlanStep:
             ovn.DEFAULT_ARCHITECTURE: ["1"],
             ovn.ARM64_ARCHITECTURE: [],
         }
+        manager.get_token_distributor_machines.return_value = ["1"]
         return ReapplyMicroOVNTerraformPlanStep(
             basic_client,
             basic_tfhelper,
@@ -530,3 +531,48 @@ class TestReapplyMicroOVNTerraformPlanStep:
             accepted_status=["active", "unknown"],
             timeout=1200,
         )
+
+    @pytest.mark.parametrize(
+        "machines,distributors",
+        [
+            ({"amd64": ["0"]}, ["0"]),
+            ({"amd64": ["2", "3"], "arm64": ["4"]}, ["2", "3"]),
+            ({"arm64": ["4"]}, []),
+        ],
+    )
+    def test_run_refreshes_machine_placement(
+        self,
+        reapply_microovn_terraform_step,
+        basic_tfhelper,
+        step_context,
+        mocker,
+        machines,
+        distributors,
+    ):
+        step = reapply_microovn_terraform_step
+        step.ovn_manager.get_machines_by_architecture.return_value = machines
+        step.ovn_manager.get_token_distributor_machines.return_value = distributors
+        step.extra_tfvars.update(
+            {
+                "microovn_machine_ids_by_architecture": {
+                    "amd64": ["0", "1"],
+                    "arm64": ["4", "5"],
+                },
+                "token_distributor_machine_ids": ["1"],
+            }
+        )
+        mocker.patch(
+            "sunbeam.steps.microovn.get_external_network_configs", return_value={}
+        )
+
+        result = step.run(step_context)
+
+        assert result.result_type == ResultType.COMPLETED
+        tfvars = basic_tfhelper.update_tfvars_and_apply_tf.call_args.kwargs[
+            "override_tfvars"
+        ]
+        assert tfvars["microovn_machine_ids_by_architecture"] == {
+            "amd64": machines.get("amd64", []),
+            "arm64": machines.get("arm64", []),
+        }
+        assert tfvars["token_distributor_machine_ids"] == distributors[:1]
