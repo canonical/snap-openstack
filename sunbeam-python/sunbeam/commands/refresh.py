@@ -359,13 +359,14 @@ def refresh_vault(
 
     plan_results = run_plan(
         [
+            TerraformInitStep(tfhelper),
             VaultCharmUpgradeStep(
                 deployment,
                 client,
                 manifest,
                 jhelper,
                 tfhelper,
-            )
+            ),
         ],
         console,
         show_hints,
