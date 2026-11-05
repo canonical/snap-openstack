@@ -450,7 +450,7 @@ class Manifest(pydantic.BaseModel):
                     feature_name,
                     feature_manifest,
                 ) in feature_or_group_manifest.root.items():
-                    if feature_name == name:
+                    if feature_name == name or f"{f_o_g_name}.{feature_name}" == name:
                         return feature_manifest
         return None
 
