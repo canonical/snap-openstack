@@ -17,6 +17,7 @@ from sunbeam.core.common import (
     CONTEXT_SETTINGS,
     FORMAT_TABLE,
     FORMAT_YAML,
+    get_step_message,
     run_plan,
 )
 from sunbeam.core.deployment import Deployment, register_deployment_type
@@ -31,7 +32,10 @@ from sunbeam.provider.base import ProviderBase
 from sunbeam.provider.local.commands import LocalProvider
 from sunbeam.provider.local.deployment import LocalDeployment
 from sunbeam.provider.maas.commands import MaasProvider
-from sunbeam.provider.maas.steps import MaasSaveClusterdCredentialsStep
+from sunbeam.provider.maas.steps import (
+    MaasBackupClusterdCredentialsStep,
+    MaasSaveClusterdCredentialsStep,
+)
 from sunbeam.utils import CatchGroup, click_option_show_hints
 
 console = Console()
@@ -248,6 +252,14 @@ def update_clusterd_credentials(ctx, show_hints: bool = False):
     run_preflight_checks([JujuLoginCheck(deployment.juju_account)], console)
 
     jhelper = JujuHelper(deployment.juju_controller)
+
+    # Run the backup on its own so its path is reported even if the update fails
+    backup_plan = [
+        MaasBackupClusterdCredentialsStep(jhelper, deployment.name, deployments)
+    ]
+    results = run_plan(backup_plan, console, show_hints)
+    if backup_path := get_step_message(results, MaasBackupClusterdCredentialsStep):
+        console.print(f"Previous clusterd credentials backed up to {backup_path}")
 
     plan = [MaasSaveClusterdCredentialsStep(jhelper, deployment.name, deployments)]
     run_plan(plan, console, show_hints)
