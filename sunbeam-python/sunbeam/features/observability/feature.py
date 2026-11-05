@@ -29,6 +29,7 @@ from sunbeam.core.checks import (
     Check,
     JujuControllerRegistrationCheck,
     JujuLoginCheck,
+    MicrocephCephFSCheck,
     run_preflight_checks,
 )
 from sunbeam.core.common import (
@@ -1398,6 +1399,29 @@ class ObservabilityFeature(OpenStackControlPlaneFeature):
 
 class EmbeddedObservabilityFeature(ObservabilityFeature):
     name = "observability.embedded"
+
+    def pre_enable(
+        self, deployment: Deployment, config: FeatureConfig, show_hints: bool
+    ) -> None:
+        """Perform preflight checks before enabling the embedded observability feature.
+
+        The Prometheus ``database`` storage in ``deploy-cos`` is typically set to a
+        large enough size (default: 20G) that will use CephFS instead of the rawfile
+        default.
+
+        As such, MicroCeph must provision the filesystem first, especially as MAAS does
+        not provision it automatically.
+
+        Deliberately unconditional: healthy local deployments provision the filesystem
+        automatically, and whether the enable would survive on rawfile (node-local disk
+        picked at bind time) cannot be known before the enable.
+        """
+        super().pre_enable(deployment, config, show_hints)
+        jhelper = JujuHelper(deployment.juju_controller)
+        run_preflight_checks(
+            [MicrocephCephFSCheck(jhelper, deployment.openstack_machines_model)],
+            console,
+        )
 
     def update_proxy_model_configs(
         self, deployment: Deployment, show_hints: bool
