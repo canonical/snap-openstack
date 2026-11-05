@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import copy
+import ipaddress
 import logging
 import typing
 from pathlib import Path
@@ -156,6 +157,13 @@ class StorageBackendConfig(pydantic.BaseModel):
             serialization_alias=utils.to_kebab,
         ),
     )
+
+    @pydantic.field_serializer("*", check_fields=False)
+    def serialize_address_value(self, value: Any) -> Any:
+        """Keep typed addresses compatible with YAML and Terraform."""
+        if isinstance(value, (ipaddress.IPv4Address, ipaddress.IPv6Address)):
+            return str(value)
+        return value
 
     volume_backend_name: typing.Annotated[
         str | None,
