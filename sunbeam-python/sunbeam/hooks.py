@@ -19,8 +19,8 @@ DEFAULT_CONFIG = {
     "daemon.group": "snap_daemon",
     "daemon.debug": False,
     "k8s.provider": "k8s",
-    "deployment.risk": "stable",
-    "deployment.version": "2026.1",
+    "deployment.risk": "beta",
+    "deployment.version": "2026.2",
 }
 
 OPTION_KEYS = {k.split(".")[0] for k in DEFAULT_CONFIG.keys()}

@@ -306,4 +306,4 @@ def test_validate_roles_gated():
 def test_infer_version_defaults_to_current_release(snap):
     snap.config.get.side_effect = UnknownConfigKey("deployment.version")
 
-    assert infer_version(snap) == "2026.1"
+    assert infer_version(snap) == "2026.2"
