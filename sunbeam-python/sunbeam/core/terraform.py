@@ -9,6 +9,7 @@ import subprocess
 import threading
 import uuid
 from datetime import datetime, timezone
+from enum import StrEnum
 from pathlib import Path
 from string import Template
 
@@ -36,6 +37,14 @@ _TF_UI_EVENT_TYPES = {
     "apply_errored",
     "change_summary",
 }
+
+
+class DiagnosticSeverity(StrEnum):
+    """Terraform diagnostic severity levels."""
+
+    ERROR = "error"
+    WARNING = "warning"
+
 
 http_backend_template = """
 terraform {
@@ -65,24 +74,16 @@ class TerraformException(Exception):
     """Terraform related exceptions."""
 
     def __init__(self, message):
-        super().__init__()
+        super().__init__(message)
         self.message = message
-
-    def __str__(self) -> str:
-        """Stringify the exception."""
-        return self.message
 
 
 class TerraformStateLockedException(Exception):
     """Terraform Remote State Locked Exception."""
 
     def __init__(self, message):
-        super().__init__()
+        super().__init__(message)
         self.message = message
-
-    def __str__(self) -> str:
-        """Stringify the exception."""
-        return self.message
 
 
 class TerraformHelper:
@@ -200,7 +201,7 @@ class TerraformHelper:
             )
         except subprocess.CalledProcessError as e:
             LOG.exception("Terraform init failed: %s", e.stderr)
-            raise TerraformException(str(e))
+            raise TerraformException(f"{e}\nstderr: {e.stderr}")
 
     def apply(
         self,
@@ -849,12 +850,17 @@ class TerraformHelper:
             ]
 
     def _parse_terraform_event(
-        self, line: str, state_lock_flag: list[bool] | None = None
+        self,
+        line: str,
+        state_lock_flag: list[bool] | None = None,
+        diagnostics: list[str] | None = None,
     ) -> ProgressEvent | None:
         """Parse a terraform JSON line into a ProgressEvent.
 
         Returns None for non-UI-relevant events or unparseable lines.
         Sets state_lock_flag[0] = True if a state lock diagnostic is detected.
+        Appends error diagnostics to ``diagnostics`` for logging and
+        exception messages on failure.
         """
         try:
             data = json.loads(line)
@@ -870,6 +876,10 @@ class TerraformHelper:
             if "state lock" in summary.lower() or "already locked" in detail.lower():
                 if state_lock_flag is not None:
                     state_lock_flag[0] = True
+            if diagnostics is not None and (
+                diagnostic.get("severity") == DiagnosticSeverity.ERROR
+            ):
+                diagnostics.append(f"{summary}: {detail}" if detail else summary)
             return None
 
         if event_type not in _TF_UI_EVENT_TYPES:
@@ -939,6 +949,7 @@ class TerraformHelper:
         stderr_thread.start()
 
         state_lock_flag = [False]
+        diagnostics: list[str] = []
         if process.stdout is None:
             raise TerraformException("stdout pipe not available")
 
@@ -949,27 +960,35 @@ class TerraformHelper:
                 line = line.rstrip("\n")
                 if not line:
                     continue
-                event = self._parse_terraform_event(line, state_lock_flag)
+                event = self._parse_terraform_event(line, state_lock_flag, diagnostics)
                 if event is not None and reporter is not None:
                     reporter.report(event)
 
         process.wait(timeout=timeout)
         stderr_thread.join(timeout=10)
         stderr_output = "".join(stderr_lines)
+        diagnostic_output = "\n".join(diagnostics)
 
         LOG.debug("Command finished. returncode=%s", process.returncode)
         if stderr_output:
             LOG.debug("stderr: %s", stderr_output)
 
         if process.returncode != 0:
-            if state_lock_flag[0] or "remote state already locked" in stderr_output:
-                raise TerraformStateLockedException(
-                    f"terraform command failed (state locked): {' '.join(cmd)}\n"
-                    f"stderr: {stderr_output}"
+            if diagnostic_output or stderr_output:
+                LOG.error(
+                    "Terraform diagnostics: %s", diagnostic_output or stderr_output
                 )
-            raise TerraformException(
-                f"terraform command failed: {' '.join(cmd)}\nstderr: {stderr_output}"
-            )
+            if state_lock_flag[0] or "remote state already locked" in stderr_output:
+                message = f"terraform command failed (state locked): {' '.join(cmd)}"
+                if diagnostic_output:
+                    message = f"{message}\n{diagnostic_output}"
+                raise TerraformStateLockedException(message)
+            message = f"terraform command failed: {' '.join(cmd)}"
+            if diagnostic_output:
+                message = f"{message}\n{diagnostic_output}"
+            elif stderr_output:
+                message = f"{message}\nstderr: {stderr_output}"
+            raise TerraformException(message)
 
 
 class TerraformInitStep(BaseStep):
