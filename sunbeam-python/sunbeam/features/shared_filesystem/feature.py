@@ -33,6 +33,7 @@ from sunbeam.features.interface.v1.openstack import (
     TerraformPlanLocation,
 )
 from sunbeam.features.shared_filesystem import manila_data
+from sunbeam.steps.openstack import ValidateInfraAppsStep
 from sunbeam.utils import click_option_show_hints, pass_method_obj
 from sunbeam.versions import OPENSTACK_CHANNEL
 
@@ -125,6 +126,23 @@ class SharedFilesystemFeature(OpenStackControlPlaneFeature):
         tfhelper_manila_data = deployment.get_tfhelper(self.tfplan_manila_data)
         client = deployment.get_client()
 
+        # This feature reapplys the openstack plan: make sure that apply
+        # would not change an INFRA_APP (mysql, vault, traefik), and only
+        # then store the user manifest in the database.
+        run_plan(
+            [
+                TerraformInitStep(tfhelper),
+                ValidateInfraAppsStep(
+                    deployment.get_client(),
+                    tfhelper,
+                    self.manifest,
+                    skip_charms=self._own_infra_charms,
+                ),
+            ],
+            console,
+            show_hints,
+        )
+
         plan: list[BaseStep] = []
         if self.user_manifest:
             plan.append(AddManifestStep(deployment.get_client(), self.user_manifest))
@@ -167,6 +185,12 @@ class SharedFilesystemFeature(OpenStackControlPlaneFeature):
 
         plan = [
             TerraformInitStep(tfhelper),
+            ValidateInfraAppsStep(
+                deployment.get_client(),
+                tfhelper,
+                self.manifest,
+                skip_charms=self._own_infra_charms,
+            ),
             DisableOpenStackApplicationStep(deployment, tfhelper, jhelper, self),
         ]
 

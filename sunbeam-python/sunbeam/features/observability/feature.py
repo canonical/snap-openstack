@@ -88,6 +88,7 @@ from sunbeam.steps.juju import (
     RemoveSaasApplicationsStep,
 )
 from sunbeam.steps.k8s import CREDENTIAL_SUFFIX
+from sunbeam.steps.openstack import ValidateInfraAppsStep
 from sunbeam.utils import click_option_show_hints, pass_method_obj
 from sunbeam.versions import TRAEFIK_CHANNEL
 
@@ -1437,6 +1438,24 @@ class EmbeddedObservabilityFeature(ObservabilityFeature):
         )
 
         client = deployment.get_client()
+
+        # This feature reapplys the openstack plan: make sure that apply
+        # would not change an INFRA_APP (mysql, vault, traefik), and only
+        # then store the user manifest in the database.
+        run_plan(
+            [
+                TerraformInitStep(tfhelper),
+                ValidateInfraAppsStep(
+                    client,
+                    tfhelper,
+                    self.manifest,
+                    skip_charms=self._own_infra_charms,
+                ),
+            ],
+            console,
+            show_hints,
+        )
+
         plan = []
         if self.user_manifest:
             plan.append(AddManifestStep(client, self.user_manifest))
@@ -1671,6 +1690,24 @@ class ExternalObservabilityFeature(ObservabilityFeature):
         )
 
         client = deployment.get_client()
+
+        # This feature reapplys the openstack plan: make sure that apply
+        # would not change an INFRA_APP (mysql, vault, traefik), and only
+        # then store the user manifest in the database.
+        run_plan(
+            [
+                TerraformInitStep(tfhelper),
+                ValidateInfraAppsStep(
+                    client,
+                    tfhelper,
+                    self.manifest,
+                    skip_charms=self._own_infra_charms,
+                ),
+            ],
+            console,
+            show_hints,
+        )
+
         plan = []
         if self.user_manifest:
             plan.append(AddManifestStep(client, self.user_manifest))
@@ -1746,6 +1783,24 @@ class ExternalObservabilityFeature(ObservabilityFeature):
         )
         tfhelper_hardware_observer = deployment.get_tfhelper(
             self.tfplan_hardware_observer
+        )
+
+        # This feature reapplys the openstack plan: make sure that apply
+        # would not change an INFRA_APP (mysql, vault, traefik) before
+        # removing any remote COS relations: a rejected disable must not
+        # disconnect the offers while the feature stays enabled.
+        run_plan(
+            [
+                TerraformInitStep(tfhelper),
+                ValidateInfraAppsStep(
+                    deployment.get_client(),
+                    tfhelper,
+                    self.manifest,
+                    skip_charms=self._own_infra_charms,
+                ),
+            ],
+            console,
+            show_hints,
         )
 
         # Workaround as integrations are not handled in terraform plan

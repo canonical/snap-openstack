@@ -27,6 +27,7 @@ from sunbeam.features.interface.v1.openstack import (
 from sunbeam.steps.cinder_volume import DeployCinderVolumeApplicationStep
 from sunbeam.steps.hypervisor import ReapplyHypervisorTerraformPlanStep
 from sunbeam.steps.juju import RemoveSaasApplicationsStep
+from sunbeam.steps.openstack import ValidateInfraAppsStep
 from sunbeam.storage.manager import StorageBackendManager
 from sunbeam.storage.steps import (
     PRINCIPAL_HA_APPLICATION,
@@ -94,6 +95,23 @@ class TelemetryFeature(OpenStackControlPlaneFeature):
         tfhelper_hypervisor = deployment.get_tfhelper("hypervisor-plan")
         tfhelper_cinder_volume = deployment.get_tfhelper("cinder-volume-plan")
         jhelper = JujuHelper(deployment.juju_controller)
+        # This feature reapplys the openstack plan: make sure that apply
+        # would not change an INFRA_APP (mysql, vault, traefik), and only
+        # then store the user manifest in the database.
+        run_plan(
+            [
+                TerraformInitStep(tfhelper),
+                ValidateInfraAppsStep(
+                    deployment.get_client(),
+                    tfhelper,
+                    self.manifest,
+                    skip_charms=self._own_infra_charms,
+                ),
+            ],
+            console,
+            show_hints,
+        )
+
         plan1: list[BaseStep] = []
         if self.user_manifest:
             plan1.append(AddManifestStep(deployment.get_client(), self.user_manifest))
@@ -220,6 +238,23 @@ class TelemetryFeature(OpenStackControlPlaneFeature):
         jhelper = JujuHelper(deployment.juju_controller)
         extra_tfvars = {"ceilometer-offer-url": None}
         extra_tfvars_cinder_volume = {"enable-telemetry-notifications": False}
+
+        # This feature reapplys the openstack plan: make sure that apply
+        # would not change an INFRA_APP (mysql, vault, traefik).
+        run_plan(
+            [
+                TerraformInitStep(tfhelper),
+                ValidateInfraAppsStep(
+                    deployment.get_client(),
+                    tfhelper,
+                    self.manifest,
+                    skip_charms=self._own_infra_charms,
+                ),
+            ],
+            console,
+            show_hints,
+        )
+
         plan = [
             TerraformInitStep(tfhelper_hypervisor),
             ReapplyHypervisorTerraformPlanStep(

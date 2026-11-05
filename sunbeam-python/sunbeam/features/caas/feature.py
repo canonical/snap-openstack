@@ -45,6 +45,7 @@ from sunbeam.features.interface.v1.openstack import (
 )
 from sunbeam.lazy import LazyImport
 from sunbeam.steps.k8s import KubeClientError, get_kube_client
+from sunbeam.steps.openstack import ValidateInfraAppsStep
 from sunbeam.utils import click_option_show_hints, pass_method_obj
 from sunbeam.versions import CLUSTER_API_VERSIONS, OPENSTACK_CHANNEL
 
@@ -867,6 +868,23 @@ class CaasFeature(OpenStackControlPlaneFeature):
         kc_dict = self._get_kubeconfig(client)
         proxy_settings = deployment.get_proxy_settings()
 
+        # This feature reapplys the openstack plan: make sure that apply
+        # would not change an INFRA_APP (mysql, vault, traefik), and only
+        # then store the user manifest in the database.
+        run_plan(
+            [
+                TerraformInitStep(tfhelper),
+                ValidateInfraAppsStep(
+                    client,
+                    tfhelper,
+                    self.manifest,
+                    skip_charms=self._own_infra_charms,
+                ),
+            ],
+            console,
+            show_hints,
+        )
+
         plan: list[BaseStep] = []
         if self.user_manifest:
             plan.append(AddManifestStep(client, self.user_manifest))
@@ -908,6 +926,24 @@ class CaasFeature(OpenStackControlPlaneFeature):
         tfhelper = deployment.get_tfhelper(self.tfplan)
         jhelper = JujuHelper(deployment.juju_controller)
         client = deployment.get_client()
+
+        # This feature reapplys the openstack plan when disabling the
+        # Magnum application: validate INFRA_APPS before the destructive
+        # teardown steps (clusterctl delete) so a drift manifest cannot
+        # leave the CAPI components half-deleted.
+        run_plan(
+            [
+                TerraformInitStep(tfhelper),
+                ValidateInfraAppsStep(
+                    client,
+                    tfhelper,
+                    self.manifest,
+                    skip_charms=self._own_infra_charms,
+                ),
+            ],
+            console,
+            show_hints,
+        )
 
         plan = [
             DeleteClusterAPI(client, self._get_kubeconfig(client)),

@@ -34,6 +34,7 @@ from sunbeam.features.interface.v1.openstack import (
     OpenStackControlPlaneFeature,
     TerraformPlanLocation,
 )
+from sunbeam.steps.openstack import ValidateInfraAppsStep
 from sunbeam.utils import click_option_show_hints, pass_method_obj
 from sunbeam.versions import OPENSTACK_CHANNEL
 
@@ -130,6 +131,23 @@ class BaremetalFeature(OpenStackControlPlaneFeature):
 
         jhelper = JujuHelper(deployment.juju_controller)
         tfhelper = deployment.get_tfhelper(self.tfplan)
+
+        # This feature reapplys the openstack plan: make sure that apply
+        # would not change an INFRA_APP (mysql, vault, traefik), and only
+        # then store the user manifest in the database.
+        run_plan(
+            [
+                TerraformInitStep(tfhelper),
+                ValidateInfraAppsStep(
+                    deployment.get_client(),
+                    tfhelper,
+                    self.manifest,
+                    skip_charms=self._own_infra_charms,
+                ),
+            ],
+            console,
+            show_hints,
+        )
 
         plan: list[BaseStep] = []
         if self.user_manifest:
@@ -259,6 +277,9 @@ class BaremetalFeature(OpenStackControlPlaneFeature):
     @pass_method_obj
     def compute_shard_add(self, deployment: Deployment, shard: str, show_hints: bool):
         """Add Ironic nova-compute shard."""
+        # This command reapplies the openstack plan: make sure that apply
+        # would not change an INFRA_APP (mysql, vault, traefik).
+        self.validate_infra_apps(deployment, show_hints)
         step = steps.DeployNovaIronicShardsStep(deployment, self, [shard])
         run_plan([step], console, show_hints)
 
@@ -277,6 +298,9 @@ class BaremetalFeature(OpenStackControlPlaneFeature):
         self, deployment: Deployment, shard: str, show_hints: bool
     ):
         """Delete Ironic nova-compute shard."""
+        # This command reapplies the openstack plan: make sure that apply
+        # would not change an INFRA_APP (mysql, vault, traefik).
+        self.validate_infra_apps(deployment, show_hints)
         step = steps.DeleteNovaIronicShardStep(deployment, self, shard)
         run_plan([step], console, show_hints)
 
@@ -294,6 +318,10 @@ class BaremetalFeature(OpenStackControlPlaneFeature):
         """Add ironic-conductor group."""
         # Login to the Juju controller
         run_preflight_checks([JujuLoginCheck(deployment.juju_account)], console)
+
+        # This command reapplies the openstack plan: make sure that apply
+        # would not change an INFRA_APP (mysql, vault, traefik).
+        self.validate_infra_apps(deployment, show_hints)
 
         step = steps.DeployIronicConductorGroupsStep(deployment, self, [group_name])
         jhelper = JujuHelper(deployment.juju_controller)
@@ -319,6 +347,9 @@ class BaremetalFeature(OpenStackControlPlaneFeature):
         self, deployment: Deployment, group_name: str, show_hints: bool
     ):
         """Delete ironic-conductor group."""
+        # This command reapplies the openstack plan: make sure that apply
+        # would not change an INFRA_APP (mysql, vault, traefik).
+        self.validate_infra_apps(deployment, show_hints)
         step = steps.DeleteIronicConductorGroupStep(deployment, self, group_name)
         run_plan([step], console, show_hints)
 
@@ -359,6 +390,10 @@ class BaremetalFeature(OpenStackControlPlaneFeature):
         show_hints: bool,
     ):
         """Add Neutron baremetal / generic switch configuration."""
+        # This command reapplies the openstack plan: make sure that apply
+        # would not change an INFRA_APP (mysql, vault, traefik).
+        self.validate_infra_apps(deployment, show_hints)
+
         switch_configs = feature_config._SwitchConfigs.read_switch_config(
             name,
             protocol,
@@ -427,8 +462,11 @@ class BaremetalFeature(OpenStackControlPlaneFeature):
     @click.argument("name")
     @click_option_show_hints
     @pass_method_obj
-    def switch_config_delete(*args, **kwargs):
+    def switch_config_delete(self, deployment: Deployment, name: str, show_hints: bool):
         """Delete Neutron baremetal / generic switch configuration."""
+        # This command reapplies the openstack plan: make sure that apply
+        # would not change an INFRA_APP (mysql, vault, traefik).
+        self.validate_infra_apps(deployment, show_hints)
         step = steps.DeleteSwitchConfigStep(deployment, self, name)
         run_plan([step], console, show_hints)
 
