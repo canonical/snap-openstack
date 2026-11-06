@@ -42,9 +42,12 @@ from sunbeam.steps.microovn import (
     DeployMicroOVNApplicationStep,
 )
 from sunbeam.steps.mysql import (
+    MYSQL_APP,
     MySQLCharmUpgradeStep,
     MySQLRouterCharmRefreshStep,
     ReapplyMySQLTerraformPlanStep,
+    get_mysql_applications,
+    load_upgrade_state,
 )
 from sunbeam.steps.openstack import (
     OpenStackPatchLoadBalancerServicesIPPoolStep,
@@ -712,6 +715,16 @@ class MySQLInChannelUpgradeCoordinator(UpgradeCoordinator):
 
     def get_plan(self) -> list[BaseStep]:
         """Return the upgrade plan."""
+        mysql_apps = get_mysql_applications(self.jhelper, OPENSTACK_MODEL)
+        # Resume the saved database first unless the user requested a reset.
+        if not self.reset_mysql_upgrade_state:
+            persisted = load_upgrade_state(self.client)
+            if persisted:
+                in_progress = persisted.get("application", MYSQL_APP)
+                if in_progress in mysql_apps:
+                    mysql_apps.remove(in_progress)
+                    mysql_apps.insert(0, in_progress)
+
         plan = [
             MySQLRouterCharmRefreshStep(
                 self.deployment,
@@ -719,13 +732,21 @@ class MySQLInChannelUpgradeCoordinator(UpgradeCoordinator):
                 self.jhelper,
                 self.manifest,
             ),
-            MySQLCharmUpgradeStep(
-                self.deployment,
-                self.client,
-                self.jhelper,
-                self.manifest,
-                self.reset_mysql_upgrade_state,
-            ),
+            # Plan steps run in order, one database upgrade at a time.
+            *[
+                MySQLCharmUpgradeStep(
+                    self.deployment,
+                    self.client,
+                    self.jhelper,
+                    self.manifest,
+                    # index 0 is the first database, so reset the shared state once.
+                    reset_mysql_upgrade_state=(
+                        self.reset_mysql_upgrade_state and index == 0
+                    ),
+                    application=app,
+                )
+                for index, app in enumerate(mysql_apps)
+            ],
             TerraformInitStep(self.deployment.get_tfhelper("openstack-plan")),
             ReapplyMySQLTerraformPlanStep(
                 self.deployment,
