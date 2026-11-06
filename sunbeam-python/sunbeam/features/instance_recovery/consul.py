@@ -60,7 +60,8 @@ CONSUL_CLIENT_STORAGE_SERF_LAN_PORT = 8321
 CONSUL_CLIENT_TFPLAN = "consul-client-plan"
 CONSUL_CLIENT_CONFIG_KEY = "TerraformVarsFeatureConsulPlanConsulClient"
 PRINCIPAL_APP = "openstack-hypervisor"
-CONSUL_STORAGE_LB_SERVICE = "consul-storage-lb"
+# Base service name; PatchLoadBalancerServices* steps look up "<name>-lb" first.
+CONSUL_STORAGE_SERVICE = "consul-storage"
 
 
 class ConsulServerNetworks(enum.Enum):
@@ -496,7 +497,7 @@ class ConsulFeature:
 class PatchConsulStorageLoadBalancerIPStep(PatchLoadBalancerServicesIPStep):
     def services(self) -> list[str]:
         """List of services to patch."""
-        return [CONSUL_STORAGE_LB_SERVICE]
+        return [CONSUL_STORAGE_SERVICE]
 
     def model(self) -> str:
         """Name of the model to use."""
@@ -506,7 +507,7 @@ class PatchConsulStorageLoadBalancerIPStep(PatchLoadBalancerServicesIPStep):
 class PatchConsulStorageLoadBalancerIPPoolStep(PatchLoadBalancerServicesIPPoolStep):
     def services(self) -> list[str]:
         """List of services to patch."""
-        return [CONSUL_STORAGE_LB_SERVICE]
+        return [CONSUL_STORAGE_SERVICE]
 
     def model(self) -> str:
         """Name of the model to use."""

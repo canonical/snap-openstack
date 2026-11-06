@@ -144,28 +144,38 @@ class InstanceRecoveryFeature(OpenStackControlPlaneFeature):
 
         plan2: list[BaseStep] = []
         if is_maas_deployment(deployment):
-            message = (
-                "Detected MAAS deployment, adding consul storage LoadBalancer patching "
-                "steps"
-            )
-            LOG.debug(message)
             client = deployment.get_client()
             maas_client = MaasClient.from_deployment(deployment)
-            plan2.extend(
-                [
-                    MaasCreateLoadBalancerIPPoolsStep(deployment, client, maas_client),
-                    consul.PatchConsulStorageLoadBalancerIPPoolStep(
-                        client,
-                        deployment.storage_ippool_label,
-                        ignore_errors=True,
-                    ),
-                    consul.PatchConsulStorageLoadBalancerIPStep(
-                        client,
-                        pool_name=deployment.storage_ippool_label,
-                        ignore_errors=True,
-                    ),
-                ]
+            plan2.append(
+                MaasCreateLoadBalancerIPPoolsStep(deployment, client, maas_client)
             )
+            # consul-storage (and its LoadBalancer service) only exists when the
+            # storage space differs from the management space.
+            servers = consul.ConsulFeature.consul_servers_to_enable(deployment)
+            if servers.get(consul.ConsulServerNetworks.STORAGE):
+                LOG.debug(
+                    "Detected MAAS deployment with a dedicated storage space, "
+                    "adding consul storage LoadBalancer patching steps"
+                )
+                plan2.extend(
+                    [
+                        consul.PatchConsulStorageLoadBalancerIPPoolStep(
+                            client,
+                            deployment.storage_ippool_label,
+                            ignore_errors=True,
+                        ),
+                        consul.PatchConsulStorageLoadBalancerIPStep(
+                            client,
+                            pool_name=deployment.storage_ippool_label,
+                            ignore_errors=True,
+                        ),
+                    ]
+                )
+            else:
+                LOG.debug(
+                    "Storage space is shared with management, no consul-storage "
+                    "server deployed: skipping consul storage LoadBalancer patching"
+                )
         plan2.extend(
             [
                 TerraformInitStep(tfhelper_consul_client),
