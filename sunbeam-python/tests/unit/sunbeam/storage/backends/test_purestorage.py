@@ -150,6 +150,12 @@ class TestPureStorageBackend(BaseBackendTests):
             "pure_replication_pg_name",
             "pure_replication_pod_name",
             "pure_trisync_enabled",
+            "replication_target_name",
+            "replication_target_address",
+            "replication_target_api_token",
+            "replication_type",
+            "replication_sync_uniform",
+            "replication_driver_ssl_cert",
         ]
         for field in replication_fields:
             assert field in fields, f"Replication field {field} not found"
@@ -182,6 +188,57 @@ class TestPureStorageBackend(BaseBackendTests):
 
 class TestPureStorageConfigValidation:
     """Test Pure Storage config validation behavior."""
+
+    BASE = {"san-ip": "192.168.1.1", "pure-api-token": "secret-token"}
+    TARGET = {
+        "replication-target-name": "joule",
+        "replication-target-address": "10.240.1.53",
+        "replication-target-api-token": "target-token",
+    }
+
+    def test_replication_fields_validate_individually(self, purestorage_backend):
+        """CLI per-field validation must accept each target field alone."""
+        from sunbeam.storage.steps import basemodel_validator
+
+        validate = basemodel_validator(purestorage_backend.config_type())
+        validate("replication_target_name")("joule")
+        validate("replication_target_address")("10.240.1.53")
+        validate("replication_target_api_token")("target-token")
+
+    def test_replication_target_full(self, purestorage_backend):
+        cfg = purestorage_backend.config_type().model_validate(
+            {**self.BASE, **self.TARGET, "replication-type": "sync"}
+        )
+        assert cfg.replication_target_name == "joule"
+        assert cfg.replication_type == "sync"
+
+    @pytest.mark.parametrize("missing", list(TARGET))
+    def test_replication_target_partial_rejected(self, purestorage_backend, missing):
+        from pydantic import ValidationError
+
+        partial = {k: v for k, v in self.TARGET.items() if k != missing}
+        with pytest.raises(ValidationError, match="must be set together"):
+            purestorage_backend.config_type().model_validate({**self.BASE, **partial})
+
+    def test_replication_type_rejects_invalid(self, purestorage_backend):
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            purestorage_backend.config_type().model_validate(
+                {**self.BASE, **self.TARGET, "replication-type": "both"}
+            )
+
+    def test_replication_token_secret_key_is_distinct(self, purestorage_backend):
+        from sunbeam.storage.models import SecretDictField
+
+        fields = purestorage_backend.config_type().model_fields
+        keys = {
+            m.field
+            for f in ("pure_api_token", "replication_target_api_token")
+            for m in fields[f].metadata
+            if isinstance(m, SecretDictField)
+        }
+        assert keys == {"token", "replication-target-api-token"}
 
     def test_protocol_accepts_only_valid_values(self, purestorage_backend):
         """Test that protocol field rejects invalid values."""
