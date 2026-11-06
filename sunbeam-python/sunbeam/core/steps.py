@@ -56,6 +56,43 @@ else:
 LOG = logging.getLogger(__name__)
 
 
+def _get_lb_service(
+    kube: "l_client.Client", service_name: str, find_lb: bool = True
+) -> "core_v1.Service":
+    """Look up a service by name, optionally preferring its LoadBalancer service.
+
+    With find_lb, ``<service_name>-lb`` is tried first and ``service_name`` is
+    the fallback. Callers pass the base service name (e.g. ``traefik``).
+
+    :raises ApiError: the last 404 if no candidate exists, or any non-404 error.
+    """
+    candidates = [f"{service_name}-lb", service_name] if find_lb else [service_name]
+
+    for candidate in candidates[:-1]:
+        try:
+            return kube.get(core_v1.Service, candidate)
+        except l_exceptions.ApiError as e:
+            if e.status.code != 404:
+                raise
+            LOG.debug("Service %r not found, trying next candidate", candidate)
+    return kube.get(core_v1.Service, candidates[-1])
+
+
+def _ignored_services_result(services: list[str], skipped: int) -> Result:
+    """Result of a LoadBalancer patch run that skipped some services.
+
+    SKIPPED when every service was skipped under ignore_errors, matching
+    is_skip(), so the plan does not report a step that patched nothing as
+    completed. COMPLETED otherwise.
+    """
+    if services and skipped == len(services):
+        return Result(
+            ResultType.SKIPPED,
+            "No LoadBalancer service found, skipping as ignore_errors is set",
+        )
+    return Result(ResultType.COMPLETED)
+
+
 class DeployMachineApplicationStep(BaseStep):
     """Base class to deploy machine application using Terraform cloud."""
 
@@ -440,15 +477,7 @@ class PatchLoadBalancerServicesIPStep(BaseStep, abc.ABC):
         self, service_name: str, find_lb: bool = True
     ) -> "core_v1.Service":
         """Look up a service by name, optionally looking for a LoadBalancer service."""
-        search_service = service_name
-        if find_lb:
-            search_service += "-lb"
-        try:
-            return self.kube.get(core_v1.Service, search_service)
-        except l_exceptions.ApiError as e:
-            if e.status.code == 404 and search_service.endswith("-lb"):
-                return self._get_service(service_name, find_lb=False)
-            raise e
+        return _get_lb_service(self.kube, service_name, find_lb=find_lb)
 
     def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not.
@@ -551,10 +580,20 @@ class PatchLoadBalancerServicesIPStep(BaseStep, abc.ABC):
 
     def run(self, context: StepContext) -> Result:
         """Patch LoadBalancer services annotations with LB IP."""
-        for service_name in self.services():
+        services = self.services()
+        skipped = 0
+        for service_name in services:
             try:
                 service = self._get_service(service_name, find_lb=True)
             except l_exceptions.ApiError as e:
+                if self.ignore_errors and e.status.code == 404:
+                    LOG.debug(
+                        "Service %r of type LoadBalancer not found, "
+                        "skipping as ignore_errors is set",
+                        service_name,
+                    )
+                    skipped += 1
+                    continue
                 return Result(ResultType.FAILED, str(e))
             if not service.metadata:
                 return Result(
@@ -637,7 +676,7 @@ class PatchLoadBalancerServicesIPStep(BaseStep, abc.ABC):
                     service_annotations[self.lb_ip_annotation],
                 )
 
-        return Result(ResultType.COMPLETED)
+        return _ignored_services_result(services, skipped)
 
 
 class PatchLoadBalancerServicesIPPoolStep(BaseStep, abc.ABC):
@@ -699,15 +738,7 @@ class PatchLoadBalancerServicesIPPoolStep(BaseStep, abc.ABC):
         self, service_name: str, find_lb: bool = True
     ) -> "core_v1.Service":
         """Look up a service by name, optionally looking for a LoadBalancer service."""
-        search_service = service_name
-        if find_lb:
-            search_service += "-lb"
-        try:
-            return self.kube.get(core_v1.Service, search_service)
-        except l_exceptions.ApiError as e:
-            if e.status.code == 404 and search_service.endswith("-lb"):
-                return self._get_service(service_name, find_lb=False)
-            raise e
+        return _get_lb_service(self.kube, service_name, find_lb=find_lb)
 
     def check_lb_pool_exists_in_annotations(
         self, service_annotations: dict, lb_pool: str
@@ -783,7 +814,9 @@ class PatchLoadBalancerServicesIPPoolStep(BaseStep, abc.ABC):
 
     def run(self, context: StepContext) -> Result:  # noqa: C901
         """Patch LoadBalancer services annotations with LB IP pool."""
-        for service_name in self.services():
+        services = self.services()
+        skipped = 0
+        for service_name in services:
             try:
                 service = self._get_service(service_name, find_lb=True)
             except l_exceptions.ApiError as e:
@@ -793,6 +826,7 @@ class PatchLoadBalancerServicesIPPoolStep(BaseStep, abc.ABC):
                         "skipping as ignore_errors is set"
                     )
                     LOG.debug(message)
+                    skipped += 1
                     continue
                 return Result(ResultType.FAILED, str(e))
 
@@ -806,6 +840,7 @@ class PatchLoadBalancerServicesIPPoolStep(BaseStep, abc.ABC):
                     "skipping as ignore_errors is set"
                 )
                 LOG.debug(message)
+                skipped += 1
                 continue
 
             if not service.metadata:
@@ -870,7 +905,7 @@ class PatchLoadBalancerServicesIPPoolStep(BaseStep, abc.ABC):
                 except ValueError as e:
                     return Result(ResultType.FAILED, str(e))
 
-        return Result(ResultType.COMPLETED)
+        return _ignored_services_result(services, skipped)
 
 
 class CreateLoadBalancerIPPoolsStep(BaseStep, abc.ABC):
