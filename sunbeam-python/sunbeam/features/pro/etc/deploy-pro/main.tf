@@ -22,8 +22,8 @@ resource "juju_application" "ubuntu_pro" {
   model_uuid = data.juju_model.machine_model.uuid
 
   charm {
-    name    = "ubuntu-advantage"
-    channel = var.ubuntu-advantage-channel
+    name    = "ubuntu-pro"
+    channel = var.ubuntu-pro-channel
     base    = "ubuntu@24.04"
   }
 
