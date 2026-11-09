@@ -9,6 +9,7 @@ for all storage backend CLI implementations.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -17,12 +18,14 @@ import yaml
 from rich.console import Console
 
 from sunbeam.core.deployment import Deployment
+from sunbeam.storage.models import normalize_backend_config
 
 if TYPE_CHECKING:
     from sunbeam.storage.base import StorageBackendBase
 
 
 console = Console()
+LOG = logging.getLogger(__name__)
 
 
 class StorageBackendCLIBase:
@@ -57,7 +60,25 @@ class StorageBackendCLIBase:
         if not path:
             return {}
         text = path.read_text()
-        return dict(yaml.safe_load(text) or {})
+        loaded = dict(yaml.safe_load(text) or {})
+        return self._drop_unknown_config_options(loaded)
+
+    def _drop_unknown_config_options(self, config: dict[str, Any]) -> dict[str, Any]:
+        """Warn about unknown settings and rewrite aliases to field names."""
+        kept, unknown = normalize_backend_config(self.backend.config_type(), config)
+        for key in unknown:
+            LOG.warning(
+                "Config option %r is not defined for storage type %r and will "
+                "be ignored; it will not be added to the cinder backend.",
+                key,
+                self.backend.backend_type,
+            )
+            console.print(
+                f"[yellow]Warning: config option {key!r} is not defined for "
+                f"storage type {self.backend.backend_type!r} and will be "
+                "ignored; it will not be added to the cinder backend.[/yellow]"
+            )
+        return kept
 
     def _click_type_for(self, field_info) -> click.types.ParamType:
         """Map pydantic field to Click type.
@@ -207,6 +228,9 @@ class StorageBackendCLIBase:
             provided_cli_values = {k: v for k, v in cli_cfg.items() if v is not None}
             # Name is guaranted to be given through the CLI.
             backend_name = provided_cli_values.pop("name")
+
+            if cfg_file or provided_cli_values:
+                accept_defaults = True
 
             merged = {**file_cfg, **provided_cli_values}
             self.backend.add_backend_instance(
