@@ -7,6 +7,7 @@ These tests are designed to be generic and can be reused by child classes
 by overriding the backend fixture.
 """
 
+import logging
 from unittest.mock import Mock, patch
 
 import click
@@ -19,6 +20,7 @@ from sunbeam.storage.base import (
     JUJU_APP_NAME_PATTERN,
     validate_juju_application_name,
 )
+from sunbeam.storage.cli_base import StorageBackendCLIBase
 
 
 class TestJujuApplicationNameValidation:
@@ -755,3 +757,33 @@ class TestStorageBackendBase(BaseStorageBackendTests):
         mock_client.cluster.update_config.assert_called_once_with(
             "StorageBackendsEnabled", json.dumps(expected_backends)
         )
+
+
+class TestStorageConfigFileUnknownOptions:
+    """Unknown config-file settings must be warned about and dropped."""
+
+    def test_unknown_option_is_warned_and_dropped(self, mock_backend, tmp_path, caplog):
+        path = tmp_path / "backend.yaml"
+        path.write_text("required_field: value\nnot-a-real-option: 1\n")
+        cli = StorageBackendCLIBase(mock_backend)
+
+        with caplog.at_level(logging.WARNING):
+            loaded = cli._load_config_file(path)
+
+        assert loaded == {"required_field": "value"}
+        assert "not-a-real-option" in caplog.text
+        assert "will be ignored" in caplog.text
+        assert "cinder backend" in caplog.text
+
+    def test_known_alias_is_rewritten_to_field_name(
+        self, mock_backend, tmp_path, caplog
+    ):
+        path = tmp_path / "backend.yaml"
+        path.write_text("required-field: alias-value\nrequired_field: field-value\n")
+        cli = StorageBackendCLIBase(mock_backend)
+
+        with caplog.at_level(logging.WARNING):
+            loaded = cli._load_config_file(path)
+
+        assert loaded == {"required_field": "field-value"}
+        assert caplog.text == ""
