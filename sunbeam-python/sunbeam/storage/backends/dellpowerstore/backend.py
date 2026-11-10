@@ -6,7 +6,7 @@
 import logging
 from typing import Annotated, Literal, Optional
 
-from pydantic import Field
+from pydantic import Field, IPvAnyAddress
 from rich.console import Console
 
 from sunbeam.core.manifest import StorageBackendConfig
@@ -26,7 +26,7 @@ class DellPowerstoreConfig(StorageBackendConfig):
 
     # Mandatory connection parameters
     san_ip: Annotated[
-        str,
+        IPvAnyAddress,
         Field(description="Dell PowerStore management IP"),
     ]
     san_login: Annotated[
