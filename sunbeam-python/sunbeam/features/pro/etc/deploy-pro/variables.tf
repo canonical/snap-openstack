@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: 2023 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
-variable "ubuntu-advantage-channel" {
-  description = "Channel to use for deployment of ubuntu-advantage charm"
+variable "ubuntu-pro-channel" {
+  description = "Channel to use for deployment of ubuntu-pro charm"
   type        = string
   default     = "latest/edge"
 }
