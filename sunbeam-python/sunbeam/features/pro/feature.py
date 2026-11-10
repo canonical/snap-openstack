@@ -16,7 +16,7 @@ from snaphelpers import Snap
 from sunbeam.clusterd.client import Client
 from sunbeam.core.common import BaseStep, Result, ResultType, StepContext, run_plan
 from sunbeam.core.deployment import Deployment
-from sunbeam.core.juju import JujuHelper, JujuStepHelper
+from sunbeam.core.juju import JujuException, JujuHelper, JujuStepHelper
 from sunbeam.core.manifest import (
     FeatureConfig,
     Manifest,
@@ -39,6 +39,8 @@ LOG = logging.getLogger(__name__)
 console = Console()
 
 APPLICATION = "ubuntu-pro"
+LEGACY_APPLICATION = "ubuntu-advantage"
+ALL_PRO_APPLICATIONS = [APPLICATION, LEGACY_APPLICATION]
 APP_TIMEOUT = 300  # 5 minutes, managing the application should be fast
 UNIT_TIMEOUT = 1200  # 15 minutes, adding / removing units can take a long time
 
@@ -134,12 +136,16 @@ class DisableUbuntuProApplicationStep(BaseStep, JujuStepHelper):
         self,
         client: Client,
         tfhelper: TerraformHelper,
+        jhelper: JujuHelper,
         manifest: Manifest,
+        model: str,
     ):
         super().__init__("Disable Ubuntu Pro", "Disabling Ubuntu Pro support")
         self.client = client
         self.tfhelper = tfhelper
+        self.jhelper = jhelper
         self.manifest = manifest
+        self.model = model
 
     def has_prompts(self) -> bool:
         """Returns true if the step has prompts that it can ask the user."""
@@ -155,7 +161,11 @@ class DisableUbuntuProApplicationStep(BaseStep, JujuStepHelper):
 
     def run(self, context: StepContext) -> Result:
         """Apply terraform configuration to disable ubuntu-pro."""
-        extra_tfvars = {"token": ""}
+        # tfvars are not persisted between runs; pass required vars again.
+        extra_tfvars = {
+            "machine_model_uuid": self.jhelper.get_model_uuid(self.model),
+            "token": "",
+        }
         try:
             self.tfhelper.update_tfvars_and_apply_tf(
                 self.client,
@@ -164,8 +174,39 @@ class DisableUbuntuProApplicationStep(BaseStep, JujuStepHelper):
                 override_tfvars=extra_tfvars,
                 reporter=context.reporter,
             )
-        except TerraformException as e:
+        except (TerraformException, TerraformStateLockedException) as e:
             return Result(ResultType.FAILED, str(e))
+
+        # The deployed app may be present as ubuntu-pro (current) or
+        # ubuntu-advantage (legacy). Ensure disable leaves neither behind.
+        try:
+            self.jhelper.wait_application_gone(
+                ALL_PRO_APPLICATIONS,
+                self.model,
+                timeout=APP_TIMEOUT,
+            )
+        except TimeoutError:
+            model_status = self.jhelper.get_model_status(self.model)
+            existing_apps = [
+                app_name
+                for app_name in ALL_PRO_APPLICATIONS
+                if app_name in model_status.apps
+            ]
+            if existing_apps:
+                try:
+                    self.jhelper.remove_application(
+                        *existing_apps,
+                        model=self.model,
+                        destroy_storage=True,
+                        force=True,
+                    )
+                    self.jhelper.wait_application_gone(
+                        existing_apps,
+                        self.model,
+                        timeout=APP_TIMEOUT,
+                    )
+                except (TimeoutError, JujuException) as e:
+                    return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.COMPLETED)
 
@@ -233,12 +274,15 @@ class ProFeature(EnableDisableFeature):
     def run_disable_plans(self, deployment: Deployment, show_hints: bool):
         """Run the disablement plans."""
         tfhelper = deployment.get_tfhelper(self.tfplan)
+        jhelper = JujuHelper(deployment.juju_controller)
         plan = [
             TerraformInitStep(tfhelper),
             DisableUbuntuProApplicationStep(
                 deployment.get_client(),
                 tfhelper,
+                jhelper,
                 self.manifest,
+                deployment.openstack_machines_model,
             ),
         ]
 
