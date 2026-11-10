@@ -6,7 +6,7 @@
 import logging
 from typing import Annotated, Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field, IPvAnyAddress, model_validator
 
 from sunbeam.core.manifest import StorageBackendConfig
 from sunbeam.storage.base import StorageBackendBase
@@ -19,7 +19,7 @@ class InfinidatConfig(StorageBackendConfig):
     """Static configuration model for Infinidat storage backend."""
 
     # Mandatory connection parameters
-    san_ip: Annotated[str, Field(description="InfiniBox Management IP")]
+    san_ip: Annotated[IPvAnyAddress, Field(description="InfiniBox Management IP")]
     infinidat_pool_name: Annotated[str, Field(description="InfiniBox Pool Name")]
     protocol: Annotated[
         Literal["iscsi", "fc"],
