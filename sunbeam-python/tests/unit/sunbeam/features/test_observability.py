@@ -118,7 +118,7 @@ class TestDeployObservabilityStackStep:
         assert result.result_type == ResultType.FAILED
         assert result.message == "apply failed..."
 
-    def test_run_waiting_timed_out(
+    def test_run_waiting_timed_out_then_recovers(
         self,
         deployment,
         tfhelper,
@@ -133,7 +133,7 @@ class TestDeployObservabilityStackStep:
         ssnap().config.get.return_value = "k8s"
         observabilityfeature.deployment.proxy_settings.return_value = {}
         jhelper.get_application_names.return_value = ["app1", "app2", "app3"]
-        jhelper.wait_until_active.side_effect = TimeoutError("timed out")
+        jhelper.wait_until_active.side_effect = [TimeoutError("timed out"), None]
         read_config_obs.side_effect = ConfigItemNotFoundException("not found")
         observabilityfeature.name = "observability.embedded"
 
@@ -143,9 +143,40 @@ class TestDeployObservabilityStackStep:
         result = step.run(step_context)
 
         tfhelper.update_tfvars_and_apply_tf.assert_called_once()
-        jhelper.wait_until_active.assert_called_once()
+        assert jhelper.wait_until_active.call_count == 2
+        assert result.result_type == ResultType.COMPLETED
+
+    def test_run_waiting_timed_out_and_recheck_failed(
+        self,
+        deployment,
+        tfhelper,
+        jhelper,
+        observabilityfeature,
+        ssnap,
+        read_config_obs,
+        update_config,
+        k8shelper,
+        step_context,
+    ):
+        ssnap().config.get.return_value = "k8s"
+        observabilityfeature.deployment.proxy_settings.return_value = {}
+        jhelper.get_application_names.return_value = ["app1", "app2", "app3"]
+        jhelper.wait_until_active.side_effect = [
+            TimeoutError("timed out"),
+            TimeoutError("still timed out"),
+        ]
+        read_config_obs.side_effect = ConfigItemNotFoundException("not found")
+        observabilityfeature.name = "observability.embedded"
+
+        step = observability_feature.DeployObservabilityStackStep(
+            deployment, observabilityfeature, tfhelper, jhelper
+        )
+        result = step.run(step_context)
+
+        tfhelper.update_tfvars_and_apply_tf.assert_called_once()
+        assert jhelper.wait_until_active.call_count == 2
         assert result.result_type == ResultType.FAILED
-        assert result.message == "timed out"
+        assert result.message == "still timed out"
 
     def test_is_skip_no_modification(
         self, deployment, tfhelper, jhelper, observabilityfeature, ssnap, step_context

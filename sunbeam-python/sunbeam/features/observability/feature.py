@@ -294,7 +294,22 @@ class DeployObservabilityStackStep(BaseStep, JujuStepHelper):
                 queue=status_queue,
                 overlay=openstack.build_overlay_dict(apps),
             )
-        except (JujuWaitException, TimeoutError) as e:
+        except TimeoutError:
+            LOG.warning(
+                "Timed out waiting for observability deployment; "
+                "running final readiness check against latest model status."
+            )
+            try:
+                self.jhelper.wait_until_active(
+                    self.model,
+                    apps,
+                    timeout=60,
+                    overlay=openstack.build_overlay_dict(apps),
+                )
+            except (JujuWaitException, TimeoutError) as e:
+                LOG.debug("Failed to deploy Observability Stack", exc_info=True)
+                return Result(ResultType.FAILED, str(e))
+        except JujuWaitException as e:
             LOG.debug("Failed to deploy Observability Stack", exc_info=True)
             return Result(ResultType.FAILED, str(e))
         finally:
