@@ -256,7 +256,17 @@ class JujuHelper:
         if controller is None:
             raise ValueError("Controller cannot be None")
         self.controller: str = controller.name
+        self._controller_obj = controller
         self._juju = jubilant.Juju()
+
+    def clone(self) -> "JujuHelper":
+        """Return an independent helper sharing only the controller.
+
+        Instances keep private jubilant state (the current model is set
+        and restored per call), so a clone is required to run commands
+        from multiple threads safely.
+        """
+        return JujuHelper(self._controller_obj)
 
     def cli(
         self,
@@ -780,6 +790,28 @@ class JujuHelper:
                     f" {name!r} in model {model!r}: {e}"
                 ) from e
         return task
+
+    def run_cmd_on_unit(
+        self,
+        name: str,
+        model: str,
+        cmd: str,
+        timeout: float | None = None,
+    ) -> jubilant.Task:
+        """Run a shell command on a unit.
+
+        The command runs on the unit's machine as the juju agent user
+        (root for machine charms).
+
+        :name: unit name
+        :model: Name of the model where the application is located
+        :cmd: Command to run
+        :timeout: Timeout in seconds
+        :returns: Task with return-code, stdout and stderr
+        """
+        self._validate_unit(name)
+        with self._model(model) as juju:
+            return juju.exec(cmd, unit=name, wait=timeout)
 
     def run_cmd_on_unit_payload(
         self,

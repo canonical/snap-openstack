@@ -141,6 +141,7 @@ class ExtendedAPIService(service.BaseService):
         arch: str | None = None,
         is_dpu: bool | None = None,
         image_name: str | None = None,
+        rack_name: str | None = None,
     ) -> None:
         """Update role and machineid for node."""
         data: dict = {"role": role, "machineid": machineid, "systemid": systemid}
@@ -150,6 +151,8 @@ class ExtendedAPIService(service.BaseService):
             data["is_dpu"] = is_dpu
         if image_name is not None:
             data["image_name"] = image_name
+        if rack_name is not None:
+            data["rack_name"] = rack_name
         self._put(f"1.0/nodes/{name}", data=json.dumps(data))
 
     def add_juju_user(self, name: str, token: str) -> None:

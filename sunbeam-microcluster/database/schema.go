@@ -20,6 +20,8 @@ var SchemaExtensions = []schema.Update{
 	FeatureGatesSchemaUpdate,
 	AddArchAndIsDPUToNodes,
 	AddImageNameToNodes,
+	AddRackNameToNodes,
+	RenameRackNameColumn,
 }
 
 // NodesSchemaUpdate is schema for table nodes
@@ -125,6 +127,28 @@ ALTER TABLE nodes ADD COLUMN is_dpu INTEGER default 0;
 func AddImageNameToNodes(_ context.Context, tx *sql.Tx) error {
 	stmt := `
 ALTER TABLE nodes ADD COLUMN image_name TEXT default '';
+  `
+
+	_, err := tx.Exec(stmt)
+
+	return err
+}
+
+// AddRackNameToNodes is schema update for table nodes
+func AddRackNameToNodes(_ context.Context, tx *sql.Tx) error {
+	stmt := `
+ALTER TABLE nodes ADD COLUMN rackname TEXT default '';
+  `
+
+	_, err := tx.Exec(stmt)
+
+	return err
+}
+
+// RenameRackNameColumn renames the column to the snake_case convention
+func RenameRackNameColumn(_ context.Context, tx *sql.Tx) error {
+	stmt := `
+ALTER TABLE nodes RENAME COLUMN rackname TO rack_name;
   `
 
 	_, err := tx.Exec(stmt)

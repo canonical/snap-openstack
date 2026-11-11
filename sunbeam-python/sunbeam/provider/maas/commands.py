@@ -73,6 +73,20 @@ from sunbeam.core.terraform import TerraformInitStep
 from sunbeam.feature_gates import feature_gate_option
 from sunbeam.provider.base import ProviderBase
 from sunbeam.provider.common.multiregion import connect_to_region_controller
+from sunbeam.provider.maas.bgp import (
+    BgpConfig,
+    BgpConfigException,
+    BgpDiscoverRackMachinesStep,
+    EnableNeutronBgpStep,
+    MicroOvnBgpAttachStep,
+    MicroOvnBgpDisableStep,
+    SaveMaasRackControllersStep,
+    SetNodeRackNamesStep,
+    ValidateNeutronBgpPluginStep,
+    parse_bgp_rack_options,
+    print_bgp_topology,
+    validate_bgp_rack_coverage,
+)
 from sunbeam.provider.maas.client import (
     MaasClient,
     MaasDeployment,
@@ -283,6 +297,7 @@ class MaasProvider(ProviderBase):
         configure.add_command(configure_cmd)
         configure.add_command(configure_sriov)
         configure.add_command(configure_dpdk)
+        configure.add_command(configure_bgp)
         deployment.add_command(machine)
         machine.add_command(list_machines_cmd)
         machine.add_command(show_machine_cmd)
@@ -1033,6 +1048,7 @@ def deploy(
                 )
             )
 
+    plan2.append(SaveMaasRackControllersStep(client, deployment))
     plan2.append(SetBootstrapped(client))
     run_plan(plan2, console, show_hints)
 
@@ -1093,7 +1109,6 @@ def configure_cmd(
     tfhelper = deployment.get_tfhelper(tfplan)
     tfhelper.env = (tfhelper.env or {}) | admin_credentials
     answer_file = tfhelper.path / "config.auto.tfvars.json"
-    tfhelper_hypervisor = deployment.get_tfhelper("hypervisor-plan")
     compute = list(
         map(_name_mapper, client.cluster.list_nodes_by_role(RoleTags.COMPUTE.value))
     )
@@ -1110,6 +1125,7 @@ def configure_cmd(
         )
     )
     network_agents_names = list(dict.fromkeys(network + compute + control))
+    tfhelper_hypervisor = deployment.get_tfhelper("hypervisor-plan")
     plan = [
         AddManifestStep(client, manifest_path),
         JujuLoginStep(deployment.juju_account),
@@ -2159,3 +2175,114 @@ def configure_dpdk(
         ),
     ]
     run_plan(plan, console, show_hints)
+
+
+@click.command("bgp")
+@click.option("--enable", help="Enable BGP configuration.", is_flag=True)
+@click.option("--disable", help="Disable BGP configuration.", is_flag=True)
+@click.option(
+    "--rack",
+    "racks",
+    help=(
+        "Rack BGP configuration as comma-separated KEY=VALUE fields: "
+        "name=<rack controller hostname>, "
+        "peer=<asn>@<address> (ASN required; IPv4 peer needs networks, "
+        "IPv6 peer must be link-local fe80:: with no networks), "
+        "networks=<first-ip>/<len> (the pool compute br-bgp addresses "
+        "are allocated from). Once per rack."
+    ),
+    multiple=True,
+)
+@click.option("-a", "--accept-defaults", help="Accept all defaults.", is_flag=True)
+@click_option_show_hints
+@click.pass_context
+def configure_bgp(
+    ctx: click.Context,
+    enable: bool,
+    disable: bool,
+    racks: tuple[str, ...],
+    accept_defaults: bool,
+    show_hints: bool,
+) -> None:
+    """Configure BGP peering for compute nodes."""
+    deployment: MaasDeployment = ctx.obj
+    client = deployment.get_client()
+
+    if enable and disable:
+        raise click.ClickException("--enable and --disable are mutually exclusive.")
+    if not enable and not disable:
+        raise click.ClickException("Specify --enable or --disable.")
+
+    if disable:
+        if racks:
+            raise click.ClickException("--disable takes no --rack arguments.")
+        run_preflight_checks([VerifyBootstrappedCheck(client)], console)
+        jhelper = JujuHelper(deployment.juju_controller)
+        run_plan(
+            [MicroOvnBgpDisableStep(jhelper, deployment.openstack_machines_model)],
+            console,
+            show_hints,
+        )
+        click.echo("BGP disabled.")
+        return
+
+    try:
+        rack_configs = parse_bgp_rack_options(racks)
+    except ValueError as e:
+        raise click.ClickException(str(e)) from e
+    if not rack_configs:
+        raise click.ClickException(
+            "No racks given. Use --rack name=...,peer=...[,networks=...]."
+        )
+
+    run_preflight_checks([VerifyBootstrappedCheck(client)], console)
+
+    discovery = BgpDiscoverRackMachinesStep(MaasClient.from_deployment(deployment))
+    run_plan([discovery], console, show_hints)
+
+    print_bgp_topology(console, rack_configs, discovery.rack_machines)
+
+    try:
+        validated = validate_bgp_rack_coverage(
+            rack_configs,
+            discovery.rack_machines,
+            accept_defaults=accept_defaults,
+            confirm=click.confirm,
+        )
+    except BgpConfigException as e:
+        raise click.ClickException(str(e)) from e
+
+    # The reconciled topology is handed to the BGP configuration steps;
+    # nothing is persisted.
+    config = BgpConfig(racks=validated)
+    click.echo(f"BGP topology validated for {len(config.racks)} rack(s).")
+
+    manifest = deployment.get_manifest()
+    jhelper = JujuHelper(deployment.juju_controller)
+    tfhelper_openstack = deployment.get_tfhelper("openstack-plan")
+    machines_model = deployment.openstack_machines_model
+
+    # Neutron first: the service plugin builds the OVN BGP topology and
+    # the agent extensions program the peer-bridge datapath; only when
+    # the rendered configuration verifies do the nodes attach.
+    plan: list[BaseStep] = [
+        SetNodeRackNamesStep(client, discovery.rack_machines),
+        TerraformInitStep(tfhelper_openstack),
+        ValidateInfraAppsStep(client, tfhelper_openstack, manifest),
+        EnableNeutronBgpStep(
+            client, manifest, tfhelper_openstack, jhelper, OPENSTACK_MODEL
+        ),
+        ValidateNeutronBgpPluginStep(jhelper, OPENSTACK_MODEL),
+    ]
+    plan += [
+        MicroOvnBgpAttachStep(
+            jhelper,
+            machines_model,
+            rack,
+            rack_config,
+            discovery.rack_machines[rack],
+        )
+        for rack, rack_config in sorted(config.racks.items())
+    ]
+    run_plan(plan, console, show_hints)
+    click.echo(f"BGP configured for {len(config.racks)} rack(s).")

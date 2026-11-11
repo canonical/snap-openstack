@@ -21,4 +21,6 @@ type Node struct {
 	IsDPU *bool `json:"is_dpu,omitempty" yaml:"is_dpu,omitempty"`
 	// ImageName is the MAAS boot resource name from the dpu-image-<name> tag.
 	ImageName string `json:"image_name,omitempty" yaml:"image_name,omitempty"`
+	// RackName is the MAAS rack controller the node's fabric is behind.
+	RackName string `json:"rack_name,omitempty" yaml:"rack_name,omitempty"`
 }

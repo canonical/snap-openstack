@@ -38,6 +38,7 @@ func ListNodes(ctx context.Context, s state.State, roles []string) (apitypes.Nod
 				Arch:      node.Arch,
 				IsDPU:     &isDPU,
 				ImageName: node.ImageName,
+				RackName:  node.RackName,
 			})
 		}
 
@@ -71,6 +72,7 @@ func GetNode(ctx context.Context, s state.State, name string) (apitypes.Node, er
 		isDPU := record.IsDPU
 		node.IsDPU = &isDPU
 		node.ImageName = record.ImageName
+		node.RackName = record.RackName
 
 		return nil
 	})
@@ -79,7 +81,7 @@ func GetNode(ctx context.Context, s state.State, name string) (apitypes.Node, er
 }
 
 // AddNode adds a node to the database
-func AddNode(ctx context.Context, s state.State, name string, role []string, machineid int, systemid string, arch string, isDPU bool, imageName string) error {
+func AddNode(ctx context.Context, s state.State, name string, role []string, machineid int, systemid string, arch string, isDPU bool, imageName string, rackName string) error {
 	nodeRole, err := roleToStr(role)
 	if err != nil {
 		return err
@@ -89,7 +91,7 @@ func AddNode(ctx context.Context, s state.State, name string, role []string, mac
 		if arch == "" {
 			arch = apitypes.DefaultArch
 		}
-		_, err := database.CreateNode(ctx, tx, database.Node{Member: s.Name(), Name: name, Role: nodeRole, MachineID: machineid, SystemID: systemid, Arch: arch, IsDPU: isDPU, ImageName: imageName})
+		_, err := database.CreateNode(ctx, tx, database.Node{Member: s.Name(), Name: name, Role: nodeRole, MachineID: machineid, SystemID: systemid, Arch: arch, IsDPU: isDPU, ImageName: imageName, RackName: rackName})
 		if err != nil {
 			return fmt.Errorf("failed to record node: %w", err)
 		}
@@ -104,7 +106,7 @@ func AddNode(ctx context.Context, s state.State, name string, role []string, mac
 }
 
 // UpdateNode updates a node record in the database
-func UpdateNode(ctx context.Context, s state.State, name string, role []string, machineid int, systemid string, arch string, isDPU *bool, imageName *string) error {
+func UpdateNode(ctx context.Context, s state.State, name string, role []string, machineid int, systemid string, arch string, isDPU *bool, imageName *string, rackName *string) error {
 	nodeRole, err := roleToStr(role)
 	if err != nil {
 		return err
@@ -137,8 +139,12 @@ func UpdateNode(ctx context.Context, s state.State, name string, role []string, 
 		if imageName != nil {
 			nodeImageName = *imageName
 		}
+		nodeRackName := node.RackName
+		if rackName != nil {
+			nodeRackName = *rackName
+		}
 
-		err = database.UpdateNode(ctx, tx, name, database.Node{Member: s.Name(), Name: name, Role: nodeRole, MachineID: machineid, SystemID: systemid, Arch: nodeArch, IsDPU: nodeIsDPU, ImageName: nodeImageName})
+		err = database.UpdateNode(ctx, tx, name, database.Node{Member: s.Name(), Name: name, Role: nodeRole, MachineID: machineid, SystemID: systemid, Arch: nodeArch, IsDPU: nodeIsDPU, ImageName: nodeImageName, RackName: nodeRackName})
 		if err != nil {
 			return fmt.Errorf("failed to update record node: %w", err)
 		}

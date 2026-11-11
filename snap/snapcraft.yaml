@@ -248,6 +248,7 @@ parts:
       - rustc
       - cargo
     stage-packages:
+      - jq
       - openssh-client
     override-build: |
       uv export --directory sunbeam-python --extra=openstackclients --frozen --no-hashes --format=requirements-txt -o requirements.txt

@@ -112,6 +112,19 @@ class MaasClient:
                 raise ValueError(str(e))
             raise e
 
+    def list_all_machines(self) -> list[dict]:
+        """List all machines as raw MAAS API JSON.
+
+        Unlike list_machines, no resource tag filtering is applied: the
+        full machine set is returned so callers can apply their own
+        selection.
+        """
+        return self._client.machines.list.__self__._handler.read()  # type: ignore # noqa
+
+    def list_rack_controllers(self) -> list[dict]:
+        """List rack controllers as raw MAAS API JSON."""
+        return self._client.rack_controllers.list.__self__._handler.read()  # type: ignore # noqa
+
     def get_machine(self, machine: str) -> dict:
         """Get machine."""
         machines = self.list_machines(hostname=machine)

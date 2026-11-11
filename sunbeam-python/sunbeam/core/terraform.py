@@ -202,6 +202,26 @@ class TerraformHelper:
             LOG.exception("Terraform init failed: %s", e.stderr)
             raise TerraformException(str(e))
 
+    @staticmethod
+    def _error_summary(last_error_line: str) -> str:
+        """Extract a readable summary from the last terraform JSON error event.
+
+        Terraform writes its diagnostics to stdout with -json; including
+        them in the exception keeps apply failures diagnosable even when
+        stderr is empty.
+        """
+        if not last_error_line:
+            return ""
+        try:
+            data = json.loads(last_error_line)
+            diagnostic = data.get("diagnostic") or {}
+            summary = diagnostic.get("summary") or data.get("@message") or ""
+            detail = diagnostic.get("detail") or ""
+            out = summary + (f": {detail}" if detail else "")
+            return f"\nlast error: {out[:500] or last_error_line[:500]}"
+        except (json.JSONDecodeError, AttributeError):
+            return f"\nlast error: {last_error_line[:500]}"
+
     def apply(
         self,
         extra_args: list | None = None,
@@ -939,6 +959,7 @@ class TerraformHelper:
         stderr_thread.start()
 
         state_lock_flag = [False]
+        last_error_line = ""
         if process.stdout is None:
             raise TerraformException("stdout pipe not available")
 
@@ -949,6 +970,8 @@ class TerraformHelper:
                 line = line.rstrip("\n")
                 if not line:
                     continue
+                if '"@level":"error"' in line:
+                    last_error_line = line
                 event = self._parse_terraform_event(line, state_lock_flag)
                 if event is not None and reporter is not None:
                     reporter.report(event)
@@ -969,6 +992,7 @@ class TerraformHelper:
                 )
             raise TerraformException(
                 f"terraform command failed: {' '.join(cmd)}\nstderr: {stderr_output}"
+                + self._error_summary(last_error_line)
             )
 
 
