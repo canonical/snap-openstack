@@ -16,7 +16,12 @@ from snaphelpers import Snap
 from sunbeam.clusterd.client import Client
 from sunbeam.core.common import BaseStep, Result, ResultType, StepContext, run_plan
 from sunbeam.core.deployment import Deployment
-from sunbeam.core.juju import JujuException, JujuHelper, JujuStepHelper
+from sunbeam.core.juju import (
+    ApplicationNotFoundException,
+    JujuException,
+    JujuHelper,
+    JujuStepHelper,
+)
 from sunbeam.core.manifest import (
     FeatureConfig,
     Manifest,
@@ -42,6 +47,11 @@ APPLICATION = "ubuntu-pro"
 UBUNTU_PRO_CHANNEL = "latest/stable"
 APP_TIMEOUT = 300  # 5 minutes, managing the application should be fast
 UNIT_TIMEOUT = 1200  # 15 minutes, adding / removing units can take a long time
+PRINCIPAL_APPLICATION = "sunbeam-machine"
+# The charm runs `pro detach` when its token is emptied, and then reports
+# this message. Removing the application does not detach the machines.
+DETACHED_MESSAGE = "No token configured"
+DETACH_TIMEOUT = 600  # 10 minutes, one config-changed hook per machine
 
 
 class ProFeatureConfig(FeatureConfig):
@@ -99,6 +109,28 @@ class EnableUbuntuProApplicationStep(BaseStep, JujuStepHelper):
         except (JujuException, TerraformException, TerraformStateLockedException) as e:
             return Result(ResultType.FAILED, str(e))
 
+        # Disable empties the token through Juju, outside Terraform. If disable
+        # failed after that, Terraform state still holds the old token, so the
+        # apply above changes nothing. Set the token again in that case.
+        try:
+            live_config = self.jhelper.get_app_config(APPLICATION, self.model)
+            if live_config.get("token") != self.token:
+                self.jhelper.set_app_config(
+                    APPLICATION, self.model, {"token": self.token}
+                )
+                # The units still report "No token configured" until the
+                # charm runs, so wait for them to attach first.
+                self.jhelper.wait_subordinate_units_status(
+                    self.model,
+                    PRINCIPAL_APPLICATION,
+                    APPLICATION,
+                    status=["active"],
+                    timeout=APP_TIMEOUT,
+                )
+        except (JujuException, TimeoutError) as e:
+            LOG.debug("Failed to empty the %s token", APPLICATION)
+            return Result(ResultType.FAILED, str(e))
+
         # Note(gboutry): application is in state unknown when it's deployed
         # without units
         try:
@@ -124,6 +156,58 @@ class EnableUbuntuProApplicationStep(BaseStep, JujuStepHelper):
         except TimeoutError as e:
             LOG.warning("Timed out waiting for %s application: %r", APPLICATION, e)
             return Result(ResultType.FAILED, str(e))
+
+        return Result(ResultType.COMPLETED)
+
+
+class DetachUbuntuProStep(BaseStep, JujuStepHelper):
+    """Detach the machines from Ubuntu Pro before the charm is removed.
+
+    The charm only detaches a machine when its token is emptied, so this
+    must run before the application is removed.
+    """
+
+    def __init__(self, jhelper: JujuHelper, model: str):
+        super().__init__(
+            "Detach Ubuntu Pro", "Detaching machines from Ubuntu Pro subscription"
+        )
+        self.jhelper = jhelper
+        self.model = model
+
+    def is_skip(self, context: StepContext) -> Result:
+        """Skip when the application is not deployed."""
+        try:
+            self.jhelper.get_application(APPLICATION, self.model)
+        except ApplicationNotFoundException:
+            LOG.debug("%s is not deployed, nothing to detach", APPLICATION)
+            return Result(ResultType.SKIPPED)
+        return Result(ResultType.COMPLETED)
+
+    def run(self, context: StepContext) -> Result:
+        """Empty the token and wait for every unit to detach."""
+        try:
+            self.jhelper.set_app_config(APPLICATION, self.model, {"token": ""})
+        except ApplicationNotFoundException:
+            return Result(ResultType.COMPLETED)
+        except JujuException as e:
+            return Result(ResultType.FAILED, str(e))
+
+        try:
+            self.jhelper.wait_subordinate_units_status(
+                self.model,
+                PRINCIPAL_APPLICATION,
+                APPLICATION,
+                status=["blocked"],
+                workload_status_message=[DETACHED_MESSAGE],
+                timeout=DETACH_TIMEOUT,
+            )
+        except TimeoutError as e:
+            return Result(
+                ResultType.FAILED,
+                f"{e}. {APPLICATION} was not removed. Run 'sunbeam disable pro' "
+                "again, or run 'sudo pro detach --assume-yes' on the machines "
+                "listed.",
+            )
 
         return Result(ResultType.COMPLETED)
 
@@ -246,6 +330,7 @@ class ProFeature(EnableDisableFeature):
         jhelper = JujuHelper(deployment.juju_controller)
         plan = [
             TerraformInitStep(tfhelper),
+            DetachUbuntuProStep(jhelper, deployment.openstack_machines_model),
             DisableUbuntuProApplicationStep(
                 deployment.get_client(),
                 tfhelper,

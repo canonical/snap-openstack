@@ -3,15 +3,20 @@
 
 import re
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import pytest
 
 from sunbeam.core.common import ResultType
-from sunbeam.core.juju import JujuException, ModelNotFoundException
-from sunbeam.core.terraform import TerraformException
+from sunbeam.core.juju import (
+    ApplicationNotFoundException,
+    JujuException,
+    ModelNotFoundException,
+)
+from sunbeam.core.terraform import TerraformException, TerraformInitStep
 from sunbeam.features.pro import feature as pro_feature
 from sunbeam.features.pro.feature import (
+    DetachUbuntuProStep,
     DisableUbuntuProApplicationStep,
     EnableUbuntuProApplicationStep,
 )
@@ -31,6 +36,7 @@ class TestEnableUbuntuProApplicationStep:
         test_token,
     ):
         """Enable Ubuntu Pro step instance for testing."""
+        basic_jhelper.get_app_config.return_value = {"token": test_token}
         return EnableUbuntuProApplicationStep(
             basic_client,
             basic_tfhelper,
@@ -99,6 +105,58 @@ class TestEnableUbuntuProApplicationStep:
         assert result.result_type == ResultType.FAILED
         assert result.message == str(error)
 
+    def test_enable_live_token_matches(
+        self, enable_step, basic_jhelper, test_model, step_context
+    ):
+        result = enable_step.run(step_context)
+
+        basic_jhelper.get_app_config.assert_called_once_with("ubuntu-pro", test_model)
+        basic_jhelper.set_app_config.assert_not_called()
+        basic_jhelper.wait_subordinate_units_status.assert_not_called()
+        assert result.result_type == ResultType.COMPLETED
+
+    def test_enable_resets_token_emptied_by_failed_disable(
+        self, enable_step, basic_jhelper, test_model, test_token, step_context
+    ):
+        basic_jhelper.get_app_config.return_value = {"token": ""}
+
+        result = enable_step.run(step_context)
+
+        basic_jhelper.set_app_config.assert_called_once_with(
+            "ubuntu-pro", test_model, {"token": test_token}
+        )
+        basic_jhelper.wait_subordinate_units_status.assert_called_once_with(
+            test_model,
+            "sunbeam-machine",
+            "ubuntu-pro",
+            status=["active"],
+            timeout=pro_feature.APP_TIMEOUT,
+        )
+        assert result.result_type == ResultType.COMPLETED
+
+    def test_enable_reset_token_timed_out(
+        self, enable_step, basic_jhelper, step_context
+    ):
+        basic_jhelper.get_app_config.return_value = {"token": ""}
+        basic_jhelper.wait_subordinate_units_status.side_effect = TimeoutError(
+            "ubuntu-pro/0 (blocked: attach failed)"
+        )
+
+        result = enable_step.run(step_context)
+
+        basic_jhelper.wait_application_ready.assert_not_called()
+        assert result.result_type == ResultType.FAILED
+        assert result.message == "ubuntu-pro/0 (blocked: attach failed)"
+
+    def test_enable_read_config_failed(self, enable_step, basic_jhelper, step_context):
+        basic_jhelper.get_app_config.side_effect = JujuException("config failed")
+
+        result = enable_step.run(step_context)
+
+        basic_jhelper.set_app_config.assert_not_called()
+        assert result.result_type == ResultType.FAILED
+        assert result.message == "config failed"
+
     def test_enable_waiting_timed_out(self, enable_step, basic_jhelper, step_context):
         basic_jhelper.wait_application_ready.side_effect = TimeoutError("timed out")
 
@@ -140,6 +198,94 @@ class TestEnableUbuntuProApplicationStep:
 
         assert result.result_type == ResultType.FAILED
         assert result.message == "No token configured"
+
+
+class TestDetachUbuntuProStep:
+    @pytest.fixture
+    def detach_step(self, basic_jhelper, test_model):
+        """Detach Ubuntu Pro step instance for testing."""
+        return DetachUbuntuProStep(basic_jhelper, test_model)
+
+    def test_is_skip_app_deployed(self, detach_step, step_context):
+        result = detach_step.is_skip(step_context)
+        assert result.result_type == ResultType.COMPLETED
+
+    def test_is_skip_app_missing(self, detach_step, basic_jhelper, step_context):
+        basic_jhelper.get_application.side_effect = ApplicationNotFoundException(
+            "missing"
+        )
+
+        result = detach_step.is_skip(step_context)
+
+        assert result.result_type == ResultType.SKIPPED
+
+    def test_detach(self, detach_step, basic_jhelper, test_model, step_context):
+        result = detach_step.run(step_context)
+
+        basic_jhelper.set_app_config.assert_called_once_with(
+            "ubuntu-pro", test_model, {"token": ""}
+        )
+        basic_jhelper.wait_subordinate_units_status.assert_called_once_with(
+            test_model,
+            "sunbeam-machine",
+            "ubuntu-pro",
+            status=["blocked"],
+            workload_status_message=["No token configured"],
+            timeout=pro_feature.DETACH_TIMEOUT,
+        )
+        assert result.result_type == ResultType.COMPLETED
+
+    def test_detach_app_gone_meanwhile(self, detach_step, basic_jhelper, step_context):
+        basic_jhelper.set_app_config.side_effect = ApplicationNotFoundException(
+            "missing"
+        )
+
+        result = detach_step.run(step_context)
+
+        basic_jhelper.wait_subordinate_units_status.assert_not_called()
+        assert result.result_type == ResultType.COMPLETED
+
+    def test_detach_set_config_failed(self, detach_step, basic_jhelper, step_context):
+        basic_jhelper.set_app_config.side_effect = JujuException("config failed")
+
+        result = detach_step.run(step_context)
+
+        basic_jhelper.wait_subordinate_units_status.assert_not_called()
+        assert result.result_type == ResultType.FAILED
+        assert result.message == "config failed"
+
+    def test_detach_timed_out(self, detach_step, basic_jhelper, step_context):
+        basic_jhelper.wait_subordinate_units_status.side_effect = TimeoutError(
+            "Timed out waiting for ubuntu-pro units: ubuntu-pro/1 (active: Attached)"
+        )
+
+        result = detach_step.run(step_context)
+
+        assert result.result_type == ResultType.FAILED
+        assert "ubuntu-pro/1 (active: Attached)" in result.message
+        assert "was not removed" in result.message
+        assert "pro detach" in result.message
+
+
+class TestRunDisablePlans:
+    def test_detach_runs_before_removal(self):
+        deployment = Mock()
+        with (
+            patch.object(pro_feature, "Snap"),
+            patch.object(pro_feature, "JujuHelper"),
+            patch.object(pro_feature, "run_plan") as run_plan,
+            patch.object(pro_feature.click, "echo"),
+        ):
+            feature = pro_feature.ProFeature()
+            feature._manifest = Mock()
+            feature.run_disable_plans(deployment, show_hints=False)
+
+        plan = run_plan.call_args.args[0]
+        assert [type(step) for step in plan] == [
+            TerraformInitStep,
+            DetachUbuntuProStep,
+            DisableUbuntuProApplicationStep,
+        ]
 
 
 class TestDisableUbuntuProApplicationStep:
