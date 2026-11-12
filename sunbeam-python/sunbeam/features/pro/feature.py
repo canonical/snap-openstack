@@ -39,6 +39,7 @@ LOG = logging.getLogger(__name__)
 console = Console()
 
 APPLICATION = "ubuntu-pro"
+UBUNTU_PRO_CHANNEL = "latest/stable"
 APP_TIMEOUT = 300  # 5 minutes, managing the application should be fast
 UNIT_TIMEOUT = 1200  # 15 minutes, adding / removing units can take a long time
 

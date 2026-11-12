@@ -1,11 +1,15 @@
 # SPDX-FileCopyrightText: 2023 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
+import re
+from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
 from sunbeam.core.common import ResultType
 from sunbeam.core.terraform import TerraformException
+from sunbeam.features.pro import feature as pro_feature
 from sunbeam.features.pro.feature import (
     DisableUbuntuProApplicationStep,
     EnableUbuntuProApplicationStep,
@@ -87,6 +91,39 @@ class TestEnableUbuntuProApplicationStep:
         assert result.result_type == ResultType.FAILED
         assert result.message == "timed out"
 
+    def test_enable_blocked_reports_stderr(
+        self, enable_step, basic_jhelper, step_context
+    ):
+        # Message format of ProcessExecutionError raised by the ubuntu-pro charm
+        # when attaching the subscription fails.
+        basic_jhelper.get_application.return_value = Mock(
+            app_status=Mock(
+                current="blocked",
+                message=(
+                    "Failed running command 'pro attach' [exit status: 1].\n"
+                    "stderr: Invalid token\n"
+                    "stdout: "
+                ),
+            )
+        )
+
+        result = enable_step.run(step_context)
+
+        assert result.result_type == ResultType.FAILED
+        assert result.message.strip() == "Invalid token"
+
+    def test_enable_blocked_without_stderr(
+        self, enable_step, basic_jhelper, step_context
+    ):
+        basic_jhelper.get_application.return_value = Mock(
+            app_status=Mock(current="blocked", message="No token configured")
+        )
+
+        result = enable_step.run(step_context)
+
+        assert result.result_type == ResultType.FAILED
+        assert result.message == "No token configured"
+
 
 class TestDisableUbuntuProApplicationStep:
     @pytest.fixture
@@ -126,3 +163,30 @@ class TestDisableUbuntuProApplicationStep:
         basic_tfhelper.update_tfvars_and_apply_tf.assert_called_once()
         assert result.result_type == ResultType.FAILED
         assert result.message == "apply failed..."
+
+
+class TestTerraformPlan:
+    """The deploy-pro plan must deploy the ubuntu-pro charm."""
+
+    def _plan_dir(self) -> Path:
+        return Path(pro_feature.__file__).parent / "etc" / "deploy-pro"
+
+    def test_deploys_ubuntu_pro_charm(self):
+        text = (self._plan_dir() / "main.tf").read_text()
+        match = re.search(r'charm\s*\{[^}]*?name\s*=\s*"([^"]+)"', text, re.DOTALL)
+        assert match, "no charm block found in main.tf"
+        assert match.group(1) == "ubuntu-pro"
+
+    def test_no_ubuntu_advantage_references(self):
+        for tf_file in self._plan_dir().glob("*.tf"):
+            assert "ubuntu-advantage" not in tf_file.read_text(), tf_file.name
+
+    def test_channel_default_matches_feature_constant(self):
+        text = (self._plan_dir() / "variables.tf").read_text()
+        match = re.search(
+            r'variable\s+"ubuntu-pro-channel"\s*\{[^}]*?default\s*=\s*"([^"]+)"',
+            text,
+            re.DOTALL,
+        )
+        assert match, "no default found for ubuntu-pro-channel in variables.tf"
+        assert match.group(1) == pro_feature.UBUNTU_PRO_CHANNEL
