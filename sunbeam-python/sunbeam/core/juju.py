@@ -1010,7 +1010,7 @@ class JujuHelper:
                 if "not found" in e.stderr:
                     raise ApplicationNotFoundException(f"App {app!r} not found") from e
                 raise JujuException(
-                    f"Failed to get config {config_value!r} from application {app!r}"
+                    f"Failed to get config from application {app!r}"
                 ) from e
         return config_value
 

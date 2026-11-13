@@ -659,7 +659,7 @@ def test_get_app_config_not_found(jhelper, juju):
 def test_get_app_config_fail(jhelper, juju):
     juju.config.side_effect = jubilant.CLIError(1, "config", stderr="fail")
     with pytest.raises(jujulib.JujuException):
-        jhelper.get_secret("test-app", "test-model")
+        jhelper.get_app_config("test-app", "test-model")
 
 
 def test_jhelper_add_k8s_cloud(jhelper: jujulib.JujuHelper):
