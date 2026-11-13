@@ -1010,7 +1010,7 @@ class JujuHelper:
                 if "not found" in e.stderr:
                     raise ApplicationNotFoundException(f"App {app!r} not found") from e
                 raise JujuException(
-                    f"Failed to get config {config_value!r} from application {app!r}"
+                    f"Failed to get config from application {app!r}"
                 ) from e
         return config_value
 
@@ -1592,6 +1592,92 @@ class JujuHelper:
                 delay=MODEL_DELAY,
                 timeout=timeout,
             )
+
+    @staticmethod
+    def _pending_subordinate_units(
+        status: "jubilant.statustypes.Status",
+        principal_app: str,
+        subordinate_app: str,
+        expected_status: Collection[str],
+        expected_workload_status_message: Collection[str] | None = None,
+    ) -> dict[str, str]:
+        """Return the subordinate units not yet in the expected workload status.
+
+        Subordinate units are listed under their principal unit, not under
+        the subordinate application, so they are collected from there.
+
+        :return: Mapping of unit name to its current "status: message".
+        """
+        principal = status.apps.get(principal_app)
+        if principal is None:
+            return {}
+
+        pending: dict[str, str] = {}
+        for unit in principal.units.values():
+            for name, sub in unit.subordinates.items():
+                if not name.startswith(f"{subordinate_app}/"):
+                    continue
+                current = sub.workload_status.current
+                message = sub.workload_status.message
+                if current not in expected_status or (
+                    expected_workload_status_message is not None
+                    and message not in expected_workload_status_message
+                ):
+                    pending[name] = f"{current}: {message}" if message else current
+        return pending
+
+    def wait_subordinate_units_status(
+        self,
+        model: str,
+        principal_app: str,
+        subordinate_app: str,
+        status: list[str],
+        workload_status_message: list[str] | None = None,
+        timeout: int = 10 * 60,
+    ) -> None:
+        """Wait for every unit of a subordinate app to reach a workload status.
+
+        The status of a subordinate application only reflects the most severe
+        status among its units, so every subordinate unit is checked instead.
+        Principal units without the subordinate are not waited for.
+
+        :model: Name of the model.
+        :principal_app: Principal application the subordinate is related to.
+        :subordinate_app: Subordinate application to check the units of.
+        :status: Accepted workload status values.
+        :workload_status_message: Accepted workload status messages, any if None.
+        :timeout: Waiting timeout in seconds.
+        :raises TimeoutError: naming the units not in the expected status.
+        """
+        last_pending: dict[str, str] = {}
+
+        def _ready(juju_status: "jubilant.statustypes.Status") -> bool:
+            nonlocal last_pending
+            last_pending = self._pending_subordinate_units(
+                juju_status,
+                principal_app,
+                subordinate_app,
+                status,
+                workload_status_message,
+            )
+            return not last_pending
+
+        LOG.debug(
+            "Waiting for %r units under %r to be %r with message %r",
+            subordinate_app,
+            principal_app,
+            status,
+            workload_status_message,
+        )
+        with self._model(model) as juju:
+            try:
+                self._wait(_ready, juju, delay=MODEL_DELAY, timeout=timeout)
+            except TimeoutError as e:
+                units = ", ".join(f"{u} ({s})" for u, s in sorted(last_pending.items()))
+                raise TimeoutError(
+                    f"Timed out after {timeout} seconds waiting for {subordinate_app} "
+                    f"units: {units or 'status unknown'}"
+                ) from e
 
     def is_k8s_model(self, model: str) -> bool:
         """Return True if the model is a k8s (CAAS) model.
