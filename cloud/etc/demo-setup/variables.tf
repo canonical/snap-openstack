@@ -27,10 +27,10 @@ variable "user" {
 }
 
 
-# Image resource distro, e.g noble etc
+# Image resource distro, e.g resolute etc
 variable "distro_version" {
   type    = string
-  default = "noble"
+  default = "resolute"
 }
 
 

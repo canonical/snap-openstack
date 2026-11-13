@@ -4,7 +4,7 @@ summary: Dead simple OpenStack installation
 license: Apache-2.0
 description: |
   snap-openstack aims to provide a scalable, simple to deploy OpenStack solution.
-version: "2026.1"
+version: "2026.2"
 adopt-info: snap-version
 
 confinement: strict
@@ -222,7 +222,7 @@ parts:
     override-prime: |
       craftctl default
       # Symlink current release manifests to the root manifests dir
-      for manifest in $CRAFT_PRIME/etc/manifests/2026.1/*yml;
+      for manifest in $CRAFT_PRIME/etc/manifests/2026.2/*yml;
       do
         link=$CRAFT_PRIME/etc/manifests/$(basename $manifest)
         [ -e $link ] && rm $link || true

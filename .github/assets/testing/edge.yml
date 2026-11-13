@@ -9,35 +9,35 @@ core:
           logging-config: "<root>=WARNING;unit=DEBUG"
     charms:
       cinder-volume:
-        channel: 2026.1/edge
+        channel: 2026.2/edge
       cinder-volume-ceph:
-        channel: 2026.1/edge
+        channel: 2026.2/edge
       cinder-k8s:
-        channel: 2026.1/edge
+        channel: 2026.2/edge
       glance-k8s:
-        channel: 2026.1/edge
+        channel: 2026.2/edge
       horizon-k8s:
-        channel: 2026.1/edge
+        channel: 2026.2/edge
       keystone-k8s:
-        channel: 2026.1/edge
+        channel: 2026.2/edge
       neutron-k8s:
-        channel: 2026.1/edge
+        channel: 2026.2/edge
       nova-k8s:
-        channel: 2026.1/edge
+        channel: 2026.2/edge
       openstack-hypervisor:
-        channel: 2026.1/edge
+        channel: 2026.2/edge
         config:
-          snap-channel: 2026.1/edge
+          snap-channel: 2026.2/edge
       placement-k8s:
-        channel: 2026.1/edge
+        channel: 2026.2/edge
       sunbeam-clusterd:
-        channel: 2026.1/edge
+        channel: 2026.2/edge
         config:
-          snap-channel: 2026.1/edge
+          snap-channel: 2026.2/edge
       sunbeam-machine:
-        channel: 2026.1/edge
+        channel: 2026.2/edge
       epa-orchestrator:
-        channel: 2026.1/edge
+        channel: 2026.2/edge
       microceph:
         channel: tentacle/edge
         config:
@@ -45,11 +45,11 @@ core:
       microovn:
         channel: 26.03/edge
       sunbeam-ovn-proxy:
-        channel: 2026.1/edge
+        channel: 2026.2/edge
       openstack-network-agents:
-        channel: 2026.1/edge
+        channel: 2026.2/edge
         config:
-          snap-channel: 2026.1/edge
+          snap-channel: 2026.2/edge
       rabbitmq-k8s:
         channel: 3.12/edge
         storage:
@@ -63,32 +63,32 @@ features:
     software:
       charms:
         ironic-conductor-k8s:
-          channel: 2026.1/edge
+          channel: 2026.2/edge
         ironic-k8s:
-          channel: 2026.1/edge
+          channel: 2026.2/edge
         nova-ironic-k8s:
-          channel: 2026.1/edge
+          channel: 2026.2/edge
         neutron-baremetal-switch-config-k8s:
-          channel: 2026.1/edge
+          channel: 2026.2/edge
         neutron-generic-switch-config-k8s:
-          channel: 2026.1/edge
+          channel: 2026.2/edge
   caas:
     software:
       charms:
         magnum-k8s:
-          channel: 2026.1/edge
+          channel: 2026.2/edge
   dns:
     software:
       charms:
         designate-bind-k8s:
           channel: 9/edge
         designate-k8s:
-          channel: 2026.1/edge
+          channel: 2026.2/edge
   images-sync:
     software:
       charms:
         openstack-images-sync-k8s:
-          channel: 2026.1/edge
+          channel: 2026.2/edge
   instance-recovery:
     software:
       charms:
@@ -97,54 +97,54 @@ features:
         consul-client:
           channel: 1.19/edge
         masakari-k8s:
-          channel: 2026.1/edge
+          channel: 2026.2/edge
   ldap:
     software:
       charms:
         keystone-ldap-k8s:
-          channel: 2026.1/edge
+          channel: 2026.2/edge
   loadbalancer:
     software:
       charms:
         octavia-k8s:
-          channel: 2026.1/edge
+          channel: 2026.2/edge
   orchestration:
     software:
       charms:
         heat-k8s:
-          channel: 2026.1/edge
+          channel: 2026.2/edge
   resource-optimization:
     software:
       charms:
         watcher-k8s:
-          channel: 2026.1/edge
+          channel: 2026.2/edge
   secrets:
     software:
       charms:
         barbican-k8s:
-          channel: 2026.1/edge
+          channel: 2026.2/edge
   shared-filesystem:
     software:
       charms:
         manila-k8s:
-          channel: 2026.1/edge
+          channel: 2026.2/edge
         manila-cephfs-k8s:
-          channel: 2026.1/edge
+          channel: 2026.2/edge
         manila-data:
-          channel: 2026.1/edge
+          channel: 2026.2/edge
   telemetry:
     software:
       charms:
         aodh-k8s:
-          channel: 2026.1/edge
+          channel: 2026.2/edge
         ceilometer-k8s:
-          channel: 2026.1/edge
+          channel: 2026.2/edge
         gnocchi-k8s:
-          channel: 2026.1/edge
+          channel: 2026.2/edge
         openstack-exporter-k8s:
-          channel: 2026.1/edge
+          channel: 2026.2/edge
   validation:
     software:
       charms:
         tempest-k8s:
-          channel: 2026.1/edge
+          channel: 2026.2/edge
