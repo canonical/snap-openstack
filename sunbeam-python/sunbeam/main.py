@@ -9,6 +9,7 @@ import click
 from snaphelpers import Snap
 
 from sunbeam import log
+from sunbeam.commands import config_file as config_file_cmds
 from sunbeam.commands import configure as configure_cmds
 from sunbeam.commands import dashboard as dashboard_cmds
 from sunbeam.commands import generate_cloud_config as generate_cloud_config_cmds
@@ -162,6 +163,7 @@ def main():
     cli.add_command(disable)
 
     cli.add_command(plans_cmd.plans)
+    cli.add_command(config_file_cmds.config_file)
     cli.add_command(list_features)
     cli.add_command(list_feature_gates)
 
