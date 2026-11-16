@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2023 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import sys
 from copy import deepcopy
 from types import SimpleNamespace
@@ -17,6 +18,7 @@ from sunbeam.core.common import Result, ResultType, SunbeamException
 from sunbeam.core.juju import (
     ActionFailedException,
     ApplicationNotFoundException,
+    JujuException,
     JujuWaitException,
 )
 from sunbeam.core.manifest import CharmManifest
@@ -1207,14 +1209,100 @@ class TestLatestInChannelCoordinator:
 class TestMySQLInChannelUpgradeCoordinator:
     def test_get_plan_refreshes_router_before_mysql(self):
         """mysql-router must be refreshed before mysql-k8s"""
+        jhelper = Mock()
+        jhelper.get_model_status.return_value.apps = {
+            "mysql": Mock(charm_name="mysql-k8s")
+        }
         coordinator = MySQLInChannelUpgradeCoordinator(
-            Mock(), Mock(), Mock(), Mock(), reset_mysql_upgrade_state=False
+            Mock(), Mock(), jhelper, Mock(), reset_mysql_upgrade_state=False
         )
         step_types = [type(step) for step in coordinator.get_plan()]
 
         assert step_types.index(MySQLRouterCharmRefreshStep) < step_types.index(
             MySQLCharmUpgradeStep
         )
+
+    def test_get_plan_refreshes_all_mysql_apps_with_in_progress_first(self):
+        """Resume an interrupted database before refreshing the others."""
+        client = Mock()
+        client.cluster.get_config.return_value = json.dumps(
+            {"application": "nova-mysql", "state": "SCALED_UP"}
+        )
+        jhelper = Mock()
+        jhelper.get_model_status.return_value.apps = {
+            "keystone-mysql": Mock(charm_name="mysql-k8s"),
+            "nova-mysql": Mock(charm_name="mysql-k8s"),
+            "nova-mysql-router": Mock(charm_name="mysql-router-k8s"),
+        }
+        coordinator = MySQLInChannelUpgradeCoordinator(
+            Mock(), client, jhelper, Mock(), reset_mysql_upgrade_state=False
+        )
+
+        plan = coordinator.get_plan()
+        upgrades = [step for step in plan if isinstance(step, MySQLCharmUpgradeStep)]
+
+        assert [step.application for step in upgrades] == [
+            "nova-mysql",
+            "keystone-mysql",
+        ]
+        assert isinstance(plan[0], MySQLRouterCharmRefreshStep)
+
+    @pytest.mark.parametrize("mysql_apps", [[], ["keystone-mysql"]])
+    def test_get_plan_reports_saved_application_not_deployed(self, mysql_apps):
+        """Reject a saved upgrade if its database is absent from Juju status."""
+        client = Mock()
+        client.cluster.get_config.return_value = json.dumps(
+            {"application": "nova-mysql", "state": "SCALED_UP"}
+        )
+        jhelper = Mock()
+        jhelper.get_model_status.return_value.apps = {
+            name: Mock(charm_name="mysql-k8s") for name in mysql_apps
+        }
+        coordinator = MySQLInChannelUpgradeCoordinator(
+            Mock(), client, jhelper, Mock(), reset_mysql_upgrade_state=False
+        )
+
+        with pytest.raises(SunbeamException, match="nova-mysql.*not found"):
+            coordinator.get_plan()
+
+    def test_get_plan_reports_model_status_failure(self):
+        """Report Juju discovery failures before constructing the plan."""
+        client = Mock()
+        jhelper = Mock()
+        jhelper.get_model_status.side_effect = JujuException("status unavailable")
+        coordinator = MySQLInChannelUpgradeCoordinator(
+            Mock(), client, jhelper, Mock(), reset_mysql_upgrade_state=False
+        )
+
+        with pytest.raises(
+            SunbeamException,
+            match="Failed to discover MySQL applications.*status unavailable",
+        ):
+            coordinator.get_plan()
+
+        client.cluster.get_config.assert_not_called()
+
+    def test_get_plan_resets_state_only_for_first_mysql_app(self):
+        """A reset clears shared state once, before building later upgrade steps."""
+        client = Mock()
+        jhelper = Mock()
+        jhelper.get_model_status.return_value.apps = {
+            "nova-mysql": Mock(charm_name="mysql-k8s"),
+            "keystone-mysql": Mock(charm_name="mysql-k8s"),
+        }
+        coordinator = MySQLInChannelUpgradeCoordinator(
+            Mock(), client, jhelper, Mock(), reset_mysql_upgrade_state=True
+        )
+
+        plan = coordinator.get_plan()
+        upgrades = [step for step in plan if isinstance(step, MySQLCharmUpgradeStep)]
+
+        assert [step.application for step in upgrades] == [
+            "keystone-mysql",
+            "nova-mysql",
+        ]
+        client.cluster.delete_config.assert_called_once_with("mysql_k8s_upgrade_state")
+        client.cluster.get_config.assert_not_called()
 
 
 class TestReapplyInfraModelConfigStep:

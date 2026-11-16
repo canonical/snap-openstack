@@ -103,11 +103,24 @@ def load_upgrade_state(client: Client) -> dict:
     return state
 
 
+def in_progress_mysql_application(state: dict) -> str:
+    """Return the saved app name, defaulting to mysql for older state."""
+    return state.get("application", MYSQL_APP)
+
+
 def write_upgrade_state(client: Client, state: dict):
     """Persist mysql upgrade state to clusterd config."""
     client.cluster.update_config(
         MYSQL_UPGRADE_CONFIG_KEY,
         json.dumps(state),
+    )
+
+
+def get_mysql_applications(jhelper: JujuHelper, model: str) -> list[str]:
+    """Return names of deployed mysql-k8s applications in a model."""
+    status = jhelper.get_model_status(model)
+    return sorted(
+        name for name, app in status.apps.items() if app.charm_name == MYSQL_CHARM
     )
 
 
@@ -135,7 +148,7 @@ class MySQLCharmUpgradeStep(BaseStep, JujuStepHelper):
         application: str = "mysql",
     ):
         super().__init__(
-            "MySQL K8s Charm Upgrade",
+            f"MySQL K8s Charm Upgrade ({application})",
             f"Refreshing {application} application to latest in-channel charm revision",
         )
         self.deployment = deployment
@@ -172,9 +185,11 @@ class MySQLCharmUpgradeStep(BaseStep, JujuStepHelper):
 
     def _set_state(self, state: MySQLUpgradeState):
         self.state = state
+        # Keep the app name in the shared state so a retry resumes the right one.
         write_upgrade_state(
             self.client,
             {
+                "application": self.application,
                 "state": state.name,
                 "original_revision": self.original_revision,
                 "original_scale": self.original_scale,
@@ -459,6 +474,19 @@ class MySQLCharmUpgradeStep(BaseStep, JujuStepHelper):
                 "mysql-k8s application has not been deployed yet",
             )
 
+        persisted = load_upgrade_state(self.client)
+        if persisted:
+            in_progress = in_progress_mysql_application(persisted)
+            if in_progress != self.application:
+                return Result(
+                    ResultType.FAILED,
+                    f"MySQL upgrade for {in_progress} must finish before "
+                    f"refreshing {self.application}",
+                )
+            # Finish an upgrade already in progress. The manifest may have
+            # changed but the current upgrade state takes precedence.
+            return Result(ResultType.COMPLETED)
+
         # charm not present in manifest
         charm_manifest = self.manifest.find_charm(MYSQL_CHARM)
         if not charm_manifest:
@@ -531,6 +559,13 @@ class MySQLCharmUpgradeStep(BaseStep, JujuStepHelper):
     def run(self, context: StepContext) -> Result:
         """Run mysql-k8s charm upgrade steps."""
         persisted = load_upgrade_state(self.client)
+        in_progress = in_progress_mysql_application(persisted)
+        if persisted and in_progress != self.application:
+            return Result(
+                ResultType.FAILED,
+                f"MySQL upgrade for {in_progress} "
+                f"must finish before refreshing {self.application}",
+            )
         state_name = persisted.get("state", MySQLUpgradeState.INIT.name)
         try:
             self.state = MySQLUpgradeState[state_name]
@@ -1045,15 +1080,21 @@ class ReapplyMySQLTerraformPlanStep(BaseStep, JujuStepHelper):
             LOG.warning("Error updating MySQL components: %r", e)
             return Result(ResultType.FAILED, str(e))
 
-        # Get mysql-related apps to wait for
-        mysql_apps = [MYSQL_APP]
         try:
-            apps = self.jhelper.get_application_names(self.model)
-            mysql_apps.extend([app for app in apps if app.endswith("-mysql-router")])
-        except Exception as e:
-            LOG.warning("Error getting mysql-router apps to wait for: %s", e)
+            status = self.jhelper.get_model_status(self.model)
+        except JujuException as e:
+            return Result(
+                ResultType.FAILED,
+                f"Failed to get model status for MySQL applications: {e}",
+            )
 
-        # Wait only for mysql and mysql-router applications
+        mysql_apps = sorted(
+            name
+            for name, app in status.apps.items()
+            if app.charm_name in (MYSQL_CHARM, MYSQL_ROUTER_CHARM)
+        )
+
+        # Wait for the deployed mysql and mysql-router applications.
         try:
             self.update_status(context, "waiting for MySQL services to settle")
             LOG.debug("Waiting for MySQL applications: %s", mysql_apps)
