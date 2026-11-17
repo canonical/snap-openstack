@@ -5,7 +5,6 @@ import logging
 from pathlib import Path
 
 import click
-import pydantic
 import yaml
 from packaging.version import Version
 from rich.console import Console
@@ -44,6 +43,7 @@ from sunbeam.features.tls.common import (
     CA_MANUAL_TLS_CERTIFICATE_INTERFACE,
     CERTIFICATE_FEATURE_KEY,
     INGRESS_CHANGE_APPLICATION_TIMEOUT,
+    Certificate,
     ConfigureTLSCertificatesStep,
     TlsFeature,
     TlsFeatureConfig,
@@ -56,12 +56,8 @@ LOG = logging.getLogger(__name__)
 console = Console()
 
 
-class _Certificate(pydantic.BaseModel):
-    certificate: str
-
-
 class CaTlsFeatureConfig(TlsFeatureConfig):
-    certificates: dict[str, _Certificate] = {}
+    certificates: dict[str, Certificate] = {}
 
 
 class CaTlsFeature(TlsFeature):

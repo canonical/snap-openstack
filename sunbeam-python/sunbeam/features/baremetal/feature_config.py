@@ -79,6 +79,8 @@ _NEUTRON_SSHKEYS_PATH = "/etc/neutron/sshkeys"
 
 
 class _Config(pydantic.BaseModel):
+    model_config = pydantic.ConfigDict(extra="forbid")
+
     configfile: str
     additional_files: dict[str, str] = pydantic.Field(
         alias="additional-files",
@@ -87,6 +89,8 @@ class _Config(pydantic.BaseModel):
 
 
 class _SwitchConfigs(pydantic.BaseModel):
+    model_config = pydantic.ConfigDict(extra="forbid")
+
     netconf: dict[str, _Config] = pydantic.Field(default={})
     generic: dict[str, _Config] = pydantic.Field(default={})
 
