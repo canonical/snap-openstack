@@ -18,6 +18,7 @@ from sunbeam.core.common import BaseStep, Result, ResultType, StepContext, run_p
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import JujuHelper, JujuStepHelper
 from sunbeam.core.manifest import (
+    CharmManifest,
     FeatureConfig,
     Manifest,
     SoftwareConfig,
@@ -39,6 +40,12 @@ LOG = logging.getLogger(__name__)
 console = Console()
 
 APPLICATION = "ubuntu-pro"
+# The 2024.1 plan deploys the ubuntu-advantage charm as the ubuntu-pro
+# application. Manifest charm keys are charm names, as refresh looks them up
+# by the deployed charm name.
+CHARM = "ubuntu-advantage"
+# Matches the ubuntu-advantage-channel default in deploy-pro/variables.tf.
+UBUNTU_ADVANTAGE_CHANNEL = "latest/edge"
 APP_TIMEOUT = 300  # 5 minutes, managing the application should be fast
 UNIT_TIMEOUT = 1200  # 15 minutes, adding / removing units can take a long time
 
@@ -197,12 +204,27 @@ class ProFeature(EnableDisableFeature):
     def default_software_overrides(self) -> SoftwareConfig:
         """Feature software configuration."""
         return SoftwareConfig(
+            charms={CHARM: CharmManifest(channel=UBUNTU_ADVANTAGE_CHANNEL)},
             terraform={
                 self.tfplan: TerraformManifest(
                     source=Path(__file__).parent / "etc" / self.tfplan_dir
                 )
-            }
+            },
         )
+
+    def manifest_attributes_tfvar_map(self) -> dict:
+        """Manifest attributes terraformvars map."""
+        return {
+            self.tfplan: {
+                "charms": {
+                    CHARM: {
+                        "channel": "ubuntu-advantage-channel",
+                        "revision": "ubuntu-advantage-revision",
+                        "config": "ubuntu-advantage-config",
+                    }
+                }
+            }
+        }
 
     def run_enable_plans(
         self, deployment: Deployment, config: ProFeatureConfig, show_hints: bool

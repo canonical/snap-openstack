@@ -7,6 +7,18 @@ variable "ubuntu-advantage-channel" {
   default     = "latest/edge"
 }
 
+variable "ubuntu-advantage-revision" {
+  description = "Revision number of ubuntu-advantage charm"
+  type        = number
+  default     = null
+}
+
+variable "ubuntu-advantage-config" {
+  description = "Config options of the ubuntu-advantage charm, such as contract_url"
+  type        = map(string)
+  default     = {}
+}
+
 variable "machine_model_uuid" {
   description = "UUID of Juju model to deploy ubuntu-pro into"
   type        = string
