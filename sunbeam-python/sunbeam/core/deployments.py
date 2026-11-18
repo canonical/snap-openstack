@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
-import shutil
+import os
 import tempfile
 import typing
 from pathlib import Path
@@ -64,11 +64,21 @@ class DeploymentsConfig(pydantic.BaseModel):
         self_dict["deployments"] = deployments
         LOG.debug("Writing deployment configuration to %r", str(self.path))
         yaml.SafeDumper.add_representer(str, str_presenter)
-        with tempfile.NamedTemporaryFile("w") as tmp:
-            yaml.safe_dump(self_dict, tmp)
-            tmp.flush()
-            shutil.copy(tmp.name, self.path)
-        self.path.chmod(0o600)
+        path = self.path.resolve()
+        tmp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                "w", dir=path.parent, prefix=f".{path.name}.", delete=False
+            ) as tmp:
+                tmp_path = Path(tmp.name)
+                yaml.safe_dump(self_dict, tmp)
+                tmp.flush()
+                os.fsync(tmp.fileno())
+            tmp_path.chmod(0o600)
+            os.replace(tmp_path, path)
+        finally:
+            if tmp_path is not None:
+                tmp_path.unlink(missing_ok=True)
 
     @property
     def path(self) -> Path:
