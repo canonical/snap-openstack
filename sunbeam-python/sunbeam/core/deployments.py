@@ -71,10 +71,10 @@ class DeploymentsConfig(pydantic.BaseModel):
                 "w", dir=path.parent, prefix=f".{path.name}.", delete=False
             ) as tmp:
                 tmp_path = Path(tmp.name)
+                os.fchmod(tmp.fileno(), 0o600)
                 yaml.safe_dump(self_dict, tmp)
                 tmp.flush()
                 os.fsync(tmp.fileno())
-            tmp_path.chmod(0o600)
             os.replace(tmp_path, path)
         finally:
             if tmp_path is not None:

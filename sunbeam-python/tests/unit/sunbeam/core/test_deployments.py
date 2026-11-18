@@ -75,6 +75,26 @@ def test_write_replaces_config_on_success(config_path):
     assert list(config_path.parent.iterdir()) == [config_path]
 
 
+def test_write_restricts_permissions_before_writing(config_path, mocker):
+    config = DeploymentsConfig.load(config_path)
+    safe_dump = yaml.safe_dump
+    modes = []
+
+    def record_mode(data, stream):
+        modes.append(os.fstat(stream.fileno()).st_mode & 0o777)
+        safe_dump(data, stream)
+
+    mocker.patch("sunbeam.core.deployments.yaml.safe_dump", side_effect=record_mode)
+    previous_umask = os.umask(0o277)
+    try:
+        config.write()
+    finally:
+        os.umask(previous_umask)
+
+    assert modes == [0o600]
+    assert config_path.stat().st_mode & 0o777 == 0o600
+
+
 def test_write_updates_symlink_target(config_path, tmp_path_factory):
     link = tmp_path_factory.mktemp("link") / "deployments.yaml"
     link.symlink_to(config_path)
