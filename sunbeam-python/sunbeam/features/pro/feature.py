@@ -18,6 +18,7 @@ from sunbeam.core.common import BaseStep, Result, ResultType, StepContext, run_p
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import JujuHelper, JujuStepHelper
 from sunbeam.core.manifest import (
+    AddManifestStep,
     CharmManifest,
     FeatureConfig,
     Manifest,
@@ -227,17 +228,24 @@ class ProFeature(EnableDisableFeature):
         """Run the enablement plans."""
         tfhelper = deployment.get_tfhelper(self.tfplan)
         jhelper = JujuHelper(deployment.juju_controller)
-        plan = [
-            TerraformInitStep(tfhelper),
-            EnableUbuntuProApplicationStep(
-                deployment.get_client(),
-                tfhelper,
-                jhelper,
-                self.manifest,
-                config.token,
-                deployment.openstack_machines_model,
-            ),
-        ]
+        plan: list[BaseStep] = []
+        # Store the manifest so later applies, e.g. a re-run of enable
+        # without --manifest, keep the charm config it sets.
+        if self.user_manifest:
+            plan.append(AddManifestStep(deployment.get_client(), self.user_manifest))
+        plan.extend(
+            [
+                TerraformInitStep(tfhelper),
+                EnableUbuntuProApplicationStep(
+                    deployment.get_client(),
+                    tfhelper,
+                    jhelper,
+                    self.manifest,
+                    config.token,
+                    deployment.openstack_machines_model,
+                ),
+            ]
+        )
 
         run_plan(plan, console, show_hints)
 
