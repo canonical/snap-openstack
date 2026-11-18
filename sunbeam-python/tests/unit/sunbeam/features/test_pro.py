@@ -3,13 +3,18 @@
 
 import re
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 import yaml
 
 from sunbeam.core.common import ResultType
-from sunbeam.core.manifest import FeatureManifest, Manifest
-from sunbeam.core.terraform import TerraformException, TerraformHelper
+from sunbeam.core.manifest import AddManifestStep, FeatureManifest, Manifest
+from sunbeam.core.terraform import (
+    TerraformException,
+    TerraformHelper,
+    TerraformInitStep,
+)
 from sunbeam.features.pro import feature as pro_feature
 from sunbeam.features.pro.feature import (
     DisableUbuntuProApplicationStep,
@@ -211,3 +216,42 @@ features:
             r"token\s*=\s*var\.token",
             text,
         )
+
+
+class TestRunEnablePlans:
+    """enable --manifest must store the manifest so later applies keep it."""
+
+    @pytest.fixture
+    def run_plan(self, mocker):
+        mocker.patch.object(pro_feature, "JujuHelper")
+        mocker.patch.object(pro_feature.click, "echo")
+        return mocker.patch.object(pro_feature, "run_plan")
+
+    def _run(self, user_manifest):
+        feature = pro_feature.ProFeature()
+        feature.user_manifest = user_manifest
+        feature._manifest = Mock()
+        feature.run_enable_plans(
+            Mock(), pro_feature.ProFeatureConfig(token="t"), show_hints=False
+        )
+
+    def test_user_manifest_is_stored_first(self, run_plan, tmp_path):
+        manifest_file = tmp_path / "manifest.yaml"
+        self._run(manifest_file)
+
+        plan = run_plan.call_args.args[0]
+        assert [type(step) for step in plan] == [
+            AddManifestStep,
+            TerraformInitStep,
+            EnableUbuntuProApplicationStep,
+        ]
+        assert plan[0].manifest_file == manifest_file
+
+    def test_no_user_manifest_stores_nothing(self, run_plan):
+        self._run(None)
+
+        plan = run_plan.call_args.args[0]
+        assert [type(step) for step in plan] == [
+            TerraformInitStep,
+            EnableUbuntuProApplicationStep,
+        ]
