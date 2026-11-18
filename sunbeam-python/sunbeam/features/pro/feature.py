@@ -18,6 +18,7 @@ from sunbeam.core.common import BaseStep, Result, ResultType, StepContext, run_p
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import JujuHelper, JujuStepHelper
 from sunbeam.core.manifest import (
+    CharmManifest,
     FeatureConfig,
     Manifest,
     SoftwareConfig,
@@ -198,12 +199,27 @@ class ProFeature(EnableDisableFeature):
     def default_software_overrides(self) -> SoftwareConfig:
         """Feature software configuration."""
         return SoftwareConfig(
+            charms={APPLICATION: CharmManifest(channel=UBUNTU_PRO_CHANNEL)},
             terraform={
                 self.tfplan: TerraformManifest(
                     source=Path(__file__).parent / "etc" / self.tfplan_dir
                 )
-            }
+            },
         )
+
+    def manifest_attributes_tfvar_map(self) -> dict:
+        """Manifest attributes terraformvars map."""
+        return {
+            self.tfplan: {
+                "charms": {
+                    APPLICATION: {
+                        "channel": "ubuntu-pro-channel",
+                        "revision": "ubuntu-pro-revision",
+                        "config": "ubuntu-pro-config",
+                    }
+                }
+            }
+        }
 
     def run_enable_plans(
         self, deployment: Deployment, config: ProFeatureConfig, show_hints: bool

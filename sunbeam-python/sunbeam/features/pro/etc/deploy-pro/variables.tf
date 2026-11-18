@@ -7,6 +7,18 @@ variable "ubuntu-pro-channel" {
   default     = "latest/stable"
 }
 
+variable "ubuntu-pro-revision" {
+  description = "Revision number of ubuntu-pro charm"
+  type        = number
+  default     = null
+}
+
+variable "ubuntu-pro-config" {
+  description = "Config options of the ubuntu-pro charm, such as contract_url"
+  type        = map(string)
+  default     = {}
+}
+
 variable "machine_model_uuid" {
   description = "UUID of Juju model to deploy ubuntu-pro into"
   type        = string
