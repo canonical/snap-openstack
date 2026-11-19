@@ -7,6 +7,7 @@ import queue
 from requests.exceptions import RequestException
 from rich.console import Console
 
+from sunbeam import versions
 from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import RemoteException
 from sunbeam.core.common import (
@@ -31,7 +32,10 @@ from sunbeam.core.manifest import Manifest
 from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.core.terraform import TerraformInitStep
 from sunbeam.features.interface.v1.base import is_maas_deployment
-from sunbeam.steps.cinder_volume import DeployCinderVolumeApplicationStep
+from sunbeam.steps.cinder_volume import (
+    DeployCinderVolumeApplicationStep,
+    get_cinder_volume_config,
+)
 from sunbeam.steps.hypervisor import ReapplyHypervisorTerraformPlanStep
 from sunbeam.steps.k8s import (
     EnsureCiliumDeviceByHostStep,
@@ -98,6 +102,46 @@ SNAP_APPS_MACHINE_MODEL: list[str] = [
 SNAP_APPS_INFRA_MODEL: list[str] = [
     "sunbeam-clusterd",
 ]
+
+# Machine-model snap charms whose Terraform plans run *after* RefreshSnapStep
+# and whose refresh-snap action accepts an optional `channel` parameter.
+# Passing the target channel explicitly avoids reading a stale/invalid
+# deployed snap-channel before Terraform applies the updated manifest.
+# Excluded:
+# - cinder-volume-noha: config already reapplied before RefreshSnapStep by
+#   DeploySpecificCinderVolumeStep.
+# - sunbeam-clusterd: config already reapplied before RefreshSnapStep by
+#   ReapplyInfraModelConfigStep.
+# - consul-client-*: its refresh-snap action does not accept a `channel` param.
+SNAP_APPS_WITH_EXPLICIT_CHANNEL: frozenset[str] = frozenset(
+    {
+        "cinder-volume",
+        "openstack-hypervisor",
+        "openstack-network-agents",
+        "epa-orchestrator",
+        "manila-data",
+    }
+)
+
+
+def _get_target_snap_channel(app_name: str, manifest: Manifest) -> str | None:
+    """Return the effective manifest snap-channel for *app_name*, or None.
+
+    Returns None for apps that do not accept a `channel` action parameter or
+    whose config is already applied before RefreshSnapStep.
+    """
+    if app_name not in SNAP_APPS_WITH_EXPLICIT_CHANNEL:
+        return None
+    if app_name == "cinder-volume":
+        return get_cinder_volume_config(manifest)["snap-channel"]
+    charm_manifest = manifest.find_charm(app_name)
+    if (
+        charm_manifest
+        and charm_manifest.config
+        and "snap-channel" in charm_manifest.config
+    ):
+        return charm_manifest.config["snap-channel"]
+    return versions.OPENSTACK_CHANNEL
 
 
 class LatestInChannel(BaseStep, JujuStepHelper):
@@ -367,19 +411,24 @@ class ReapplyInfraModelConfigStep(BaseStep, JujuStepHelper):
 class RefreshSnapStep(BaseStep, JujuStepHelper):
     """Run refresh-snap action on all snap-based charm units.
 
-    This step must run after the charm refresh so that the new refresh-snap
-    action handler is present.  Snaps are held at their current revision by
-    the charm to prevent spontaneous snapd auto-refreshes; this step explicitly
-    triggers a snap refresh on every unit before the Terraform plans are applied.
+    This step must run after the charm refresh (so that the new refresh-snap
+    action handler is present) and before any Terraform plan is applied.
+    Snaps are held to prevent spontaneous snapd auto-refreshes; this step
+    triggers a snap refresh on every unit before the Terraform plans are
+    applied. For charms whose Terraform plans run later and whose refresh-snap
+    action accepts a ``channel`` override, the effective target channel from
+    the manifest is passed explicitly so a stale deployed ``snap-channel``
+    cannot block recovery.
     """
 
-    def __init__(self, deployment: Deployment, jhelper: JujuHelper):
+    def __init__(self, deployment: Deployment, jhelper: JujuHelper, manifest: Manifest):
         super().__init__(
             "Refresh snaps",
             "Run refresh-snap action on snap-based charm units",
         )
         self.deployment = deployment
         self.jhelper = jhelper
+        self.manifest = manifest
 
     def _refresh_snap_for_apps(
         self, apps: list[str], model: str, context: StepContext | None = None
@@ -396,6 +445,16 @@ class RefreshSnapStep(BaseStep, JujuStepHelper):
                 )
                 continue
 
+            target_channel = _get_target_snap_channel(app_name, self.manifest)
+            params: dict[str, dict[str, str]] = {}
+            if target_channel is not None:
+                params["action_params"] = {"channel": target_channel}
+                LOG.debug(
+                    "Explicit refresh-snap channel for %s: %s",
+                    app_name,
+                    target_channel,
+                )
+
             for unit_name in application.units:
                 LOG.debug("Running refresh-snap on %s in %s", unit_name, model)
                 if context is not None:
@@ -406,6 +465,7 @@ class RefreshSnapStep(BaseStep, JujuStepHelper):
                         model,
                         "refresh-snap",
                         timeout=600,
+                        **params,
                     )
                 except ActionFailedException as e:
                     LOG.warning("refresh-snap failed on %s: %s", unit_name, e)
@@ -522,7 +582,7 @@ class LatestInChannelCoordinator(UpgradeCoordinator):
                 ]
             )
 
-        plan.append(RefreshSnapStep(self.deployment, self.jhelper))
+        plan.append(RefreshSnapStep(self.deployment, self.jhelper, self.manifest))
         plan.extend(
             [
                 # Microceph introduces new offer urls for rgw and so microceph

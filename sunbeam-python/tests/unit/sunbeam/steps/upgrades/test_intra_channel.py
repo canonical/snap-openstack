@@ -10,6 +10,7 @@ from unittest.mock import Mock, call, patch
 import pytest
 from requests.exceptions import Timeout
 
+from sunbeam import versions
 from sunbeam.clusterd.service import (
     ClusterServiceUnavailableException,
     ConfigItemNotFoundException,
@@ -24,6 +25,8 @@ from sunbeam.core.juju import (
 from sunbeam.core.manifest import CharmManifest
 from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.core.terraform import TerraformInitStep
+from sunbeam.steps.cinder_volume import DeployCinderVolumeApplicationStep
+from sunbeam.steps.hypervisor import ReapplyHypervisorTerraformPlanStep
 from sunbeam.steps.k8s import (
     EnsureCiliumDeviceByHostStep,
     EnsureDefaultL2AdvertisementMutedStep,
@@ -36,6 +39,7 @@ from sunbeam.steps.openstack import (
     ValidateInfraAppsStep,
 )
 from sunbeam.steps.role_distributor import DeployRoleDistributorApplicationStep
+from sunbeam.steps.sunbeam_machine import DeploySunbeamMachineApplicationStep
 from sunbeam.steps.upgrades.base import UpgradeFeatures
 from sunbeam.steps.upgrades.intra_channel import (
     SNAP_APPS_INFRA_MODEL,
@@ -1082,6 +1086,72 @@ class TestLatestInChannelCoordinator:
             < microovn_deploy_index
         )
 
+    @patch(f"{_INTRA_CHANNEL}.is_maas_deployment", return_value=False)
+    def test_refresh_snap_step_precedes_core_terraform(self, mock_is_maas):
+        """RefreshSnapStep stays after charm refresh and before core Terraform."""
+        self.deployment.get_ovn_manager().get_roles_for_microovn.return_value = []
+        plan = LatestInChannelCoordinator(
+            self.deployment, self.client, self.jhelper, self.manifest
+        ).get_plan()
+        step_types = [type(step) for step in plan]
+        refresh_index = step_types.index(RefreshSnapStep)
+        assert step_types.count(RefreshSnapStep) == 1
+        assert (
+            step_types.index(LatestInChannel)
+            < step_types.index(ReapplyInfraModelConfigStep)
+            < refresh_index
+        )
+        assert step_types[refresh_index + 1] is TerraformInitStep
+        for step_type in (
+            DeployCinderVolumeApplicationStep,
+            ReapplyHypervisorTerraformPlanStep,
+            DeploySunbeamMachineApplicationStep,
+            UpgradeFeatures,
+        ):
+            assert refresh_index < step_types.index(step_type), step_type.__name__
+
+    @pytest.mark.parametrize("snap_channel", [None, "2024.1/stable/fixed-branch"])
+    @patch(f"{_INTRA_CHANNEL}.is_maas_deployment", return_value=False)
+    def test_recover_stale_snap_channel(self, mock_is_maas, snap_channel, step_context):
+        """Early refresh-snap passes the manifest channel to recover stale config."""
+        config = {"snap-channel": snap_channel} if snap_channel else {}
+        self.manifest.core.software.charms = {
+            "cinder-volume": CharmManifest(config=config)
+        }
+        plan = LatestInChannelCoordinator(
+            self.deployment, self.client, self.jhelper, self.manifest
+        ).get_plan()
+        deployed = {"snap-channel": "2024.1/not-a-risk/lp2172372"}
+        expected = snap_channel or versions.OPENSTACK_CHANNEL
+
+        def get_app(name, model):
+            if name != "cinder-volume":
+                raise ApplicationNotFoundException(name)
+            return SimpleNamespace(units=["cinder-volume/0"])
+
+        def refresh_snap(*args, **kwargs):
+            effective = (kwargs.get("action_params") or {}).get(
+                "channel", deployed["snap-channel"]
+            )
+            if effective != expected:
+                raise ActionFailedException("stale snap-channel")
+
+        self.jhelper.get_application.side_effect = get_app
+        self.jhelper.run_action.side_effect = refresh_snap
+        for step in plan:
+            if isinstance(step, RefreshSnapStep):
+                assert step.run(step_context).result_type == ResultType.COMPLETED
+            elif isinstance(step, DeployCinderVolumeApplicationStep):
+                deployed.update(step.extra_tfvars()["charm_cinder_volume_config"])
+        assert deployed["snap-channel"] == expected
+        self.jhelper.run_action.assert_called_once_with(
+            "cinder-volume/0",
+            "openstack-machines",
+            "refresh-snap",
+            timeout=600,
+            action_params={"channel": expected},
+        )
+
     @pytest.mark.parametrize("principal", [None, "cinder-volume"])
     @patch(f"{_INTRA_CHANNEL}.StorageBackendManager")
     @patch(f"{_INTRA_CHANNEL}.is_maas_deployment", return_value=False)
@@ -1482,6 +1552,9 @@ class TestRefreshSnapStep:
         self.deployment = Mock()
         self.deployment.openstack_machines_model = "openstack-machines"
         self.jhelper = Mock()
+        self.manifest = Mock()
+        self.manifest.core.software.charms = {}
+        self.manifest.find_charm.return_value = None
 
     def _make_application(self, unit_names: list[str]) -> Mock:
         """Return a Mock application whose .units dict maps names to Mock units."""
@@ -1498,7 +1571,7 @@ class TestRefreshSnapStep:
         self.jhelper.get_application.side_effect = ApplicationNotFoundException(
             "not found"
         )
-        step = RefreshSnapStep(self.deployment, self.jhelper)
+        step = RefreshSnapStep(self.deployment, self.jhelper, self.manifest)
 
         result = step._refresh_snap_for_apps(
             ["openstack-hypervisor"], "openstack-machines", step_context
@@ -1512,7 +1585,7 @@ class TestRefreshSnapStep:
         self.jhelper.get_application.return_value = self._make_application(
             ["openstack-hypervisor/0", "openstack-hypervisor/1"]
         )
-        step = RefreshSnapStep(self.deployment, self.jhelper)
+        step = RefreshSnapStep(self.deployment, self.jhelper, self.manifest)
 
         result = step._refresh_snap_for_apps(
             ["openstack-hypervisor"], "openstack-machines", step_context
@@ -1522,7 +1595,11 @@ class TestRefreshSnapStep:
         assert self.jhelper.run_action.call_count == 2
         for unit in ("openstack-hypervisor/0", "openstack-hypervisor/1"):
             self.jhelper.run_action.assert_any_call(
-                unit, "openstack-machines", "refresh-snap", timeout=600
+                unit,
+                "openstack-machines",
+                "refresh-snap",
+                timeout=600,
+                action_params={"channel": versions.OPENSTACK_CHANNEL},
             )
 
     def test_returns_failed_when_action_fails(self, step_context):
@@ -1531,7 +1608,7 @@ class TestRefreshSnapStep:
             ["openstack-hypervisor/0", "openstack-hypervisor/1"]
         )
         self.jhelper.run_action.side_effect = ActionFailedException("snap error")
-        step = RefreshSnapStep(self.deployment, self.jhelper)
+        step = RefreshSnapStep(self.deployment, self.jhelper, self.manifest)
 
         result = step._refresh_snap_for_apps(
             ["openstack-hypervisor"], "openstack-machines", step_context
@@ -1549,7 +1626,7 @@ class TestRefreshSnapStep:
             return self._make_application([f"{name}/0"])
 
         self.jhelper.get_application.side_effect = get_app
-        step = RefreshSnapStep(self.deployment, self.jhelper)
+        step = RefreshSnapStep(self.deployment, self.jhelper, self.manifest)
 
         result = step._refresh_snap_for_apps(
             ["openstack-hypervisor", "cinder-volume"],
@@ -1569,7 +1646,7 @@ class TestRefreshSnapStep:
             return self._make_application([f"{name}/0"])
 
         self.jhelper.get_application.side_effect = get_app
-        step = RefreshSnapStep(self.deployment, self.jhelper)
+        step = RefreshSnapStep(self.deployment, self.jhelper, self.manifest)
 
         result = step._refresh_snap_for_apps(
             ["openstack-hypervisor", "cinder-volume"],
@@ -1580,17 +1657,88 @@ class TestRefreshSnapStep:
         assert result.result_type == ResultType.COMPLETED
         # Only openstack-hypervisor/0 should be refreshed
         self.jhelper.run_action.assert_called_once_with(
-            "openstack-hypervisor/0", "openstack-machines", "refresh-snap", timeout=600
+            "openstack-hypervisor/0",
+            "openstack-machines",
+            "refresh-snap",
+            timeout=600,
+            action_params={"channel": versions.OPENSTACK_CHANNEL},
         )
 
     def test_empty_app_list_returns_completed(self, step_context):
         """Empty app list does nothing and returns COMPLETED."""
-        step = RefreshSnapStep(self.deployment, self.jhelper)
+        step = RefreshSnapStep(self.deployment, self.jhelper, self.manifest)
 
         result = step._refresh_snap_for_apps([], "openstack-machines", step_context)
 
         assert result.result_type == ResultType.COMPLETED
         self.jhelper.get_application.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "app_name",
+        [
+            "cinder-volume",
+            "openstack-hypervisor",
+            "openstack-network-agents",
+            "epa-orchestrator",
+            "manila-data",
+        ],
+    )
+    @pytest.mark.parametrize("config", [{"snap-channel": "2026.1/candidate"}, {}, None])
+    def test_explicit_channel_for_supported_machine_apps(
+        self, app_name, config, step_context
+    ):
+        """Supported machine charms receive the manifest or release-default channel."""
+        self.jhelper.get_application.return_value = self._make_application(
+            [f"{app_name}/0"]
+        )
+        charm = CharmManifest(config=config) if config is not None else None
+        if charm is not None:
+            self.manifest.core.software.charms = {app_name: charm}
+        self.manifest.find_charm.return_value = charm
+        expected = (config or {}).get("snap-channel", versions.OPENSTACK_CHANNEL)
+        step = RefreshSnapStep(self.deployment, self.jhelper, self.manifest)
+
+        result = step._refresh_snap_for_apps(
+            [app_name], "openstack-machines", step_context
+        )
+
+        assert result.result_type == ResultType.COMPLETED
+        self.jhelper.run_action.assert_called_once_with(
+            f"{app_name}/0",
+            "openstack-machines",
+            "refresh-snap",
+            timeout=600,
+            action_params={"channel": expected},
+        )
+
+    @pytest.mark.parametrize(
+        "app_name",
+        [
+            "cinder-volume-noha",
+            "sunbeam-clusterd",
+            "consul-client-management",
+            "consul-client-tenant",
+            "consul-client-storage",
+        ],
+    )
+    def test_other_apps_omit_channel_param(self, app_name, step_context):
+        """Apps configured early or without a channel param omit action_params."""
+        self.jhelper.get_application.return_value = self._make_application(
+            [f"{app_name}/0"]
+        )
+        step = RefreshSnapStep(self.deployment, self.jhelper, self.manifest)
+
+        result = step._refresh_snap_for_apps(
+            [app_name], "openstack-machines", step_context
+        )
+
+        assert result.result_type == ResultType.COMPLETED
+        self.jhelper.run_action.assert_called_once_with(
+            f"{app_name}/0",
+            "openstack-machines",
+            "refresh-snap",
+            timeout=600,
+        )
 
     # ------------------------------------------------------------------
     # run()
@@ -1601,7 +1749,7 @@ class TestRefreshSnapStep:
         """Local deployment refreshes only the machines model."""
         mock_is_maas.return_value = False
         self.jhelper.get_application.side_effect = ApplicationNotFoundException("x")
-        step = RefreshSnapStep(self.deployment, self.jhelper)
+        step = RefreshSnapStep(self.deployment, self.jhelper, self.manifest)
 
         result = step.run(step_context)
 
@@ -1623,7 +1771,7 @@ class TestRefreshSnapStep:
             raise ApplicationNotFoundException("not deployed")
 
         self.jhelper.get_application.side_effect = get_app
-        step = RefreshSnapStep(self.deployment, self.jhelper)
+        step = RefreshSnapStep(self.deployment, self.jhelper, self.manifest)
 
         result = step.run(step_context)
 
@@ -1641,7 +1789,7 @@ class TestRefreshSnapStep:
             ["openstack-hypervisor/0"]
         )
         self.jhelper.run_action.side_effect = ActionFailedException("disk full")
-        step = RefreshSnapStep(self.deployment, self.jhelper)
+        step = RefreshSnapStep(self.deployment, self.jhelper, self.manifest)
 
         result = step.run(step_context)
 
@@ -1671,7 +1819,7 @@ class TestRefreshSnapStep:
             raise ApplicationNotFoundException("not deployed")
 
         self.jhelper.get_application.side_effect = get_app
-        step = RefreshSnapStep(self.deployment, self.jhelper)
+        step = RefreshSnapStep(self.deployment, self.jhelper, self.manifest)
         step.run(step_context)
 
         assert set(queried["openstack-machines"]) == set(SNAP_APPS_MACHINE_MODEL)

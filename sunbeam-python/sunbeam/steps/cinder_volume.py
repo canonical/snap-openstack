@@ -110,6 +110,21 @@ def get_optional_control_plane_offers(
     return tfvars
 
 
+def get_cinder_volume_config(manifest: Manifest) -> dict[str, Any]:
+    """Return ordinary Cinder config, with manifest values over release defaults.
+
+    Shared by the Terraform step and the early refresh-snap action. Terraform
+    also gives manifest charm config precedence over runtime overrides.
+    """
+    config: dict[str, Any] = {"snap-channel": versions.OPENSTACK_CHANNEL}
+    charm_manifest: CharmManifest | None = manifest.core.software.charms.get(
+        APPLICATION
+    )
+    if charm_manifest and charm_manifest.config:
+        config.update(charm_manifest.config)
+    return config
+
+
 class DeployCinderVolumeApplicationStep(DeployMachineApplicationStep):
     """Deploy Cinder Volume application using Terraform."""
 
@@ -215,19 +230,13 @@ class DeployCinderVolumeApplicationStep(DeployMachineApplicationStep):
                     "endpoint": "ceph",
                 },
             ],
-            "charm_cinder_volume_config": {"snap-channel": versions.OPENSTACK_CHANNEL},
+            "charm_cinder_volume_config": get_cinder_volume_config(self.manifest),
             "charm_cinder_volume_ceph_config": {
                 "ceph-osd-replication-count": microceph.ceph_replica_scale(
                     len(storage_nodes)
                 ),
             },
         }
-
-        charm_manifest: CharmManifest | None = self.manifest.core.software.charms.get(
-            APPLICATION
-        )
-        if charm_manifest and charm_manifest.config:
-            tfvars["charm_cinder_volume_config"].update(charm_manifest.config)
 
         # This may not be required ideally as Cinder volume is deployed always
         # before user can enable or disable telemetry.
