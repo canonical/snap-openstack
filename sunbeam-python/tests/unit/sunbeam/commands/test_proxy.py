@@ -6,7 +6,8 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from sunbeam.commands.proxy import PromptForProxyStep
+from sunbeam.commands.proxy import PromptForProxyStep, _update_proxy
+from sunbeam.core.common import convert_proxy_to_model_configs
 from sunbeam.core.deployment import PROXY_CONFIG_KEY
 
 
@@ -14,6 +15,114 @@ from sunbeam.core.deployment import PROXY_CONFIG_KEY
 def question_bank():
     with patch("sunbeam.commands.proxy.QuestionBank") as p:
         yield p
+
+
+def mock_deployment(dep_type: str) -> Mock:
+    deployment = Mock()
+    deployment.type = dep_type
+    deployment.get_proxy_settings.return_value = {
+        "HTTP_PROXY": "http://proxy:3128",
+        "HTTPS_PROXY": "http://proxy:3128",
+        "NO_PROXY": ".example.com",
+    }
+    return deployment
+
+
+@pytest.fixture()
+def update_proxy_mocks():
+    with (
+        patch("sunbeam.commands.proxy.run_preflight_checks") as run_preflight_checks,
+        patch("sunbeam.commands.proxy.update_config") as update_config,
+        patch("sunbeam.commands.proxy.JujuHelper") as juju_helper,
+        patch("sunbeam.commands.proxy.run_plan") as run_plan,
+        patch(
+            "sunbeam.commands.proxy.DeploySunbeamMachineApplicationStep"
+        ) as deploy_sunbeam_machine,
+        patch(
+            "sunbeam.commands.proxy.UpdateJujuModelConfigStep"
+        ) as update_model_config,
+        patch("sunbeam.commands.proxy.TerraformInitStep") as terraform_init,
+        patch(
+            "sunbeam.commands.proxy.UpdateOpenStackModelConfigStep"
+        ) as update_openstack_model_config,
+    ):
+        yield {
+            "run_preflight_checks": run_preflight_checks,
+            "update_config": update_config,
+            "juju_helper": juju_helper,
+            "run_plan": run_plan,
+            "deploy_sunbeam_machine": deploy_sunbeam_machine,
+            "update_model_config": update_model_config,
+            "terraform_init": terraform_init,
+            "update_openstack_model_config": update_openstack_model_config,
+        }
+
+
+class TestUpdateProxy:
+    def test_local_updates_openstack_model_config(self, update_proxy_mocks):
+        deployment = mock_deployment("local")
+        proxy = {"proxy": {"proxy_required": True}}
+        expected_model_config = convert_proxy_to_model_configs(
+            deployment.get_proxy_settings.return_value
+        )
+
+        _update_proxy(proxy, deployment, False)
+
+        update_proxy_mocks["update_config"].assert_called_once_with(
+            deployment.get_client(), PROXY_CONFIG_KEY, proxy
+        )
+        update_proxy_mocks["deploy_sunbeam_machine"].assert_called_once()
+        assert update_proxy_mocks["update_model_config"].call_count == 1
+        update_proxy_mocks["update_model_config"].assert_called_once_with(
+            update_proxy_mocks["juju_helper"].return_value,
+            "controller",
+            expected_model_config,
+        )
+        update_proxy_mocks["terraform_init"].assert_called_once_with(
+            deployment.get_tfhelper("openstack-plan")
+        )
+        update_proxy_mocks["update_openstack_model_config"].assert_called_once_with(
+            deployment,
+            deployment.get_tfhelper("openstack-plan"),
+            deployment.get_manifest(),
+            expected_model_config,
+        )
+        update_proxy_mocks["run_plan"].assert_called_once()
+
+    def test_maas_updates_openstack_model_config(self, update_proxy_mocks):
+        deployment = mock_deployment("maas")
+        proxy = {"proxy": {"proxy_required": True}}
+        expected_model_config = convert_proxy_to_model_configs(
+            deployment.get_proxy_settings.return_value
+        )
+
+        _update_proxy(proxy, deployment, False)
+
+        update_proxy_mocks["update_config"].assert_called_once_with(
+            deployment.get_client(), PROXY_CONFIG_KEY, proxy
+        )
+        update_proxy_mocks["deploy_sunbeam_machine"].assert_called_once()
+        assert update_proxy_mocks["update_model_config"].call_count == 2
+        update_proxy_mocks["update_model_config"].assert_any_call(
+            update_proxy_mocks["juju_helper"].return_value,
+            "controller",
+            expected_model_config,
+        )
+        update_proxy_mocks["update_model_config"].assert_any_call(
+            update_proxy_mocks["juju_helper"].return_value,
+            deployment.openstack_machines_model,
+            expected_model_config,
+        )
+        update_proxy_mocks["terraform_init"].assert_called_once_with(
+            deployment.get_tfhelper("openstack-plan")
+        )
+        update_proxy_mocks["update_openstack_model_config"].assert_called_once_with(
+            deployment,
+            deployment.get_tfhelper("openstack-plan"),
+            deployment.get_manifest(),
+            expected_model_config,
+        )
+        update_proxy_mocks["run_plan"].assert_called_once()
 
 
 class TestPromptForProxyStep:
