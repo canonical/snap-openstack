@@ -3074,6 +3074,7 @@ dependencies = [
     { name = "requests-unixsocket" },
     { name = "rich" },
     { name = "snap-helpers" },
+    { name = "sunbeam-ndr-contract" },
     { name = "tenacity" },
 ]
 
@@ -3212,6 +3213,7 @@ requires-dist = [
     { name = "setuptools-rust", marker = "extra == 'openstackclients'" },
     { name = "setuptools-scm", marker = "extra == 'openstackclients'" },
     { name = "snap-helpers", git = "https://github.com/albertodonato/snap-helpers?rev=76f8166b640163c0f20887829e31b2cafbfdec11" },
+    { name = "sunbeam-ndr-contract", specifier = "==2027.1.0.dev0" },
     { name = "tempest", marker = "extra == 'dev'", specifier = ">=17.1.0" },
     { name = "tenacity" },
     { name = "testtools", marker = "extra == 'dev'", specifier = ">=2.2.0" },
@@ -3223,6 +3225,15 @@ requires-dist = [
     { name = "wrapt", marker = "extra == 'dev'", specifier = ">=1.7.0" },
 ]
 provides-extras = ["openstackclients", "dev", "tics"]
+
+[[package]]
+name = "sunbeam-ndr-contract"
+version = "2027.1.0.dev0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/b4/73/71292096d2916434cb1c97c774db7b48d18d3f067a810e81f1b97ae0fc10/sunbeam_ndr_contract-2027.1.0.dev0.tar.gz", hash = "sha256:d116ce5e0cc847e42cc091486455209eaf3d83090f724eca5e481c97b0e161f4", size = 9343, upload-time = "2026-11-25T10:41:30.856Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/cb/8a/af6613e210f431730d78f758e2f6486baefa18adc93d5c1e46dfdc40a2b7/sunbeam_ndr_contract-2027.1.0.dev0-py3-none-any.whl", hash = "sha256:e02b802d5cbd5306cfc04781e8bca96b78fb6871055993bede5c4c14d0e71c9b", size = 8913, upload-time = "2026-11-25T10:41:30.033Z" },
+]
 
 [[package]]
 name = "tempest"
