@@ -50,6 +50,7 @@ dependencies = [
     "tenacity",
     "jubilant>=1.3.0",
     "packaging>=23.2",
+    "sunbeam-ndr-contract==2027.1.0.dev0",
 ]
 
 [project.optional-dependencies]
@@ -129,7 +130,7 @@ install = "sunbeam.hooks:install"
 post-refresh = "sunbeam.hooks:upgrade"
 
 [tool.setuptools]
-packages = ["sunbeam"]
+packages = ["sunbeam", "sunbeam.features.dynamic_routing"]
 
 [tool.setuptools.package-data]
 sunbeam = ["features/*/etc/*/*.tf", "features/*/etc/*/modules/*/*.tf"]

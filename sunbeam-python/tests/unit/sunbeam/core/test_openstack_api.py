@@ -64,6 +64,16 @@ class TestOpenStackAPI:
             project_domain_name=FAKE_CREDS.get("OS_PROJECT_DOMAIN_NAME"),
         )
 
+    def test_get_admin_connection_uses_region_and_ca(
+        self, retrieve_admin_credentials, os_connect
+    ):
+        retrieve_admin_credentials.return_value = {**FAKE_CREDS, "OS_CACERT": "ca.pem"}
+        sunbeam.core.openstack_api.get_admin_connection(
+            Mock(), Mock(), region_name="region-two"
+        )
+        assert os_connect.call_args.kwargs["region_name"] == "region-two"
+        assert os_connect.call_args.kwargs["cacert"] == "ca.pem"
+
     def test_guests_on_hypervisor(self):
         conn = Mock()
         get_admin_connection.return_value = conn
