@@ -368,9 +368,11 @@ class RefreshSnapStep(BaseStep, JujuStepHelper):
     """Run refresh-snap action on all snap-based charm units.
 
     This step must run after the charm refresh so that the new refresh-snap
-    action handler is present.  Snaps are held at their current revision by
-    the charm to prevent spontaneous snapd auto-refreshes; this step explicitly
-    triggers a snap refresh on every unit before the Terraform plans are applied.
+    action handler is present, and after the Terraform plans apply the target
+    manifest configuration. Otherwise a failed refresh can leave stale charm
+    configuration (for example an invalid snap-channel) that prevents a corrected
+    manifest from being applied. Snaps are held to prevent spontaneous snapd
+    auto-refreshes; this step explicitly refreshes every unit after configuration.
     """
 
     def __init__(self, deployment: Deployment, jhelper: JujuHelper):
@@ -522,7 +524,6 @@ class LatestInChannelCoordinator(UpgradeCoordinator):
                 ]
             )
 
-        plan.append(RefreshSnapStep(self.deployment, self.jhelper))
         plan.extend(
             [
                 # Microceph introduces new offer urls for rgw and so microceph
@@ -694,6 +695,7 @@ class LatestInChannelCoordinator(UpgradeCoordinator):
                     self.deployment.openstack_machines_model,
                 ),
                 UpgradeFeatures(self.deployment, upgrade_release=False),
+                RefreshSnapStep(self.deployment, self.jhelper),
             ]
         )
 
