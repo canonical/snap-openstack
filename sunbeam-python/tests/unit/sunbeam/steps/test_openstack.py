@@ -1516,6 +1516,53 @@ class TestUpdateOpenStackModelConfigStep:
 
         assert result.result_type == ResultType.COMPLETED
 
+    def test_is_skip_plan_not_applied(
+        self, tfhelper, manifest, deployment, step_context, snap_patch, snap_mock
+    ):
+        """is_skip returns SKIPPED when the openstack plan was never applied.
+
+        TerraformVarsOpenstack only exists after DeployControlPlaneStep ran.
+        On bootstrapped-but-not-deployed clusters, running the step would
+        write a partial TerraformVarsOpenstack entry and break fresh-deployment
+        detection in cluster deploy.
+        """
+        with patch(
+            "sunbeam.steps.openstack.read_config",
+            side_effect=ConfigItemNotFoundException("absent"),
+        ):
+            step = UpdateOpenStackModelConfigStep(deployment, tfhelper, manifest)
+            result = step.is_skip(step_context)
+
+        assert result.result_type == ResultType.SKIPPED
+        assert "not applied yet" in result.message
+
+    def test_is_skip_plan_applied(
+        self, tfhelper, manifest, deployment, step_context, snap_patch, snap_mock
+    ):
+        """is_skip returns COMPLETED when TerraformVarsOpenstack exists."""
+        with patch(
+            "sunbeam.steps.openstack.read_config",
+            return_value={"config": {}},
+        ):
+            step = UpdateOpenStackModelConfigStep(deployment, tfhelper, manifest)
+            result = step.is_skip(step_context)
+
+        assert result.result_type == ResultType.COMPLETED
+
+    def test_is_skip_plan_not_applied_does_not_run_tf(
+        self, tfhelper, manifest, deployment, step_context, snap_patch, snap_mock
+    ):
+        """When skipped, terraform must not be touched at all."""
+        with patch(
+            "sunbeam.steps.openstack.read_config",
+            side_effect=ConfigItemNotFoundException("absent"),
+        ):
+            step = UpdateOpenStackModelConfigStep(deployment, tfhelper, manifest)
+            result = step.is_skip(step_context)
+
+        assert result.result_type == ResultType.SKIPPED
+        tfhelper.update_tfvars_and_apply_tf.assert_not_called()
+
 
 class TestDeployControlPlaneStepModelConfigPersisted:
     """Verifies that DeployControlPlaneStep persists model config to the DB."""
