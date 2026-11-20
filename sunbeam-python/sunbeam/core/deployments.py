@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2024 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
+import errno
 import logging
 import os
 import tempfile
@@ -19,6 +20,39 @@ LOG = logging.getLogger(__name__)
 DEPLOYMENTS_CONFIG = SHARE_PATH / "deployments.yaml"
 
 T = TypeVar("T", bound=Deployment)
+
+
+def _keep_owner(fd: int, existing: os.stat_result) -> None:
+    """Give a replacement file the owner of the file it replaces."""
+    created = os.fstat(fd)
+    # -1 leaves an id as it is, so only a differing one is asked for
+    uid = -1 if created.st_uid == existing.st_uid else existing.st_uid
+    gid = -1 if created.st_gid == existing.st_gid else existing.st_gid
+    if uid == gid == -1:
+        return
+    try:
+        os.fchown(fd, uid, gid)
+    except OSError as e:
+        # Only expected when it is not permitted for this user, or not
+        # supported by the filesystem
+        if not isinstance(e, PermissionError) and e.errno != errno.EOPNOTSUPP:
+            raise
+        LOG.debug("Could not keep the owner of the replaced file: %s", e)
+
+
+def _sync_directory(directory: Path) -> None:
+    """Make a rename in the directory durable.
+
+    The renamed file is already in place, so a failure is only reported.
+    """
+    try:
+        dir_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
+    except OSError as e:
+        LOG.warning("Could not sync %r after writing to it: %s", str(directory), e)
 
 
 class DeploymentsConfig(pydantic.BaseModel):
@@ -65,6 +99,10 @@ class DeploymentsConfig(pydantic.BaseModel):
         LOG.debug("Writing deployment configuration to %r", str(self.path))
         yaml.SafeDumper.add_representer(str, str_presenter)
         path = self.path.resolve()
+        try:
+            existing = path.stat()
+        except FileNotFoundError:
+            existing = None
         tmp_path = None
         try:
             with tempfile.NamedTemporaryFile(
@@ -72,6 +110,8 @@ class DeploymentsConfig(pydantic.BaseModel):
             ) as tmp:
                 tmp_path = Path(tmp.name)
                 os.fchmod(tmp.fileno(), 0o600)
+                if existing is not None:
+                    _keep_owner(tmp.fileno(), existing)
                 yaml.safe_dump(self_dict, tmp)
                 tmp.flush()
                 os.fsync(tmp.fileno())
@@ -79,6 +119,7 @@ class DeploymentsConfig(pydantic.BaseModel):
         finally:
             if tmp_path is not None:
                 tmp_path.unlink(missing_ok=True)
+        _sync_directory(path.parent)
 
     @property
     def path(self) -> Path:
