@@ -160,6 +160,15 @@ class ApplicationStatusOverlay(TypedDict, total=False):
     agent_status: list[str] | None
     units: list[str] | None
     workload_status_message: list[str] | None
+    allow_zero_scale: bool
+
+
+def application_scale(app: jubilant.statustypes.AppStatus) -> int | None:
+    """Return the reported scale, or None for a Juju status-error."""
+    # Jubilant leaves scale at zero when it cannot read an application's status.
+    if app.app_status.current == "failed":
+        return None
+    return app.scale
 
 
 def build_pre_status_overlay(
@@ -1417,6 +1426,7 @@ class JujuHelper:
         expected_status: Collection[str],
         expected_agent_status: Collection[str] | None = None,
         expected_workload_status_message: Collection[str] | None = None,
+        allow_zero_scale: bool = False,
     ):
         """Check if the desired status is achieved for the given application.
 
@@ -1425,8 +1435,21 @@ class JujuHelper:
         :expected_status: Expected workload status values.
         :expected_agent_status: Expected agent status values.
         :expected_workload_status_message: Expected workload status messages.
+        :allow_zero_scale: Whether a non-subordinate application with scale
+            zero is considered settled once it has no units. Only for
+            Kubernetes models, where scale is the desired unit count. Ignored
+            when specific units are requested.
         """
         units = application_status.units
+        if (
+            allow_zero_scale
+            and not unit_list
+            and not application_status.subordinate_to
+            and application_scale(application_status) == 0
+        ):
+            # Scaling to zero is complete once the last unit is gone.
+            return not units
+
         app_status: set[str] = set()
         agent_status: set[str] = set()
         workload_status_message: set[str] = set()
@@ -1559,16 +1582,20 @@ class JujuHelper:
                 app_wl_status,
                 app_agent_status,
                 app_wl_msg,
+                app_overlay.get("allow_zero_scale", False),
             )
 
         def _wait_until_status(status: "jubilant.statustypes.Status"):
             """Check if all applications are in the desired status."""
             ready = True
+            # Machine models report scale 0 for every application.
+            k8s_model = status.model.type == "caas"
             for app, (
                 unit_list,
                 expected_status,
                 expected_agent_status,
                 expected_workload_status_message,
+                allow_zero_scale,
             ) in app_params.items():
                 if JujuHelper._is_desired_status_achieved(
                     status.apps[app],
@@ -1576,6 +1603,7 @@ class JujuHelper:
                     expected_status,
                     expected_agent_status,
                     expected_workload_status_message,
+                    allow_zero_scale and k8s_model,
                 ):
                     if queue is not None:
                         queue.put_nowait((STATUS_READY, app))
