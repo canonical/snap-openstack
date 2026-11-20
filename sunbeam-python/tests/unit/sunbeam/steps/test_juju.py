@@ -11,7 +11,7 @@ import pytest
 
 import sunbeam.steps.juju as juju
 from sunbeam.core.common import ResultType
-from sunbeam.core.juju import ModelNotFoundException
+from sunbeam.core.juju import JujuException, JujuWaitException, ModelNotFoundException
 
 TEST_OFFER_INTERFACES = [
     "grafana_dashboard",
@@ -757,6 +757,35 @@ class TestRemoveSaasApplicationsStep:
         step._remote_app_to_delete = ["test-1"]
         result = step.run(step_context)
         assert result.result_type == ResultType.COMPLETED
+
+    def test_run_remove_saas_fails(self, jhelper, step_context):
+        jhelper.remove_saas.side_effect = JujuException("remove-saas failed")
+        step = juju.RemoveSaasApplicationsStep(
+            jhelper,
+            "test",
+            "offering_model",
+            TEST_OFFER_INTERFACES,
+            wait_timeout=10,
+        )
+        step._remote_app_to_delete = ["test-1"]
+        result = step.run(step_context)
+        assert result.result_type == ResultType.FAILED
+        assert "remove-saas failed" in result.message
+        jhelper.wait_app_endpoint_gone.assert_not_called()
+
+    @pytest.mark.parametrize("error", [JujuWaitException("wait"), TimeoutError("t")])
+    def test_run_wait_fails(self, jhelper, step_context, error):
+        jhelper.wait_app_endpoint_gone.side_effect = error
+        step = juju.RemoveSaasApplicationsStep(
+            jhelper,
+            "test",
+            "offering_model",
+            TEST_OFFER_INTERFACES,
+            wait_timeout=10,
+        )
+        step._remote_app_to_delete = ["test-1"]
+        result = step.run(step_context)
+        assert result.result_type == ResultType.FAILED
 
 
 class TestBoostrapJujuStep:
