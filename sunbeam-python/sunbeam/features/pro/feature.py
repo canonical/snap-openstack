@@ -18,6 +18,8 @@ from sunbeam.core.common import BaseStep, Result, ResultType, StepContext, run_p
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import JujuHelper, JujuStepHelper
 from sunbeam.core.manifest import (
+    AddManifestStep,
+    CharmManifest,
     FeatureConfig,
     Manifest,
     SoftwareConfig,
@@ -198,12 +200,27 @@ class ProFeature(EnableDisableFeature):
     def default_software_overrides(self) -> SoftwareConfig:
         """Feature software configuration."""
         return SoftwareConfig(
+            charms={APPLICATION: CharmManifest(channel=UBUNTU_PRO_CHANNEL)},
             terraform={
                 self.tfplan: TerraformManifest(
                     source=Path(__file__).parent / "etc" / self.tfplan_dir
                 )
-            }
+            },
         )
+
+    def manifest_attributes_tfvar_map(self) -> dict:
+        """Manifest attributes terraformvars map."""
+        return {
+            self.tfplan: {
+                "charms": {
+                    APPLICATION: {
+                        "channel": "ubuntu-pro-channel",
+                        "revision": "ubuntu-pro-revision",
+                        "config": "ubuntu-pro-config",
+                    }
+                }
+            }
+        }
 
     def run_enable_plans(
         self, deployment: Deployment, config: ProFeatureConfig, show_hints: bool
@@ -211,17 +228,24 @@ class ProFeature(EnableDisableFeature):
         """Run the enablement plans."""
         tfhelper = deployment.get_tfhelper(self.tfplan)
         jhelper = JujuHelper(deployment.juju_controller)
-        plan = [
-            TerraformInitStep(tfhelper),
-            EnableUbuntuProApplicationStep(
-                deployment.get_client(),
-                tfhelper,
-                jhelper,
-                self.manifest,
-                config.token,
-                deployment.openstack_machines_model,
-            ),
-        ]
+        plan: list[BaseStep] = []
+        # Store the manifest so later applies, e.g. a re-run of enable
+        # without --manifest, keep the charm config it sets.
+        if self.user_manifest:
+            plan.append(AddManifestStep(deployment.get_client(), self.user_manifest))
+        plan.extend(
+            [
+                TerraformInitStep(tfhelper),
+                EnableUbuntuProApplicationStep(
+                    deployment.get_client(),
+                    tfhelper,
+                    jhelper,
+                    self.manifest,
+                    config.token,
+                    deployment.openstack_machines_model,
+                ),
+            ]
+        )
 
         run_plan(plan, console, show_hints)
 
