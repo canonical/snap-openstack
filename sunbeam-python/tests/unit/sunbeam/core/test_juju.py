@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2023 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
 import json
 from unittest.mock import MagicMock, Mock, patch
 
@@ -91,7 +92,7 @@ def status():
                 "cloud": "test-cloud",
                 "region": "test-region",
                 "version": "9723",
-                "type": "k8s",
+                "type": "caas",
                 "model_status": {},
             },
             "machines": {},
@@ -1108,6 +1109,202 @@ def test_is_desired_status_achieved(
         expected_workload_status_message,
     )
     assert result == expected_result
+
+
+def test_is_desired_status_achieved_for_zero_scaled_application():
+    """A caller may accept an app with no units when its scale is zero."""
+    application_status = Mock(
+        units={}, subordinate_to=[], app_status=Mock(current="unknown"), scale=0
+    )
+
+    assert not jujulib.JujuHelper._is_desired_status_achieved(
+        application_status, [], {"active"}
+    )
+    assert jujulib.JujuHelper._is_desired_status_achieved(
+        application_status,
+        [],
+        {"active"},
+        allow_zero_scale=True,
+    )
+    subordinate_status = Mock(
+        units={},
+        subordinate_to=["parent"],
+        app_status=Mock(current="blocked"),
+        scale=0,
+    )
+    assert not jujulib.JujuHelper._is_desired_status_achieved(
+        subordinate_status,
+        [],
+        {"active"},
+        allow_zero_scale=True,
+    )
+    scaled_status = Mock(
+        units={}, subordinate_to=[], app_status=Mock(current="unknown"), scale=1
+    )
+    assert not jujulib.JujuHelper._is_desired_status_achieved(
+        scaled_status,
+        [],
+        {"active"},
+        allow_zero_scale=True,
+    )
+    draining_status = Mock(
+        units={
+            "app1/0": Mock(
+                workload_status=Mock(current="blocked"),
+                juju_status=Mock(current="idle"),
+            )
+        },
+        subordinate_to=[],
+        app_status=Mock(current="unknown"),
+        scale=0,
+    )
+    assert not jujulib.JujuHelper._is_desired_status_achieved(
+        draining_status,
+        [],
+        {"active"},
+        allow_zero_scale=True,
+    )
+
+
+def test_status_error_is_not_ready_at_zero_scale():
+    app = jubilant.statustypes.AppStatus._from_dict({"status-error": "unavailable"})
+
+    assert not jujulib.JujuHelper._is_desired_status_achieved(
+        app, [], {"active"}, allow_zero_scale=True
+    )
+
+
+def test_is_desired_status_achieved_waits_for_last_zero_scale_unit():
+    """An app scaling to zero is not settled while a unit is still active."""
+    application_status = Mock(
+        units={
+            "app1/0": Mock(
+                workload_status=Mock(current="active", message=""),
+                juju_status=Mock(current="idle"),
+            )
+        },
+        subordinate_to=[],
+        app_status=Mock(current="active"),
+        scale=0,
+    )
+
+    assert not jujulib.JujuHelper._is_desired_status_achieved(
+        application_status,
+        [],
+        {"active"},
+        allow_zero_scale=True,
+    )
+
+
+def test_is_desired_status_achieved_zero_scale_keeps_requested_units():
+    """A caller waiting for a specific unit is not satisfied by zero scale."""
+    application_status = Mock(
+        units={}, subordinate_to=[], app_status=Mock(current="unknown"), scale=0
+    )
+
+    assert not jujulib.JujuHelper._is_desired_status_achieved(
+        application_status,
+        ["app1/0"],
+        {"active"},
+        allow_zero_scale=True,
+    )
+
+
+def test_wait_until_desired_status_zero_scale_ignored_on_machine_model(
+    jhelper: jujulib.JujuHelper, juju, status
+):
+    """Machine models report scale 0 for applications that have units."""
+    status = dataclasses.replace(
+        status, model=dataclasses.replace(status.model, type="iaas")
+    )
+    status.apps["app1"] = Mock(
+        units={
+            "app1/0": Mock(
+                workload_status=Mock(current="active", message=""),
+                juju_status=Mock(current="idle"),
+            )
+        },
+        subordinate_to=[],
+        app_status=Mock(current="active"),
+        scale=0,
+    )
+    ready_results = []
+
+    def wait_for_status(ready, model, **kwargs):
+        ready_results.append(ready(status))
+
+    jhelper._wait = Mock(side_effect=wait_for_status)
+    jhelper.wait_until_desired_status(
+        "test-model",
+        ["app1"],
+        status=["active"],
+        overlay={"app1": {"allow_zero_scale": True}},
+    )
+
+    assert ready_results == [True]
+
+
+def test_wait_until_desired_status_zero_scale_overlay_reaches_status_callback(
+    jhelper: jujulib.JujuHelper, juju, status
+):
+    """The per-app flag is passed through to the status check."""
+    status.apps["app1"] = jubilant.statustypes.AppStatus._from_dict(
+        {
+            "charm": "mysql-router-k8s",
+            "charm-origin": "charmhub",
+            "charm-name": "mysql-router-k8s",
+            "charm-rev": 1,
+            "exposed": False,
+        }
+    )
+    assert status.apps["app1"].scale == 0
+    assert status.apps["app1"].units == {}
+    ready_results = []
+
+    def wait_for_status(ready, model, **kwargs):
+        ready_results.append(ready(status))
+
+    jhelper._wait = Mock(side_effect=wait_for_status)
+    jhelper.wait_until_desired_status(
+        "test-model",
+        ["app1"],
+        status=["active"],
+        overlay={"app1": {"allow_zero_scale": True}},
+    )
+
+    assert ready_results == [True]
+    jhelper._wait.assert_called_once()
+
+
+def test_wait_until_active_zero_scale_overlay_reaches_status_callback(
+    jhelper: jujulib.JujuHelper, status
+):
+    """wait_until_active forwards the per-app zero-scale setting."""
+    status.apps["app1"] = jubilant.statustypes.AppStatus._from_dict(
+        {
+            "charm": "mysql-router-k8s",
+            "charm-origin": "charmhub",
+            "charm-name": "mysql-router-k8s",
+            "charm-rev": 1,
+            "exposed": False,
+        }
+    )
+    assert status.apps["app1"].scale == 0
+    assert status.apps["app1"].units == {}
+    ready_results = []
+
+    def wait_for_status(ready, model, **kwargs):
+        ready_results.append(ready(status))
+
+    jhelper._wait = Mock(side_effect=wait_for_status)
+    jhelper.wait_until_active("test-model", apps=["app1"])
+    jhelper.wait_until_active(
+        "test-model",
+        apps=["app1"],
+        overlay={"app1": {"allow_zero_scale": True}},
+    )
+
+    assert ready_results == [False, True]
 
 
 def test_wait_until_desired_status_overlay_overrides_status(

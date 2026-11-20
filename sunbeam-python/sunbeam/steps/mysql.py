@@ -7,6 +7,7 @@ import time
 from enum import StrEnum
 
 import jubilant
+import tenacity
 
 from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import ConfigItemNotFoundException
@@ -27,6 +28,7 @@ from sunbeam.core.juju import (
     JujuStepHelper,
     JujuWaitException,
     LeaderNotFoundException,
+    application_scale,
 )
 from sunbeam.core.manifest import Manifest
 from sunbeam.core.openstack import OPENSTACK_MODEL
@@ -679,7 +681,7 @@ def _deployed_channel_revisions(
             revision_cache[key] = jhelper.get_available_charm_revisions(
                 charm, deployed_channel, base
             )
-        except JujuException as e:
+        except (JujuException, jubilant.CLIError) as e:
             LOG.debug(
                 "Could not look up %s revisions in channel %s: %r",
                 charm,
@@ -724,11 +726,14 @@ class MySQLRouterCharmRefreshStep(BaseStep, JujuStepHelper):
         self.apps_to_wait: list[str] = []
         # (channel, revision) each app was on when its refresh was issued
         self._refresh_start: dict[str, tuple[str, int]] = {}
-        # Apps whose target revision cannot be looked up, so the revision may
-        # legitimately not move
+        # Apps whose target revision cannot be looked up or is already deployed,
+        # so the revision may legitimately not move
         self._unverified: set[str] = set()
         # Consecutive polls each app has been active with all units active/idle
         self._healthy_polls: dict[str, int] = {}
+        # Apps waiting for a readable status or for their last unit to go away
+        self._pending_refresh: set[str] = set()
+        self._revision_cache: dict[tuple[str, str], dict[str, int]] = {}
 
     def is_skip(self, context: StepContext) -> Result:
         """Skip if no router needs refreshing or a mysql upgrade is in flight."""
@@ -746,7 +751,6 @@ class MySQLRouterCharmRefreshStep(BaseStep, JujuStepHelper):
             LOG.warning("Could not get model status: %r", e)
             return Result(ResultType.FAILED, f"Could not get model status: {e}")
 
-        revision_cache: dict[tuple[str, str], dict[str, int]] = {}
         routers = {
             name: app
             for name, app in status.apps.items()
@@ -756,7 +760,11 @@ class MySQLRouterCharmRefreshStep(BaseStep, JujuStepHelper):
             name
             for name, app in routers.items()
             if in_channel_refresh_needed(
-                self.jhelper, MYSQL_ROUTER_CHARM, app, self.manifest, revision_cache
+                self.jhelper,
+                MYSQL_ROUTER_CHARM,
+                app,
+                self.manifest,
+                self._revision_cache,
             )
         )
         # Also wait on routers left mid-refresh
@@ -787,8 +795,9 @@ class MySQLRouterCharmRefreshStep(BaseStep, JujuStepHelper):
         """Return the apps that are settled, and those paused awaiting resume.
 
         An app is settled once it is active with all units active and idle, and
-        its requested refresh has completed (see `_refresh_done`). A paused app
-        is only returned once all its units are active and idle.
+        its requested refresh has completed (see `_refresh_done`). A zero-scale
+        app has no units to report a status, so only its refresh is checked. A
+        paused app is only returned once all its units are active and idle.
         """
         settled: list[str] = []
         paused: list[str] = []
@@ -797,6 +806,15 @@ class MySQLRouterCharmRefreshStep(BaseStep, JujuStepHelper):
             if app is None:
                 # App removed from the model so don't wait for it
                 settled.append(name)
+                continue
+            if name in self._pending_refresh:
+                # Not refreshed yet
+                continue
+            if application_scale(app) == 0 and not app.units:
+                # No unit to report a status or to run resume-refresh on
+                self._healthy_polls[name] = self._healthy_polls.get(name, 0) + 1
+                if self._refresh_done(name, app):
+                    settled.append(name)
                 continue
             units_healthy = all(
                 unit.workload_status.current == "active"
@@ -888,44 +906,98 @@ class MySQLRouterCharmRefreshStep(BaseStep, JujuStepHelper):
             return f"could not run pre-refresh-check: {exc}"
         return None
 
+    def _refresh_app(
+        self,
+        name: str,
+        app: jubilant.statustypes.AppStatus,
+        failures: dict[str, str],
+    ) -> bool:
+        """Prepare and refresh an outdated app, recording it if that fails.
+
+        :return: True if the refresh was issued
+        """
+        scale = application_scale(app)
+        if scale is None or (scale == 0 and app.units):
+            # The leader of an app scaling down to zero can be gone before it
+            # is used, so the refresh is issued once the last unit is removed.
+            self._pending_refresh.add(name)
+            return False
+        # A zero-scale app has no leader to run pre-refresh-check on and no
+        # unit to pause after.
+        reason = None if scale == 0 else self._prepare_refresh(name)
+        if reason:
+            failures[name] = reason
+            self.apps_to_wait.remove(name)
+            return False
+
+        deployed_channel = self.normalise_channel(app.charm_channel)
+        channel, revision = deployed_channel, None
+        charm_manifest = self.manifest.find_charm(MYSQL_ROUTER_CHARM)
+        if charm_manifest:
+            channel = charm_manifest.channel or deployed_channel
+            revision = charm_manifest.revision
+        LOG.debug("Refreshing %s to channel=%s revision=%s", name, channel, revision)
+        self._refresh_start[name] = (deployed_channel, app.charm_rev)
+        if revision is None and channel == deployed_channel:
+            # The lookup made when the app was selected is reused, and one that
+            # failed then is retried
+            latest = _deployed_channel_revisions(
+                self.jhelper, MYSQL_ROUTER_CHARM, app, self._revision_cache
+            )
+            if latest is None or app.charm_rev in latest.values():
+                self._unverified.add(name)
+        try:
+            self.jhelper.charm_refresh(
+                name, self.model, channel=channel, revision=revision
+            )
+        except (JujuException, jubilant.CLIError) as exc:
+            # Recorded so that the other apps are still carried to a conclusion
+            LOG.debug("Refresh of %s failed: %r", name, exc)
+            # Without stderr the exception still names the exit status or signal
+            stderr = exc.stderr if isinstance(exc, jubilant.CLIError) else None
+            failures[name] = f"refresh failed: {(stderr or '').strip() or exc}"
+            self.apps_to_wait.remove(name)
+            return False
+        return True
+
     def _refresh_apps(self, context: StepContext, failures: dict[str, str]):
         """Prepare and refresh each outdated app, recording those that fail."""
         status = self.jhelper.get_model_status(self.model)
-        revision_cache: dict[tuple[str, str], dict[str, int]] = {}
         for name in self.apps_to_refresh:
             app = status.apps.get(name)
             if app is None:
                 LOG.debug("%s not found in model, skipping refresh", name)
                 continue
             self.update_status(context, f"Refreshing {name}...")
-            reason = self._prepare_refresh(name)
-            if reason:
-                failures[name] = reason
-                self.apps_to_wait.remove(name)
-                continue
+            self._refresh_app(name, app, failures)
 
-            deployed_channel = self.normalise_channel(app.charm_channel)
-            channel, revision = deployed_channel, None
-            charm_manifest = self.manifest.find_charm(MYSQL_ROUTER_CHARM)
-            if charm_manifest:
-                channel = charm_manifest.channel or deployed_channel
-                revision = charm_manifest.revision
-            LOG.debug(
-                "Refreshing %s to channel=%s revision=%s", name, channel, revision
-            )
-            self._refresh_start[name] = (deployed_channel, app.charm_rev)
-            if (
-                revision is None
-                and channel == deployed_channel
-                and _deployed_channel_revisions(
-                    self.jhelper, MYSQL_ROUTER_CHARM, app, revision_cache
-                )
-                is None
-            ):
-                self._unverified.add(name)
-            self.jhelper.charm_refresh(
-                name, self.model, channel=channel, revision=revision
-            )
+    def _refresh_pending(
+        self,
+        status: jubilant.Status,
+        failures: dict[str, str],
+        deadlines: dict[str, float],
+    ):
+        """Refresh deferred apps once they have no units or a leader.
+
+        Each refreshed app gets its own deadline, as its refresh starts late.
+        """
+        for name in sorted(self._pending_refresh):
+            app = status.apps.get(name)
+            if app is None:
+                self._pending_refresh.remove(name)
+                continue
+            scale = application_scale(app)
+            if scale is None:
+                continue
+            if scale == 0:
+                ready = not app.units
+            else:
+                # The pre-refresh-check action needs a leader
+                ready = any(unit.leader for unit in app.units.values())
+            if ready:
+                self._pending_refresh.remove(name)
+                if self._refresh_app(name, app, failures):
+                    deadlines[name] = time.monotonic() + ROUTER_REFRESH_TIMEOUT
 
     def _wait_for_apps(self, context: StepContext, failures: dict[str, str]):
         """Poll until every app has settled or been recorded as failed."""
@@ -933,10 +1005,12 @@ class MySQLRouterCharmRefreshStep(BaseStep, JujuStepHelper):
             context, "Waiting for mysql-router applications to refresh..."
         )
         deadline = time.monotonic() + ROUTER_REFRESH_TIMEOUT
+        # Deadlines of the apps refreshed from this loop
+        deadlines: dict[str, float] = {}
         resume_attempts: dict[str, int] = {}
         # Polls left before a still-paused app is resumed again
         resume_backoff: dict[str, int] = {}
-        while True:
+        while self.apps_to_wait:
             status = self.jhelper.get_model_status(self.model)
             settled, paused = self._settled_and_paused(status)
             for name in set(resume_backoff) - set(paused):
@@ -962,9 +1036,26 @@ class MySQLRouterCharmRefreshStep(BaseStep, JujuStepHelper):
                     self.apps_to_wait.remove(name)
             if len(settled) == len(self.apps_to_wait):
                 return
-            if time.monotonic() >= deadline:
-                for name in sorted(set(self.apps_to_wait) - set(settled)):
+            now = time.monotonic()
+            for name in sorted(set(self.apps_to_wait) - set(settled)):
+                if now < deadlines.get(name, deadline):
+                    continue
+                app = status.apps[name]
+                if application_scale(app) is None:
+                    failures[name] = (
+                        f"timed out reading status: {app.app_status.message}"
+                    )
+                elif name in self._pending_refresh:
+                    failures[name] = "timed out waiting for it to finish scaling"
+                else:
                     failures[name] = "timed out waiting for the refresh to complete"
+                self.apps_to_wait.remove(name)
+                self._pending_refresh.discard(name)
+            if len(settled) == len(self.apps_to_wait):
+                return
+            # Refreshes issued here are first checked on the next status read
+            self._refresh_pending(status, failures, deadlines)
+            if len(settled) == len(self.apps_to_wait):
                 return
             time.sleep(MODEL_DELAY)
 
@@ -975,20 +1066,29 @@ class MySQLRouterCharmRefreshStep(BaseStep, JujuStepHelper):
         does not leave the others unwatched. All failures are reported together.
         """
         failures: dict[str, str] = {}
+        error = None
         try:
             self._refresh_apps(context, failures)
             self._wait_for_apps(context, failures)
-        except (JujuException, TimeoutError) as exc:
+        except (JujuException, TimeoutError, tenacity.RetryError) as exc:
             LOG.warning("Error refreshing mysql-router applications: %r", exc)
-            return Result(
-                ResultType.FAILED, f"mysql-router applications refresh failed: {exc}"
-            )
+            cause: BaseException | None = exc
+            if isinstance(exc, tenacity.RetryError):
+                # Raised once the status retries are exhausted
+                cause = exc.last_attempt.exception() or exc
+            error = f"mysql-router applications refresh failed: {cause}"
+
+        details = "\n".join(
+            f"  {name}: {why}" for name, why in sorted(failures.items())
+        )
+        if error:
+            # Keep the failures recorded before the error stopped the polling
+            if failures:
+                error += f"\nApplications that had already failed:\n{details}"
+            return Result(ResultType.FAILED, error)
 
         if failures:
             LOG.debug("mysql-router applications failed to refresh: %s", failures)
-            details = "\n".join(
-                f"  {name}: {why}" for name, why in sorted(failures.items())
-            )
             return Result(
                 ResultType.FAILED,
                 f"mysql-router applications failed to refresh:\n{details}\n"
@@ -1093,6 +1193,11 @@ class ReapplyMySQLTerraformPlanStep(BaseStep, JujuStepHelper):
             for name, app in status.apps.items()
             if app.charm_name in (MYSQL_CHARM, MYSQL_ROUTER_CHARM)
         )
+        mysql_router_apps = sorted(
+            name
+            for name, app in status.apps.items()
+            if app.charm_name == MYSQL_ROUTER_CHARM
+        )
 
         # Wait for the deployed mysql and mysql-router applications.
         try:
@@ -1102,6 +1207,7 @@ class ReapplyMySQLTerraformPlanStep(BaseStep, JujuStepHelper):
                 model=self.model,
                 apps=mysql_apps,
                 timeout=1200,
+                overlay={app: {"allow_zero_scale": True} for app in mysql_router_apps},
             )
         except (JujuWaitException, TimeoutError) as e:
             LOG.warning("Error waiting for MySQL applications: %r", e)

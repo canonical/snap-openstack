@@ -4,7 +4,9 @@
 import json
 from unittest.mock import Mock, call, patch
 
+import jubilant
 import pytest
+import tenacity
 from jubilant.statustypes import AppStatus, FormattedBase, StatusInfo, UnitStatus
 
 from sunbeam.clusterd.service import ConfigItemNotFoundException
@@ -12,6 +14,7 @@ from sunbeam.core.common import ResultType, SunbeamException
 from sunbeam.core.juju import (
     ActionFailedException,
     ApplicationNotFoundException,
+    ControllerNotReachableException,
     JujuException,
     LeaderNotFoundException,
 )
@@ -577,6 +580,7 @@ class TestReapplyMySQLTerraformPlanStep:
             "nova-mysql": Mock(charm_name="mysql-k8s"),
             "keystone-mysql-router": Mock(charm_name="mysql-router-k8s"),
             "nova-api-mysql-router": Mock(charm_name="mysql-router-k8s"),
+            "zone-router": Mock(charm_name="mysql-router-k8s"),
             "keystone": Mock(charm_name="keystone-k8s"),
         }
 
@@ -588,7 +592,13 @@ class TestReapplyMySQLTerraformPlanStep:
             "keystone-mysql-router",
             "nova-api-mysql-router",
             "nova-mysql",
+            "zone-router",
         ]
+        assert basic_jhelper.wait_until_active.call_args.kwargs["overlay"] == {
+            "keystone-mysql-router": {"allow_zero_scale": True},
+            "nova-api-mysql-router": {"allow_zero_scale": True},
+            "zone-router": {"allow_zero_scale": True},
+        }
 
     def test_run_terraform_failure(
         self, basic_deployment, basic_client, basic_jhelper, basic_manifest
@@ -660,6 +670,8 @@ def _router_app(
     charm_name=MYSQL_ROUTER_CHARM,
     unit_status="active",
     agent_status="idle",
+    unit_count=None,
+    leader=True,
 ):
     return AppStatus(
         charm=f"ch:amd64/{charm_name}-{rev}",
@@ -676,10 +688,18 @@ def _router_app(
                 workload_status=StatusInfo(current=unit_status),
                 juju_status=StatusInfo(current=agent_status),
                 upgrading_from=upgrading_from,
+                leader=leader and i == 0,
             )
-            for i in range(scale)
+            for i in range(scale if unit_count is None else unit_count)
         },
     )
+
+
+def _retry_error(cause):
+    """The error tenacity raises once the retries of a call are exhausted"""
+    last_attempt = tenacity.Future(8)
+    last_attempt.set_exception(cause)
+    return tenacity.RetryError(last_attempt)
 
 
 ROUTER_APP = "keystone-mysql-router"
@@ -701,6 +721,16 @@ ROUTER_STATES = {
         "message": ROUTER_PAUSED_MESSAGE,
         "unit_status": "maintenance",
         "agent_status": "executing",
+    },
+    "zero_draining": {"scale": 0, "unit_count": 1},
+    "single_electing": {"leader": False},
+    "zero_before": {"scale": 0, "app_status": "unknown"},
+    "zero": {"scale": 0, "app_status": "unknown", "rev": 200},
+    "zero_paused": {
+        "scale": 0,
+        "app_status": "blocked",
+        "message": ROUTER_PAUSED_MESSAGE,
+        "rev": 200,
     },
 }
 
@@ -861,13 +891,18 @@ class TestMySQLRouterCharmRefreshStep:
 
         assert result.result_type == expected
 
+    @pytest.mark.parametrize(
+        "lookup_error",
+        [
+            JujuException("charmhub unreachable"),
+            jubilant.CLIError(1, ["juju", "info"], stderr="charmhub unreachable"),
+        ],
+    )
     def test_is_skip_charmhub_lookup_failure_refreshes(
-        self, step, basic_jhelper, step_context
+        self, step, basic_jhelper, step_context, lookup_error
     ):
         """A failed Charmhub lookup must not abort the command. Refresh anyway."""
-        basic_jhelper.get_available_charm_revisions.side_effect = JujuException(
-            "charmhub unreachable"
-        )
+        basic_jhelper.get_available_charm_revisions.side_effect = lookup_error
         basic_jhelper.get_model_status.return_value = Mock(
             apps={ROUTER_APP: _router_app(rev=100)}
         )
@@ -892,6 +927,416 @@ class TestMySQLRouterCharmRefreshStep:
         basic_jhelper.charm_refresh.assert_called_once_with(
             ROUTER_APP, refresh_step.model, channel="8.0/stable", revision=None
         )
+
+    def test_run_refreshes_zero_scale_router(
+        self, refresh_step, basic_jhelper, step_context
+    ):
+        """A router scaled to zero has no leader, so it is refreshed directly"""
+        basic_jhelper.get_leader_unit.side_effect = LeaderNotFoundException()
+
+        result = self._run_polling(refresh_step, step_context, "zero_before", "zero")
+
+        assert result.result_type == ResultType.COMPLETED
+        basic_jhelper.set_app_config.assert_not_called()
+        basic_jhelper.run_action.assert_not_called()
+        basic_jhelper.charm_refresh.assert_called_once_with(
+            ROUTER_APP, refresh_step.model, channel="8.0/stable", revision=None
+        )
+
+    @pytest.mark.parametrize("scale", [0, 3])
+    def test_run_waits_for_readable_router_status(
+        self, refresh_step, basic_jhelper, step_context, scale
+    ):
+        failed = AppStatus._from_dict({"status-error": "unavailable"})
+        before = _router_app(scale=scale)
+        updated = _router_app(scale=scale, rev=200)
+        # The status read fails before the refresh and again while it settles.
+        snapshots = [failed, failed, before, failed, *[updated] * REFRESH_SETTLE_POLLS]
+        basic_jhelper.get_model_status.side_effect = [
+            Mock(apps={ROUTER_APP: app}) for app in snapshots
+        ]
+
+        def refresh(*args, **kwargs):
+            # The first two reads failed.
+            assert basic_jhelper.get_model_status.call_count == 3
+
+        basic_jhelper.charm_refresh.side_effect = refresh
+        with patch("sunbeam.steps.mysql.time.sleep"):
+            result = refresh_step.run(step_context)
+
+        assert result.result_type == ResultType.COMPLETED
+        basic_jhelper.charm_refresh.assert_called_once_with(
+            ROUTER_APP, refresh_step.model, channel=before.charm_channel, revision=None
+        )
+        if scale:
+            basic_jhelper.run_action.assert_called_once_with(
+                f"{ROUTER_APP}/0", refresh_step.model, "pre-refresh-check"
+            )
+        else:
+            basic_jhelper.run_action.assert_not_called()
+        assert basic_jhelper.get_model_status.call_count == len(snapshots)
+
+    def test_run_refreshes_router_after_scale_down_to_zero(
+        self, refresh_step, basic_jhelper, step_context
+    ):
+        """A router scaling to zero is refreshed once its last unit is gone"""
+        refreshed_at = []
+        basic_jhelper.charm_refresh.side_effect = lambda *args, **kwargs: (
+            refreshed_at.append(basic_jhelper.get_model_status.call_count)
+        )
+
+        result = self._run_polling(
+            refresh_step,
+            step_context,
+            "zero_draining",
+            "zero_draining",
+            "zero_before",
+            "zero",
+        )
+
+        assert result.result_type == ResultType.COMPLETED
+        basic_jhelper.set_app_config.assert_not_called()
+        basic_jhelper.get_leader_unit.assert_not_called()
+        basic_jhelper.run_action.assert_not_called()
+        basic_jhelper.charm_refresh.assert_called_once_with(
+            ROUTER_APP, refresh_step.model, channel="8.0/stable", revision=None
+        )
+        # Issued on the third status read, the first one without units
+        assert refreshed_at == [3]
+        # Settled on status reads made after the refresh only
+        assert basic_jhelper.get_model_status.call_count == 3 + REFRESH_SETTLE_POLLS
+
+    def test_run_fails_when_router_does_not_scale_down(
+        self, refresh_step, basic_jhelper, step_context
+    ):
+        with patch(
+            "sunbeam.steps.mysql.time.monotonic",
+            side_effect=[0.0, ROUTER_REFRESH_TIMEOUT],
+        ):
+            result = self._run_polling(
+                refresh_step, step_context, "zero_draining", "zero_draining"
+            )
+
+        assert result.result_type == ResultType.FAILED
+        assert f"{ROUTER_APP}: timed out waiting for it to finish" in result.message
+        basic_jhelper.run_action.assert_not_called()
+        basic_jhelper.charm_refresh.assert_not_called()
+
+    def test_run_gives_router_time_to_refresh_after_late_scale_down(
+        self, refresh_step, basic_jhelper, step_context
+    ):
+        """The time spent scaling down is not taken from the refresh"""
+        late = ROUTER_REFRESH_TIMEOUT - 10
+        with patch(
+            "sunbeam.steps.mysql.time.monotonic",
+            # Start, units gone, refresh issued, then two polls past the start
+            # deadline
+            side_effect=[0.0, late, late, late + 10, late + 20],
+        ):
+            result = self._run_polling(
+                refresh_step, step_context, "zero_draining", "zero_before", "zero"
+            )
+
+        assert result.result_type == ResultType.COMPLETED
+        basic_jhelper.charm_refresh.assert_called_once()
+
+    def test_run_watches_other_routers_when_refresh_fails(
+        self, refresh_step, basic_jhelper, step_context
+    ):
+        """A rejected refresh is recorded and the other routers are still watched"""
+        refresh_step.apps_to_refresh = [OTHER_APP, ROUTER_APP]
+        refresh_step.apps_to_wait = [OTHER_APP, ROUTER_APP]
+
+        def charm_refresh(name, *args, **kwargs):
+            if name == ROUTER_APP:
+                raise jubilant.CLIError(1, ["juju", "refresh"], stderr="not found")
+
+        basic_jhelper.charm_refresh.side_effect = charm_refresh
+        before = _router_app(**ROUTER_STATES["single_before"])
+        done = _router_app(**ROUTER_STATES["single"])
+        draining = _router_app(**ROUTER_STATES["zero_draining"])
+        drained = _router_app(**ROUTER_STATES["zero_before"])
+        basic_jhelper.get_model_status.side_effect = [
+            Mock(apps={OTHER_APP: before, ROUTER_APP: draining}),
+            Mock(apps={OTHER_APP: before, ROUTER_APP: drained}),
+            *[Mock(apps={OTHER_APP: done, ROUTER_APP: drained})] * REFRESH_SETTLE_POLLS,
+        ]
+
+        with patch("sunbeam.steps.mysql.time.sleep"):
+            result = refresh_step.run(step_context)
+
+        assert result.result_type == ResultType.FAILED
+        assert f"{ROUTER_APP}: refresh failed: not found" in result.message
+        assert OTHER_APP not in result.message
+        # The other router was polled until it settled
+        assert basic_jhelper.get_model_status.call_count == 1 + REFRESH_SETTLE_POLLS
+
+    def test_run_stops_polling_when_last_refresh_fails(
+        self, refresh_step, basic_jhelper, step_context
+    ):
+        basic_jhelper.charm_refresh.side_effect = jubilant.CLIError(
+            1, ["juju", "refresh"], stderr="not found"
+        )
+        basic_jhelper.get_model_status.side_effect = [
+            Mock(apps={ROUTER_APP: _router_app(**ROUTER_STATES["zero_draining"])}),
+            Mock(apps={ROUTER_APP: _router_app(**ROUTER_STATES["zero_before"])}),
+        ]
+
+        with patch("sunbeam.steps.mysql.time.sleep"):
+            result = refresh_step.run(step_context)
+
+        assert result.result_type == ResultType.FAILED
+        assert f"{ROUTER_APP}: refresh failed: not found" in result.message
+        assert basic_jhelper.get_model_status.call_count == 2
+
+    def test_run_does_not_poll_when_no_router_is_left(
+        self, refresh_step, basic_jhelper, step_context
+    ):
+        basic_jhelper.run_action.side_effect = ActionFailedException("not ready")
+        basic_jhelper.get_model_status.side_effect = [
+            Mock(apps={ROUTER_APP: _router_app(**ROUTER_STATES["single_before"])}),
+        ]
+
+        result = refresh_step.run(step_context)
+
+        assert result.result_type == ResultType.FAILED
+        assert "not ready" in result.message
+        assert basic_jhelper.get_model_status.call_count == 1
+
+    def test_run_starts_each_late_deadline_at_its_own_refresh(
+        self, refresh_step, basic_jhelper, step_context
+    ):
+        refresh_step.apps_to_refresh = [OTHER_APP, ROUTER_APP]
+        refresh_step.apps_to_wait = [OTHER_APP, ROUTER_APP]
+        events = []
+        basic_jhelper.charm_refresh.side_effect = lambda name, *args, **kwargs: (
+            events.append(name)
+        )
+
+        def monotonic():
+            events.append("clock")
+            return 0.0
+
+        draining = _router_app(**ROUTER_STATES["zero_draining"])
+        drained = _router_app(**ROUTER_STATES["zero_before"])
+        done = _router_app(**ROUTER_STATES["zero"])
+        basic_jhelper.get_model_status.side_effect = [
+            Mock(apps={OTHER_APP: draining, ROUTER_APP: draining}),
+            Mock(apps={OTHER_APP: drained, ROUTER_APP: drained}),
+            *[Mock(apps={OTHER_APP: done, ROUTER_APP: done})] * REFRESH_SETTLE_POLLS,
+        ]
+
+        with (
+            patch("sunbeam.steps.mysql.time.sleep"),
+            patch("sunbeam.steps.mysql.time.monotonic", side_effect=monotonic),
+        ):
+            result = refresh_step.run(step_context)
+
+        assert result.result_type == ResultType.COMPLETED
+        # After the start deadline and the first poll's check
+        assert events[2:6] == [OTHER_APP, "clock", ROUTER_APP, "clock"]
+
+    def test_run_times_out_late_routers_separately(
+        self, refresh_step, basic_jhelper, step_context
+    ):
+        """Each router refreshed late has a deadline of its own"""
+        refresh_step.apps_to_refresh = [OTHER_APP, ROUTER_APP]
+        refresh_step.apps_to_wait = [OTHER_APP, ROUTER_APP]
+        draining = _router_app(**ROUTER_STATES["zero_draining"])
+        drained = _router_app(**ROUTER_STATES["zero_before"])
+        done = _router_app(**ROUTER_STATES["zero"])
+        basic_jhelper.get_model_status.side_effect = [
+            Mock(apps={OTHER_APP: draining, ROUTER_APP: draining}),
+            Mock(apps={OTHER_APP: drained, ROUTER_APP: drained}),
+            # The revision of the first router never moves
+            *[Mock(apps={OTHER_APP: drained, ROUTER_APP: done})] * REFRESH_SETTLE_POLLS,
+        ]
+
+        with (
+            patch("sunbeam.steps.mysql.time.sleep"),
+            patch(
+                "sunbeam.steps.mysql.time.monotonic",
+                side_effect=[
+                    0.0,  # start
+                    0.0,  # first poll
+                    0.0,  # first router refreshed
+                    100.0,  # second router refreshed
+                    ROUTER_REFRESH_TIMEOUT + 50,
+                    ROUTER_REFRESH_TIMEOUT + 60,
+                ],
+            ),
+        ):
+            result = refresh_step.run(step_context)
+
+        assert result.result_type == ResultType.FAILED
+        assert f"{OTHER_APP}: timed out waiting for the refresh" in result.message
+        assert ROUTER_APP not in result.message
+
+    @pytest.mark.parametrize(
+        "polling_error",
+        [
+            JujuException("controller unreachable"),
+            # Raised by the status read once its retries are exhausted
+            _retry_error(ControllerNotReachableException("controller unreachable")),
+        ],
+    )
+    def test_run_reports_recorded_failures_when_polling_fails(
+        self, refresh_step, basic_jhelper, step_context, polling_error
+    ):
+        refresh_step.apps_to_refresh = [OTHER_APP, ROUTER_APP]
+        refresh_step.apps_to_wait = [OTHER_APP, ROUTER_APP]
+
+        def charm_refresh(name, *args, **kwargs):
+            if name == ROUTER_APP:
+                raise jubilant.CLIError(1, ["juju", "refresh"], stderr="not found")
+
+        basic_jhelper.charm_refresh.side_effect = charm_refresh
+        before = _router_app(**ROUTER_STATES["single_before"])
+        basic_jhelper.get_model_status.side_effect = [
+            Mock(apps={OTHER_APP: before, ROUTER_APP: before}),
+            polling_error,
+        ]
+
+        result = refresh_step.run(step_context)
+
+        assert result.result_type == ResultType.FAILED
+        assert "controller unreachable" in result.message
+        assert f"{ROUTER_APP}: refresh failed: not found" in result.message
+
+    def test_run_keeps_revision_lookup_from_is_skip(
+        self, step, basic_jhelper, step_context
+    ):
+        """A newer revision found by is_skip is still expected if a lookup fails"""
+        behind = Mock(apps={ROUTER_APP: _router_app(**ROUTER_STATES["single_before"])})
+        basic_jhelper.get_model_status.return_value = behind
+        step.is_skip(step_context)
+        basic_jhelper.get_available_charm_revisions.side_effect = jubilant.CLIError(
+            1, ["juju", "info"], stderr="charmhub unreachable"
+        )
+
+        with (
+            patch(
+                "sunbeam.steps.mysql.time.monotonic",
+                side_effect=[
+                    0.0,
+                    # Healthy at the old revision for longer than it takes to settle
+                    *[1.0] * (REFRESH_SETTLE_POLLS + 1),
+                    ROUTER_REFRESH_TIMEOUT + 1,
+                ],
+            ),
+            patch("sunbeam.steps.mysql.time.sleep"),
+        ):
+            result = step.run(step_context)
+
+        assert result.result_type == ResultType.FAILED
+        assert f"{ROUTER_APP}: timed out" in result.message
+        basic_jhelper.get_available_charm_revisions.assert_called_once()
+
+    def test_run_settles_router_found_current_after_failed_lookup(
+        self, step, basic_jhelper, step_context
+    ):
+        """A lookup that recovers can show there is no newer revision to wait for"""
+        current = Mock(apps={ROUTER_APP: _router_app(**ROUTER_STATES["single"])})
+        basic_jhelper.get_model_status.side_effect = [current] * (
+            2 + REFRESH_SETTLE_POLLS
+        )
+        basic_jhelper.get_available_charm_revisions.side_effect = [
+            jubilant.CLIError(1, ["juju", "info"], stderr="charmhub unreachable"),
+            {"amd64": 200},
+        ]
+        step.is_skip(step_context)
+
+        with patch("sunbeam.steps.mysql.time.sleep"):
+            result = step.run(step_context)
+
+        assert step.apps_to_refresh == [ROUTER_APP]
+        assert result.result_type == ResultType.COMPLETED
+        basic_jhelper.charm_refresh.assert_called_once()
+
+    def test_run_reports_exit_status_when_refresh_has_no_stderr(
+        self, refresh_step, basic_jhelper, step_context
+    ):
+        basic_jhelper.charm_refresh.side_effect = jubilant.CLIError(
+            -9, ["juju", "refresh"]
+        )
+        basic_jhelper.get_model_status.return_value = Mock(
+            apps={ROUTER_APP: _router_app(**ROUTER_STATES["single_before"])}
+        )
+
+        result = refresh_step.run(step_context)
+
+        assert result.result_type == ResultType.FAILED
+        assert f"{ROUTER_APP}: refresh failed: Command" in result.message
+        assert "SIGKILL" in result.message
+
+    def test_run_skips_router_removed_during_scale_down(
+        self, refresh_step, basic_jhelper, step_context
+    ):
+        basic_jhelper.get_model_status.side_effect = [
+            Mock(apps={ROUTER_APP: _router_app(**ROUTER_STATES["zero_draining"])}),
+            Mock(apps={}),
+        ]
+
+        with patch("sunbeam.steps.mysql.time.sleep"):
+            result = refresh_step.run(step_context)
+
+        assert result.result_type == ResultType.COMPLETED
+        basic_jhelper.charm_refresh.assert_not_called()
+
+    def test_run_prepares_router_scaled_back_up(
+        self, refresh_step, basic_jhelper, step_context
+    ):
+        """A router scaled up again is refreshed once it has a leader"""
+        refreshed_at = []
+        basic_jhelper.charm_refresh.side_effect = lambda *args, **kwargs: (
+            refreshed_at.append(basic_jhelper.get_model_status.call_count)
+        )
+
+        result = self._run_polling(
+            refresh_step,
+            step_context,
+            "zero_draining",
+            "single_electing",
+            "single_before",
+            "single",
+        )
+
+        assert result.result_type == ResultType.COMPLETED
+        assert refreshed_at == [3]
+        # Settled on status reads made after the refresh only
+        assert basic_jhelper.get_model_status.call_count == 3 + REFRESH_SETTLE_POLLS
+        basic_jhelper.run_action.assert_called_once_with(
+            f"{ROUTER_APP}/0", refresh_step.model, "pre-refresh-check"
+        )
+        basic_jhelper.charm_refresh.assert_called_once_with(
+            ROUTER_APP, refresh_step.model, channel="8.0/stable", revision=None
+        )
+
+    def test_run_does_not_resume_zero_scale_router(
+        self, refresh_step, basic_jhelper, step_context
+    ):
+        """A stale paused status on a router without units is not resumed"""
+        result = self._run_polling(
+            refresh_step, step_context, "zero_before", "zero_paused"
+        )
+
+        assert result.result_type == ResultType.COMPLETED
+        basic_jhelper.run_action.assert_not_called()
+
+    def test_run_waits_for_zero_scale_router_revision(
+        self, refresh_step, basic_jhelper, step_context
+    ):
+        """A zero-scale router is not settled until its revision has moved"""
+        # Healthy for REFRESH_SETTLE_POLLS polls, then the deadline passes
+        with patch(
+            "sunbeam.steps.mysql.time.monotonic",
+            side_effect=[*[0.0] * (REFRESH_SETTLE_POLLS + 1), ROUTER_REFRESH_TIMEOUT],
+        ):
+            result = self._run_polling(refresh_step, step_context, *["zero_before"] * 3)
+
+        assert result.result_type == ResultType.FAILED
+        assert "timed out" in result.message
+        assert basic_jhelper.get_model_status.call_count == 2 + REFRESH_SETTLE_POLLS
 
     def test_run_fails_when_pre_refresh_check_fails(
         self, refresh_step, basic_jhelper, step_context
@@ -1127,6 +1572,10 @@ class TestMySQLRouterCharmRefreshStep:
         [
             ("8.0/edge/fix", None),  # branch channels aren't in the channel map
             ("8.0/stable", JujuException("charmhub unreachable")),
+            (
+                "8.0/stable",
+                jubilant.CLIError(1, ["juju", "info"], stderr="charmhub unreachable"),
+            ),
         ],
     )
     def test_run_settles_refresh_with_unverifiable_target_at_same_revision(
