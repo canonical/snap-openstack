@@ -1224,6 +1224,26 @@ class UpdateOpenStackModelConfigStep(BaseStep):
         self.deployment = deployment
         self.model_config = model_config or {}
 
+    def is_skip(self, context: StepContext) -> Result:
+        """Determines if the step should be skipped or not.
+
+        The openstack terraform plan only exists once the control plane has
+        been deployed. On bootstrapped-but-not-deployed clusters (e.g. MAAS
+        where bootstrap and deploy are separate commands), running this step
+        would create a partial TerraformVarsOpenstack entry that lacks values
+        computed by DeployControlPlaneStep (model, cloud, credential, offer
+        URLs) and would make cluster deploy treat the cluster as deployed.
+        The proxy is picked up by DeployControlPlaneStep at deploy time.
+
+        :return: ResultType.SKIPPED if the openstack plan was never applied,
+                ResultType.COMPLETED otherwise
+        """
+        try:
+            read_config(self.client, self._CONFIG)
+        except ConfigItemNotFoundException:
+            return Result(ResultType.SKIPPED, "OpenStack plan not applied yet")
+        return Result(ResultType.COMPLETED)
+
     def run(self, context: StepContext) -> Result:
         """Apply model configs to openstack terraform plan."""
         try:
