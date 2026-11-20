@@ -1483,7 +1483,13 @@ class JujuLoginStep(BaseStep, JujuStepHelper):
                 return Result(ResultType.FAILED, str(e))
 
             LOG.debug("Command stdout=%r", process.before)
+            process.wait()
             if process.exitstatus != 0:
+                LOG.debug(
+                    "Juju login failed: exitstatus=%r signalstatus=%r",
+                    process.exitstatus,
+                    process.signalstatus,
+                )
                 return Result(ResultType.FAILED, "Failed to login to Juju Controller")
             return Result(ResultType.COMPLETED)
 
