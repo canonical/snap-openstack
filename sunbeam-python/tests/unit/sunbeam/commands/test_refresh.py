@@ -460,6 +460,45 @@ class TestRefreshManifestStoreOrdering:
                 return i
         raise AssertionError(f"No run_plan call with {step_classes}")
 
+    @pytest.mark.parametrize("command", ["mysql", "vault", "ingress"])
+    @pytest.mark.parametrize("replace_manifest", [False, True])
+    def test_preflight_only_when_replacing_manifest(
+        self, mocker, tmp_path, command, replace_manifest
+    ):
+        deployment = _build_deployment(_build_client("stable"))
+        preflight_error = click.ClickException("Manifest would change a charm track")
+        deployment.validate_manifest_for_infra.side_effect = preflight_error
+        run_plan = mocker.patch("sunbeam.commands.refresh.run_plan")
+        mysql = mocker.patch(
+            "sunbeam.commands.refresh.MySQLInChannelUpgradeCoordinator",
+            autospec=True,
+        )
+        args = [command]
+        if replace_manifest:
+            manifest_file = tmp_path / "manifest.yaml"
+            manifest_file.write_text(_make_manifest_data("stable"))
+            args.extend(["-m", str(manifest_file)])
+
+        result = self._invoke(args, deployment)
+
+        if replace_manifest:
+            assert result.exit_code == 1, result.output
+            assert preflight_error.message in result.output
+            deployment.validate_manifest_for_infra.assert_called_once_with(
+                deployment.get_manifest.return_value
+            )
+            run_plan.assert_not_called()
+            mysql.assert_not_called()
+        else:
+            assert result.exit_code == 0, result.output
+            deployment.validate_manifest_for_infra.assert_not_called()
+            deployment.resolve_k8s_channel.assert_not_called()
+            assert not any(
+                isinstance(step, AddManifestStep)
+                for steps in self._calls(run_plan)
+                for step in steps
+            )
+
     def test_manifest_stored_after_infra_apps_gate(self, mocker, tmp_path):
         """Generic refresh: the gate validates the manifest before storing."""
         client = _build_client("stable")

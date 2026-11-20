@@ -684,7 +684,7 @@ class VaultFeature(OpenStackControlPlaneFeature):
 
         plan: list[BaseStep] = []
         if self.user_manifest:
-            plan.append(AddManifestStep(deployment.get_client(), self.user_manifest))
+            plan.append(AddManifestStep(deployment, self.user_manifest))
         plan.extend(
             [
                 TerraformInitStep(deployment.get_tfhelper(self.tfplan)),

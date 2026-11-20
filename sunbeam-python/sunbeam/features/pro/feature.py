@@ -232,7 +232,7 @@ class ProFeature(EnableDisableFeature):
         # Store the manifest so later applies, e.g. a re-run of enable
         # without --manifest, keep the charm config it sets.
         if self.user_manifest:
-            plan.append(AddManifestStep(deployment.get_client(), self.user_manifest))
+            plan.append(AddManifestStep(deployment, self.user_manifest))
         plan.extend(
             [
                 TerraformInitStep(tfhelper),

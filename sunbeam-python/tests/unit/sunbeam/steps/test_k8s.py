@@ -1704,6 +1704,87 @@ class TestEnsureCiliumDeviceByHostStep:
         )
         assert result.result_type == ResultType.COMPLETED
 
+    @pytest.mark.parametrize("replacement", ["false", "true"])
+    def test_device_defaults_follow_datapath_and_exclude_physnet(
+        self, step, deployment, jhelper, replacement
+    ):
+        deployment.get_space.side_effect = lambda network: network.value
+        jhelper.get_machine_interfaces.return_value = {
+            "internal0": Mock(space="internal"),
+            "public0": Mock(space="public"),
+            "management0": Mock(space="management"),
+            "storage0": Mock(space="storage"),
+            "data0": Mock(space="data"),
+            "ovs-uplink": Mock(space=None),
+        }
+        step.kube.get.return_value = Mock(data={"kube-proxy-replacement": replacement})
+        step.to_update = [{"name": "node1", "machineid": "1"}]
+        step._restart_cilium_on_node = Mock()
+
+        assert step._apply_changes(None).result_type == ResultType.COMPLETED
+
+        obj = step.kube.apply.call_args.args[0]
+        assert obj._api_info.resource.group == "cilium.io"
+        assert obj._api_info.resource.version == "v2"
+        resource = obj.to_dict()
+        assert resource["spec"]["nodeSelector"] == {
+            "matchLabels": {"sunbeam/hostname": "node1"}
+        }
+        if replacement == "true":
+            assert resource["spec"]["defaults"] == {
+                "devices": "internal0,management0,public0,storage0",
+                "direct-routing-device": "internal0",
+            }
+        else:
+            assert resource["spec"]["defaults"] == {"devices": "internal0"}
+
+    def test_device_defaults_deduplicate_shared_spaces(self, step, jhelper):
+        jhelper.get_machine_interfaces.return_value = {"eth0": Mock(space="internal")}
+        step.kube.get.return_value = Mock(data={"kube-proxy-replacement": "true"})
+        assert step._cilium_defaults({"name": "node1", "machineid": "1"}) == {
+            "devices": "eth0",
+            "direct-routing-device": "eth0",
+        }
+
+    def test_region_controller_without_storage_space(self, step, deployment, jhelper):
+        def get_space(network):
+            if network == Networks.STORAGE:
+                raise ValueError("Storage space not configured")
+            return "internal"
+
+        deployment.get_space.side_effect = get_space
+        jhelper.get_machine_interfaces.return_value = {"eth0": Mock(space="internal")}
+        step.kube.get.return_value = Mock(data={"kube-proxy-replacement": "true"})
+        assert step._cilium_defaults({"name": "region1", "machineid": "1"}) == {
+            "devices": "eth0",
+            "direct-routing-device": "eth0",
+        }
+
+    def test_wrong_direct_routing_device_requires_reconciliation(self, step, jhelper):
+        jhelper.get_machine_interfaces.return_value = {"eth0": Mock(space="internal")}
+        step.kube.get.return_value = Mock(data={"kube-proxy-replacement": "true"})
+        config = Mock(
+            metadata=Mock(labels={"sunbeam/hostname": "node1"}, annotations={}),
+        )
+        config.spec = {
+            "nodeSelector": {"matchLabels": {"sunbeam/hostname": "node1"}},
+            "defaults": {"devices": "eth0", "direct-routing-device": "wrong"},
+        }
+        step.kube.list.return_value = [config]
+        nodes = [{"name": "node1", "machineid": "1"}]
+        assert step._get_outdated_resources(nodes, step.kube) == (["node1"], [])
+        config.spec["defaults"]["direct-routing-device"] = "eth0"
+        assert step._get_outdated_resources(nodes, step.kube) == ([], [])
+
+    def test_unreadable_datapath_does_not_apply_resources(self, step):
+        step.to_update = [{"name": "node1", "machineid": "1"}]
+        step._get_interface = Mock(return_value="eth0")
+        error = ApiError.__new__(ApiError)
+        error.status = Mock(code=403)
+        step.kube.get.side_effect = error
+        assert step._apply_changes(None).result_type == ResultType.FAILED
+        step.kube.apply.assert_not_called()
+
     def test_apply_changes_updates_config(self, step):
         step.to_update = [
             {"name": "node1", "machineid": "1"},
