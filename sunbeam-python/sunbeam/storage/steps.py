@@ -61,6 +61,7 @@ from sunbeam.steps.cinder_volume import (
     get_optional_control_plane_offers,
 )
 from sunbeam.storage.models import (
+    FIELD_PROMPT_CONTEXT_KEY,
     BackendValidationException,
     SecretDictField,
     normalize_backend_config,
@@ -216,7 +217,12 @@ def basemodel_validator(
 
         def value_validator(value: Any) -> None:
             try:
-                validator.validate_assignment(constructed, field, value)
+                validator.validate_assignment(
+                    constructed,
+                    field,
+                    value,
+                    context={FIELD_PROMPT_CONTEXT_KEY: True},
+                )
             except pydantic.ValidationError as exc:
                 messages: list[str] = []
                 for error in exc.errors():
