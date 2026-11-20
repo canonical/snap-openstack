@@ -10,6 +10,7 @@ from unittest.mock import Mock, call, patch
 import pytest
 from requests.exceptions import Timeout
 
+from sunbeam import versions
 from sunbeam.clusterd.service import (
     ClusterServiceUnavailableException,
     ConfigItemNotFoundException,
@@ -24,6 +25,8 @@ from sunbeam.core.juju import (
 from sunbeam.core.manifest import CharmManifest
 from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.core.terraform import TerraformInitStep
+from sunbeam.steps.cinder_volume import DeployCinderVolumeApplicationStep
+from sunbeam.steps.hypervisor import ReapplyHypervisorTerraformPlanStep
 from sunbeam.steps.k8s import (
     EnsureCiliumDeviceByHostStep,
     EnsureDefaultL2AdvertisementMutedStep,
@@ -36,6 +39,7 @@ from sunbeam.steps.openstack import (
     ValidateInfraAppsStep,
 )
 from sunbeam.steps.role_distributor import DeployRoleDistributorApplicationStep
+from sunbeam.steps.sunbeam_machine import DeploySunbeamMachineApplicationStep
 from sunbeam.steps.upgrades.base import UpgradeFeatures
 from sunbeam.steps.upgrades.intra_channel import (
     SNAP_APPS_INFRA_MODEL,
@@ -1081,6 +1085,65 @@ class TestLatestInChannelCoordinator:
             < microovn_init_index
             < microovn_deploy_index
         )
+
+    @patch(f"{_INTRA_CHANNEL}.is_maas_deployment", return_value=False)
+    def test_manifest_config_precedes_snap_refresh(self, mock_is_maas):
+        """Configuration precedes snap refresh actions."""
+        self.deployment.get_ovn_manager().get_roles_for_microovn.return_value = []
+        plan = LatestInChannelCoordinator(
+            self.deployment, self.client, self.jhelper, self.manifest
+        ).get_plan()
+        refresh_index = next(
+            i for i, step in enumerate(plan) if isinstance(step, RefreshSnapStep)
+        )
+        config_types = (
+            DeployCinderVolumeApplicationStep,
+            ReapplyHypervisorTerraformPlanStep,
+            DeploySunbeamMachineApplicationStep,
+            ReapplyInfraModelConfigStep,
+        )
+        for i, step in enumerate(plan):
+            if isinstance(step, config_types):
+                assert i < refresh_index, type(step).__name__
+        assert (
+            next(i for i, step in enumerate(plan) if isinstance(step, UpgradeFeatures))
+            < refresh_index
+        )
+
+    @pytest.mark.parametrize("snap_channel", [None, "2024.1/stable/fixed-branch"])
+    @patch(f"{_INTRA_CHANNEL}.is_maas_deployment", return_value=False)
+    def test_recover_stale_snap_channel(self, mock_is_maas, snap_channel, step_context):
+        """A corrected or cleared manifest replaces stale config before actions."""
+        config = {"snap-channel": snap_channel} if snap_channel else {}
+        self.manifest.core.software.charms = {
+            "cinder-volume": CharmManifest(config=config)
+        }
+        plan = LatestInChannelCoordinator(
+            self.deployment, self.client, self.jhelper, self.manifest
+        ).get_plan()
+        deployed = {"snap-channel": "2024.1/not-a-risk/lp2172372"}
+        expected = snap_channel or versions.OPENSTACK_CHANNEL
+
+        def get_app(name, model):
+            if name != "cinder-volume":
+                raise ApplicationNotFoundException(name)
+            return SimpleNamespace(units=["cinder-volume/0"])
+
+        def refresh_snap(*args, **kwargs):
+            if deployed["snap-channel"] != expected:
+                raise ActionFailedException("stale snap-channel")
+
+        self.jhelper.get_application.side_effect = get_app
+        self.jhelper.run_action.side_effect = refresh_snap
+        for step in plan:
+            if isinstance(step, DeployCinderVolumeApplicationStep):
+                # Use the real target config calculation; only Terraform/Juju I/O
+                # is replaced by the in-memory deployed configuration.
+                deployed.update(step.extra_tfvars()["charm_cinder_volume_config"])
+            elif isinstance(step, RefreshSnapStep):
+                assert step.run(step_context).result_type == ResultType.COMPLETED
+        assert deployed["snap-channel"] == expected
+        self.jhelper.run_action.assert_called_once()
 
     @pytest.mark.parametrize("principal", [None, "cinder-volume"])
     @patch(f"{_INTRA_CHANNEL}.StorageBackendManager")
