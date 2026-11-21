@@ -857,6 +857,25 @@ class JujuHelper:
             raise ActionFailedException(str(task))
         return task.results
 
+    def get_application_endpoints(
+        self, applications: list[str], model: str
+    ) -> dict[str, set[str]]:
+        """Return declared endpoint names, including those with no relation."""
+        with self._model(model) as juju:
+            try:
+                details = self.cli(
+                    "show-application",
+                    *applications,
+                    include_controller=False,
+                    juju=juju,
+                )
+            except jubilant.CLIError as error:
+                raise JujuException(str(error)) from error
+        return {
+            name: set(info.get("endpoint-bindings", {}))
+            for name, info in details.items()
+        }
+
     def add_secret(self, model: str, name: str, data: dict, info: str) -> str:
         """Add secret to the model.
 

@@ -609,6 +609,21 @@ def test_get_secret_not_found(jhelper, juju):
         jhelper.get_secret("test-model", "secret-id")
 
 
+def test_get_application_endpoints_includes_unrelated_endpoints(jhelper, juju):
+    juju.cli.return_value = (
+        '{"agent": {"endpoint-bindings": {"juju-info": "alpha", "cos-agent": "alpha"}},'
+        '"legacy": {"endpoint-bindings": {"juju-info": "alpha"}}}'
+    )
+
+    assert jhelper.get_application_endpoints(["agent", "legacy"], "test-model") == {
+        "agent": {"juju-info", "cos-agent"},
+        "legacy": {"juju-info"},
+    }
+    juju.cli.assert_called_once_with(
+        "show-application", "--format", "json", "agent", "legacy"
+    )
+
+
 def test_get_app_config_success(jhelper, juju):
     test_config = {"key": "value"}
     juju.config.return_value = test_config
