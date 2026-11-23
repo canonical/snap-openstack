@@ -184,11 +184,18 @@ class BaseService(ABC):
                 )
             elif "not found" == error:
                 raise URLNotFoundException("URL not found")
-            elif "No remote exists with the given name" in error:
-                raise NodeNotExistInClusterException(
-                    "Node does not exist in the sunbeam cluster"
+            elif (
+                "No remote exists with the given name" in error
+                or "Node not found" in error
+                or (
+                    response.status_code == 404
+                    and error.startswith("Cluster member ")
+                    and (
+                        "not found in truststore" in error
+                        or "not found in dqlite or database" in error
+                    )
                 )
-            elif "Node not found" in error:
+            ):
                 raise NodeNotExistInClusterException(
                     "Node does not exist in the sunbeam cluster"
                 )
@@ -196,7 +203,10 @@ class BaseService(ABC):
                 raise NodeJoinException(
                     "Join node to cluster failed with the given token"
                 )
-            elif "UNIQUE constraint failed: internal_token_records.name" in error:
+            elif (
+                "UNIQUE constraint failed: core_token_records.name" in error
+                or "UNIQUE constraint failed: internal_token_records.name" in error
+            ):
                 raise TokenAlreadyGeneratedException(
                     "Token already generated for the node"
                 )
@@ -204,7 +214,10 @@ class BaseService(ABC):
                 raise ClusterServiceUnavailableException(
                     "Sunbeam Cluster not initialized"
                 )
-            elif "InternalTokenRecord not found" in error:
+            elif (
+                "CoreTokenRecord not found" in error
+                or "InternalTokenRecord not found" in error
+            ):
                 raise TokenNotFoundException("Token not found for the node")
             elif (
                 "Cannot remove cluster members, there are no remaining "

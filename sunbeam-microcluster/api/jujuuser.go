@@ -6,10 +6,8 @@ import (
 	"net/http"
 	"net/url"
 
-	"github.com/canonical/lxd/lxd/response"
 	"github.com/canonical/lxd/shared/api"
-	"github.com/canonical/microcluster/v2/rest"
-	"github.com/canonical/microcluster/v2/state"
+	"github.com/canonical/microcluster/v3/microcluster/types"
 	"github.com/gorilla/mux"
 
 	"github.com/canonical/snap-openstack/sunbeam-microcluster/access"
@@ -18,7 +16,7 @@ import (
 )
 
 // /1.0/jujuusers endpoint.
-var jujuusersCmd = rest.Endpoint{
+var jujuusersCmd = types.Endpoint{
 	Path: "jujuusers",
 
 	Get:  access.ClusterCATrustedEndpoint(cmdJujuUsersGetAll, true),
@@ -26,7 +24,7 @@ var jujuusersCmd = rest.Endpoint{
 }
 
 // /1.0/jujuusers/<name> endpoint.
-var jujuuserCmd = rest.Endpoint{
+var jujuuserCmd = types.Endpoint{
 	Path: "jujuusers/{name}",
 
 	Get:    access.ClusterCATrustedEndpoint(cmdJujuUsersGet, true),
@@ -34,20 +32,20 @@ var jujuuserCmd = rest.Endpoint{
 	Delete: access.ClusterCATrustedEndpoint(cmdJujuUsersDelete, true),
 }
 
-func cmdJujuUsersGetAll(s state.State, r *http.Request) response.Response {
+func cmdJujuUsersGetAll(s types.State, r *http.Request) types.Response {
 	users, err := sunbeam.ListJujuUsers(r.Context(), s)
 	if err != nil {
-		return response.InternalError(err)
+		return types.InternalError(err)
 	}
 
-	return response.SyncResponse(true, users)
+	return types.SyncResponse(true, users)
 }
 
-func cmdJujuUsersGet(s state.State, r *http.Request) response.Response {
+func cmdJujuUsersGet(s types.State, r *http.Request) types.Response {
 	var name string
 	name, err := url.PathUnescape(mux.Vars(r)["name"])
 	if err != nil {
-		return response.InternalError(err)
+		return types.InternalError(err)
 	}
 	jujuUser, err := sunbeam.GetJujuUser(r.Context(), s, name)
 	if err != nil {
@@ -55,42 +53,42 @@ func cmdJujuUsersGet(s state.State, r *http.Request) response.Response {
 		var statusErr api.StatusError
 		if errors.As(err, &statusErr) {
 			if statusErr.Status() == http.StatusNotFound {
-				return response.NotFound(err)
+				return types.NotFound(err)
 			}
 		}
-		return response.InternalError(err)
+		return types.InternalError(err)
 	}
 
-	return response.SyncResponse(true, jujuUser)
+	return types.SyncResponse(true, jujuUser)
 }
 
-func cmdJujuUsersPost(s state.State, r *http.Request) response.Response {
+func cmdJujuUsersPost(s types.State, r *http.Request) types.Response {
 	var req apitypes.JujuUser
 
 	err := json.NewDecoder(r.Body).Decode(&req)
 	if err != nil {
-		return response.InternalError(err)
+		return types.InternalError(err)
 	}
 
 	err = sunbeam.AddJujuUser(r.Context(), s, req.Username, req.Token)
 	if err != nil {
-		return response.InternalError(err)
+		return types.InternalError(err)
 	}
 
-	return response.EmptySyncResponse
+	return types.EmptySyncResponse
 }
 
-func cmdJujuUsersPut(s state.State, r *http.Request) response.Response {
+func cmdJujuUsersPut(s types.State, r *http.Request) types.Response {
 	var req apitypes.JujuUser
 
 	name, err := url.PathUnescape(mux.Vars(r)["name"])
 	if err != nil {
-		return response.SmartError(err)
+		return types.SmartError(err)
 	}
 
 	err = json.NewDecoder(r.Body).Decode(&req)
 	if err != nil {
-		return response.InternalError(err)
+		return types.InternalError(err)
 	}
 
 	err = sunbeam.UpdateJujuUser(r.Context(), s, name, req.Token)
@@ -99,24 +97,24 @@ func cmdJujuUsersPut(s state.State, r *http.Request) response.Response {
 		var statusErr api.StatusError
 		if errors.As(err, &statusErr) {
 			if statusErr.Status() == http.StatusNotFound {
-				return response.NotFound(err)
+				return types.NotFound(err)
 			}
 		}
-		return response.InternalError(err)
+		return types.InternalError(err)
 	}
 
-	return response.EmptySyncResponse
+	return types.EmptySyncResponse
 }
 
-func cmdJujuUsersDelete(s state.State, r *http.Request) response.Response {
+func cmdJujuUsersDelete(s types.State, r *http.Request) types.Response {
 	name, err := url.PathUnescape(mux.Vars(r)["name"])
 	if err != nil {
-		return response.SmartError(err)
+		return types.SmartError(err)
 	}
 	err = sunbeam.DeleteJujuUser(r.Context(), s, name)
 	if err != nil {
-		return response.InternalError(err)
+		return types.InternalError(err)
 	}
 
-	return response.EmptySyncResponse
+	return types.EmptySyncResponse
 }

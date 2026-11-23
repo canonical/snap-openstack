@@ -5,14 +5,14 @@ import (
 	"database/sql"
 	"fmt"
 
-	"github.com/canonical/microcluster/v2/state"
+	"github.com/canonical/microcluster/v3/microcluster/types"
 
 	"github.com/canonical/snap-openstack/sunbeam-microcluster/api/apitypes"
 	"github.com/canonical/snap-openstack/sunbeam-microcluster/database"
 )
 
 // ListStorageBackends return all the storage backends, filterable by role (Optional)
-func ListStorageBackends(ctx context.Context, s state.State) (apitypes.StorageBackends, error) {
+func ListStorageBackends(ctx context.Context, s types.State) (apitypes.StorageBackends, error) {
 	backends := apitypes.StorageBackends{}
 
 	// Get the storage backends from the database.
@@ -44,7 +44,7 @@ func ListStorageBackends(ctx context.Context, s state.State) (apitypes.StorageBa
 }
 
 // GetStorageBackend returns a StorageBackend with the given name
-func GetStorageBackend(ctx context.Context, s state.State, name string) (apitypes.StorageBackend, error) {
+func GetStorageBackend(ctx context.Context, s types.State, name string) (apitypes.StorageBackend, error) {
 	backend := apitypes.StorageBackend{}
 	err := s.Database().Transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		record, err := database.GetStorageBackend(ctx, tx, name)
@@ -67,7 +67,7 @@ func GetStorageBackend(ctx context.Context, s state.State, name string) (apitype
 }
 
 // AddStorageBackend adds a storage backend to the database
-func AddStorageBackend(ctx context.Context, s state.State, name string, backendType string, principal string, modelUUID string, config string) error {
+func AddStorageBackend(ctx context.Context, s types.State, name string, backendType string, principal string, modelUUID string, config string) error {
 	// Add storage backend to the database.
 	return s.Database().Transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		_, err := database.CreateStorageBackend(ctx, tx, database.StorageBackend{
@@ -86,7 +86,7 @@ func AddStorageBackend(ctx context.Context, s state.State, name string, backendT
 }
 
 // UpdateStorageBackend updates a storage backend record in the database
-func UpdateStorageBackend(ctx context.Context, s state.State, name string, backendType string, principal string, modelUUID string, config string) error {
+func UpdateStorageBackend(ctx context.Context, s types.State, name string, backendType string, principal string, modelUUID string, config string) error {
 	// Update storage backend to the database.
 	err := s.Database().Transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		backend, err := database.GetStorageBackend(ctx, tx, name)
@@ -119,7 +119,7 @@ func UpdateStorageBackend(ctx context.Context, s state.State, name string, backe
 }
 
 // DeleteStorageBackend deletes a storage backend from database
-func DeleteStorageBackend(ctx context.Context, s state.State, name string) error {
+func DeleteStorageBackend(ctx context.Context, s types.State, name string) error {
 	return s.Database().Transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		return database.DeleteStorageBackend(ctx, tx, name)
 	})

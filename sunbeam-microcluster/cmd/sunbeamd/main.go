@@ -3,30 +3,24 @@ package main
 
 import (
 	"context"
-	"crypto/subtle"
-	"crypto/x509"
+	"log/slog"
 	"math/rand"
-	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/canonical/lxd/shared/logger"
-	"github.com/canonical/microcluster/v2/microcluster"
-	"github.com/canonical/microcluster/v2/rest/types"
-	"github.com/canonical/microcluster/v2/state"
+	"github.com/canonical/microcluster/v3/microcluster"
+	"github.com/canonical/microcluster/v3/microcluster/types"
 	"github.com/spf13/cobra"
 
+	"github.com/canonical/snap-openstack/sunbeam-microcluster/access"
 	"github.com/canonical/snap-openstack/sunbeam-microcluster/api"
 	"github.com/canonical/snap-openstack/sunbeam-microcluster/database"
 	"github.com/canonical/snap-openstack/sunbeam-microcluster/sunbeam"
 	"github.com/canonical/snap-openstack/sunbeam-microcluster/version"
 )
-
-// Debug indicates whether to log debug messages or not.
-var Debug bool
-
-// Verbose indicates verbosity.
-var Verbose bool
 
 type cmdGlobal struct {
 	cmd *cobra.Command //nolint:structcheck,unused // FIXME: Remove the nolint flag when this is in use.
@@ -36,13 +30,6 @@ type cmdGlobal struct {
 
 	flagLogDebug   bool
 	flagLogVerbose bool
-}
-
-func (c *cmdGlobal) Run(_ *cobra.Command, _ []string) error {
-	Debug = c.flagLogDebug
-	Verbose = c.flagLogVerbose
-
-	return logger.InitLogger("", "", c.flagLogVerbose, c.flagLogDebug, nil)
 }
 
 type cmdDaemon struct {
@@ -65,29 +52,46 @@ func (c *cmdDaemon) Command() *cobra.Command {
 }
 
 func (c *cmdDaemon) Run(_ *cobra.Command, _ []string) error {
-	m, err := microcluster.App(microcluster.Args{StateDir: c.flagStateDir})
+	logLevel := slog.LevelWarn
+	if c.global.flagLogDebug {
+		logLevel = slog.LevelDebug
+	} else if c.global.flagLogVerbose {
+		logLevel = slog.LevelInfo
+	}
+
+	logHandler := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel})
+	m, err := microcluster.App(microcluster.Args{
+		StateDir:   c.flagStateDir,
+		LogHandler: logHandler,
+	})
+	if err != nil {
+		return err
+	}
+
+	// Sunbeam handlers and the feature-gate watcher still use the LXD logger.
+	err = logger.InitLogger("", "", c.global.flagLogVerbose, c.global.flagLogDebug, nil)
 	if err != nil {
 		return err
 	}
 
 	// Placeholder for post-action hooks that can be run by MicroCluster.
-	h := &state.Hooks{
+	h := &types.Hooks{
 		// PreInit is run before the daemon is initialized (bootstrap or join).
-		PreInit: func(_ context.Context, _ state.State, _ bool, _ map[string]string) error {
+		PreInit: func(_ context.Context, _ types.State, _ bool, _ map[string]string) error {
 			logger.Info("This is a hook that runs before the daemon is initialized")
 
 			return nil
 		},
 
 		// PostBootstrap is run after the daemon is initialized and bootstrapped.
-		PostBootstrap: func(_ context.Context, _ state.State, _ map[string]string) error {
+		PostBootstrap: func(_ context.Context, _ types.State, _ map[string]string) error {
 			logger.Info("This is a hook that runs after the daemon is initialized and bootstrapped")
 
 			return nil
 		},
 
 		// OnStart is run after the daemon is started.
-		OnStart: func(ctx context.Context, s state.State) error {
+		OnStart: func(ctx context.Context, s types.State) error {
 			logger.Info("This is a hook that runs after the daemon first starts")
 
 			// Start the feature gate sync watcher to sync cluster DB to snap config
@@ -97,52 +101,50 @@ func (c *cmdDaemon) Run(_ *cobra.Command, _ []string) error {
 		},
 
 		// PostJoin is run after the daemon is initialized and joins a cluster.
-		PostJoin: func(_ context.Context, _ state.State, _ map[string]string) error {
+		PostJoin: func(_ context.Context, _ types.State, _ map[string]string) error {
 			logger.Info("This is a hook that runs after the daemon is initialized and joins an existing cluster, after OnNewMember runs on all peers")
 
 			return nil
 		},
 
 		// PreJoin is run after the daemon is initialized and joins a cluster.
-		PreJoin: func(_ context.Context, _ state.State, _ map[string]string) error {
+		PreJoin: func(_ context.Context, _ types.State, _ map[string]string) error {
 			logger.Info("This is a hook that runs after the daemon is initialized and joins an existing cluster, before OnNewMember runs on all peers")
 
 			return nil
 		},
 
 		// PostRemove is run after the daemon is removed from a cluster.
-		PostRemove: func(_ context.Context, s state.State, _ bool) error {
+		PostRemove: func(_ context.Context, s types.State, _ bool) error {
 			logger.Infof("This is a hook that is run on peer %q after a cluster member is removed", s.Name())
 
 			return nil
 		},
 
 		// PreRemove is run before the daemon is removed from the cluster.
-		PreRemove: func(_ context.Context, s state.State, _ bool) error {
+		PreRemove: func(_ context.Context, s types.State, _ bool) error {
 			logger.Infof("This is a hook that is run on peer %q just before it is removed", s.Name())
 
 			return nil
 		},
 
 		// OnHeartbeat is run after a successful heartbeat round.
-		OnHeartbeat: func(_ context.Context, _ state.State) error {
+		OnHeartbeat: func(_ context.Context, _ types.State, _ map[string]types.RoleStatus) error {
 			logger.Info("This is a hook that is run on the dqlite leader after a successful heartbeat")
 
 			return nil
 		},
 
 		// OnNewMember is run after a new member has joined.
-		OnNewMember: func(_ context.Context, s state.State, _ types.ClusterMemberLocal) error {
+		OnNewMember: func(_ context.Context, s types.State, _ types.ClusterMemberLocal) error {
 			logger.Infof("This is a hook that is run on peer %q when a new cluster member has joined", s.Name())
 
 			return nil
 		},
 
-		OnAuthenticate: authenticateClient,
+		OnAuthenticate: access.AuthenticateClient,
 	}
 	daemonArgs := microcluster.DaemonArgs{
-		Verbose:          c.global.flagLogVerbose,
-		Debug:            c.global.flagLogDebug,
 		Version:          "UNKNOWN", // FIXME: Add an explicit version to Sunbeam.
 		ExtensionServers: api.Servers,
 		ExtensionsSchema: database.SchemaExtensions,
@@ -151,48 +153,13 @@ func (c *cmdDaemon) Run(_ *cobra.Command, _ []string) error {
 		SocketGroup:      c.flagSocketGroup,
 	}
 
-	return m.Start(context.Background(), daemonArgs)
-}
+	// Preserve the v2 daemon's behavior on SIGHUP.
+	hangup := make(chan os.Signal, 1)
+	signal.Notify(hangup, syscall.SIGHUP)
+	defer signal.Stop(hangup)
 
-// authenticateClient replaces the regular mTLS check for network requests.
-// Never return an error here: microcluster renders a hook error as a
-// pre-dispatch 403 before handleRequest runs, so the endpoint's own
-// AccessHandler (e.g. access.AuthenticateClusterCAHandler) is never
-// reached. Only ever return (true, nil) or (false, nil).
-func authenticateClient(_ context.Context, _ state.State, r *http.Request, trustedCerts map[string]x509.Certificate) (bool, error) {
-	if r.TLS == nil {
-		return false, nil
-	}
-
-	if len(r.TLS.PeerCertificates) == 0 {
-		return false, nil
-	}
-
-	peerCertificate := r.TLS.PeerCertificates[0]
-
-	now := time.Now()
-	if now.Before(peerCertificate.NotBefore) {
-		logger.Debugf("Rejecting request from %q: certificate is not yet valid", r.RemoteAddr)
-
-		return false, nil
-	}
-
-	if now.After(peerCertificate.NotAfter) {
-		logger.Debugf("Rejecting request from %q: certificate has expired", r.RemoteAddr)
-
-		return false, nil
-	}
-
-	// Check whether client certificate is in the map of trusted certs.
-	for fingerprint, v := range trustedCerts {
-		if subtle.ConstantTimeCompare(peerCertificate.Raw, v.Raw) == 1 {
-			logger.Debugf("Matched trusted cert with fingerprint %q", fingerprint)
-
-			return true, nil
-		}
-	}
-
-	return false, nil
+	ctx := types.ContextWithLogger(context.Background(), slog.New(logHandler))
+	return m.Start(ctx, daemonArgs)
 }
 
 func init() {

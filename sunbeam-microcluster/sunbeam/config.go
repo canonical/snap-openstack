@@ -7,13 +7,13 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/canonical/microcluster/v2/state"
+	"github.com/canonical/microcluster/v3/microcluster/types"
 
 	"github.com/canonical/snap-openstack/sunbeam-microcluster/database"
 )
 
 // GetConfig returns the ConfigItem based on key from the database
-func GetConfig(ctx context.Context, s state.State, key string) (string, error) {
+func GetConfig(ctx context.Context, s types.State, key string) (string, error) {
 	var value string
 
 	err := s.Database().Transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
@@ -33,7 +33,7 @@ func GetConfig(ctx context.Context, s state.State, key string) (string, error) {
 }
 
 // GetConfigItemKeys returns the list of ConfigItem keys from the database
-func GetConfigItemKeys(ctx context.Context, s state.State, prefix *string) ([]string, error) {
+func GetConfigItemKeys(ctx context.Context, s types.State, prefix *string) ([]string, error) {
 	var keys []string
 
 	err := s.Database().Transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
@@ -53,7 +53,7 @@ func GetConfigItemKeys(ctx context.Context, s state.State, prefix *string) ([]st
 }
 
 // CreateConfig adds a new ConfigItem to the database
-func CreateConfig(ctx context.Context, s state.State, key string, value string) error {
+func CreateConfig(ctx context.Context, s types.State, key string, value string) error {
 
 	return s.Database().Transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		_, err := database.CreateConfigItem(ctx, tx, database.ConfigItem{Key: key, Value: value})
@@ -65,7 +65,7 @@ func CreateConfig(ctx context.Context, s state.State, key string, value string) 
 }
 
 // UpdateConfig updates a ConfigItem in the database
-func UpdateConfig(ctx context.Context, s state.State, key string, value string) error {
+func UpdateConfig(ctx context.Context, s types.State, key string, value string) error {
 	configItem := database.ConfigItem{Key: key, Value: value}
 
 	return s.Database().Transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
@@ -82,7 +82,7 @@ func UpdateConfig(ctx context.Context, s state.State, key string, value string) 
 }
 
 // DeleteConfig deletes a ConfigItem from the database
-func DeleteConfig(ctx context.Context, s state.State, key string) error {
+func DeleteConfig(ctx context.Context, s types.State, key string) error {
 	return s.Database().Transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		return database.DeleteConfigItem(ctx, tx, key)
 	})
