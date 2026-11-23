@@ -7,23 +7,23 @@ import (
 	"net/http"
 
 	"github.com/canonical/lxd/shared/api"
-	"github.com/canonical/microcluster/v2/cluster"
+	cluster "github.com/canonical/microcluster/v3/microcluster/db"
 )
 
 //go:generate -command mapper lxd-generate db mapper -t manifest.mapper.go
 //go:generate mapper reset
 //
-//go:generate mapper stmt -d github.com/canonical/microcluster/v2/cluster -e ManifestItem objects table=manifest
-//go:generate mapper stmt -d github.com/canonical/microcluster/v2/cluster -e ManifestItem objects-by-ManifestID table=manifest
-//go:generate mapper stmt -d github.com/canonical/microcluster/v2/cluster -e ManifestItem id table=manifest
-//go:generate mapper stmt -d github.com/canonical/microcluster/v2/cluster -e ManifestItem delete-by-ManifestID table=manifest
+//go:generate mapper stmt -d github.com/canonical/microcluster/v3/microcluster/db -e ManifestItem objects table=manifest
+//go:generate mapper stmt -d github.com/canonical/microcluster/v3/microcluster/db -e ManifestItem objects-by-ManifestID table=manifest
+//go:generate mapper stmt -d github.com/canonical/microcluster/v3/microcluster/db -e ManifestItem id table=manifest
+//go:generate mapper stmt -d github.com/canonical/microcluster/v3/microcluster/db -e ManifestItem delete-by-ManifestID table=manifest
 
 //
-//go:generate mapper method -i -d github.com/canonical/microcluster/v2/cluster -e ManifestItem GetMany table=manifest
-//go:generate mapper method -i -d github.com/canonical/microcluster/v2/cluster -e ManifestItem GetOne table=manifest
-//go:generate mapper method -i -d github.com/canonical/microcluster/v2/cluster -e ManifestItem ID table=manifest
-//go:generate mapper method -i -d github.com/canonical/microcluster/v2/cluster -e ManifestItem Exists table=manifest
-//go:generate mapper method -i -d github.com/canonical/microcluster/v2/cluster -e ManifestItem DeleteOne-by-ManifestID table=manifest
+//go:generate mapper method -i -d github.com/canonical/microcluster/v3/microcluster/db -e ManifestItem GetMany table=manifest
+//go:generate mapper method -i -d github.com/canonical/microcluster/v3/microcluster/db -e ManifestItem GetOne table=manifest
+//go:generate mapper method -i -d github.com/canonical/microcluster/v3/microcluster/db -e ManifestItem ID table=manifest
+//go:generate mapper method -i -d github.com/canonical/microcluster/v3/microcluster/db -e ManifestItem Exists table=manifest
+//go:generate mapper method -i -d github.com/canonical/microcluster/v3/microcluster/db -e ManifestItem DeleteOne-by-ManifestID table=manifest
 
 // ManifestItem is used to save the Sunbeam manifests provided by user.
 // AppliedDate is saved as Timestamp in database but retreived as string

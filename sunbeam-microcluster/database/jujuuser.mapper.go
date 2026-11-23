@@ -12,39 +12,39 @@ import (
 
 	"github.com/canonical/lxd/lxd/db/query"
 	"github.com/canonical/lxd/shared/api"
-	"github.com/canonical/microcluster/v2/cluster"
+	"github.com/canonical/microcluster/v3/microcluster/db"
 )
 
 var _ = api.ServerEnvironment{}
 
-var jujuUserObjects = cluster.RegisterStmt(`
+var jujuUserObjects = db.RegisterStmt(`
 SELECT jujuuser.id, jujuuser.username, jujuuser.token
   FROM jujuuser
   ORDER BY jujuuser.username
 `)
 
-var jujuUserObjectsByUsername = cluster.RegisterStmt(`
+var jujuUserObjectsByUsername = db.RegisterStmt(`
 SELECT jujuuser.id, jujuuser.username, jujuuser.token
   FROM jujuuser
   WHERE ( jujuuser.username = ? )
   ORDER BY jujuuser.username
 `)
 
-var jujuUserID = cluster.RegisterStmt(`
+var jujuUserID = db.RegisterStmt(`
 SELECT jujuuser.id FROM jujuuser
   WHERE jujuuser.username = ?
 `)
 
-var jujuUserCreate = cluster.RegisterStmt(`
+var jujuUserCreate = db.RegisterStmt(`
 INSERT INTO jujuuser (username, token)
   VALUES (?, ?)
 `)
 
-var jujuUserDeleteByUsername = cluster.RegisterStmt(`
+var jujuUserDeleteByUsername = db.RegisterStmt(`
 DELETE FROM jujuuser WHERE username = ?
 `)
 
-var jujuUserUpdate = cluster.RegisterStmt(`
+var jujuUserUpdate = db.RegisterStmt(`
 UPDATE jujuuser
   SET username = ?, token = ?
  WHERE id = ?
@@ -118,7 +118,7 @@ func GetJujuUsers(ctx context.Context, tx *sql.Tx, filters ...JujuUserFilter) ([
 	queryParts := [2]string{}
 
 	if len(filters) == 0 {
-		sqlStmt, err = cluster.Stmt(tx, jujuUserObjects)
+		sqlStmt, err = db.Stmt(tx, jujuUserObjects)
 		if err != nil {
 			return nil, fmt.Errorf("Failed to get \"jujuUserObjects\" prepared statement: %w", err)
 		}
@@ -128,7 +128,7 @@ func GetJujuUsers(ctx context.Context, tx *sql.Tx, filters ...JujuUserFilter) ([
 		if filter.Username != nil {
 			args = append(args, []any{filter.Username}...)
 			if len(filters) == 1 {
-				sqlStmt, err = cluster.Stmt(tx, jujuUserObjectsByUsername)
+				sqlStmt, err = db.Stmt(tx, jujuUserObjectsByUsername)
 				if err != nil {
 					return nil, fmt.Errorf("Failed to get \"jujuUserObjectsByUsername\" prepared statement: %w", err)
 				}
@@ -136,7 +136,7 @@ func GetJujuUsers(ctx context.Context, tx *sql.Tx, filters ...JujuUserFilter) ([
 				break
 			}
 
-			query, err := cluster.StmtString(jujuUserObjectsByUsername)
+			query, err := db.StmtString(jujuUserObjectsByUsername)
 			if err != nil {
 				return nil, fmt.Errorf("Failed to get \"jujuUserObjects\" prepared statement: %w", err)
 			}
@@ -195,7 +195,7 @@ func GetJujuUser(ctx context.Context, tx *sql.Tx, username string) (*JujuUser, e
 // GetJujuUserID return the ID of the JujuUser with the given key.
 // generator: JujuUser ID
 func GetJujuUserID(ctx context.Context, tx *sql.Tx, username string) (int64, error) {
-	stmt, err := cluster.Stmt(tx, jujuUserID)
+	stmt, err := db.Stmt(tx, jujuUserID)
 	if err != nil {
 		return -1, fmt.Errorf("Failed to get \"jujuUserID\" prepared statement: %w", err)
 	}
@@ -249,7 +249,7 @@ func CreateJujuUser(ctx context.Context, tx *sql.Tx, object JujuUser) (int64, er
 	args[1] = object.Token
 
 	// Prepared statement to use.
-	stmt, err := cluster.Stmt(tx, jujuUserCreate)
+	stmt, err := db.Stmt(tx, jujuUserCreate)
 	if err != nil {
 		return -1, fmt.Errorf("Failed to get \"jujuUserCreate\" prepared statement: %w", err)
 	}
@@ -271,7 +271,7 @@ func CreateJujuUser(ctx context.Context, tx *sql.Tx, object JujuUser) (int64, er
 // DeleteJujuUser deletes the JujuUser matching the given key parameters.
 // generator: JujuUser DeleteOne-by-Username
 func DeleteJujuUser(_ context.Context, tx *sql.Tx, username string) error {
-	stmt, err := cluster.Stmt(tx, jujuUserDeleteByUsername)
+	stmt, err := db.Stmt(tx, jujuUserDeleteByUsername)
 	if err != nil {
 		return fmt.Errorf("Failed to get \"jujuUserDeleteByUsername\" prepared statement: %w", err)
 	}
@@ -303,7 +303,7 @@ func UpdateJujuUser(ctx context.Context, tx *sql.Tx, username string, object Juj
 		return err
 	}
 
-	stmt, err := cluster.Stmt(tx, jujuUserUpdate)
+	stmt, err := db.Stmt(tx, jujuUserUpdate)
 	if err != nil {
 		return fmt.Errorf("Failed to get \"jujuUserUpdate\" prepared statement: %w", err)
 	}

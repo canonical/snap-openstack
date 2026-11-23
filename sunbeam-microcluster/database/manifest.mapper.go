@@ -12,30 +12,30 @@ import (
 
 	"github.com/canonical/lxd/lxd/db/query"
 	"github.com/canonical/lxd/shared/api"
-	"github.com/canonical/microcluster/v2/cluster"
+	"github.com/canonical/microcluster/v3/microcluster/db"
 )
 
 var _ = api.ServerEnvironment{}
 
-var manifestItemObjects = cluster.RegisterStmt(`
+var manifestItemObjects = db.RegisterStmt(`
 SELECT manifest.id, manifest.manifest_id, manifest.applied_date, manifest.data
   FROM manifest
   ORDER BY manifest.manifest_id
 `)
 
-var manifestItemObjectsByManifestID = cluster.RegisterStmt(`
+var manifestItemObjectsByManifestID = db.RegisterStmt(`
 SELECT manifest.id, manifest.manifest_id, manifest.applied_date, manifest.data
   FROM manifest
   WHERE ( manifest.manifest_id = ? )
   ORDER BY manifest.manifest_id
 `)
 
-var manifestItemID = cluster.RegisterStmt(`
+var manifestItemID = db.RegisterStmt(`
 SELECT manifest.id FROM manifest
   WHERE manifest.manifest_id = ?
 `)
 
-var manifestItemDeleteByManifestID = cluster.RegisterStmt(`
+var manifestItemDeleteByManifestID = db.RegisterStmt(`
 DELETE FROM manifest WHERE manifest_id = ?
 `)
 
@@ -107,7 +107,7 @@ func GetManifestItems(ctx context.Context, tx *sql.Tx, filters ...ManifestItemFi
 	queryParts := [2]string{}
 
 	if len(filters) == 0 {
-		sqlStmt, err = cluster.Stmt(tx, manifestItemObjects)
+		sqlStmt, err = db.Stmt(tx, manifestItemObjects)
 		if err != nil {
 			return nil, fmt.Errorf("Failed to get \"manifestItemObjects\" prepared statement: %w", err)
 		}
@@ -117,7 +117,7 @@ func GetManifestItems(ctx context.Context, tx *sql.Tx, filters ...ManifestItemFi
 		if filter.ManifestID != nil {
 			args = append(args, []any{filter.ManifestID}...)
 			if len(filters) == 1 {
-				sqlStmt, err = cluster.Stmt(tx, manifestItemObjectsByManifestID)
+				sqlStmt, err = db.Stmt(tx, manifestItemObjectsByManifestID)
 				if err != nil {
 					return nil, fmt.Errorf("Failed to get \"manifestItemObjectsByManifestID\" prepared statement: %w", err)
 				}
@@ -125,7 +125,7 @@ func GetManifestItems(ctx context.Context, tx *sql.Tx, filters ...ManifestItemFi
 				break
 			}
 
-			query, err := cluster.StmtString(manifestItemObjectsByManifestID)
+			query, err := db.StmtString(manifestItemObjectsByManifestID)
 			if err != nil {
 				return nil, fmt.Errorf("Failed to get \"manifestItemObjects\" prepared statement: %w", err)
 			}
@@ -184,7 +184,7 @@ func GetManifestItem(ctx context.Context, tx *sql.Tx, manifestID string) (*Manif
 // GetManifestItemID return the ID of the ManifestItem with the given key.
 // generator: ManifestItem ID
 func GetManifestItemID(ctx context.Context, tx *sql.Tx, manifestID string) (int64, error) {
-	stmt, err := cluster.Stmt(tx, manifestItemID)
+	stmt, err := db.Stmt(tx, manifestItemID)
 	if err != nil {
 		return -1, fmt.Errorf("Failed to get \"manifestItemID\" prepared statement: %w", err)
 	}
@@ -221,7 +221,7 @@ func ManifestItemExists(ctx context.Context, tx *sql.Tx, manifestID string) (boo
 // DeleteManifestItem deletes the ManifestItem matching the given key parameters.
 // generator: ManifestItem DeleteOne-by-ManifestID
 func DeleteManifestItem(_ context.Context, tx *sql.Tx, manifestID string) error {
-	stmt, err := cluster.Stmt(tx, manifestItemDeleteByManifestID)
+	stmt, err := db.Stmt(tx, manifestItemDeleteByManifestID)
 	if err != nil {
 		return fmt.Errorf("Failed to get \"manifestItemDeleteByManifestID\" prepared statement: %w", err)
 	}

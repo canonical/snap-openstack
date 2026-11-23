@@ -12,19 +12,19 @@ import (
 
 	"github.com/canonical/lxd/lxd/db/query"
 	"github.com/canonical/lxd/shared/api"
-	"github.com/canonical/microcluster/v2/cluster"
+	"github.com/canonical/microcluster/v3/microcluster/db"
 )
 
 var _ = api.ServerEnvironment{}
 
-var nodeObjects = cluster.RegisterStmt(`
+var nodeObjects = db.RegisterStmt(`
 SELECT nodes.id, core_cluster_members.name AS member, nodes.name, nodes.role, nodes.machine_id, nodes.system_id, nodes.arch, nodes.is_dpu, nodes.image_name
   FROM nodes
   JOIN core_cluster_members ON nodes.member_id = core_cluster_members.id
   ORDER BY nodes.name
 `)
 
-var nodeObjectsByMember = cluster.RegisterStmt(`
+var nodeObjectsByMember = db.RegisterStmt(`
 SELECT nodes.id, core_cluster_members.name AS member, nodes.name, nodes.role, nodes.machine_id, nodes.system_id, nodes.arch, nodes.is_dpu, nodes.image_name
   FROM nodes
   JOIN core_cluster_members ON nodes.member_id = core_cluster_members.id
@@ -32,7 +32,7 @@ SELECT nodes.id, core_cluster_members.name AS member, nodes.name, nodes.role, no
   ORDER BY nodes.name
 `)
 
-var nodeObjectsByName = cluster.RegisterStmt(`
+var nodeObjectsByName = db.RegisterStmt(`
 SELECT nodes.id, core_cluster_members.name AS member, nodes.name, nodes.role, nodes.machine_id, nodes.system_id, nodes.arch, nodes.is_dpu, nodes.image_name
   FROM nodes
   JOIN core_cluster_members ON nodes.member_id = core_cluster_members.id
@@ -40,7 +40,7 @@ SELECT nodes.id, core_cluster_members.name AS member, nodes.name, nodes.role, no
   ORDER BY nodes.name
 `)
 
-var nodeObjectsByRole = cluster.RegisterStmt(`
+var nodeObjectsByRole = db.RegisterStmt(`
 SELECT nodes.id, core_cluster_members.name AS member, nodes.name, nodes.role, nodes.machine_id, nodes.system_id, nodes.arch, nodes.is_dpu, nodes.image_name
   FROM nodes
   JOIN core_cluster_members ON nodes.member_id = core_cluster_members.id
@@ -48,7 +48,7 @@ SELECT nodes.id, core_cluster_members.name AS member, nodes.name, nodes.role, no
   ORDER BY nodes.name
 `)
 
-var nodeObjectsByMachineID = cluster.RegisterStmt(`
+var nodeObjectsByMachineID = db.RegisterStmt(`
 SELECT nodes.id, core_cluster_members.name AS member, nodes.name, nodes.role, nodes.machine_id, nodes.system_id, nodes.arch, nodes.is_dpu, nodes.image_name
   FROM nodes
   JOIN core_cluster_members ON nodes.member_id = core_cluster_members.id
@@ -56,21 +56,21 @@ SELECT nodes.id, core_cluster_members.name AS member, nodes.name, nodes.role, no
   ORDER BY nodes.name
 `)
 
-var nodeID = cluster.RegisterStmt(`
+var nodeID = db.RegisterStmt(`
 SELECT nodes.id FROM nodes
   WHERE nodes.name = ?
 `)
 
-var nodeCreate = cluster.RegisterStmt(`
+var nodeCreate = db.RegisterStmt(`
 INSERT INTO nodes (member_id, name, role, machine_id, system_id, arch, is_dpu, image_name)
   VALUES ((SELECT core_cluster_members.id FROM core_cluster_members WHERE core_cluster_members.name = ?), ?, ?, ?, ?, ?, ?, ?)
 `)
 
-var nodeDeleteByName = cluster.RegisterStmt(`
+var nodeDeleteByName = db.RegisterStmt(`
 DELETE FROM nodes WHERE name = ?
 `)
 
-var nodeUpdate = cluster.RegisterStmt(`
+var nodeUpdate = db.RegisterStmt(`
 UPDATE nodes
   SET member_id = (SELECT core_cluster_members.id FROM core_cluster_members WHERE core_cluster_members.name = ?), name = ?, role = ?, machine_id = ?, system_id = ?, arch = ?, is_dpu = ?, image_name = ?
  WHERE id = ?
@@ -144,7 +144,7 @@ func GetNodes(ctx context.Context, tx *sql.Tx, filters ...NodeFilter) ([]Node, e
 	queryParts := [2]string{}
 
 	if len(filters) == 0 {
-		sqlStmt, err = cluster.Stmt(tx, nodeObjects)
+		sqlStmt, err = db.Stmt(tx, nodeObjects)
 		if err != nil {
 			return nil, fmt.Errorf("Failed to get \"nodeObjects\" prepared statement: %w", err)
 		}
@@ -154,7 +154,7 @@ func GetNodes(ctx context.Context, tx *sql.Tx, filters ...NodeFilter) ([]Node, e
 		if filter.Role != nil && filter.Member == nil && filter.Name == nil && filter.MachineID == nil {
 			args = append(args, []any{filter.Role}...)
 			if len(filters) == 1 {
-				sqlStmt, err = cluster.Stmt(tx, nodeObjectsByRole)
+				sqlStmt, err = db.Stmt(tx, nodeObjectsByRole)
 				if err != nil {
 					return nil, fmt.Errorf("Failed to get \"nodeObjectsByRole\" prepared statement: %w", err)
 				}
@@ -162,7 +162,7 @@ func GetNodes(ctx context.Context, tx *sql.Tx, filters ...NodeFilter) ([]Node, e
 				break
 			}
 
-			query, err := cluster.StmtString(nodeObjectsByRole)
+			query, err := db.StmtString(nodeObjectsByRole)
 			if err != nil {
 				return nil, fmt.Errorf("Failed to get \"nodeObjects\" prepared statement: %w", err)
 			}
@@ -178,7 +178,7 @@ func GetNodes(ctx context.Context, tx *sql.Tx, filters ...NodeFilter) ([]Node, e
 		} else if filter.Name != nil && filter.Member == nil && filter.Role == nil && filter.MachineID == nil {
 			args = append(args, []any{filter.Name}...)
 			if len(filters) == 1 {
-				sqlStmt, err = cluster.Stmt(tx, nodeObjectsByName)
+				sqlStmt, err = db.Stmt(tx, nodeObjectsByName)
 				if err != nil {
 					return nil, fmt.Errorf("Failed to get \"nodeObjectsByName\" prepared statement: %w", err)
 				}
@@ -186,7 +186,7 @@ func GetNodes(ctx context.Context, tx *sql.Tx, filters ...NodeFilter) ([]Node, e
 				break
 			}
 
-			query, err := cluster.StmtString(nodeObjectsByName)
+			query, err := db.StmtString(nodeObjectsByName)
 			if err != nil {
 				return nil, fmt.Errorf("Failed to get \"nodeObjects\" prepared statement: %w", err)
 			}
@@ -202,7 +202,7 @@ func GetNodes(ctx context.Context, tx *sql.Tx, filters ...NodeFilter) ([]Node, e
 		} else if filter.Member != nil && filter.Name == nil && filter.Role == nil && filter.MachineID == nil {
 			args = append(args, []any{filter.Member}...)
 			if len(filters) == 1 {
-				sqlStmt, err = cluster.Stmt(tx, nodeObjectsByMember)
+				sqlStmt, err = db.Stmt(tx, nodeObjectsByMember)
 				if err != nil {
 					return nil, fmt.Errorf("Failed to get \"nodeObjectsByMember\" prepared statement: %w", err)
 				}
@@ -210,7 +210,7 @@ func GetNodes(ctx context.Context, tx *sql.Tx, filters ...NodeFilter) ([]Node, e
 				break
 			}
 
-			query, err := cluster.StmtString(nodeObjectsByMember)
+			query, err := db.StmtString(nodeObjectsByMember)
 			if err != nil {
 				return nil, fmt.Errorf("Failed to get \"nodeObjects\" prepared statement: %w", err)
 			}
@@ -226,7 +226,7 @@ func GetNodes(ctx context.Context, tx *sql.Tx, filters ...NodeFilter) ([]Node, e
 		} else if filter.MachineID != nil && filter.Member == nil && filter.Name == nil && filter.Role == nil {
 			args = append(args, []any{filter.MachineID}...)
 			if len(filters) == 1 {
-				sqlStmt, err = cluster.Stmt(tx, nodeObjectsByMachineID)
+				sqlStmt, err = db.Stmt(tx, nodeObjectsByMachineID)
 				if err != nil {
 					return nil, fmt.Errorf("Failed to get \"nodeObjectsByMachineID\" prepared statement: %w", err)
 				}
@@ -234,7 +234,7 @@ func GetNodes(ctx context.Context, tx *sql.Tx, filters ...NodeFilter) ([]Node, e
 				break
 			}
 
-			query, err := cluster.StmtString(nodeObjectsByMachineID)
+			query, err := db.StmtString(nodeObjectsByMachineID)
 			if err != nil {
 				return nil, fmt.Errorf("Failed to get \"nodeObjects\" prepared statement: %w", err)
 			}
@@ -293,7 +293,7 @@ func GetNode(ctx context.Context, tx *sql.Tx, name string) (*Node, error) {
 // GetNodeID return the ID of the node with the given key.
 // generator: node ID
 func GetNodeID(ctx context.Context, tx *sql.Tx, name string) (int64, error) {
-	stmt, err := cluster.Stmt(tx, nodeID)
+	stmt, err := db.Stmt(tx, nodeID)
 	if err != nil {
 		return -1, fmt.Errorf("Failed to get \"nodeID\" prepared statement: %w", err)
 	}
@@ -353,7 +353,7 @@ func CreateNode(ctx context.Context, tx *sql.Tx, object Node) (int64, error) {
 	args[7] = object.ImageName
 
 	// Prepared statement to use.
-	stmt, err := cluster.Stmt(tx, nodeCreate)
+	stmt, err := db.Stmt(tx, nodeCreate)
 	if err != nil {
 		return -1, fmt.Errorf("Failed to get \"nodeCreate\" prepared statement: %w", err)
 	}
@@ -375,7 +375,7 @@ func CreateNode(ctx context.Context, tx *sql.Tx, object Node) (int64, error) {
 // DeleteNode deletes the node matching the given key parameters.
 // generator: node DeleteOne-by-Name
 func DeleteNode(_ context.Context, tx *sql.Tx, name string) error {
-	stmt, err := cluster.Stmt(tx, nodeDeleteByName)
+	stmt, err := db.Stmt(tx, nodeDeleteByName)
 	if err != nil {
 		return fmt.Errorf("Failed to get \"nodeDeleteByName\" prepared statement: %w", err)
 	}
@@ -407,7 +407,7 @@ func UpdateNode(ctx context.Context, tx *sql.Tx, name string, object Node) error
 		return err
 	}
 
-	stmt, err := cluster.Stmt(tx, nodeUpdate)
+	stmt, err := db.Stmt(tx, nodeUpdate)
 	if err != nil {
 		return fmt.Errorf("Failed to get \"nodeUpdate\" prepared statement: %w", err)
 	}
