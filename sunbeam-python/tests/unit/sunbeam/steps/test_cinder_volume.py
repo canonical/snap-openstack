@@ -22,6 +22,7 @@ from sunbeam.steps.cinder_volume import (
     DisableCinderVolumeServicesStep,
     RemoveCinderVolumeServicesStep,
     RemoveCinderVolumeUnitsStep,
+    get_accepted_application_status,
     get_cinder_volume_services,
 )
 
@@ -849,3 +850,16 @@ class TestCinderVolumeServiceCleanup:
             call.args[0] == "cinder/1"
             for call in basic_jhelper.run_cmd_on_unit_payload.call_args_list
         )
+
+
+@pytest.mark.parametrize(
+    "offers,expected",
+    [
+        ({}, ["active", "unknown", "blocked"]),
+        ({"keystone": None}, ["active", "unknown", "blocked"]),
+        ({"keystone": "url", "database": None}, ["active", "unknown", "blocked"]),
+        ({"keystone": "url", "database": "url"}, ["active", "unknown"]),
+    ],
+)
+def test_cinder_accepted_state_depends_on_current_mandatory_offers(offers, expected):
+    assert get_accepted_application_status(offers) == expected

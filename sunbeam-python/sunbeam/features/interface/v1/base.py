@@ -18,6 +18,7 @@ from sunbeam.clusterd.service import ConfigItemNotFoundException
 from sunbeam.core.checks import JujuLoginCheck, run_preflight_checks
 from sunbeam.core.common import SunbeamException, read_config, update_config
 from sunbeam.core.deployment import Deployment
+from sunbeam.core.juju import ApplicationReadiness
 from sunbeam.core.manifest import FeatureConfig, Manifest, SoftwareConfig
 from sunbeam.feature_gates import FeatureGateMixin
 from sunbeam.features.interface import utils
@@ -529,6 +530,16 @@ class BaseFeature(BaseRegisterable, FeatureGateMixin, Generic[ConfigType]):
     def get_terraform_plans_base_path(self) -> Path:
         """Return Terraform plan base location."""
         return Snap().paths.user_common
+
+    def readiness_requirements(
+        self, deployment: Deployment, applications: dict[str, typing.Collection[str]]
+    ) -> dict[str, dict[str, ApplicationReadiness]]:
+        """Define readiness for owned applications in the affected scope.
+
+        Disabled features are excluded by the feature manager. Implementations
+        must not add unrelated applications or read their Terraform plans.
+        """
+        return {}
 
     def is_openstack_control_plane(self) -> bool:
         """Is feature deploys openstack control plane.
