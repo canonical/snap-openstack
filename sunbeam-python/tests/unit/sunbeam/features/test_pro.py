@@ -1,11 +1,21 @@
 # SPDX-FileCopyrightText: 2023 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
+import re
+from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
+import yaml
 
 from sunbeam.core.common import ResultType
-from sunbeam.core.terraform import TerraformException
+from sunbeam.core.manifest import AddManifestStep, FeatureManifest, Manifest
+from sunbeam.core.terraform import (
+    TerraformException,
+    TerraformHelper,
+    TerraformInitStep,
+)
+from sunbeam.features.pro import feature as pro_feature
 from sunbeam.features.pro.feature import (
     DisableUbuntuProApplicationStep,
     EnableUbuntuProApplicationStep,
@@ -126,3 +136,122 @@ class TestDisableUbuntuProApplicationStep:
         basic_tfhelper.update_tfvars_and_apply_tf.assert_called_once()
         assert result.result_type == ResultType.FAILED
         assert result.message == "apply failed..."
+
+
+class TestManifestCharmConfig:
+    """Charm options such as contract_url can be set via the manifest."""
+
+    _MANIFEST = """
+features:
+  pro:
+    software:
+      charms:
+        ubuntu-advantage:
+          revision: 46
+          config:
+            contract_url: https://contracts.example.com
+"""
+
+    def _variables(self) -> str:
+        plan_dir = Path(pro_feature.__file__).parent / "etc" / "deploy-pro"
+        return (plan_dir / "variables.tf").read_text()
+
+    def test_default_software_registers_charm(self):
+        feature = pro_feature.ProFeature()
+        charms = feature.default_software_overrides().charms
+        assert charms[pro_feature.CHARM].channel == (
+            pro_feature.UBUNTU_ADVANTAGE_CHANNEL
+        )
+
+    def test_channel_default_matches_plan_variable(self):
+        match = re.search(
+            r'variable\s+"ubuntu-advantage-channel"\s*\{[^}]*?default\s*=\s*"([^"]+)"',
+            self._variables(),
+            re.DOTALL,
+        )
+        assert match, "no default found for ubuntu-advantage-channel"
+        assert match.group(1) == pro_feature.UBUNTU_ADVANTAGE_CHANNEL
+
+    def test_tfvar_map_matches_plan_variables(self):
+        feature = pro_feature.ProFeature()
+        tfvar_map = feature.manifest_attributes_tfvar_map()[feature.tfplan]
+        variables = self._variables()
+        for tfvar in tfvar_map["charms"][pro_feature.CHARM].values():
+            assert f'variable "{tfvar}"' in variables, tfvar
+
+    def test_manifest_config_becomes_tfvar(self, tmp_path):
+        feature = pro_feature.ProFeature()
+        default = Manifest(
+            features={
+                feature.name: FeatureManifest(
+                    software=feature.default_software_overrides()
+                )
+            }
+        )
+        override = Manifest.model_validate(yaml.safe_load(self._MANIFEST))
+        override.validate_against_default(default)
+        tfhelper = TerraformHelper(
+            path=tmp_path,
+            plan=feature.tfplan,
+            tfvar_map=feature.manifest_attributes_tfvar_map()[feature.tfplan],
+        )
+
+        tfvars = tfhelper._get_tfvars(default.merge(override))
+
+        # A user charm entry replaces the default one, so the channel falls
+        # back to the variable default in variables.tf.
+        assert tfvars == {
+            "ubuntu-advantage-revision": 46,
+            "ubuntu-advantage-config": {
+                "contract_url": "https://contracts.example.com"
+            },
+        }
+
+    def test_cli_token_wins_over_manifest_config(self):
+        text = (
+            Path(pro_feature.__file__).parent / "etc" / "deploy-pro" / "main.tf"
+        ).read_text()
+        assert re.search(
+            r"config\s*=\s*merge\(\s*var\.ubuntu-advantage-config\s*,\s*\{\s*"
+            r"token\s*=\s*var\.token",
+            text,
+        )
+
+
+class TestRunEnablePlans:
+    """enable --manifest must store the manifest so later applies keep it."""
+
+    @pytest.fixture
+    def run_plan(self, mocker):
+        mocker.patch.object(pro_feature, "JujuHelper")
+        mocker.patch.object(pro_feature.click, "echo")
+        return mocker.patch.object(pro_feature, "run_plan")
+
+    def _run(self, user_manifest):
+        feature = pro_feature.ProFeature()
+        feature.user_manifest = user_manifest
+        feature._manifest = Mock()
+        feature.run_enable_plans(
+            Mock(), pro_feature.ProFeatureConfig(token="t"), show_hints=False
+        )
+
+    def test_user_manifest_is_stored_first(self, run_plan, tmp_path):
+        manifest_file = tmp_path / "manifest.yaml"
+        self._run(manifest_file)
+
+        plan = run_plan.call_args.args[0]
+        assert [type(step) for step in plan] == [
+            AddManifestStep,
+            TerraformInitStep,
+            EnableUbuntuProApplicationStep,
+        ]
+        assert plan[0].manifest_file == manifest_file
+
+    def test_no_user_manifest_stores_nothing(self, run_plan):
+        self._run(None)
+
+        plan = run_plan.call_args.args[0]
+        assert [type(step) for step in plan] == [
+            TerraformInitStep,
+            EnableUbuntuProApplicationStep,
+        ]
