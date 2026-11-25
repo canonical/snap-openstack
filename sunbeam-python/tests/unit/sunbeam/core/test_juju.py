@@ -659,7 +659,7 @@ def test_get_app_config_not_found(jhelper, juju):
 def test_get_app_config_fail(jhelper, juju):
     juju.config.side_effect = jubilant.CLIError(1, "config", stderr="fail")
     with pytest.raises(jujulib.JujuException):
-        jhelper.get_secret("test-app", "test-model")
+        jhelper.get_app_config("test-app", "test-model")
 
 
 def test_jhelper_add_k8s_cloud(jhelper: jujulib.JujuHelper):
@@ -818,22 +818,38 @@ def test_get_available_charm_revisions_malformed_channel(
 
 
 def test_set_app_config(jhelper: jujulib.JujuHelper, juju):
-    """set_app_config passes config values to jubilant."""
-    config = {"key1": "value1", "key2": 42}
-    jhelper.set_app_config("nova", "test-model", config)
-    juju.config.assert_called_once_with("nova", config)
+    """set_app_config sends the values as YAML on stdin, not as arguments."""
+    config = {"token": "s3cr3t", "key2": 42, "key3": True}
+
+    jhelper.set_app_config("ubuntu-pro", "test-model", config)
+
+    juju.config.assert_not_called()
+    juju.cli.assert_called_once()
+    args = juju.cli.call_args.args
+    assert args == ("config", "ubuntu-pro", "--file", "-")
+    assert not any("s3cr3t" in arg for arg in args)
+    stdin = juju.cli.call_args.kwargs["stdin"]
+    assert yaml.safe_load(stdin) == {"ubuntu-pro": config}
+
+
+def test_set_app_config_empty_value(jhelper: jujulib.JujuHelper, juju):
+    """An empty string is kept as a value, not dropped or turned into null."""
+    jhelper.set_app_config("ubuntu-pro", "test-model", {"token": ""})
+
+    stdin = juju.cli.call_args.kwargs["stdin"]
+    assert yaml.safe_load(stdin) == {"ubuntu-pro": {"token": ""}}
 
 
 def test_set_app_config_app_not_found(jhelper: jujulib.JujuHelper, juju):
     """set_app_config raises ApplicationNotFoundException for missing app."""
-    juju.config.side_effect = jubilant.CLIError(1, ["config"], "", "not found")
+    juju.cli.side_effect = jubilant.CLIError(1, ["config"], "", "not found")
     with pytest.raises(jujulib.ApplicationNotFoundException):
         jhelper.set_app_config("missing-app", "test-model", {"key": "val"})
 
 
 def test_set_app_config_juju_error(jhelper: jujulib.JujuHelper, juju):
     """set_app_config raises JujuException for other CLI errors."""
-    juju.config.side_effect = jubilant.CLIError(1, ["config"], "", "some error")
+    juju.cli.side_effect = jubilant.CLIError(1, ["config"], "", "some error")
     with pytest.raises(jujulib.JujuException):
         jhelper.set_app_config("nova", "test-model", {"key": "val"})
 
@@ -1433,3 +1449,187 @@ def test_snapshot_workload_status_mixed_present_and_absent(jhelper, status):
     status.apps["present"] = app_mock
     result = jhelper.snapshot_workload_status("test-model", ["present", "absent"])
     assert result == {"present": "active"}
+
+
+def _machine_app(charm: str, **extra) -> dict:
+    """Minimal machine-model application status, as `juju status` reports it."""
+    return {
+        "charm": charm,
+        "charm-origin": "charmhub",
+        "charm-name": charm,
+        "charm-rev": 1,
+        "exposed": False,
+        **extra,
+    }
+
+
+def _machine_status(subordinates_by_principal: dict) -> jubilant.statustypes.Status:
+    """Build a status where sunbeam-machine units carry ubuntu-pro subordinates.
+
+    :subordinates_by_principal: principal unit -> {sub unit: (status, message)}
+    """
+    units = {
+        principal: {
+            "machine": str(i),
+            "subordinates": {
+                name: {"workload-status": {"current": current, "message": message}}
+                for name, (current, message) in subs.items()
+            },
+        }
+        for i, (principal, subs) in enumerate(subordinates_by_principal.items())
+    }
+    return jubilant.statustypes.Status._from_dict(
+        {
+            "model": {
+                "name": "test-model",
+                "controller": "test-controller",
+                "cloud": "localhost",
+                "version": "3.6.29",
+                "type": "iaas",
+                "model-status": {},
+            },
+            "machines": {},
+            "applications": {
+                "sunbeam-machine": _machine_app("sunbeam-machine", units=units),
+                "ubuntu-pro": _machine_app(
+                    "ubuntu-pro", **{"subordinate-to": ["sunbeam-machine"]}
+                ),
+            },
+        }
+    )
+
+
+DETACHED = ("blocked", "No token configured")
+
+
+@pytest.mark.parametrize(
+    "subordinates, expected",
+    [
+        (
+            {
+                "sunbeam-machine/0": {"ubuntu-pro/0": DETACHED},
+                "sunbeam-machine/1": {"ubuntu-pro/1": DETACHED},
+            },
+            {},
+        ),
+        (
+            {
+                "sunbeam-machine/0": {"ubuntu-pro/0": DETACHED},
+                "sunbeam-machine/1": {
+                    "ubuntu-pro/1": ("active", "Attached (esm-infra)")
+                },
+            },
+            {"ubuntu-pro/1": "active: Attached (esm-infra)"},
+        ),
+        (
+            # Blocked for another reason, e.g. a failed attach before the hook ran
+            {"sunbeam-machine/0": {"ubuntu-pro/0": ("blocked", "attach failed")}},
+            {"ubuntu-pro/0": "blocked: attach failed"},
+        ),
+        (
+            # Other subordinates on the same machine are ignored
+            {
+                "sunbeam-machine/0": {
+                    "ubuntu-pro/0": DETACHED,
+                    "openstack-hypervisor/0": ("active", ""),
+                }
+            },
+            {},
+        ),
+        (
+            # While related, every principal unit must have the subordinate
+            {
+                "sunbeam-machine/0": {"ubuntu-pro/0": DETACHED},
+                "sunbeam-machine/1": {},
+            },
+            {"sunbeam-machine/1": "no ubuntu-pro unit"},
+        ),
+    ],
+)
+def test_pending_subordinate_units(subordinates, expected):
+    status = _machine_status(subordinates)
+
+    pending = jujulib.JujuHelper._pending_subordinate_units(
+        status,
+        "sunbeam-machine",
+        "ubuntu-pro",
+        ["blocked"],
+        ["No token configured"],
+    )
+
+    assert pending == expected
+
+
+def test_pending_subordinate_units_missing_principal():
+    status = _machine_status({"sunbeam-machine/0": {"ubuntu-pro/0": DETACHED}})
+    status.apps.pop("sunbeam-machine")
+
+    with pytest.raises(jujulib.JujuException, match="'sunbeam-machine' not found"):
+        jujulib.JujuHelper._pending_subordinate_units(
+            status, "sunbeam-machine", "ubuntu-pro", ["blocked"]
+        )
+
+
+@pytest.mark.parametrize("change", ["unrelated", "removed"])
+def test_pending_subordinate_units_without_units(change):
+    """No subordinate units exist when it is unrelated or removed."""
+    status = _machine_status({"sunbeam-machine/0": {}})
+    if change == "unrelated":
+        status.apps["ubuntu-pro"].subordinate_to.clear()
+    else:
+        status.apps.pop("ubuntu-pro")
+
+    assert (
+        jujulib.JujuHelper._pending_subordinate_units(
+            status, "sunbeam-machine", "ubuntu-pro", ["blocked"]
+        )
+        == {}
+    )
+
+
+def test_wait_subordinate_units_status_ready(jhelper: jujulib.JujuHelper, juju):
+    status = _machine_status({"sunbeam-machine/0": {"ubuntu-pro/0": DETACHED}})
+
+    def _wait(ready, **kwargs):
+        assert ready(status)
+
+    juju.wait.side_effect = _wait
+
+    jhelper.wait_subordinate_units_status(
+        "test-model",
+        "sunbeam-machine",
+        "ubuntu-pro",
+        ["blocked"],
+        ["No token configured"],
+        timeout=60,
+    )
+
+    juju.wait.assert_called_once()
+
+
+def test_wait_subordinate_units_status_timeout(jhelper: jujulib.JujuHelper, juju):
+    status = _machine_status(
+        {
+            "sunbeam-machine/0": {"ubuntu-pro/0": DETACHED},
+            "sunbeam-machine/1": {"ubuntu-pro/1": ("active", "Attached (esm-infra)")},
+        }
+    )
+
+    def _wait(ready, **kwargs):
+        assert not ready(status)
+        raise TimeoutError("jubilant timeout")
+
+    juju.wait.side_effect = _wait
+
+    with pytest.raises(TimeoutError) as exc:
+        jhelper.wait_subordinate_units_status(
+            "test-model",
+            "sunbeam-machine",
+            "ubuntu-pro",
+            ["blocked"],
+            ["No token configured"],
+            timeout=60,
+        )
+
+    assert "ubuntu-pro/1 (active: Attached (esm-infra))" in str(exc.value)
+    assert "ubuntu-pro/0" not in str(exc.value)
