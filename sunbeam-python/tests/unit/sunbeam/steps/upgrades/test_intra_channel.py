@@ -994,13 +994,23 @@ class TestLatestInChannelCoordinator:
             plan = coordinator.get_plan()
 
         step_types = [type(step) for step in plan]
-        assert EnsureCiliumDeviceByHostStep in step_types
+        cilium_index = step_types.index(EnsureCiliumDeviceByHostStep)
+        assert (
+            plan.index(
+                mock_maas_steps_module.MaasCreateLoadBalancerIPPoolsStep.return_value
+            )
+            < cilium_index
+        )
         assert OpenStackPatchLoadBalancerServicesIPPoolStep in step_types
         assert EnsureDefaultL2AdvertisementMutedStep in step_types
         l2_steps = [
             step for step in plan if isinstance(step, EnsureL2AdvertisementByHostStep)
         ]
         assert len(l2_steps) == 3
+        mute_index = step_types.index(EnsureDefaultL2AdvertisementMutedStep)
+        assert all(cilium_index < plan.index(step) < mute_index for step in l2_steps)
+        assert not l2_steps[0].remove_legacy
+        assert all(step.remove_legacy for step in l2_steps[1:])
         storage_l2_steps = [step for step in l2_steps if step.network.name == "STORAGE"]
         assert len(storage_l2_steps) == 1
         assert storage_l2_steps[0].pool == "test-storage-ippool"

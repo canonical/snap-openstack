@@ -1307,20 +1307,20 @@ class _PerHostK8SResourceStep(BaseStep):
         self.fqdn = fqdn
         self.to_update: list[dict] = []
         self.to_delete: list[dict] = []
-        self._ifnames: dict[str, str] = {}
+        self._machine_interfaces: dict[
+            str, dict[str, "jubilant.statustypes.NetworkInterface"]
+        ] = {}
 
     def _get_interface(self, node: dict) -> str:
-        """Get the network interface for the node in the configured space."""
-        name = node["name"]
-        if name in self._ifnames:
-            return self._ifnames[name]
+        """Get the node's interface in the configured space."""
         machine_id = str(node["machineid"])
-        machine_interfaces = self.jhelper.get_machine_interfaces(self.model, machine_id)
-        LOG.debug("Machine %r interfaces: %r", machine_id, machine_interfaces)
+        if machine_id not in self._machine_interfaces:
+            interfaces = self.jhelper.get_machine_interfaces(self.model, machine_id)
+            LOG.debug("Machine %r interfaces: %r", machine_id, interfaces)
+            self._machine_interfaces[machine_id] = interfaces
         network_space = self.deployment.get_space(self.network)
-        for ifname, iface in machine_interfaces.items():
+        for ifname, iface in self._machine_interfaces[machine_id].items():
             if (spaces := iface.space) and network_space in spaces.split():
-                self._ifnames[name] = ifname
                 return ifname
         raise self._InterfaceError(
             f"Node {node['name']} has no interface in {self.network.name} space"
@@ -1343,6 +1343,7 @@ class _PerHostK8SResourceStep(BaseStep):
         """Determines if the step should be skipped or not."""
         self.to_update = []
         self.to_delete = []
+        self._machine_interfaces.clear()
         control = Role.CONTROL.name.lower()
         region_controller = Role.REGION_CONTROLLER.name.lower()
         if self.fqdn:
@@ -1384,7 +1385,11 @@ class _PerHostK8SResourceStep(BaseStep):
             outdated, deleted = self._get_outdated_resources(
                 self.control_nodes, self.kube
             )
-        except (l_exceptions.ApiError, self._InterfaceError) as e:
+        except (
+            l_exceptions.ApiError,
+            self._InterfaceError,
+            MachineNotFoundException,
+        ) as e:
             LOG.debug("Failed to get outdated resources", exc_info=True)
             return Result(ResultType.FAILED, str(e))
 
@@ -1906,6 +1911,7 @@ class EnsureL2AdvertisementByHostStep(_PerHostK8SResourceStep):
         pool: str,
         fqdn: str | None = None,
         optional_if_pool_missing: bool = False,
+        remove_legacy: bool = False,
     ):
         super().__init__(
             "Ensure L2 advertisement",
@@ -1920,6 +1926,9 @@ class EnsureL2AdvertisementByHostStep(_PerHostK8SResourceStep):
         )
         self.pool = pool
         self.optional_if_pool_missing = optional_if_pool_missing
+        self.remove_legacy = remove_legacy
+        self._legacy_to_remove = False
+        self._has_replacement_nodes = False
         self.lbpool_resource = K8SHelper.get_lightkube_loadbalancer_resource()
         self.l2_advertisement_resource = (
             K8SHelper.get_lightkube_l2_advertisement_resource()
@@ -1927,9 +1936,11 @@ class EnsureL2AdvertisementByHostStep(_PerHostK8SResourceStep):
         self.l2_advertisement_namespace = K8SHelper.get_loadbalancer_namespace()
 
     def is_skip(self, context: StepContext) -> Result:
-        """Skip optional advertisements when the IPAddressPool is absent."""
+        """Check for per-host changes and a legacy advertisement to retire."""
         self.to_update = []
         self.to_delete = []
+        self._legacy_to_remove = False
+        self._has_replacement_nodes = False
         if self.optional_if_pool_missing:
             try:
                 kube = get_kube_client(self.client, self.kube_namespace)
@@ -1951,7 +1962,26 @@ class EnsureL2AdvertisementByHostStep(_PerHostK8SResourceStep):
                 LOG.debug("Failed to get ipaddresspool %s", self.pool, exc_info=True)
                 return Result(ResultType.FAILED, str(e))
 
-        return super().is_skip(context)
+        result = super().is_skip(context)
+        if (
+            result.result_type == ResultType.FAILED
+            or not self.remove_legacy
+            or self.fqdn
+            or not self._has_replacement_nodes
+        ):
+            return result
+        try:
+            self.kube.get(
+                self.l2_advertisement_resource,
+                name=self.pool,
+                namespace=self.l2_advertisement_namespace,
+            )
+        except l_exceptions.ApiError as e:
+            if e.status.code == 404:
+                return result
+            return Result(ResultType.FAILED, str(e))
+        self._legacy_to_remove = True
+        return Result(ResultType.COMPLETED)
 
     def _labels(self, name: str, space: str) -> dict[str, str]:
         """Return labels for the L2 advertisement."""
@@ -1978,10 +2008,24 @@ class EnsureL2AdvertisementByHostStep(_PerHostK8SResourceStep):
         """Return instance label for the L2 advertisement."""
         return self._name_label(network) + "-" + name
 
+    def _node_selectors(self, hostname: str) -> list[dict]:
+        return [{"matchLabels": {HOSTNAME_LABEL: hostname}}]
+
+    def _has_public_interface(self, node: dict) -> bool:
+        try:
+            self._get_interface(node)
+        except self._InterfaceError as e:
+            LOG.debug("%s", e)
+            return False
+        return True
+
     def _get_outdated_resources(
         self, nodes: list[dict], kube: "l_client.Client"
     ) -> tuple[list[str], list[str]]:
         """Get outdated L2 advertisement."""
+        if self.network == Networks.PUBLIC:
+            nodes = [node for node in nodes if self._has_public_interface(node)]
+        self._has_replacement_nodes = bool(nodes)
         node_names = {node["name"] for node in nodes}
         outdated: list[str] = [node["name"] for node in nodes]
         deleted: list[str] = []
@@ -1989,7 +2033,10 @@ class EnsureL2AdvertisementByHostStep(_PerHostK8SResourceStep):
         l2_advertisements = kube.list(
             self.l2_advertisement_resource,
             namespace=self.l2_advertisement_namespace,
-            labels={"app.kubernetes.io/name": self._name_label(self.pool)},
+            labels={
+                "app.kubernetes.io/managed-by": self.deployment.name,
+                "app.kubernetes.io/name": self._name_label(self.network.value.lower()),
+            },
         )
 
         for l2_ad in l2_advertisements:
@@ -2036,6 +2083,13 @@ class EnsureL2AdvertisementByHostStep(_PerHostK8SResourceStep):
                     l2_ad.metadata.name,
                 )
                 continue
+            if l2_ad.spec.get("nodeSelectors") != self._node_selectors(hostname):
+                LOG.debug(
+                    "L2 advertisement %s does not select node %s",
+                    l2_ad.metadata.name,
+                    hostname,
+                )
+                continue
             outdated.remove(hostname)
         return outdated, deleted
 
@@ -2058,13 +2112,7 @@ class EnsureL2AdvertisementByHostStep(_PerHostK8SResourceStep):
                     spec={
                         "ipAddressPools": [self.pool],
                         "interfaces": [interface],
-                        "nodeSelectors": [
-                            {
-                                "matchLabels": {
-                                    HOSTNAME_LABEL: name,
-                                }
-                            }
-                        ],
+                        "nodeSelectors": self._node_selectors(name),
                     },
                 ),
                 field_manager=self.deployment.name,
@@ -2122,6 +2170,20 @@ class EnsureL2AdvertisementByHostStep(_PerHostK8SResourceStep):
             except l_exceptions.ApiError:
                 LOG.debug("Failed to delete L2 advertisement", exc_info=True)
                 continue
+
+        if self._legacy_to_remove:
+            try:
+                self.kube.delete(
+                    self.l2_advertisement_resource,
+                    self.pool,
+                    namespace=self.l2_advertisement_namespace,
+                )
+            except l_exceptions.ApiError as e:
+                if e.status.code != 404:
+                    return Result(
+                        ResultType.FAILED,
+                        f"Failed to delete legacy L2 advertisement {self.pool}: {e}",
+                    )
 
         return Result(ResultType.COMPLETED)
 

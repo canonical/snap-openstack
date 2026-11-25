@@ -566,19 +566,16 @@ class LatestInChannelCoordinator(UpgradeCoordinator):
             maas_client = MaasClient.from_deployment(self.deployment)
             plan.extend(
                 [
+                    MaasCreateLoadBalancerIPPoolsStep(
+                        self.deployment,  # type: ignore [arg-type]
+                        self.client,
+                        maas_client,
+                    ),
                     EnsureCiliumDeviceByHostStep(
                         self.deployment,
                         self.client,
                         self.jhelper,
                         self.deployment.openstack_machines_model,
-                    ),
-                    EnsureDefaultL2AdvertisementMutedStep(
-                        self.deployment, self.client, self.jhelper
-                    ),
-                    MaasCreateLoadBalancerIPPoolsStep(
-                        self.deployment,  # type: ignore [arg-type]
-                        self.client,
-                        maas_client,
                     ),
                     EnsureL2AdvertisementByHostStep(
                         self.deployment,
@@ -595,6 +592,7 @@ class LatestInChannelCoordinator(UpgradeCoordinator):
                         self.deployment.openstack_machines_model,
                         Networks.PUBLIC,
                         self.deployment.public_ip_pool,  # type: ignore [attr-defined]
+                        remove_legacy=True,
                     ),
                     EnsureL2AdvertisementByHostStep(
                         self.deployment,
@@ -604,6 +602,10 @@ class LatestInChannelCoordinator(UpgradeCoordinator):
                         Networks.STORAGE,
                         self.deployment.storage_ip_pool,  # type: ignore [attr-defined]
                         optional_if_pool_missing=True,
+                        remove_legacy=True,
+                    ),
+                    EnsureDefaultL2AdvertisementMutedStep(
+                        self.deployment, self.client, self.jhelper
                     ),
                     OpenStackPatchLoadBalancerServicesIPPoolStep(
                         self.client,

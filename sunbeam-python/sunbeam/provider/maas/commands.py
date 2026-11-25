@@ -787,7 +787,6 @@ def deploy(
             deployment, client, jhelper, deployment.openstack_machines_model
         )
     )
-    plan2.append(EnsureDefaultL2AdvertisementMutedStep(deployment, client, jhelper))
     plan2.append(MaasCreateLoadBalancerIPPoolsStep(deployment, client, maas_client))
     plan2.append(
         EnsureCiliumDeviceByHostStep(
@@ -815,6 +814,7 @@ def deploy(
             deployment.openstack_machines_model,
             Networks.PUBLIC,
             deployment.public_ip_pool,
+            remove_legacy=True,
         )
     )
     plan2.append(
@@ -826,8 +826,10 @@ def deploy(
             Networks.STORAGE,
             deployment.storage_ip_pool,
             optional_if_pool_missing=True,
+            remove_legacy=True,
         )
     )
+    plan2.append(EnsureDefaultL2AdvertisementMutedStep(deployment, client, jhelper))
     plan2.append(AddK8SCloudStep(deployment, jhelper))
 
     plan2.append(TerraformInitStep(tfhelper_microceph))
