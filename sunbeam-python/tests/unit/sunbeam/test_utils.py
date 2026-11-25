@@ -6,7 +6,9 @@ import json
 import textwrap
 from unittest.mock import mock_open, patch
 
+import click
 import pytest
+from click.testing import CliRunner
 
 import sunbeam.utils as utils
 
@@ -47,6 +49,18 @@ def ifaddresses():
 
 
 class TestUtils:
+    def test_defaultable_mapping_argument_help(self):
+        @click.command()
+        @click.argument(
+            "mapping", type=utils.DefaultableMappingParameter("key", "value")
+        )
+        def command(mapping):
+            pass
+
+        result = CliRunner().invoke(command, ["--help"])
+        assert result.exit_code == 0, result.exception
+        assert "{key|key:value}" in result.output
+
     def test_get_fqdn(self, mocker):
         gethostname = mocker.patch("sunbeam.utils.socket.gethostname")
         gethostname.return_value = "myhost"
