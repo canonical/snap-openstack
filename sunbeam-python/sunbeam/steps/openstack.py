@@ -33,6 +33,7 @@ from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import (
     ApplicationNotFoundException,
     ApplicationStatusOverlay,
+    JujuException,
     JujuHelper,
     JujuStepHelper,
     JujuWaitException,
@@ -922,6 +923,14 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
             self.topology, len(control_nodes) or len(region_controllers)
         )
         extra_tfvars = self.get_storage_tfvars(storage_nodes)
+        try:
+            charm_base = self.jhelper.get_deployment_charm_base(
+                self.machine_model, "cinder", application_model=self.model
+            )
+        except JujuException as e:
+            return Result(ResultType.FAILED, str(e))
+        if charm_base == "ubuntu@26.04":
+            extra_tfvars["base"] = charm_base
         extra_tfvars.update(self.get_network_tfvars())
         extra_tfvars.update(self.get_region_tfvars())
 

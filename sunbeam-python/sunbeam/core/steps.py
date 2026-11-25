@@ -59,6 +59,8 @@ LOG = logging.getLogger(__name__)
 class DeployMachineApplicationStep(BaseStep):
     """Base class to deploy machine application using Terraform cloud."""
 
+    uses_target_charm_base = False
+
     def __init__(
         self,
         deployment: Deployment,
@@ -136,6 +138,15 @@ class DeployMachineApplicationStep(BaseStep):
 
                 extra_tfvars["machine_ids"] = sorted(machine_ids)
 
+            if self.uses_target_charm_base:
+                base = self.jhelper.get_deployment_charm_base(
+                    self.model,
+                    self.application,
+                    machine_ids=extra_tfvars["machine_ids"],
+                )
+                if base == "ubuntu@26.04":
+                    extra_tfvars["charm_base"] = base
+
             self.tfhelper.update_tfvars_and_apply_tf(
                 self.client,
                 self.manifest,
@@ -144,7 +155,7 @@ class DeployMachineApplicationStep(BaseStep):
                 tf_apply_extra_args=self.tf_apply_extra_args(),
                 reporter=context.reporter,
             )
-        except TerraformException as e:
+        except (JujuException, TerraformException) as e:
             return Result(ResultType.FAILED, str(e))
 
         # Note(gboutry): application is in state unknown when it's deployed

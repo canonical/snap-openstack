@@ -97,6 +97,8 @@ def ceph_replica_scale(storage_nodes: int) -> int:
 class DeployMicrocephApplicationStep(DeployMachineApplicationStep):
     """Deploy Microceph application using Terraform."""
 
+    uses_target_charm_base = True
+
     def __init__(
         self,
         deployment: Deployment,

@@ -28,6 +28,7 @@ from sunbeam.core.common import BaseStep, Result, ResultType, StepContext
 from sunbeam.core.juju import (
     ApplicationNotFoundException,
     JujuController,
+    JujuException,
     JujuHelper,
     JujuStepHelper,
     JujuWaitException,
@@ -760,6 +761,12 @@ class DeploySunbeamClusterdApplicationStep(BaseStep):
         charm_config = {"snap-channel": versions.OPENSTACK_CHANNEL}
         if charm_manifest.config:
             charm_config.update(charm_manifest.config)
+        try:
+            charm_base = self.jhelper.get_deployment_charm_base(
+                self.model, APPLICATION, machine_ids=machines
+            )
+        except JujuException as e:
+            return Result(ResultType.FAILED, str(e))
         self.jhelper.deploy(
             APPLICATION,
             "sunbeam-clusterd",
@@ -769,7 +776,7 @@ class DeploySunbeamClusterdApplicationStep(BaseStep):
             revision=charm_manifest.revision,
             to=machines,
             config=charm_config,
-            base=versions.JUJU_BASE,
+            base=charm_base,
         )
 
         apps = self.jhelper.get_application_names(self.model)

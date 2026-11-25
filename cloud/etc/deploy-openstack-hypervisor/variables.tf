@@ -95,3 +95,9 @@ variable "barbican-offer-url" {
   type        = string
   default     = null
 }
+
+variable "charm_base" {
+  description = "Ubuntu base of the target Juju machines"
+  type        = string
+  default     = "ubuntu@24.04"
+}

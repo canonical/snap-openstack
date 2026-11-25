@@ -19,7 +19,7 @@ def determine_version() -> str:
     return risk
 
 
-SUPPORTED_RELEASE = "noble"
+SUPPORTED_RELEASE_BASES = {"noble": "ubuntu@24.04", "resolute": "ubuntu@26.04"}
 JUJU_CHANNEL = "3.6/stable"
 JUJU_BASE = "ubuntu@24.04"
 OPENSTACK_CHANNEL = f"{determine_version()}/stable"

@@ -44,6 +44,8 @@ def get_mandatory_control_plane_offers(
 class DeployManilaDataApplicationStep(DeployMachineApplicationStep):
     """Deploy Manila Data application using Terraform."""
 
+    uses_target_charm_base = True
+
     def __init__(
         self,
         deployment: Deployment,

@@ -575,6 +575,12 @@ class BaseStorageBackendDeployStep(BaseStep):
             validated_config,
         )
         try:
+            backend_vars = backends[backend_key]
+            base = self.jhelper.get_deployment_charm_base(
+                self.model, backend_vars["principal_application"]
+            )
+            if base == "ubuntu@26.04":
+                backend_vars["charm_base"] = base
             # Update Terraform variables and apply with merged map
             self.tfhelper.update_tfvars_and_apply_tf(
                 self.client,
@@ -922,6 +928,13 @@ class DeploySpecificCinderVolumeStep(BaseStep):
         charm_revision = cinder_volume.revision
         charm_channel = cinder_volume.channel
 
+        try:
+            charm_base = self.jhelper.get_deployment_charm_base(
+                self.model, application_name, machine_ids=machine_ids
+            )
+        except JujuException as e:
+            return Result(ResultType.FAILED, str(e))
+
         tfvars.setdefault("cinder-volumes", {})[application_name] = {
             "application_name": application_name,
             "charm_channel": charm_channel,
@@ -959,6 +972,8 @@ class DeploySpecificCinderVolumeStep(BaseStep):
                 },
             ],
         }
+        if charm_base == "ubuntu@26.04":
+            tfvars["cinder-volumes"][application_name]["charm_base"] = charm_base
         tfvars["cinder-volumes"][application_name].update(self._get_offers())
         tfvars["cinder-volumes"][application_name].update(
             get_optional_control_plane_offers(

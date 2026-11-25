@@ -160,6 +160,30 @@ def test_get_machines(jhelper, status):
     assert jhelper.get_machines("test-model") == status.machines
 
 
+def test_get_deployment_charm_base_selects_target_machine(jhelper, status):
+    status.machines.update(
+        {
+            "5": Mock(base=jubilant.statustypes.FormattedBase("ubuntu", "24.04")),
+            "6": Mock(base=jubilant.statustypes.FormattedBase("ubuntu", "26.04")),
+        }
+    )
+    assert (
+        jhelper.get_deployment_charm_base("test-model", "new-app", machine_ids=["6"])
+        == "ubuntu@26.04"
+    )
+    with pytest.raises(jujulib.JujuException, match="Cannot choose one charm base"):
+        jhelper.get_deployment_charm_base(
+            "test-model", "new-app", machine_ids=["5", "6"]
+        )
+
+
+def test_get_deployment_charm_base_keeps_existing_application(jhelper, status):
+    status.apps["app"] = Mock(
+        base=jubilant.statustypes.FormattedBase("ubuntu", "24.04")
+    )
+    assert jhelper.get_deployment_charm_base("test-model", "app") == "ubuntu@24.04"
+
+
 def test_get_application_found(jhelper, status):
     status.apps["app"] = Mock()
     assert jhelper.get_application("app", "test-model") == status.apps["app"]

@@ -32,7 +32,7 @@ from snaphelpers import Snap
 from sunbeam import utils
 from sunbeam.clusterd.client import Client
 from sunbeam.core.common import STATUS_NOT_READY, STATUS_READY, SunbeamException
-from sunbeam.versions import JUJU_BASE
+from sunbeam.versions import JUJU_BASE, SUPPORTED_RELEASE_BASES
 
 LOG = logging.getLogger(__name__)
 CONTROLLER_MODEL = "admin/controller"
@@ -498,6 +498,41 @@ class JujuHelper:
         :model: Name of the model where the machines are located
         """
         return self.get_model_status(model).machines
+
+    def get_deployment_charm_base(
+        self,
+        machine_model: str,
+        application: str,
+        *,
+        application_model: str | None = None,
+        machine_ids: Collection[str] | None = None,
+    ) -> str:
+        """Keep an existing app's base or select the target machines' Ubuntu base."""
+        try:
+            app = self.get_application(application, application_model or machine_model)
+        except (ApplicationNotFoundException, ModelNotFoundException):
+            pass
+        else:
+            if app.base:
+                return f"{app.base.name}@{app.base.channel}"
+            return JUJU_BASE
+
+        machines = self.get_machines(machine_model)
+        selected = set(map(str, machine_ids)) if machine_ids else machines.keys()
+        bases = {
+            f"{machine.base.name}@{machine.base.channel}"
+            for machine_id, machine in machines.items()
+            if machine_id in selected and machine.base
+        }
+        if len(bases) > 1:
+            raise JujuException(
+                f"Cannot choose one charm base for {application}: "
+                f"{', '.join(sorted(bases))}"
+            )
+        base = next(iter(bases), JUJU_BASE)
+        if base not in SUPPORTED_RELEASE_BASES.values():
+            raise JujuException(f"Unsupported machine base {base!r} for {application}")
+        return base
 
     def get_machine_interfaces(
         self, model: str, machine: str
