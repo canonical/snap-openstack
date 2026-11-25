@@ -24,9 +24,10 @@ device to use on each host, rather than trying to enumerate what to avoid.
 ## Solution
 
 Replace the cluster-wide cilium devices annotation with per-host
-`CiliumNodeConfig` resources that specify the exact interface name for each
-control node. The interface is determined by querying juju for each machine's
-network interfaces and matching against the internal space.
+`CiliumNodeConfig` resources that specify the exact interface names for each
+control node. Sunbeam selects devices for the running Kubernetes datapath.
+On MAAS, only nodes with a public-space interface receive a per-host
+advertisement for the public pool.
 
 ## Reverts
 
@@ -61,11 +62,10 @@ underscore-prefixed). This deduplicates ~60-70 lines.
 
 - **Constructor**: `deployment`, `client`, `jhelper`, `model`, `network`,
   `fqdn` (optional). Initializes `to_update: list[dict]`,
-  `to_delete: list[dict]`, `_ifnames: dict[str, str]` cache.
-- **`_get_interface(node)`**: Looks up machine interfaces via
-  `jhelper.get_machine_interfaces()`, matches by the step's `network` space.
-  Caches results in `_ifnames`. Raises a step-specific error (defined by
-  subclass) if no matching interface found.
+  `to_delete: list[dict]`, and a cache of Juju machine interfaces.
+- **`_get_interface(node)`** looks up machine interfaces via
+  `jhelper.get_machine_interfaces()` and matches the step's configured network
+  space. It raises an error if the node has no interface in that space.
 - **`is_skip(context)`**: Control node lookup (single node if `fqdn` provided,
   all control nodes otherwise), kube client creation, calls abstract
   `_get_outdated_resources(nodes, kube)`, populates `to_update`/`to_delete`,
@@ -97,8 +97,10 @@ Lists existing `CiliumNodeConfig` resources labeled with
 - `spec.nodeSelector.matchLabels` contains exactly
   `sunbeam/hostname: <hostname>` (guards against over-broad or empty
   selectors that could silently misconfigure other nodes)
-- `spec.defaults.devices` matches the current internal-space interface for that
-  node
+- `spec.defaults.devices` matches the devices selected for the running
+  Kubernetes datapath.
+- `spec.defaults.direct-routing-device` matches the internal interface when
+  Cilium replaces kube-proxy.
 
 A resource that has the right metadata label and device but a wrong or missing
 `nodeSelector` is considered outdated and will be re-applied.
@@ -107,7 +109,7 @@ Returns `(outdated, deleted)` lists.
 
 ### `run(context)`
 
-- For each node in `to_update`: look up interface, apply `CiliumNodeConfig` via
+- For each node in `to_update`: resolve the devices, apply `CiliumNodeConfig` via
   lightkube, then delete the cilium pod on that node to trigger restart
 - For each node in `to_delete`: delete the `CiliumNodeConfig` resource and
   delete the cilium pod
@@ -129,11 +131,15 @@ spec:
     matchLabels:
       kubernetes.io/hostname: <hostname>
   defaults:
-    devices: "<interface-name>"
+    devices: "<service-facing-interfaces>"
+    direct-routing-device: "<internal-interface>"
 ```
 
 Uses `cilium.io/v2` (Canonical K8s 1.32 LTS ships Cilium 1.17.1; `v2alpha1`
 is deprecated since Cilium 1.17).
+
+This example applies when Cilium replaces kube-proxy. With kube-proxy active,
+Sunbeam specifies only the internal interface.
 
 ### Cilium Pod Restart
 
@@ -173,6 +179,11 @@ configured before metallb).
 
 - Bootstrap plan — before `EnsureL2AdvertisementByHostStep`, all control nodes
 - Remove-node plan — all control nodes (cleans up departed node's config)
+
+MAAS instance recovery enablement creates the pools first, then reconciles
+Cilium and the public and storage L2 advertisements before assigning the Consul
+storage VIP. A legacy pool advertisement is retired only when per-host
+replacements are in place.
 
 ### Local commands (`sunbeam-python/sunbeam/provider/local/commands.py`)
 

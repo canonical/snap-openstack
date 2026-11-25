@@ -874,7 +874,7 @@ class PatchLoadBalancerServicesIPPoolStep(BaseStep, abc.ABC):
 
 
 class CreateLoadBalancerIPPoolsStep(BaseStep, abc.ABC):
-    """Create IPPool and L2Advertisement resources."""
+    """Ensure the configured MetalLB IP pools exist."""
 
     def __init__(
         self,
@@ -886,9 +886,6 @@ class CreateLoadBalancerIPPoolsStep(BaseStep, abc.ABC):
         )
         self.client = client
         self.lbpool_resource = K8SHelper.get_lightkube_loadbalancer_resource()
-        self.l2_advertisement_resource = (
-            K8SHelper.get_lightkube_l2_advertisement_resource()
-        )
         self.model = K8SHelper.get_loadbalancer_namespace()
 
     @abc.abstractmethod
@@ -927,21 +924,6 @@ class CreateLoadBalancerIPPoolsStep(BaseStep, abc.ABC):
             )
             self.kube.create(new_ippool)
 
-    def handle_l2_advertisement(self, name: str):
-        """Manage L2Advertisement resource.
-
-        Kept for backward compatibility, deleting the resource on
-        upgraded versions of Sunbeam.
-        """
-        try:
-            self.kube.get(
-                self.l2_advertisement_resource, name=name, namespace=self.model
-            )
-            self.kube.delete(self.l2_advertisement_resource, name, namespace=self.model)
-        except l_exceptions.ApiError as e:
-            if e.status.code != 404:
-                raise
-
     def run(self, context: StepContext) -> Result:
         """Create Loadbalancer IPPool."""
         try:
@@ -964,14 +946,6 @@ class CreateLoadBalancerIPPoolsStep(BaseStep, abc.ABC):
                 return Result(
                     ResultType.FAILED,
                     f"Error in processing LoadBalancer pool {name}: {str(e)}",
-                )
-
-            try:
-                self.handle_l2_advertisement(name)
-            except l_exceptions.ApiError as e:
-                return Result(
-                    ResultType.FAILED,
-                    f"Error in processing L2Advertisement {name}: {str(e)}",
                 )
 
         return Result(ResultType.COMPLETED)

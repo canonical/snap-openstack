@@ -9,7 +9,7 @@ from packaging.version import Version
 from rich.console import Console
 
 from sunbeam.core.common import BaseStep, run_plan
-from sunbeam.core.deployment import Deployment
+from sunbeam.core.deployment import Deployment, Networks
 from sunbeam.core.juju import JujuHelper
 from sunbeam.core.manifest import (
     AddManifestStep,
@@ -31,6 +31,10 @@ from sunbeam.provider.maas.deployment import is_maas_deployment
 from sunbeam.provider.maas.steps import MaasCreateLoadBalancerIPPoolsStep
 from sunbeam.steps.hypervisor import ReapplyHypervisorTerraformPlanStep
 from sunbeam.steps.juju import RemoveSaasApplicationsStep
+from sunbeam.steps.k8s import (
+    EnsureCiliumDeviceByHostStep,
+    EnsureL2AdvertisementByHostStep,
+)
 from sunbeam.steps.openstack import ValidateInfraAppsStep
 from sunbeam.utils import click_option_show_hints, pass_method_obj
 from sunbeam.versions import CONSUL_CHANNEL, OPENSTACK_CHANNEL
@@ -154,14 +158,40 @@ class InstanceRecoveryFeature(OpenStackControlPlaneFeature):
             plan2.extend(
                 [
                     MaasCreateLoadBalancerIPPoolsStep(deployment, client, maas_client),
+                    EnsureCiliumDeviceByHostStep(
+                        deployment,
+                        client,
+                        jhelper,
+                        deployment.openstack_machines_model,
+                    ),
+                    EnsureL2AdvertisementByHostStep(
+                        deployment,
+                        client,
+                        jhelper,
+                        deployment.openstack_machines_model,
+                        Networks.PUBLIC,
+                        deployment.public_ip_pool,
+                        optional_if_pool_missing=True,
+                        remove_legacy=True,
+                    ),
+                    EnsureL2AdvertisementByHostStep(
+                        deployment,
+                        client,
+                        jhelper,
+                        deployment.openstack_machines_model,
+                        Networks.STORAGE,
+                        deployment.storage_ip_pool,
+                        optional_if_pool_missing=True,
+                        remove_legacy=True,
+                    ),
                     consul.PatchConsulStorageLoadBalancerIPPoolStep(
                         client,
-                        deployment.storage_ippool_label,
+                        deployment.storage_ip_pool,
                         ignore_errors=True,
                     ),
                     consul.PatchConsulStorageLoadBalancerIPStep(
                         client,
-                        pool_name=deployment.storage_ippool_label,
+                        pool_name=deployment.storage_ip_pool,
                         ignore_errors=True,
                     ),
                 ]
