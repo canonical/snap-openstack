@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Tuple, Type
 
 import click
+import pydantic
 import yaml
 from click.core import ParameterSource
 from rich.console import Console
@@ -65,6 +66,7 @@ from sunbeam.core.common import (
     update_config,
     validate_roles,
 )
+from sunbeam.core.compute_storage import load_compute_storage_config
 from sunbeam.core.deployment import (
     DEPLOYMENT_TYPE_CONFIG_KEY,
     Deployment,
@@ -92,6 +94,7 @@ from sunbeam.provider.local.steps import (
     LocalClusterStatusStep,
     LocalConfigDPDKStep,
     LocalConfigSRIOVStep,
+    LocalConfigureEncryptedStorageStep,
     LocalEndpointsConfigurationStep,
     LocalSetOpenStackNetworkAgentsStep,
     LocalUserQuestions,
@@ -119,6 +122,7 @@ from sunbeam.steps.clusterd import (
 from sunbeam.steps.horizon import AttachHorizonThemeStep
 from sunbeam.steps.hypervisor import (
     DeployHypervisorApplicationStep,
+    DeployVaultlockerStep,
     ReapplyHypervisorOptionalIntegrationsStep,
     ReapplyHypervisorTerraformPlanStep,
     RemoveHypervisorUnitStep,
@@ -241,6 +245,7 @@ class LocalProvider(ProviderBase):
         configure.add_command(configure_cmd)
         configure.add_command(configure_sriov)
         configure.add_command(configure_dpdk)
+        configure.add_command(configure_compute_storage)
         cluster.add_command(bootstrap)
         cluster.add_command(add)
         cluster.add_command(add_secondary_region_node)
@@ -1175,6 +1180,77 @@ def configure_dpdk(
         ),
     ]
     run_plan(plan, console, show_hints)
+
+
+@click.command("compute-storage")
+@click.option(
+    "--config",
+    "config_path",
+    help="Compute-storage config file.",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+)
+@click_option_show_hints
+@click.pass_context
+def configure_compute_storage(
+    ctx: click.Context,
+    config_path: Path | None = None,
+    show_hints: bool = False,
+) -> None:
+    """Configure encrypted compute storage."""
+    deployment: LocalDeployment = ctx.obj
+    client = deployment.get_client()
+    fqdn = utils.get_fqdn()
+
+    node = client.cluster.get_node_info(fqdn)
+    if "compute" not in node["role"]:
+        raise click.ClickException(
+            "Encrypted compute storage can only be configured on compute hosts"
+        )
+
+    if config_path:
+        try:
+            config = load_compute_storage_config(config_path)
+        except (OSError, pydantic.ValidationError, yaml.YAMLError) as exc:
+            raise click.ClickException(
+                f"Invalid compute-storage config in {config_path}: {exc}"
+            ) from exc
+    else:
+        config = None
+    node_config = config.nodes.get(fqdn) if config is not None else None
+    if config is not None and node_config is None:
+        raise click.ClickException(
+            f"No encrypted compute-storage configuration for {fqdn}"
+        )
+    manifest = deployment.get_manifest()
+
+    # Login to the Juju controller
+    run_preflight_checks([JujuLoginCheck(deployment.juju_account)], console)
+
+    jhelper = deployment.get_juju_helper()
+    tfhelper_hypervisor = deployment.get_tfhelper("hypervisor-plan")
+
+    plan: list[BaseStep] = [
+        TerraformInitStep(tfhelper_hypervisor),
+        DeployVaultlockerStep(
+            client,
+            tfhelper_hypervisor,
+            jhelper,
+            manifest,
+            model=deployment.openstack_machines_model,
+            vault_offer_url=config.vault_offer_url if config else None,
+            target_nodes=[fqdn],
+        ),
+        LocalConfigureEncryptedStorageStep(
+            client,
+            fqdn,
+            jhelper,
+            deployment.openstack_machines_model,
+            deployment,
+            node_config=node_config,
+        ),
+    ]
+    run_plan(plan, console, show_hints)
+    click.echo(f"Encrypted compute storage configuration completed on {fqdn}.")
 
 
 def _print_output(token: str, format: str, name: str):

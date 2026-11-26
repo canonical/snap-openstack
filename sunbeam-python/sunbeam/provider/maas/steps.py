@@ -49,6 +49,7 @@ from sunbeam.core.deployment import CertPair, Networks
 from sunbeam.core.deployments import DeploymentsConfig
 from sunbeam.core.juju import (
     ActionFailedException,
+    JujuException,
     JujuHelper,
     JujuSecretNotFound,
     JujuStepHelper,
@@ -56,11 +57,12 @@ from sunbeam.core.juju import (
     UnitNotFoundException,
 )
 from sunbeam.core.manifest import Manifest
+from sunbeam.core.openstack_api import get_admin_connection
 from sunbeam.core.steps import CreateLoadBalancerIPPoolsStep
 from sunbeam.core.terraform import TerraformHelper
 from sunbeam.lazy import LazyImport
 from sunbeam.provider.common import nic_utils
-from sunbeam.steps import clusterd
+from sunbeam.steps import clusterd, hypervisor
 from sunbeam.steps.cluster_status import ClusterStatusStep
 from sunbeam.steps.clusterd import APPLICATION as CLUSTERD_APPLICATION
 from sunbeam.steps.configure import (
@@ -2989,4 +2991,59 @@ class MaasConfigDPDKStep(BaseConfigDPDKStep):
                 LOG.warning(msg)
                 return Result(ResultType.FAILED, msg)
 
+        return Result(ResultType.COMPLETED)
+
+
+class MaasConfigureEncryptedStorageStep(BaseStep):
+    """Configure encrypted compute storage for MAAS compute hosts."""
+
+    def __init__(
+        self,
+        client: Client,
+        jhelper: JujuHelper,
+        model: str,
+        config,
+        deployment: maas_deployment.MaasDeployment,
+    ):
+        """Initialise the step with a compute-storage configuration.
+
+        :param deployment: deployment used to obtain an OpenStack admin
+            connection for the "no instances remain" guard.
+        """
+        super().__init__(
+            "Configure encrypted compute storage",
+            "Configuring encrypted compute storage",
+        )
+        self.client = client
+        self.jhelper = jhelper
+        self.model = model
+        self.config = config
+        self.deployment = deployment
+
+    def run(self, context: StepContext) -> Result:
+        """Enroll each configured host independently."""
+        failures: list[str] = []
+        try:
+            conn = get_admin_connection(self.jhelper, self.deployment)
+        except (JujuException, TimeoutError, ValueError, KeyError) as e:
+            return Result(ResultType.FAILED, str(e))
+        for node_name, node in self.config.nodes.items():
+            self.update_status(context, f"enrolling encrypted storage on {node_name}")
+            try:
+                hypervisor.check_no_guests_on_hypervisor(conn, node_name)
+                hypervisor.enroll_encrypted_storage(
+                    self.client,
+                    self.jhelper,
+                    self.model,
+                    node_name,
+                    node.target,
+                    node.existing_key_secret_id,
+                    node.existing_key_secret_id,
+                )
+            except (JujuException, TimeoutError, ValueError, KeyError) as e:
+                failures.append(f"{node_name}: {e}")
+                continue
+
+        if failures:
+            return Result(ResultType.FAILED, "; ".join(failures))
         return Result(ResultType.COMPLETED)

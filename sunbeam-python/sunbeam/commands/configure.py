@@ -471,6 +471,9 @@ def configure(
         return
     commands = sorted(configure.commands.items(), key=_sorter)
     for name, command in commands:
+        # Encrypted compute storage needs explicit offer and target
+        if name == "compute-storage":
+            continue
         LOG.debug("Running configure %r", name)
         cmd_ctx = click.Context(
             command,

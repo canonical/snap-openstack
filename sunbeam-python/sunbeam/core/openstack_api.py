@@ -38,6 +38,8 @@ def get_admin_connection(
         project_name=admin_auth_info.get("OS_PROJECT_NAME"),
         user_domain_name=admin_auth_info.get("OS_USER_DOMAIN_NAME"),
         project_domain_name=admin_auth_info.get("OS_PROJECT_DOMAIN_NAME"),
+        # Pin service lookups to this deployment's region in multi-region clouds.
+        region_name=admin_auth_info.get("OS_REGION_NAME"),
         cacert=admin_auth_info.get("OS_CACERT"),
         **options,
     )
@@ -61,6 +63,34 @@ def guests_on_hypervisor(
             all_projects=True, hypervisor_hostname=hypervisor_name, status=status
         )
     )
+
+
+def resolve_hypervisor_name(
+    node_name: str, conn: "openstack.connection.Connection"
+) -> str:
+    """Find Nova's name for a compute node before checking for its guests.
+
+    The cluster and Nova may use different short or fully qualified names.
+    Querying Nova with the wrong name can miss running guests, so require one match.
+    """
+    # Match the whole short host label, so cloud-1 cannot match cloud-11.maas.
+    short_name = node_name.split(".", 1)[0]
+    matches = [
+        hypervisor.name
+        for hypervisor in conn.compute.hypervisors()
+        if hypervisor.name
+        and (
+            hypervisor.name == node_name
+            or ("." not in node_name and hypervisor.name.startswith(f"{node_name}."))
+            or ("." in node_name and hypervisor.name == short_name)
+        )
+    ]
+    if len(matches) != 1:
+        raise ValueError(
+            f"Cannot identify a unique Nova hypervisor for {node_name}: "
+            f"found {matches}. Check the node hostname in Nova."
+        )
+    return matches[0]
 
 
 def remove_compute_service(

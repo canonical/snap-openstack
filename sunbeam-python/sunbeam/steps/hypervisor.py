@@ -3,11 +3,14 @@
 
 import json
 import logging
+import math
 import subprocess
+import time
 import typing
 
 import click
 import tenacity
+from jubilant import TaskError
 from rich.console import Console
 from snaphelpers import Snap
 
@@ -49,9 +52,11 @@ from sunbeam.core.juju import (
 from sunbeam.core.manifest import Manifest
 from sunbeam.core.openstack_api import (
     get_admin_connection,
+    guests_on_hypervisor,
     remove_compute_service,
     remove_hypervisor,
     remove_network_service,
+    resolve_hypervisor_name,
 )
 from sunbeam.core.steps import (
     DeployMachineApplicationStep,
@@ -86,6 +91,79 @@ HYPERVISOR_UNIT_TIMEOUT = (
 # check. Poll every 10 seconds for up to 5 minutes before failing removal.
 HYPERVISOR_REFERENCES_TIMEOUT = 300
 HYPERVISOR_REFERENCES_POLL_INTERVAL = 10
+ENCRYPTED_STORAGE_ACTION = "configure-encrypted-storage"
+ENCRYPTED_STORAGE_TIMEOUT = 600  # 10 minutes per host, after vaultlocker deployment
+
+
+def check_no_guests_on_hypervisor(
+    conn: "openstack.connection.Connection", node_name: str
+) -> None:
+    """Check that no guests are assigned to the hypervisor."""
+    hypervisor_name = resolve_hypervisor_name(node_name, conn)
+    guests = guests_on_hypervisor(hypervisor_name, conn)
+    if guests:
+        raise ValueError(
+            f"{len(guests)} instance(s) still assigned; migrate or delete them first"
+        )
+
+
+def enroll_encrypted_storage(
+    client: Client,
+    jhelper: JujuHelper,
+    model: str,
+    node_name: str,
+    target: str,
+    secret_id: str,
+    grant_ref: str,
+) -> None:
+    """Grant a credential and wait for one host's storage to be mounted."""
+    jhelper.grant_secret(model, grant_ref, VAULTLOCKER_APPLICATION)
+    machine_id = str(client.cluster.get_node_info(node_name)["machineid"])
+    unit = jhelper.get_unit_from_machine(APPLICATION, machine_id, model)
+    wait_for_encrypted_storage(jhelper, unit, model, target, secret_id)
+
+
+def wait_for_encrypted_storage(
+    jhelper: JujuHelper, unit: str, model: str, target: str, secret_id: str
+) -> None:
+    """Wait until the hypervisor has mounted the enrolled storage target."""
+    deadline = time.monotonic() + ENCRYPTED_STORAGE_TIMEOUT
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError(
+                f"Encrypted storage configuration did not complete for {unit}. "
+                "Check the Vaultlocker subordinate unit."
+            )
+
+        try:
+            result = jhelper.run_action(
+                unit,
+                model,
+                ENCRYPTED_STORAGE_ACTION,
+                {"target": target, "existing-key-secret-id": secret_id},
+                timeout=max(1, math.ceil(remaining)),
+            )
+        except TaskError as e:
+            task = e.task
+            reason = task.message or task.stderr or str(e)
+            raise ActionFailedException(
+                f"Action {ENCRYPTED_STORAGE_ACTION!r} on unit {unit!r} failed: {reason}"
+            ) from e
+        if result.get("target") != target:
+            raise ValueError(f"Unexpected encrypted storage result from {unit}")
+        if result.get("status") == "completed":
+            return
+        if result.get("status") != "requested":
+            raise ValueError(f"Unexpected encrypted storage status from {unit}")
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError(
+                f"Encrypted storage configuration did not complete for {unit}. "
+                "Check the Vaultlocker subordinate unit."
+            )
+        time.sleep(min(10, remaining))
 
 
 class DeployHypervisorApplicationStep(DeployMachineApplicationStep):
