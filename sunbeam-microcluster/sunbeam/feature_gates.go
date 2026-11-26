@@ -5,14 +5,14 @@ import (
 	"database/sql"
 	"fmt"
 
-	"github.com/canonical/microcluster/v2/state"
+	"github.com/canonical/microcluster/v3/microcluster/types"
 
 	"github.com/canonical/snap-openstack/sunbeam-microcluster/api/apitypes"
 	"github.com/canonical/snap-openstack/sunbeam-microcluster/database"
 )
 
 // ListFeatureGates returns all the feature gates.
-func ListFeatureGates(ctx context.Context, s state.State) (apitypes.FeatureGates, error) {
+func ListFeatureGates(ctx context.Context, s types.State) (apitypes.FeatureGates, error) {
 	gates := apitypes.FeatureGates{}
 
 	// Get the feature gates from the database.
@@ -39,7 +39,7 @@ func ListFeatureGates(ctx context.Context, s state.State) (apitypes.FeatureGates
 }
 
 // GetFeatureGate returns a FeatureGate with the given gate key.
-func GetFeatureGate(ctx context.Context, s state.State, gateKey string) (apitypes.FeatureGate, error) {
+func GetFeatureGate(ctx context.Context, s types.State, gateKey string) (apitypes.FeatureGate, error) {
 	gate := apitypes.FeatureGate{}
 	err := s.Database().Transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		record, err := database.GetFeatureGate(ctx, tx, gateKey)
@@ -59,7 +59,7 @@ func GetFeatureGate(ctx context.Context, s state.State, gateKey string) (apitype
 }
 
 // AddFeatureGate adds a feature gate to the database.
-func AddFeatureGate(ctx context.Context, s state.State, gateKey string, enabled bool) error {
+func AddFeatureGate(ctx context.Context, s types.State, gateKey string, enabled bool) error {
 	// Add feature gate to the database.
 	return s.Database().Transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		_, err := database.CreateFeatureGate(ctx, tx, database.FeatureGate{
@@ -75,7 +75,7 @@ func AddFeatureGate(ctx context.Context, s state.State, gateKey string, enabled 
 }
 
 // UpdateFeatureGate updates a feature gate record in the database.
-func UpdateFeatureGate(ctx context.Context, s state.State, gateKey string, enabled bool) error {
+func UpdateFeatureGate(ctx context.Context, s types.State, gateKey string, enabled bool) error {
 	// Update feature gate in the database.
 	err := s.Database().Transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		_, err := database.GetFeatureGate(ctx, tx, gateKey)
@@ -97,7 +97,7 @@ func UpdateFeatureGate(ctx context.Context, s state.State, gateKey string, enabl
 }
 
 // DeleteFeatureGate deletes a feature gate from the database.
-func DeleteFeatureGate(ctx context.Context, s state.State, gateKey string) error {
+func DeleteFeatureGate(ctx context.Context, s types.State, gateKey string) error {
 	// Delete feature gate from the database.
 	return s.Database().Transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		err := database.DeleteFeatureGate(ctx, tx, gateKey)

@@ -11,39 +11,39 @@ import (
 
 	"github.com/canonical/lxd/lxd/db/query"
 	"github.com/canonical/lxd/shared/api"
-	"github.com/canonical/microcluster/v2/cluster"
+	"github.com/canonical/microcluster/v3/microcluster/db"
 )
 
 var _ = api.ServerEnvironment{}
 
-var featureGateObjects = cluster.RegisterStmt(`
+var featureGateObjects = db.RegisterStmt(`
 SELECT feature_gates.id, feature_gates.gate_key, feature_gates.enabled
   FROM feature_gates
   ORDER BY feature_gates.gate_key
 `)
 
-var featureGateObjectsByGateKey = cluster.RegisterStmt(`
+var featureGateObjectsByGateKey = db.RegisterStmt(`
 SELECT feature_gates.id, feature_gates.gate_key, feature_gates.enabled
   FROM feature_gates
   WHERE ( feature_gates.gate_key = ? )
   ORDER BY feature_gates.gate_key
 `)
 
-var featureGateID = cluster.RegisterStmt(`
+var featureGateID = db.RegisterStmt(`
 SELECT feature_gates.id FROM feature_gates
   WHERE feature_gates.gate_key = ?
 `)
 
-var featureGateCreate = cluster.RegisterStmt(`
+var featureGateCreate = db.RegisterStmt(`
 INSERT INTO feature_gates (gate_key, enabled)
   VALUES (?, ?)
 `)
 
-var featureGateDeleteByGateKey = cluster.RegisterStmt(`
+var featureGateDeleteByGateKey = db.RegisterStmt(`
 DELETE FROM feature_gates WHERE gate_key = ?
 `)
 
-var featureGateUpdate = cluster.RegisterStmt(`
+var featureGateUpdate = db.RegisterStmt(`
 UPDATE feature_gates
   SET gate_key = ?, enabled = ?
  WHERE id = ?
@@ -53,7 +53,7 @@ UPDATE feature_gates
 func GetFeatureGates(ctx context.Context, tx *sql.Tx) ([]FeatureGate, error) {
 	objects := make([]FeatureGate, 0)
 
-	stmt, err := cluster.Stmt(tx, featureGateObjects)
+	stmt, err := db.Stmt(tx, featureGateObjects)
 	if err != nil {
 		return nil, fmt.Errorf("Failed to get \"featureGateObjects\" prepared statement: %w", err)
 	}
@@ -79,7 +79,7 @@ func GetFeatureGates(ctx context.Context, tx *sql.Tx) ([]FeatureGate, error) {
 
 // GetFeatureGate returns a single FeatureGate by gate_key.
 func GetFeatureGate(ctx context.Context, tx *sql.Tx, gateKey string) (FeatureGate, error) {
-	stmt, err := cluster.Stmt(tx, featureGateObjectsByGateKey)
+	stmt, err := db.Stmt(tx, featureGateObjectsByGateKey)
 	if err != nil {
 		return FeatureGate{}, fmt.Errorf("Failed to get \"featureGateObjectsByGateKey\" prepared statement: %w", err)
 	}
@@ -102,7 +102,7 @@ func GetFeatureGate(ctx context.Context, tx *sql.Tx, gateKey string) (FeatureGat
 
 // CreateFeatureGate creates a new FeatureGate.
 func CreateFeatureGate(ctx context.Context, tx *sql.Tx, object FeatureGate) (int64, error) {
-	stmt, err := cluster.Stmt(tx, featureGateCreate)
+	stmt, err := db.Stmt(tx, featureGateCreate)
 	if err != nil {
 		return -1, fmt.Errorf("Failed to get \"featureGateCreate\" prepared statement: %w", err)
 	}
@@ -122,7 +122,7 @@ func CreateFeatureGate(ctx context.Context, tx *sql.Tx, object FeatureGate) (int
 
 // DeleteFeatureGate deletes a FeatureGate by gate_key.
 func DeleteFeatureGate(ctx context.Context, tx *sql.Tx, gateKey string) error {
-	stmt, err := cluster.Stmt(tx, featureGateDeleteByGateKey)
+	stmt, err := db.Stmt(tx, featureGateDeleteByGateKey)
 	if err != nil {
 		return fmt.Errorf("Failed to get \"featureGateDeleteByGateKey\" prepared statement: %w", err)
 	}
@@ -152,7 +152,7 @@ func UpdateFeatureGate(ctx context.Context, tx *sql.Tx, gateKey string, object F
 		return err
 	}
 
-	stmt, err := cluster.Stmt(tx, featureGateUpdate)
+	stmt, err := db.Stmt(tx, featureGateUpdate)
 	if err != nil {
 		return fmt.Errorf("Failed to get \"featureGateUpdate\" prepared statement: %w", err)
 	}
@@ -177,7 +177,7 @@ func UpdateFeatureGate(ctx context.Context, tx *sql.Tx, gateKey string, object F
 
 // GetFeatureGateID returns the ID of a FeatureGate by gate_key.
 func GetFeatureGateID(ctx context.Context, tx *sql.Tx, gateKey string) (int64, error) {
-	stmt, err := cluster.Stmt(tx, featureGateID)
+	stmt, err := db.Stmt(tx, featureGateID)
 	if err != nil {
 		return -1, fmt.Errorf("Failed to get \"featureGateID\" prepared statement: %w", err)
 	}
