@@ -752,6 +752,30 @@ def test_get_available_charm_revisions(jhelper: jujulib.JujuHelper, juju):
     assert revisions == {"amd64": 121, "arm64": 122}
 
 
+def test_get_all_channels_for_revision(juju, mocker):
+    mocker.patch.object(jubilant, "Juju", return_value=juju)
+    juju.cli.return_value = json.dumps(
+        {
+            "channels": {
+                "1.36": {"edge": [{"revision": 200}]},
+                "1.32": {"stable": [{"revision": 100}], "edge": [{"revision": 200}]},
+            }
+        }
+    )
+    assert jujulib.JujuHelper.get_charm_channels_for_revision("k8s", 200) == [
+        "1.36/edge",
+        "1.32/edge",
+    ]
+    assert jujulib.JujuHelper.get_charm_channels_for_revision("k8s", 300) == []
+
+
+def test_revision_channel_lookup_failure(juju, mocker):
+    mocker.patch.object(jubilant, "Juju", return_value=juju)
+    juju.cli.side_effect = jubilant.CLIError(1, ["info"], "", "offline")
+    with pytest.raises(jujulib.JujuException, match="Cannot look up channels"):
+        jujulib.JujuHelper.get_charm_channels_for_revision("k8s", 200)
+
+
 def test_get_available_charm_revisions_branch_channel(
     jhelper: jujulib.JujuHelper, juju
 ):

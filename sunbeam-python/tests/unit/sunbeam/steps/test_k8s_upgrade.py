@@ -19,12 +19,26 @@ from sunbeam.steps.k8s_upgrade import CHARM_NAME, K8S_CHANNEL, K8SCharmUpgradeSt
 @pytest.fixture
 def step(basic_deployment, basic_client, basic_manifest, basic_jhelper):
     basic_deployment.openstack_machines_model = "openstack-machines"
+    basic_deployment.resolve_k8s_channel.return_value = None
     return K8SCharmUpgradeStep(
         basic_deployment, basic_client, basic_manifest, basic_jhelper
     )
 
 
 class TestK8SCharmUpgradeStepIsSkip:
+    @pytest.mark.parametrize("track", ["1.32", "1.36"])
+    def test_explicit_supported_track_with_new_default(
+        self, step, basic_jhelper, basic_manifest, step_context, track
+    ):
+        basic_jhelper.get_application.return_value = Mock(
+            charm_rev=100, charm_channel=f"{track}/stable", base=None
+        )
+        basic_manifest.find_charm.return_value = Mock(
+            channel=f"{track}/edge", revision=None
+        )
+        assert step.is_skip(step_context).result_type == ResultType.COMPLETED
+        assert step._decision.effective_channel == f"{track}/edge"
+
     def test_skip_when_application_not_deployed(
         self, step, basic_jhelper, step_context
     ):
@@ -82,7 +96,7 @@ class TestK8SCharmUpgradeStepIsSkip:
         """Revision-only manifest: proceed when revision differs, no --channel."""
         app = Mock(charm_rev=499, charm_channel="1.32/stable", base=None)
         basic_jhelper.get_application.return_value = app
-        basic_jhelper.get_charm_channel_for_revision.return_value = "1.32/stable"
+        basic_jhelper.get_charm_channels_for_revision.return_value = ["1.32/stable"]
         basic_manifest.find_charm.return_value = Mock(channel=None, revision=500)
 
         result = step.is_skip(step_context)
@@ -96,7 +110,7 @@ class TestK8SCharmUpgradeStepIsSkip:
         """Revision-only: if revision is not found in any channel, proceed."""
         app = Mock(charm_rev=499, charm_channel="1.32/stable", base=None)
         basic_jhelper.get_application.return_value = app
-        basic_jhelper.get_charm_channel_for_revision.return_value = None
+        basic_jhelper.get_charm_channels_for_revision.return_value = []
         basic_manifest.find_charm.return_value = Mock(channel=None, revision=500)
 
         result = step.is_skip(step_context)
@@ -110,7 +124,7 @@ class TestK8SCharmUpgradeStepIsSkip:
         """Revision-only: FAILED when revision belongs to a different track."""
         app = Mock(charm_rev=499, charm_channel="1.32/stable", base=None)
         basic_jhelper.get_application.return_value = app
-        basic_jhelper.get_charm_channel_for_revision.return_value = "1.35/stable"
+        basic_jhelper.get_charm_channels_for_revision.return_value = ["1.35/stable"]
         basic_manifest.find_charm.return_value = Mock(channel=None, revision=500)
 
         result = step.is_skip(step_context)
@@ -126,7 +140,7 @@ class TestK8SCharmUpgradeStepIsSkip:
         """Revision-only: if CharmHub lookup fails, proceed rather than block."""
         app = Mock(charm_rev=499, charm_channel="1.32/stable", base=None)
         basic_jhelper.get_application.return_value = app
-        basic_jhelper.get_charm_channel_for_revision.side_effect = JujuException(
+        basic_jhelper.get_charm_channels_for_revision.side_effect = JujuException(
             "network error"
         )
         basic_manifest.find_charm.return_value = Mock(channel=None, revision=500)

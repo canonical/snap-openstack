@@ -8,15 +8,19 @@ import os
 import subprocess
 import threading
 import uuid
+from collections.abc import Callable, Iterator
+from contextlib import AbstractContextManager
 from datetime import datetime, timezone
 from enum import StrEnum
 from pathlib import Path
 from string import Template
 
+from requests.exceptions import RequestException
 from snaphelpers import Snap
 
 from sunbeam.clusterd.client import Client
-from sunbeam.clusterd.service import ConfigItemNotFoundException
+from sunbeam.clusterd.service import ConfigItemNotFoundException, RemoteException
+from sunbeam.core.charm_channel import CharmChannelError
 from sunbeam.core.common import (
     BaseStep,
     Result,
@@ -98,6 +102,8 @@ class TerraformHelper:
         parallelism: int | None = None,
         backend: str | None = None,
         clusterd_address: str | None = None,
+        validate_tfvars: Callable[[dict], None] | None = None,
+        apply_context: Callable[[], AbstractContextManager[None]] | None = None,
     ):
         self.snap = Snap()
         self.path = path
@@ -108,6 +114,31 @@ class TerraformHelper:
         self.backend = backend or "local"
         self.terraform = str(self.snap.paths.snap / "bin" / "terraform")
         self.clusterd_address = clusterd_address
+        self.validate_tfvars = validate_tfvars
+        self.apply_context = apply_context
+
+    def _validate_tfvars(self, tfvars: dict) -> None:
+        if self.validate_tfvars is not None:
+            try:
+                self.validate_tfvars(tfvars)
+            except (
+                CharmChannelError,
+                RemoteException,
+                RequestException,
+                ValueError,
+            ) as e:
+                raise TerraformException(str(e)) from e
+
+    @contextlib.contextmanager
+    def _apply_context(self) -> Iterator[None]:
+        if self.apply_context is None:
+            yield
+            return
+        try:
+            with self.apply_context():
+                yield
+        except (CharmChannelError, RemoteException, RequestException, ValueError) as e:
+            raise TerraformException(str(e)) from e
 
     def backend_config(self) -> dict:
         """Get backend configuration for terraform."""
@@ -394,26 +425,30 @@ class TerraformHelper:
         Uses source tracking to preserve computed values while updating
         only the tfvars related to specified charms from manifest.
         """
-        # Step 1: Load and filter DB values (only refresh charm-specific values)
-        computed_keys, updated_tfvars = self._load_and_filter_db_tfvars_for_charms(
-            client, tfvar_config, charms
-        )
+        with self._apply_context():
+            # Step 1: Load and filter DB values (only refresh charm-specific values)
+            computed_keys, updated_tfvars = self._load_and_filter_db_tfvars_for_charms(
+                client, tfvar_config, charms
+            )
 
-        # Step 2: Apply manifest values for specified charms
-        tfvars_from_manifest = self._get_tfvars(manifest, charms)
-        self._apply_tfvars(updated_tfvars, tfvars_from_manifest)
+            # Step 2: Apply manifest values for specified charms
+            tfvars_from_manifest = self._get_tfvars(manifest, charms)
+            self._apply_tfvars(updated_tfvars, tfvars_from_manifest)
 
-        # Step 3: Save and apply
-        if tfvar_config:
-            data_to_save = dict(updated_tfvars)
-            data_to_save["_computed_keys"] = list(computed_keys)
-            update_config(client, tfvar_config, data_to_save)
+            # Step 3: Save and apply
+            self._validate_tfvars(updated_tfvars)
+            if tfvar_config:
+                data_to_save = dict(updated_tfvars)
+                data_to_save["_computed_keys"] = list(computed_keys)
+                update_config(client, tfvar_config, data_to_save)
 
-        self.write_tfvars(updated_tfvars)
-        # Keys only: the merged tfvars can carry credentials (e.g. SSO
-        # provider client secrets) and end up in the DEBUG log file.
-        LOG.debug("Applying plan %s with tfvars %s", self.plan, list(updated_tfvars))
-        self.apply(tf_apply_extra_args, reporter=reporter)
+            self.write_tfvars(updated_tfvars)
+            # Keys only: the merged tfvars can carry credentials (e.g. SSO
+            # provider client secrets) and end up in the DEBUG log file.
+            LOG.debug(
+                "Applying plan %s with tfvars %s", self.plan, list(updated_tfvars)
+            )
+            self.apply(tf_apply_extra_args, reporter=reporter)
 
     def plan_resource_changes(self) -> dict[str, dict]:
         """Run terraform plan and return the planned changes per resource.
@@ -567,6 +602,7 @@ class TerraformHelper:
         # need the written tfvars file to plan against and must not
         # overwrite the stored tfvars other validation steps compare
         # against (e.g. the immutable storage checks).
+        self._validate_tfvars(updated_tfvars)
         if persist and tfvar_config:
             data_to_save = dict(updated_tfvars)
             data_to_save["_computed_keys"] = list(computed_keys)
@@ -657,9 +693,10 @@ class TerraformHelper:
         :param override_tfvars: Terraform vars to override (computed/runtime)
         :param tf_apply_extra_args: Extra args to terraform apply command
         """
-        self.update_tfvars(client, manifest, tfvar_config, override_tfvars)
-        LOG.debug("Applying plan %s", self.plan)
-        self.apply(tf_apply_extra_args, reporter=reporter)
+        with self._apply_context():
+            self.update_tfvars(client, manifest, tfvar_config, override_tfvars)
+            LOG.debug("Applying plan %s", self.plan)
+            self.apply(tf_apply_extra_args, reporter=reporter)
 
     def _load_and_filter_db_tfvars(
         self, client: Client, tfvar_config: str | None
@@ -827,7 +864,12 @@ class TerraformHelper:
                 manifest_charm = charm_manifest.model_dump(by_alias=True)
                 for charm_attribute_name, tfvar_name in per_charm_tfvar_map.items():
                     charm_attribute_value = manifest_charm.get(charm_attribute_name)
-                    if charm_attribute_value:
+                    # A channel validator resolves omission from live state.
+                    # Preserve omitted or invalid values for it to handle.
+                    if charm_attribute_value or (
+                        self.validate_tfvars is not None
+                        and charm_attribute_name == "channel"
+                    ):
                         tfvars[tfvar_name] = charm_attribute_value
 
         return tfvars

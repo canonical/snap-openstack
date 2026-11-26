@@ -12,6 +12,11 @@ from . import utils
 
 def pytest_addoption(parser):
     parser.addoption(
+        "--expected-k8s-track",
+        choices=("1.32", "1.36"),
+        help="Enable Kubernetes compatibility tests and require this cluster track.",
+    )
+    parser.addoption(
         "--manifest-path",
         action="store",
         help=(

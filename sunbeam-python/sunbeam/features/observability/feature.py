@@ -1458,7 +1458,7 @@ class EmbeddedObservabilityFeature(ObservabilityFeature):
 
         plan = []
         if self.user_manifest:
-            plan.append(AddManifestStep(client, self.user_manifest))
+            plan.append(AddManifestStep(deployment, self.user_manifest))
 
         cos_plan = [
             TerraformInitStep(tfhelper_cos),
@@ -1710,7 +1710,7 @@ class ExternalObservabilityFeature(ObservabilityFeature):
 
         plan = []
         if self.user_manifest:
-            plan.append(AddManifestStep(client, self.user_manifest))
+            plan.append(AddManifestStep(deployment, self.user_manifest))
 
         observability_agent_k8s_plan = [
             TerraformInitStep(tfhelper),

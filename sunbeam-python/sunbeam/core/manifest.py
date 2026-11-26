@@ -11,6 +11,7 @@ from typing import Any
 import pydantic
 import yaml
 from pydantic import AliasChoices, Field
+from requests.exceptions import RequestException
 from snaphelpers import Snap
 
 from sunbeam import utils
@@ -19,7 +20,9 @@ from sunbeam.clusterd.service import (
     ClusterServiceUnavailableException,
     ConfigItemNotFoundException,
     ManifestItemNotFoundException,
+    RemoteException,
 )
+from sunbeam.core.charm_channel import CharmChannelError
 from sunbeam.core.common import (
     BaseStep,
     Result,
@@ -29,6 +32,9 @@ from sunbeam.core.common import (
     infer_version,
     read_config,
 )
+
+if typing.TYPE_CHECKING:
+    from sunbeam.core.deployment import Deployment
 
 # from sunbeam.feature_manager import FeatureManager
 from sunbeam.versions import MANIFEST_CHARM_VERSIONS, TERRAFORM_DIR_NAMES, VarMap
@@ -190,7 +196,9 @@ def _default_software_config() -> SoftwareConfig:
     snap = Snap()
     return SoftwareConfig(
         charms={
-            charm: CharmManifest(channel=channel)
+            # The Kubernetes track guard resolves omitted channels when the
+            # selection is applied, using the recorded and observed tracks.
+            charm: CharmManifest(channel=None if charm == "k8s" else channel)
             for charm, channel in MANIFEST_CHARM_VERSIONS.items()
         },
         terraform={
@@ -619,12 +627,13 @@ class AddManifestStep(BaseStep):
 
     def __init__(
         self,
-        client: Client,
+        deployment: "Deployment",
         manifest_file: Path | None = None,
         clear: bool = False,
     ):
         super().__init__("Write Manifest to database", "Writing Manifest to database")
-        self.client = client
+        self.deployment = deployment
+        self.client = deployment.get_client()
         self.manifest_file = manifest_file
         self.clear = clear
         self.manifest_content = None
@@ -657,13 +666,31 @@ class AddManifestStep(BaseStep):
             LOG.debug("Failed to fetch latest manifest from clusterd", exc_info=True)
             return Result(ResultType.FAILED, str(e))
 
+        # Check unchanged manifests for drift without initializing cluster state.
+        try:
+            latest_content = (
+                yaml.safe_load(latest_manifest["data"]) if latest_manifest else None
+            )
+            content = (
+                self.manifest_content
+                if self.manifest_content is not None
+                else latest_content
+            )
+            self.deployment.validate_manifest_for_infra(content or {})
+        except (
+            CharmChannelError,
+            RemoteException,
+            RequestException,
+            ValueError,
+            yaml.YAMLError,
+        ) as e:
+            LOG.debug("Failed to validate manifest infrastructure", exc_info=True)
+            return Result(ResultType.FAILED, str(e))
+
         if self.manifest_content is None:
             return Result(ResultType.SKIPPED)
 
-        if (
-            latest_manifest
-            and yaml.safe_load(latest_manifest.get("data", {})) == self.manifest_content
-        ):
+        if latest_manifest and latest_content == self.manifest_content:
             return Result(ResultType.SKIPPED)
 
         return Result(ResultType.COMPLETED)
@@ -671,10 +698,18 @@ class AddManifestStep(BaseStep):
     def run(self, context: StepContext) -> Result:
         """Write manifest to cluster db."""
         try:
+            self.deployment.validate_manifest_for_infra(self.manifest_content or {})
             id = self.client.cluster.add_manifest(
                 data=yaml.safe_dump(self.manifest_content)
             )
+            self.deployment._manifest = None
             return Result(ResultType.COMPLETED, id)
-        except Exception as e:
-            LOG.debug("Failed to add manifest to cluster db: %r", e)
+        except (
+            CharmChannelError,
+            RemoteException,
+            RequestException,
+            ValueError,
+            yaml.YAMLError,
+        ) as e:
+            LOG.debug("Failed to add manifest to cluster db", exc_info=True)
             return Result(ResultType.FAILED, str(e))
