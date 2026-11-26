@@ -1567,6 +1567,60 @@ class TestEnsureCiliumDeviceByHostStep:
         step.client.cluster.lock_terraform_plan.assert_called_once()
         step.client.cluster.unlock_terraform_plan.assert_called_once()
 
+    @pytest.mark.parametrize(
+        ("replacement", "public", "expected_devices"),
+        [
+            ("false", True, "eth1.2743"),
+            ("true", True, "eth0,eth1.101,eth1.2743"),
+            ("true", False, "eth0,eth1.2743"),
+        ],
+    )
+    def test_run_reconciles_oam_only_for_kube_proxy_replacement(
+        self, step, step_context, replacement, public, expected_devices
+    ):
+        step.deployment.get_space.side_effect = lambda network: network.value
+        step.client.cluster.list_nodes_by_role.return_value = [
+            {"name": "node1", "machineid": "1"}
+        ]
+        interfaces = {
+            "eth0": Mock(space="management"),
+            "eth1.2743": Mock(space="internal"),
+        }
+        if public:
+            interfaces["eth1.101"] = Mock(space="public")
+        step.jhelper.get_machine_interfaces.return_value = interfaces
+        step.kube.get.return_value = Mock(data={"kube-proxy-replacement": replacement})
+        step.kube.list.return_value = [
+            step.cilium_node_config_resource(
+                metadata=ObjectMeta(labels={"sunbeam/hostname": "node1"}),
+                spec={
+                    "nodeSelector": {"matchLabels": {"sunbeam/hostname": "node1"}},
+                    "defaults": {"devices": "eth1.2743"},
+                },
+            )
+        ]
+        step._restart_cilium_on_node = Mock()
+
+        with patch("sunbeam.steps.k8s.get_kube_client", return_value=step.kube):
+            if replacement == "false":
+                assert step.run(step_context).result_type == ResultType.SKIPPED
+                step.kube.apply.assert_not_called()
+                step._restart_cilium_on_node.assert_not_called()
+                return
+
+            assert step.run(step_context).result_type == ResultType.COMPLETED
+            applied = step.kube.apply.call_args.args[0]
+            assert applied.spec["defaults"] == {
+                "devices": expected_devices,
+                "direct-routing-device": "eth1.2743",
+            }
+            applied.metadata.annotations["sunbeam/restart-pending"] = "false"
+            step.kube.list.return_value = [applied]
+            assert step.run(step_context).result_type == ResultType.SKIPPED
+
+        step.kube.apply.assert_called_once()
+        step._restart_cilium_on_node.assert_called_once_with("node1")
+
     def test_run_outdated_device(self, step, step_context):
         step._get_outdated_resources = Mock(return_value=(["node1"], []))
         step._apply_changes = Mock(return_value=Result(ResultType.COMPLETED))

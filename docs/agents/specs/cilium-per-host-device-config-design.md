@@ -141,6 +141,12 @@ is deprecated since Cilium 1.17).
 This example applies when Cilium replaces kube-proxy. With kube-proxy active,
 Sunbeam specifies only the internal interface.
 
+In replacement mode, Sunbeam includes the interfaces in the internal, public,
+management, and storage spaces when present. This includes the management
+(OAM) interface, which needs Cilium's reverse NAT for LoadBalancer replies
+that leave through the OAM default route. Interfaces shared by multiple spaces
+appear once.
+
 ### Cilium Pod Restart
 
 After applying a config change for a node, restart the cilium agent on that node:
