@@ -131,7 +131,7 @@ class InstanceRecoveryFeature(OpenStackControlPlaneFeature):
 
         plan1: list[BaseStep] = []
         if self.user_manifest:
-            plan1.append(AddManifestStep(deployment.get_client(), self.user_manifest))
+            plan1.append(AddManifestStep(deployment, self.user_manifest))
         plan1.extend(
             [
                 TerraformInitStep(tfhelper),

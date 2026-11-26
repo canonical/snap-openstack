@@ -18,6 +18,7 @@ from sunbeam.clusterd.service import (
 from sunbeam.core.common import FORMAT_TABLE, FORMAT_YAML
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.manifest import Manifest, SoftwareConfig
+from sunbeam.versions import K8S_CHANNEL
 
 if typing.TYPE_CHECKING:
     from sunbeam.features.interface.v1.base import BaseFeature
@@ -173,7 +174,23 @@ def generate(
     manifest = deployment.get_manifest()
 
     manifest_content = deployment.generate_core_config(console)
-    manifest_content += "\n" + generate_software_manifest(manifest.core.software)
+    software = manifest.core.software.model_copy(deep=True)
+    # The exported example describes the effective channel, even when the
+    # source manifest leaves the channel unpinned.
+    k8s = software.charms["k8s"]
+    if deployment.juju_controller is not None:
+        try:
+            deployment.get_client()
+        except ValueError:
+            # MAAS may have a controller before clusterd is configured.
+            pass
+        else:
+            k8s.channel = deployment.resolve_k8s_channel(
+                k8s.channel, k8s.revision, config=k8s.config
+            )
+    if k8s.channel is None:
+        k8s.channel = K8S_CHANNEL
+    manifest_content += "\n" + generate_software_manifest(software)
     fm = deployment.get_feature_manager()
     indent = 2
     manifest_content += "\nfeatures:"

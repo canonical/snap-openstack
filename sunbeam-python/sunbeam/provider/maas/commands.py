@@ -512,7 +512,7 @@ def bootstrap(
 
     client = deployment.get_client()
     plan3: list[BaseStep] = []
-    plan3.append(AddManifestStep(client, manifest_path))
+    plan3.append(AddManifestStep(deployment, manifest_path))
     plan3.append(MaasAddMachinesToClusterdStep(client, maas_client))
     if not juju_controller:
         plan3.append(
@@ -672,7 +672,7 @@ def deploy(
         )
 
     plan: list[BaseStep] = []
-    plan.append(AddManifestStep(client, manifest_path))
+    plan.append(AddManifestStep(deployment, manifest_path))
     plan.append(SyncFeatureGatesToCluster(client))
     plan.append(
         AddJujuModelStep(
@@ -1110,7 +1110,7 @@ def configure_cmd(
     )
     network_agents_names = list(dict.fromkeys(network + compute + control))
     plan = [
-        AddManifestStep(client, manifest_path),
+        AddManifestStep(deployment, manifest_path),
         JujuLoginStep(deployment.juju_account),
         MaasUserQuestions(
             client,
@@ -2076,7 +2076,7 @@ def configure_sriov(
             show_hints,
         )
     if manifest_path:
-        run_plan([AddManifestStep(client, manifest_path)], console, show_hints)
+        run_plan([AddManifestStep(deployment, manifest_path)], console, show_hints)
 
     plan: list[BaseStep] = [
         MaasConfigSRIOVStep(

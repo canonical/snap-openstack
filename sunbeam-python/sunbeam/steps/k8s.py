@@ -1382,7 +1382,7 @@ class _PerHostK8SResourceStep(BaseStep):
 
 
 class EnsureCiliumDeviceByHostStep(_PerHostK8SResourceStep):
-    """Ensure each control node has a CiliumNodeConfig for its internal-space device."""
+    """Ensure each control node has Cilium device config for its Sunbeam networks."""
 
     _CILIUM_NAMESPACE = "kube-system"
     _RESTART_TIMEOUT = 300
@@ -1413,6 +1413,7 @@ class EnsureCiliumDeviceByHostStep(_PerHostK8SResourceStep):
             fqdn=fqdn,
         )
         self._reconcile_existing = reconcile_existing
+        self._kube_proxy_replacement: bool | None = None
         self.cilium_node_config_resource = (
             K8SHelper.get_lightkube_cilium_node_config_resource()
         )
@@ -1490,6 +1491,7 @@ class EnsureCiliumDeviceByHostStep(_PerHostK8SResourceStep):
 
     def run(self, context: StepContext) -> Result:
         """Recalculate and apply Cilium changes under the k8s plan lock."""
+        self._kube_proxy_replacement = None
         try:
             self._acquire_reconciliation_lock()
         except (
@@ -1522,6 +1524,53 @@ class EnsureCiliumDeviceByHostStep(_PerHostK8SResourceStep):
             "app.kubernetes.io/managed-by": self.deployment.name,
             HOSTNAME_LABEL: hostname,
         }
+
+    def _cilium_defaults(self, node: dict) -> dict[str, str]:
+        """Select explicit service-facing devices for the active datapath.
+
+        Kubernetes 1.36 uses Cilium's kube-proxy replacement. Restricting BPF
+        to the internal interface would leave VIPs on other API networks
+        unreachable. Include only interfaces in Sunbeam's API/management
+        spaces, preserving the exclusion of OVS/physnet uplinks. Keep direct
+        routing on the internal interface even when multiple devices match.
+
+        Read the running configuration rather than infer capabilities from
+        the charm track: same-track risk changes may change the datapath too.
+        """
+        internal = self._get_interface(node)
+        if self._kube_proxy_replacement is None:
+            config = self.kube.get(
+                core_v1.ConfigMap, "cilium-config", namespace=self._CILIUM_NAMESPACE
+            )
+            self._kube_proxy_replacement = (config.data or {}).get(
+                "kube-proxy-replacement", "false"
+            ) in ("true", "strict")
+        if not self._kube_proxy_replacement:
+            return {"devices": internal}
+
+        service_spaces = {
+            self.deployment.get_space(network)
+            for network in (
+                Networks.INTERNAL,
+                Networks.MANAGEMENT,
+                Networks.PUBLIC,
+            )
+        }
+        try:
+            service_spaces.add(self.deployment.get_space(Networks.STORAGE))
+        except ValueError:
+            # A deployment consisting of region controllers need not have storage.
+            LOG.debug("No storage space configured for Cilium devices")
+        interfaces = self.jhelper.get_machine_interfaces(
+            self.model, str(node["machineid"])
+        )
+        devices = {internal}
+        devices.update(
+            name
+            for name, interface in interfaces.items()
+            if interface.space and service_spaces.intersection(interface.space.split())
+        )
+        return {"devices": ",".join(sorted(devices)), "direct-routing-device": internal}
 
     def _get_outdated_resources(
         self, nodes: list[dict], kube: "l_client.Client"
@@ -1568,24 +1617,27 @@ class EnsureCiliumDeviceByHostStep(_PerHostK8SResourceStep):
                 )
                 continue
 
-            # Validate device
+            # Validate device selection and the direct-routing interface.
             defaults = config.spec.get("defaults", {})
-            interface = None
+            expected_defaults = None
             for node in nodes:
                 if node["name"] == hostname:
-                    interface = self._get_interface(node)
-            if not interface:
+                    expected_defaults = self._cilium_defaults(node)
+            if not expected_defaults:
                 LOG.debug(
                     "CiliumNodeConfig %s: no interface for node",
                     config.metadata.name,
                 )
                 continue
-            if defaults.get("devices") != interface:
+            if any(
+                defaults.get(key) != expected_defaults.get(key)
+                for key in ("devices", "direct-routing-device")
+            ):
                 LOG.debug(
-                    "CiliumNodeConfig %s has wrong device (got %s, want %s)",
+                    "CiliumNodeConfig %s has wrong defaults (got %s, want %s)",
                     config.metadata.name,
-                    defaults.get("devices"),
-                    interface,
+                    defaults,
+                    expected_defaults,
                 )
                 continue
 
@@ -1710,8 +1762,12 @@ class EnsureCiliumDeviceByHostStep(_PerHostK8SResourceStep):
         for node in self.to_update:
             name = node["name"]
             try:
-                interface = self._get_interface(node)
-            except MachineNotFoundException:
+                defaults = self._cilium_defaults(node)
+            except (
+                MachineNotFoundException,
+                self._InterfaceError,
+                l_exceptions.ApiError,
+            ) as e:
                 LOG.debug(
                     "Failed to get machine for CiliumNodeConfig on %s",
                     name,
@@ -1719,7 +1775,7 @@ class EnsureCiliumDeviceByHostStep(_PerHostK8SResourceStep):
                 )
                 return Result(
                     ResultType.FAILED,
-                    f"Machine not found for node {name}",
+                    f"Failed to determine Cilium device configuration for {name}: {e}",
                 )
 
             try:
@@ -1738,9 +1794,7 @@ class EnsureCiliumDeviceByHostStep(_PerHostK8SResourceStep):
                                     HOSTNAME_LABEL: name,
                                 },
                             },
-                            "defaults": {
-                                "devices": interface,
-                            },
+                            "defaults": defaults,
                         },
                     ),
                     field_manager=self.deployment.name,
