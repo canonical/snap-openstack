@@ -7,6 +7,7 @@ import json
 from unittest.mock import MagicMock, patch
 
 import pytest
+from click.testing import CliRunner
 from snaphelpers import UnknownConfigKey
 
 from sunbeam.clusterd.service import ConfigItemNotFoundException
@@ -659,8 +660,8 @@ class TestFeatureGatedChoice:
         assert "experimental" not in choice_type.choices
         assert "control" in choice_type.choices
 
-    def test_get_metavar_shows_all_choices(self):
-        """Test get_metavar shows all choices including gated ones."""
+    def test_cli_help_and_missing_choice(self):
+        """Show gated choices in help and explain missing required choices."""
         import click
 
         with patch("sunbeam.feature_gates.is_feature_gate_enabled", return_value=False):
@@ -669,15 +670,21 @@ class TestFeatureGatedChoice:
                 gated_choices={"feature.multi-region": ["region_controller"]},
             )
 
-        param = MagicMock(spec=click.Parameter)
-        metavar = choice_type.get_metavar(param)
+        @click.command()
+        @click.option("--role", type=choice_type, required=True)
+        def command(role):
+            pass
 
-        # Should show all choices
-        assert "control" in metavar
-        assert "compute" in metavar
-        assert "region_controller" in metavar
-        # Should indicate which are gated
-        assert "feature.multi-region" in metavar
+        runner = CliRunner()
+        help_result = runner.invoke(command, ["--help"])
+        assert help_result.exit_code == 0, help_result.exception
+        assert "[control|compute|region_controller]" in help_result.output
+        assert "requires feature.multi-region" in help_result.output
+
+        missing_result = runner.invoke(command, [])
+        assert missing_result.exit_code == 2, missing_result.exception
+        assert "Missing option '--role'" in missing_result.output
+        assert "Available choices: control, compute" in missing_result.output
 
     def test_choice_validation_accepts_enabled_choice(self):
         """Test that validation accepts a choice that is enabled."""
