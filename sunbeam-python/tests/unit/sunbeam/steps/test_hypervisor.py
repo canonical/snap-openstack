@@ -626,7 +626,10 @@ class TestReapplyHypervisorTerraformPlanStep:
             "not found"
         )
 
-        result = reapply_hypervisor_step.run(step_context)
+        with patch(
+            "sunbeam.steps.hypervisor.get_vault_kv_offer_url", return_value=None
+        ):
+            result = reapply_hypervisor_step.run(step_context)
 
         basic_tfhelper.update_tfvars_and_apply_tf.assert_called_once()
         basic_jhelper.wait_until_desired_status.assert_called_once()
@@ -683,11 +686,18 @@ class TestReapplyHypervisorTerraformPlanStep:
         basic_jhelper.get_model_owner.return_value = "test-owner"
         basic_jhelper.get_model_uuid.return_value = "test-uuid"
 
-        result = step.run(step_context)
+        with patch(
+            "sunbeam.steps.hypervisor.get_vault_kv_offer_url", return_value=None
+        ):
+            result = step.run(step_context)
 
         basic_tfhelper.update_tfvars_and_apply_tf.assert_called_once()
 
-        expected_override_tfvars: dict = {"charm_config": {}}
+        expected_override_tfvars: dict = {
+            "charm_config": {},
+            "vault-kv-offer-url": None,
+            "vault-kv-offering-controller": None,
+        }
         expected_override_tfvars["charm_config"].update(network_config_tfvars)
         expected_override_tfvars["charm_config"].update(pci_config_tfvars)
         expected_override_tfvars["charm_config"].update(dpdk_config_tfvars)
@@ -702,6 +712,35 @@ class TestReapplyHypervisorTerraformPlanStep:
         assert override_tfvars_from_mock_call == expected_override_tfvars
         assert result.result_type == ResultType.COMPLETED
 
+    def test_run_uses_confirmed_offer_instead_of_saved_candidate(
+        self, reapply_hypervisor_step, basic_tfhelper, step_context
+    ):
+        with patch(
+            "sunbeam.steps.hypervisor.get_vault_kv_offer_url",
+            return_value="confirmed.vault-kv",
+        ):
+            reapply_hypervisor_step.run(step_context)
+
+        override = basic_tfhelper.update_tfvars_and_apply_tf.call_args.kwargs[
+            "override_tfvars"
+        ]
+        assert override["vault-kv-offer-url"] == "confirmed.vault-kv"
+        assert override["vault-kv-offering-controller"] is None
+
+    def test_run_uses_remote_controller_from_confirmed_offer(
+        self, reapply_hypervisor_step, basic_tfhelper, step_context
+    ):
+        with patch(
+            "sunbeam.steps.hypervisor.get_vault_kv_offer_url",
+            return_value="vault-controller:admin/vault.vault-kv",
+        ):
+            reapply_hypervisor_step.run(step_context)
+
+        override = basic_tfhelper.update_tfvars_and_apply_tf.call_args.kwargs[
+            "override_tfvars"
+        ]
+        assert override["vault-kv-offering-controller"] == "vault-controller"
+
     def test_run_tf_apply_failed(
         self, reapply_hypervisor_step, basic_tfhelper, step_context
     ):
@@ -709,7 +748,10 @@ class TestReapplyHypervisorTerraformPlanStep:
             "apply failed..."
         )
 
-        result = reapply_hypervisor_step.run(step_context)
+        with patch(
+            "sunbeam.steps.hypervisor.get_vault_kv_offer_url", return_value=None
+        ):
+            result = reapply_hypervisor_step.run(step_context)
 
         basic_tfhelper.update_tfvars_and_apply_tf.assert_called_once()
         assert result.result_type == ResultType.FAILED
@@ -720,7 +762,10 @@ class TestReapplyHypervisorTerraformPlanStep:
     ):
         basic_jhelper.wait_until_desired_status.side_effect = TimeoutError("timed out")
 
-        result = reapply_hypervisor_step.run(step_context)
+        with patch(
+            "sunbeam.steps.hypervisor.get_vault_kv_offer_url", return_value=None
+        ):
+            result = reapply_hypervisor_step.run(step_context)
 
         basic_jhelper.wait_until_desired_status.assert_called_once()
         assert result.result_type == ResultType.FAILED
