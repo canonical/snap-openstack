@@ -32,6 +32,7 @@ from sunbeam.core.juju import (
 from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.core.terraform import TerraformInitStep
 from sunbeam.steps.juju import RemoveSaasApplicationsStep
+from sunbeam.steps.openstack import ValidateInfraAppsStep
 from sunbeam.steps.sso import (
     APPLICATION_REMOVE_TIMEOUT,
     SSO_CONFIG_KEY,
@@ -192,6 +193,20 @@ def add_sso(
         charm_config,
     )
 
+    if provider_type != "canonical":
+        # External providers reapply the whole openstack plan: make sure
+        # that apply would not change an INFRA_APP.  Canonical providers
+        # are SAAS-only and do not touch the plan.
+        tfhelper = deployment.get_tfhelper("openstack-plan")
+        run_plan(
+            [
+                TerraformInitStep(tfhelper),
+                ValidateInfraAppsStep(client, tfhelper),
+            ],
+            console,
+            show_hints,
+        )
+
     plan = [
         TerraformInitStep(deployment.get_tfhelper("openstack-plan")),
         step,
@@ -270,6 +285,19 @@ def remove_sso(
             )
         )
 
+    if prov_type != "canonical":
+        # Removing an external provider reapplies the whole openstack
+        # plan: make sure that apply would not change an INFRA_APP.
+        tfhelper = deployment.get_tfhelper("openstack-plan")
+        run_plan(
+            [
+                TerraformInitStep(tfhelper),
+                ValidateInfraAppsStep(client, tfhelper),
+            ],
+            console,
+            show_hints,
+        )
+
     run_plan(plan, console, show_hints)
     if prov_type == "canonical":
         del cfg[name]
@@ -328,6 +356,21 @@ def update_sso(
 
     jhelper = JujuHelper(deployment.juju_controller)
 
+    provider_type = cfg[protocol][name].get("provider_type")
+    if provider_type != "canonical":
+        # Updating an external provider reapplies the whole openstack
+        # plan: make sure that apply would not change an INFRA_APP.
+        # Canonical providers are SAAS-only: UpdateExternalProviderStep
+        # skips them without touching the plan.
+        tfhelper = deployment.get_tfhelper("openstack-plan")
+        run_plan(
+            [
+                TerraformInitStep(tfhelper),
+                ValidateInfraAppsStep(client, tfhelper),
+            ],
+            console,
+            show_hints,
+        )
     plan = [
         TerraformInitStep(deployment.get_tfhelper("openstack-plan")),
         UpdateExternalProviderStep(
@@ -436,6 +479,18 @@ def purge_sso(
                 wait_timeout=APPLICATION_REMOVE_TIMEOUT,
             ),
         )
+    if any(isinstance(step, RemoveExternalProviderStep) for step in remove_idp_plan):
+        # Removing an external provider reapplies the whole openstack
+        # plan: make sure that apply would not change an INFRA_APP.
+        tfhelper = deployment.get_tfhelper("openstack-plan")
+        run_plan(
+            [
+                TerraformInitStep(tfhelper),
+                ValidateInfraAppsStep(client, tfhelper),
+            ],
+            console,
+            show_hints,
+        )
     run_plan(remove_idp_plan, console, show_hints)
     update_config(client, SSO_CONFIG_KEY, {})
 
@@ -464,6 +519,16 @@ def set_saml_x509(
 
     jhelper = JujuHelper(deployment.juju_controller)
 
+    # Setting the SAML certificate reapplies the whole openstack plan:
+    # make sure that apply would not change an INFRA_APP.
+    run_plan(
+        [
+            TerraformInitStep(tfhelper),
+            ValidateInfraAppsStep(client, tfhelper),
+        ],
+        console,
+        show_hints,
+    )
     run_plan(
         [
             TerraformInitStep(deployment.get_tfhelper("openstack-plan")),

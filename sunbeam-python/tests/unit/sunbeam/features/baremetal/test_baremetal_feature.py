@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-from unittest.mock import ANY, Mock, call, patch
+from unittest.mock import ANY, MagicMock, Mock, call, patch
 
+import click
 import pytest
 
 from sunbeam.core.openstack import OPENSTACK_MODEL
@@ -92,6 +93,17 @@ class TestBaremetalFeature:
         ironic = ironic_feature.BaremetalFeature()
         ironic._manifest = Mock()
         ironic._manifest.core.software.charms = {}
+
+        # The INFRA_APPS gate plans against the openstack tfhelper
+        deployment.get_tfhelper.side_effect = lambda plan: (
+            Mock(
+                plan=plan,
+                tfvar_map={"charms": {}},
+                plan_resource_changes=Mock(return_value={}),
+            )
+            if plan == "openstack-plan"
+            else deployment.get_tfhelper.return_value
+        )
 
         # set existing secrets.
         client = deployment.get_client.return_value
@@ -266,3 +278,82 @@ class TestBaremetalFeature:
             constants.NEUTRON_GENERIC_SWITCH_CONF_SECRETS_TFVAR: "",
         }
         assert extra_tfvars == expected_tfvars
+
+
+class TestStandaloneCommandsInfraGate:
+    """Standalone baremetal commands run the INFRA_APPS gate.
+
+    Commands that reapply the openstack plan are gated before persisting
+    or applying anything.
+    """
+
+    @pytest.fixture()
+    def deployment(self):
+        deploy = MagicMock()
+        deploy.get_manifest.return_value = MagicMock()
+        yield deploy
+
+    @staticmethod
+    def _invoke(ironic, command, deployment, **params):
+        """Invoke a feature command method with a click context."""
+        with click.Context(command, obj=deployment):
+            command.callback(ironic, **params)
+
+    @patch.object(ironic_feature, "run_plan")
+    @patch.object(steps, "JujuHelper")
+    @patch.object(ironic_feature, "JujuHelper")
+    @patch.object(ironic_feature, "run_preflight_checks")
+    @patch.object(ironic_feature.feature_config._SwitchConfigs, "read_switch_config")
+    @patch.object(ironic_feature.OpenStackControlPlaneFeature, "validate_infra_apps")
+    def test_apply_commands_are_gated(
+        self,
+        mock_validate,
+        mock_read_switch_config,
+        mock_run_preflight_checks,
+        mock_feature_jhelper,
+        mock_steps_jhelper,
+        mock_run_plan,
+        deployment,
+    ):
+        switch_configs = MagicMock()
+        switch_configs.netconf = {"foo": MagicMock()}
+        switch_configs.generic = {}
+        mock_read_switch_config.return_value = switch_configs
+
+        ironic = ironic_feature.BaremetalFeature()
+
+        gated_commands = [
+            (ironic.compute_shard_add, {"shard": "foo"}),
+            (ironic.compute_shard_delete, {"shard": "foo"}),
+            (ironic.conductor_group_add, {"group_name": "foo"}),
+            (ironic.conductor_group_delete, {"group_name": "foo"}),
+            (
+                ironic.switch_config_add,
+                {
+                    "protocol": "netconf",
+                    "name": "foo",
+                    "config": MagicMock(),
+                    "additional_files": [],
+                },
+            ),
+            (ironic.switch_config_delete, {"name": "foo"}),
+        ]
+        for command, params in gated_commands:
+            self._invoke(ironic, command, deployment, show_hints=False, **params)
+
+        assert mock_validate.call_count == len(gated_commands)
+        for validate_args in mock_validate.call_args_list:
+            assert validate_args.args[0] is deployment
+
+        # The juju-secret-only command is not gated.
+        self._invoke(
+            ironic,
+            ironic.switch_config_update,
+            deployment,
+            show_hints=False,
+            protocol="netconf",
+            name="foo",
+            config=MagicMock(),
+            additional_files=[],
+        )
+        assert mock_validate.call_count == len(gated_commands)

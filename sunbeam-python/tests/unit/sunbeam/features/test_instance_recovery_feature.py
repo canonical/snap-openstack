@@ -7,6 +7,7 @@ import pytest
 
 from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.features.instance_recovery.feature import InstanceRecoveryFeature
+from sunbeam.steps.openstack import ValidateInfraAppsStep
 
 
 @pytest.fixture
@@ -73,7 +74,12 @@ def test_disable_purges_consul_and_masakari_saas_apps(
 
     expected_saas_apps = consul_apps + expected_extra_masakari_apps
 
-    assert mock_run_plan.call_count == 1
+    # The INFRA_APPS gate runs as its own plan before the teardown plan.
+    assert mock_run_plan.call_count == 2
+    first_plan = mock_run_plan.call_args_list[0].args[0]
+    assert any(isinstance(step, ValidateInfraAppsStep) for step in first_plan), (
+        "the INFRA_APPS gate must run before the teardown plan"
+    )
 
     mock_remove_saas.assert_called_once()
     assert (

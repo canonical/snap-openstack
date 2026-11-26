@@ -18,7 +18,7 @@ from sunbeam.steps.microceph import (
     DeployMicrocephApplicationStep,
     SetCephMgrPoolSizeStep,
 )
-from sunbeam.steps.openstack import DeployControlPlaneStep
+from sunbeam.steps.openstack import DeployControlPlaneStep, ValidateInfraAppsStep
 from sunbeam.utils import click_option_show_hints
 
 LOG = logging.getLogger(__name__)
@@ -52,6 +52,17 @@ def resize(
     openstack_tfhelper = deployment.get_tfhelper("openstack-plan")
     microceph_tfhelper = deployment.get_tfhelper("microceph-plan")
     cinder_volume_tfhelper = deployment.get_tfhelper("cinder-volume-plan")
+
+    # This command must not upgrade INFRA_APPS: refuse to resize with a
+    # manifest that would drift them before anything is redeployed.
+    run_plan(
+        [
+            TerraformInitStep(openstack_tfhelper),
+            ValidateInfraAppsStep(client, openstack_tfhelper, manifest),
+        ],
+        console,
+        show_hints,
+    )
 
     storage_nodes = client.cluster.list_nodes_by_role("storage")
 

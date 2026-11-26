@@ -107,6 +107,12 @@ class TestTelemetryFeatureDeduplication:
         # Create feature and run enable plans
         feature = telemetry_feature.TelemetryFeature()
         feature._manifest = Mock()
+        # The INFRA_APPS gate plans against the openstack tfhelper
+        deployment.get_tfhelper.side_effect = lambda plan: (
+            Mock(plan_resource_changes=Mock(return_value={}))
+            if plan == "openstack-plan"
+            else Mock()
+        )
         feature.run_enable_plans(deployment, Mock(), False)
 
         # Verify DeploySpecificCinderVolumeStep was called only twice
@@ -236,11 +242,17 @@ class TestTelemetryFeatureDeduplication:
         # Create feature and run enable plans
         feature = telemetry_feature.TelemetryFeature()
         feature._manifest = Mock()
+        # The INFRA_APPS gate plans against the openstack tfhelper
+        deployment.get_tfhelper.side_effect = lambda plan: (
+            Mock(plan_resource_changes=Mock(return_value={}))
+            if plan == "openstack-plan"
+            else Mock()
+        )
         feature.run_enable_plans(deployment, Mock(), False)
 
         # Verify run_plan was called for plan1 and plan2, but not plan3
         # (plan3 is for storage backends which we don't have)
-        assert mock_run_plan.call_count == 2
+        assert mock_run_plan.call_count == 3
 
     @patch("sunbeam.features.telemetry.feature.JujuHelper")
     @patch("sunbeam.features.telemetry.feature.StorageBackendManager")
@@ -286,6 +298,12 @@ class TestTelemetryFeatureDeduplication:
         # Create feature and run enable plans
         feature = telemetry_feature.TelemetryFeature()
         feature._manifest = Mock()
+        # The INFRA_APPS gate plans against the openstack tfhelper
+        deployment.get_tfhelper.side_effect = lambda plan: (
+            Mock(plan_resource_changes=Mock(return_value={}))
+            if plan == "openstack-plan"
+            else Mock()
+        )
         feature.run_enable_plans(deployment, Mock(), False)
 
         # Verify all DeploySpecificCinderVolumeStep calls have correct extra_tfvars

@@ -3,6 +3,7 @@
 
 from unittest.mock import MagicMock
 
+import click
 import pytest
 import yaml
 from click.testing import CliRunner
@@ -10,6 +11,10 @@ from click.testing import CliRunner
 from sunbeam.clusterd.service import ManifestItemNotFoundException
 from sunbeam.commands.refresh import _stored_manifest_risk, refresh
 from sunbeam.core.common import RiskLevel
+from sunbeam.core.manifest import AddManifestStep
+from sunbeam.steps.ingress import ReapplyIngressTerraformPlanStep
+from sunbeam.steps.openstack import ValidateInfraAppsStep
+from sunbeam.steps.vault import VaultCharmUpgradeStep
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -430,3 +435,146 @@ class TestRefreshWarning:
 
         assert result.exit_code != 0
         assert "mutually exclusive" in result.output.lower()
+
+
+# ---------------------------------------------------------------------------
+# Manifest store ordering: validation must accept a manifest before it is
+# stored as the cluster's latest manifest.
+# ---------------------------------------------------------------------------
+
+
+class TestRefreshManifestStoreOrdering:
+    """Tests for when the user manifest is stored during refresh flows."""
+
+    def _invoke(self, args, deployment):
+        runner = CliRunner()
+        return runner.invoke(refresh, args, obj=deployment)
+
+    def _calls(self, mock_run_plan):
+        """Return the step lists of every run_plan call, in order."""
+        return [call.args[0] for call in mock_run_plan.call_args_list if call.args]
+
+    def _first_call_with(self, calls, *step_classes):
+        for i, steps in enumerate(calls):
+            if any(isinstance(step, step_classes) for step in steps):
+                return i
+        raise AssertionError(f"No run_plan call with {step_classes}")
+
+    def test_manifest_stored_after_infra_apps_gate(self, mocker, tmp_path):
+        """Generic refresh: the gate validates the manifest before storing."""
+        client = _build_client("stable")
+        deployment = _build_deployment(client)
+        mock_run_plan = mocker.patch("sunbeam.commands.refresh.run_plan")
+        manifest_file = tmp_path / "manifest.yaml"
+        manifest_file.write_text(_make_manifest_data("stable"))
+
+        result = self._invoke(["-m", str(manifest_file)], deployment)
+
+        assert result.exit_code == 0
+        calls = self._calls(mock_run_plan)
+        gate_idx = self._first_call_with(calls, ValidateInfraAppsStep)
+        store_idx = self._first_call_with(calls, AddManifestStep)
+        assert gate_idx < store_idx, "gate must run before the manifest is stored"
+
+    def test_upgrade_release_stores_manifest_without_gate(self, mocker, tmp_path):
+        """Release upgrades are exempt from the gate and store upfront."""
+        client = _build_client("stable")
+        deployment = _build_deployment(client)
+        mock_run_plan = mocker.patch("sunbeam.commands.refresh.run_plan")
+        manifest_file = tmp_path / "manifest.yaml"
+        manifest_file.write_text(_make_manifest_data("stable"))
+
+        result = self._invoke(
+            ["--upgrade-release", "-m", str(manifest_file)], deployment
+        )
+
+        assert result.exit_code == 0
+        calls = self._calls(mock_run_plan)
+        assert not any(
+            isinstance(step, ValidateInfraAppsStep) for steps in calls for step in steps
+        ), "release upgrade must not run the INFRA_APPS gate"
+        store_idx = self._first_call_with(calls, AddManifestStep)
+        assert store_idx == 0, "manifest is stored upfront on release upgrades"
+
+    def test_vault_stores_manifest_after_refresh(self, mocker, tmp_path):
+        """Vault refresh: the manifest is stored only after the refresh."""
+        client = _build_client("stable")
+        deployment = _build_deployment(client)
+        mock_run_plan = mocker.patch("sunbeam.commands.refresh.run_plan")
+        manifest_file = tmp_path / "manifest.yaml"
+        manifest_file.write_text(_make_manifest_data("stable"))
+
+        result = self._invoke(["vault", "-m", str(manifest_file)], deployment)
+
+        assert result.exit_code == 0
+        calls = self._calls(mock_run_plan)
+        refresh_idx = self._first_call_with(calls, VaultCharmUpgradeStep)
+        store_idx = self._first_call_with(calls, AddManifestStep)
+        assert refresh_idx < store_idx
+
+    def test_ingress_stores_manifest_after_refresh(self, mocker, tmp_path):
+        """Ingress refresh: the manifest is stored only after the refresh."""
+        client = _build_client("stable")
+        deployment = _build_deployment(client)
+        mock_run_plan = mocker.patch("sunbeam.commands.refresh.run_plan")
+        manifest_file = tmp_path / "manifest.yaml"
+        manifest_file.write_text(_make_manifest_data("stable"))
+
+        result = self._invoke(["ingress", "-m", str(manifest_file)], deployment)
+
+        assert result.exit_code == 0
+        calls = self._calls(mock_run_plan)
+        refresh_idx = self._first_call_with(calls, ReapplyIngressTerraformPlanStep)
+        store_idx = self._first_call_with(calls, AddManifestStep)
+        assert refresh_idx < store_idx
+
+    def test_mysql_stores_manifest_after_refresh(self, mocker, tmp_path):
+        """MySQL refresh: the manifest is stored only after the refresh."""
+        client = _build_client("stable")
+        deployment = _build_deployment(client)
+        order: list[str] = []
+        mock_run_plan = mocker.patch("sunbeam.commands.refresh.run_plan")
+        mock_run_plan.side_effect = lambda steps, *a, **k: (
+            order.append("store")
+            if any(isinstance(step, AddManifestStep) for step in steps)
+            else None
+        )
+        coordinator = mocker.patch(
+            "sunbeam.commands.refresh.MySQLInChannelUpgradeCoordinator",
+            autospec=True,
+        )
+        coordinator.return_value.run_plan.side_effect = lambda *a, **k: order.append(
+            "refresh"
+        )
+        manifest_file = tmp_path / "manifest.yaml"
+        manifest_file.write_text(_make_manifest_data("stable"))
+
+        result = self._invoke(["mysql", "-m", str(manifest_file)], deployment)
+
+        assert result.exit_code == 0, result.output
+        assert order == ["refresh", "store"]
+
+    def test_mysql_failure_does_not_store_manifest(self, mocker, tmp_path):
+        """A rejected mysql refresh must not store the user manifest."""
+        client = _build_client("stable")
+        deployment = _build_deployment(client)
+        mock_run_plan = mocker.patch("sunbeam.commands.refresh.run_plan")
+        coordinator = mocker.patch(
+            "sunbeam.commands.refresh.MySQLInChannelUpgradeCoordinator",
+            autospec=True,
+        )
+        coordinator.return_value.run_plan.side_effect = click.ClickException(
+            "Manifest has track values that require upgrades"
+        )
+        manifest_file = tmp_path / "manifest.yaml"
+        manifest_file.write_text(_make_manifest_data("stable"))
+
+        result = self._invoke(["mysql", "-m", str(manifest_file)], deployment)
+
+        assert result.exit_code != 0
+        assert not any(
+            isinstance(step, AddManifestStep)
+            for call in mock_run_plan.call_args_list
+            if call.args
+            for step in call.args[0]
+        )

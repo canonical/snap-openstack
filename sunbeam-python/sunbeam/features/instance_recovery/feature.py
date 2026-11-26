@@ -31,6 +31,7 @@ from sunbeam.provider.maas.deployment import is_maas_deployment
 from sunbeam.provider.maas.steps import MaasCreateLoadBalancerIPPoolsStep
 from sunbeam.steps.hypervisor import ReapplyHypervisorTerraformPlanStep
 from sunbeam.steps.juju import RemoveSaasApplicationsStep
+from sunbeam.steps.openstack import ValidateInfraAppsStep
 from sunbeam.utils import click_option_show_hints, pass_method_obj
 from sunbeam.versions import CONSUL_CHANNEL, OPENSTACK_CHANNEL
 
@@ -110,6 +111,24 @@ class InstanceRecoveryFeature(OpenStackControlPlaneFeature):
         tfhelper_hypervisor = deployment.get_tfhelper("hypervisor-plan")
         tfhelper_consul_client = deployment.get_tfhelper(self.tf_plan_consul_client)
         jhelper = JujuHelper(deployment.juju_controller)
+
+        # This feature reapplys the openstack plan: make sure that apply
+        # would not change an INFRA_APP (mysql, vault, traefik), and only
+        # then store the user manifest in the database.
+        run_plan(
+            [
+                TerraformInitStep(tfhelper),
+                ValidateInfraAppsStep(
+                    deployment.get_client(),
+                    tfhelper,
+                    self.manifest,
+                    skip_charms=self._own_infra_charms,
+                ),
+            ],
+            console,
+            show_hints,
+        )
+
         plan1: list[BaseStep] = []
         if self.user_manifest:
             plan1.append(AddManifestStep(deployment.get_client(), self.user_manifest))
@@ -190,6 +209,25 @@ class InstanceRecoveryFeature(OpenStackControlPlaneFeature):
         tfhelper_consul_client = deployment.get_tfhelper(self.tf_plan_consul_client)
         jhelper = JujuHelper(deployment.juju_controller)
         extra_tfvars = {"masakari-offer-url": None}
+
+        # This feature reapplys the openstack plan when disabling the
+        # Masakari application: validate INFRA_APPS before the teardown
+        # steps (hypervisor reapply, SAAS removal, consul removal) so a
+        # drift manifest cannot leave the feature half-disabled.
+        run_plan(
+            [
+                TerraformInitStep(tfhelper),
+                ValidateInfraAppsStep(
+                    deployment.get_client(),
+                    tfhelper,
+                    self.manifest,
+                    skip_charms=self._own_infra_charms,
+                ),
+            ],
+            console,
+            show_hints,
+        )
+
         plan = [
             TerraformInitStep(tfhelper_hypervisor),
             ReapplyHypervisorTerraformPlanStep(

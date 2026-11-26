@@ -25,6 +25,7 @@ from sunbeam.features.interface.v1.openstack import (
 )
 from sunbeam.steps.hypervisor import ReapplyHypervisorTerraformPlanStep
 from sunbeam.steps.juju import RemoveSaasApplicationsStep
+from sunbeam.steps.openstack import ValidateInfraAppsStep
 from sunbeam.utils import click_option_show_hints, pass_method_obj
 from sunbeam.versions import OPENSTACK_CHANNEL
 
@@ -106,6 +107,23 @@ class SecretsFeature(OpenStackControlPlaneFeature):
         tfhelper_openstack = deployment.get_tfhelper("openstack-plan")
         tfhelper_hypervisor = deployment.get_tfhelper("hypervisor-plan")
         jhelper = JujuHelper(deployment.juju_controller)
+        # This feature reapplys the openstack plan: make sure that apply
+        # would not change an INFRA_APP (mysql, vault, traefik), and only
+        # then store the user manifest in the database.
+        run_plan(
+            [
+                TerraformInitStep(tfhelper),
+                ValidateInfraAppsStep(
+                    deployment.get_client(),
+                    tfhelper,
+                    self.manifest,
+                    skip_charms=self._own_infra_charms,
+                ),
+            ],
+            console,
+            show_hints,
+        )
+
         plan1: list[BaseStep] = []
         if self.user_manifest:
             plan1.append(AddManifestStep(deployment.get_client(), self.user_manifest))
@@ -147,6 +165,23 @@ class SecretsFeature(OpenStackControlPlaneFeature):
         tfhelper_hypervisor = deployment.get_tfhelper("hypervisor-plan")
         jhelper = JujuHelper(deployment.juju_controller)
         extra_tfvars = {"barbican-offer-url": None}
+
+        # This feature reapplys the openstack plan: make sure that apply
+        # would not change an INFRA_APP (mysql, vault, traefik).
+        run_plan(
+            [
+                TerraformInitStep(tfhelper),
+                ValidateInfraAppsStep(
+                    deployment.get_client(),
+                    tfhelper,
+                    self.manifest,
+                    skip_charms=self._own_infra_charms,
+                ),
+            ],
+            console,
+            show_hints,
+        )
+
         plan: list[BaseStep] = [
             TerraformInitStep(tfhelper_hypervisor),
             ReapplyHypervisorTerraformPlanStep(
