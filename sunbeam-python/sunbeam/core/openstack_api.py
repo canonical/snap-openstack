@@ -19,14 +19,20 @@ LOG = logging.getLogger(__name__)
 
 
 def get_admin_connection(
-    jhelper: JujuHelper, deployment: Deployment
+    jhelper: JujuHelper, deployment: Deployment, *, region_name: str | None = None
 ) -> "openstack.connection.Connection":
     """Return a connection to keystone using admin credentials.
 
     :param jhelper: Juju helpers for retrieving admin credentials
+    :param region_name: Region to select from the service catalog
     :raises: openstack.exceptions.SDKException
     """
     admin_auth_info = retrieve_admin_credentials(jhelper, deployment, OPENSTACK_MODEL)
+    options: dict[str, typing.Any] = {}
+    if cacert := admin_auth_info.get("OS_CACERT"):
+        options["cacert"] = cacert
+    if region_name is not None:
+        options["region_name"] = region_name
     conn = openstack.connect(
         auth_url=admin_auth_info.get("OS_AUTH_URL"),
         username=admin_auth_info.get("OS_USERNAME"),
@@ -34,6 +40,7 @@ def get_admin_connection(
         project_name=admin_auth_info.get("OS_PROJECT_NAME"),
         user_domain_name=admin_auth_info.get("OS_USER_DOMAIN_NAME"),
         project_domain_name=admin_auth_info.get("OS_PROJECT_DOMAIN_NAME"),
+        **options,
     )
     return conn
 

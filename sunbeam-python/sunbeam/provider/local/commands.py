@@ -83,6 +83,7 @@ from sunbeam.feature_gates import (
     feature_gate_command,
     feature_gate_option,
 )
+from sunbeam.features.dynamic_routing.feature import DynamicRoutingFeature
 from sunbeam.provider.base import ProviderBase
 from sunbeam.provider.common.multiregion import connect_to_region_controller
 from sunbeam.provider.local.deployment import LOCAL_TYPE, LocalDeployment
@@ -2021,7 +2022,8 @@ def remove(ctx: click.Context, name: str, force: bool, show_hints: bool) -> None
             ]
         )
 
-    run_plan(plan, console, show_hints)
+    with DynamicRoutingFeature().node_removal_guard(client, name):
+        run_plan(plan, console, show_hints)
     click.echo(f"Removed node {name} from the cluster")
     # Removing machine does not clean up all deployed juju components. This is
     # deliberate, see https://bugs.launchpad.net/juju/+bug/1851489.

@@ -67,6 +67,23 @@ resource "juju_application" "openstack-network-agents-arm64" {
   endpoint_bindings = var.openstack_network_agents_endpoint_bindings
 }
 
+resource "juju_integration" "amqp" {
+  # Sunbeam resolves the installed applications before configuring NDR.
+  # Keep this relation independent so a targeted apply preserves local charms.
+  for_each = var.ndr_rabbitmq_offer_url == null ? toset([]) : toset(var.ndr_applications)
+
+  model_uuid = data.juju_model.machine_model.uuid
+
+  application {
+    name     = each.key
+    endpoint = "amqp"
+  }
+
+  application {
+    offer_url = var.ndr_rabbitmq_offer_url
+  }
+}
+
 resource "juju_application" "microcluster-token-distributor" {
   name       = "microcluster-token-distributor"
   model_uuid = data.juju_model.machine_model.uuid
