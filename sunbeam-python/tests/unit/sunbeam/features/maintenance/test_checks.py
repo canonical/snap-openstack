@@ -103,7 +103,10 @@ class TestNoEphemeralDiskCheck:
             ]
         )
         mock_conn.compute.find_flavor.assert_has_calls(
-            [call(inst.flavor.get.return_value) for inst in instances]
+            [
+                call(inst.flavor.get.return_value, ignore_missing=False)
+                for inst in instances
+            ]
         )
 
     def test_run_failed(self, mocker):
@@ -135,7 +138,10 @@ class TestNoEphemeralDiskCheck:
             ]
         )
         mock_conn.compute.find_flavor.assert_has_calls(
-            [call(inst.flavor.get.return_value) for inst in instances]
+            [
+                call(inst.flavor.get.return_value, ignore_missing=False)
+                for inst in instances
+            ]
         )
 
     def test_run_force(self, mocker):
@@ -161,7 +167,10 @@ class TestNoEphemeralDiskCheck:
             ]
         )
         mock_conn.compute.find_flavor.assert_has_calls(
-            [call(inst.flavor.get.return_value) for inst in instances]
+            [
+                call(inst.flavor.get.return_value, ignore_missing=False)
+                for inst in instances
+            ]
         )
 
 

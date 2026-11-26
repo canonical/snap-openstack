@@ -126,9 +126,11 @@ def launch(
             image = conn.compute.find_image(image_name)
             if not image:
                 raise click.ClickException(f"Image '{image_name}' not found.")
-            flavor = conn.compute.find_flavor("m1.tiny")
-            network = conn.network.find_network(f"{tf_output['OS_USERNAME']}-network")
-            keypair = conn.compute.find_keypair(key)
+            flavor = conn.compute.find_flavor("m1.tiny", ignore_missing=False)
+            network = conn.network.find_network(
+                f"{tf_output['OS_USERNAME']}-network", ignore_missing=False
+            )
+            keypair = conn.compute.find_keypair(key, ignore_missing=False)
             server = conn.compute.create_server(
                 name=instance_name,
                 image_id=image.id,
@@ -146,7 +148,9 @@ def launch(
 
     with console.status("Allocating IP address to instance ... "):
         try:
-            external_network = conn.network.find_network("external-network")
+            external_network = conn.network.find_network(
+                "external-network", ignore_missing=False
+            )
             ip_ = conn.network.create_ip(floating_network_id=external_network.id)
             conn.add_ips_to_server(server, ips=[ip_.floating_ip_address])
             console.print("Access the instance by running the following command:")

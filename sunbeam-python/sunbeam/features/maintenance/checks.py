@@ -133,7 +133,9 @@ class NoEphemeralDiskCheck(Check):
             hypervisor_name=self.node,
             conn=conn,
         ):
-            flavor = conn.compute.find_flavor(inst.flavor.get("id"))
+            flavor = conn.compute.find_flavor(
+                inst.flavor.get("id"), ignore_missing=False
+            )
             if flavor.ephemeral > 0:
                 unexpected_instances.append(inst.id)
         if unexpected_instances:
