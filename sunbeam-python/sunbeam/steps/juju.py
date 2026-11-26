@@ -2101,16 +2101,17 @@ class RemoveSaasApplicationsStep(BaseStep):
             self._remote_app_to_delete,
             self.model,
         )
-        self.jhelper.remove_saas(self.model, *self._remote_app_to_delete)
-        if self._wait_timeout:
-            try:
+        try:
+            self.jhelper.remove_saas(self.model, *self._remote_app_to_delete)
+            if self._wait_timeout:
                 self.jhelper.wait_app_endpoint_gone(
                     self._remote_app_to_delete,
                     self.model,
                     timeout=self._wait_timeout,
                 )
-            except (JujuWaitException, TimeoutError) as e:
-                return Result(ResultType.FAILED, str(e))
+        except (JujuException, TimeoutError) as e:
+            LOG.debug("Failed to remove SAAS apps: %s", e)
+            return Result(ResultType.FAILED, str(e))
         return Result(ResultType.COMPLETED)
 
 
