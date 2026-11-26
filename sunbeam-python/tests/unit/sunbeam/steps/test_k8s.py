@@ -1206,6 +1206,23 @@ class TestGetKubeClient:
         )
         assert result == mock_client.return_value
 
+    @patch("sunbeam.steps.k8s.read_config")
+    def test_get_kube_client_initializes_http_transport(self, mock_read_config, client):
+        mock_read_config.return_value = {
+            "apiVersion": "v1",
+            "kind": "Config",
+            "current-context": "test",
+            "clusters": [
+                {"name": "test", "cluster": {"server": "https://localhost:6443"}}
+            ],
+            "contexts": [
+                {"name": "test", "context": {"cluster": "test", "user": "test"}}
+            ],
+            "users": [{"name": "test", "user": {}}],
+        }
+
+        assert isinstance(get_kube_client(client), lightkube.Client)
+
     @patch("sunbeam.steps.k8s.read_config", side_effect=ConfigItemNotFoundException)
     @patch(
         "sunbeam.steps.k8s.K8SHelper.get_kubeconfig_key", return_value="kubeconfig-key"
