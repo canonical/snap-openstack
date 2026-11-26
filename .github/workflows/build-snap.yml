@@ -32,17 +32,29 @@ jobs:
 
   functional-test:
     needs: build
-    name: Functional test (Kubernetes ${{ matrix.k8s-track }})
-    runs-on: [self-hosted, large, noble, x64]
+    name: Functional test (${{ matrix.os }}, Kubernetes ${{ matrix.k8s-track }})
     strategy:
       fail-fast: false
       matrix:
         include:
-          - k8s-track: "1.32"
+          - os: noble
+            charm-base: ubuntu@24.04
+            k8s-track: "1.32"
             k8s-channel: 1.32/stable
-          - k8s-track: "1.36"
+            token-distributor-channel: v1/stable
+          - os: noble
+            charm-base: ubuntu@24.04
+            k8s-track: "1.36"
             k8s-channel: 1.36/candidate
             juju-cli-channel: 3.6/edge
+            token-distributor-channel: v1/stable
+          - os: resolute
+            charm-base: ubuntu@26.04
+            k8s-track: "1.36"
+            k8s-channel: 1.36/candidate
+            juju-cli-channel: 3.6/edge
+            token-distributor-channel: v1/edge
+    runs-on: [self-hosted, large, "${{ matrix.os }}", x64]
     env:
       K8S_TRACK: ${{ matrix.k8s-track }}
       K8S_CHANNEL: ${{ matrix.k8s-channel }}
@@ -56,9 +68,19 @@ jobs:
         with:
           name: local-${{ needs.build.outputs.snap }}
       - name: test
+        env:
+          EXPECTED_OS: ${{ matrix.os }}
+          EXPECTED_CHARM_BASE: ${{ matrix.charm-base }}
+          TOKEN_DISTRIBUTOR_CHANNEL: ${{ matrix.token-distributor-channel }}
         run: |
           set -x
           export COLUMNS=256
+
+          . /etc/os-release
+          if [ "$VERSION_CODENAME" != "$EXPECTED_OS" ]; then
+            echo "Expected a $EXPECTED_OS runner, got $VERSION_CODENAME"
+            exit 1
+          fi
 
           # Check docker, containerd and remove them if exists
           sudo apt remove --purge docker.io containerd runc -y
@@ -109,6 +131,9 @@ jobs:
           software = manifest.setdefault("core", {}).setdefault("software", {})
           charms = software.setdefault("charms", {})
           charms.setdefault("k8s", {})["channel"] = os.environ["K8S_CHANNEL"]
+          charms.setdefault("microcluster-token-distributor", {})["channel"] = os.environ[
+              "TOKEN_DISTRIBUTOR_CHANNEL"
+          ]
           if agent_version := os.environ.get("JUJU_BOOTSTRAP_AGENT_VERSION"):
               juju = software.setdefault("juju", {})
               juju.setdefault("bootstrap_args", []).append(f"--agent-version={agent_version}")
@@ -116,6 +141,20 @@ jobs:
           PY
           sg snap_daemon "openstack.sunbeam cluster bootstrap --manifest k8s-manifest.yml --accept-defaults --topology single --database single"
           sg snap_daemon "openstack.sunbeam cluster list"
+
+          # Verify both a machine charm and a Kubernetes charm selected the expected base.
+          check_charm_base() {
+            local model="$1" app="$2" base
+            base=$(juju status -m "$model" --format json |
+              jq -er --arg app "$app" '.applications[$app].base | .name + "@" + .channel')
+            if [ "$base" != "$EXPECTED_CHARM_BASE" ]; then
+              echo "Expected $model/$app on $EXPECTED_CHARM_BASE, got $base"
+              return 1
+            fi
+            echo "$model/$app deployed on $base"
+          }
+          check_charm_base openstack-machines sunbeam-machine
+          check_charm_base openstack keystone
 
           # Verify bootstrap_model_configs from manifest were applied to the openstack model.
           # The edge.yml sets logging-config for the openstack model; confirm it is not the default.
@@ -230,7 +269,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: sunbeam_logs-k8s-${{ matrix.k8s-track }}
+          name: sunbeam_logs-${{ matrix.os }}-k8s-${{ matrix.k8s-track }}
           path: logs
           retention-days: 30
       - name: Setup tmate session

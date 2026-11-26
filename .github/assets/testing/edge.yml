@@ -38,12 +38,16 @@ core:
         channel: 2026.1/edge
       epa-orchestrator:
         channel: 2026.1/edge
+      k8s:
+        channel: K8S_CHARM_CHANNEL
       microceph:
         channel: tentacle/edge
         config:
           snap-channel: tentacle/edge
       microovn:
         channel: 26.03/edge
+      microcluster-token-distributor:
+        channel: TOKEN_DISTRIBUTOR_CHANNEL
       sunbeam-ovn-proxy:
         channel: 2026.1/edge
       openstack-network-agents:
