@@ -2554,6 +2554,29 @@ class TestRemoveNode:
     @patch("sunbeam.provider.maas.commands.JujuHelper")
     @patch("sunbeam.provider.maas.commands.run_preflight_checks")
     @patch("sunbeam.provider.maas.commands.run_plan")
+    @pytest.mark.parametrize("force_arg", [[], ["--force"]], ids=["normal", "force"])
+    def test_remove_requires_ndr_placement_to_be_drained(
+        self, run_plan_cmd, run_preflight, juju_helper, mock_maas_machine, force_arg
+    ):
+        deployment = Mock()
+        deployment.get_ovn_manager.return_value.get_machines.return_value = []
+        cluster = deployment.get_client.return_value.cluster
+        cluster.get_config.return_value = (
+            '{"instances": {"node-1": [{"host": "node-1.red.v4"}]}}'
+        )
+
+        result = CliRunner().invoke(remove_node, [*force_arg, "node-1"], obj=deployment)
+
+        assert result.exit_code == 1
+        assert "Drain dynamic routing placement" in result.output
+        assert run_plan_cmd.call_count == 1
+        cluster.unlock_terraform_plan.assert_called_once_with(
+            *cluster.lock_terraform_plan.call_args.args
+        )
+
+    @patch("sunbeam.provider.maas.commands.JujuHelper")
+    @patch("sunbeam.provider.maas.commands.run_preflight_checks")
+    @patch("sunbeam.provider.maas.commands.run_plan")
     @pytest.mark.parametrize(
         ("cli_args", "force"),
         [(["node-1"], False), (["--force", "node-1"], True)],
@@ -2569,6 +2592,7 @@ class TestRemoveNode:
     ):
         maas_client, get_machine = mock_maas_machine
         deployment = Mock()
+        deployment.get_client.return_value.cluster.get_config.return_value = "{}"
         deployment.openstack_machines_model = "openstack-machines"
         deployment.get_ovn_manager.return_value.get_machines.return_value = []
 
@@ -2643,6 +2667,7 @@ class TestRemoveNode:
         _, get_machine = mock_maas_machine
         get_machine.side_effect = ValueError("Machine 'node-1' not found.")
         deployment = Mock()
+        deployment.get_client.return_value.cluster.get_config.return_value = "{}"
         deployment.get_ovn_manager.return_value.get_machines.return_value = []
 
         result = CliRunner().invoke(remove_node, ["node-1"], obj=deployment)
@@ -2660,6 +2685,7 @@ class TestRemoveNode:
         _, get_machine = mock_maas_machine
         get_machine.side_effect = ValueError("Machine 'node-1' not found.")
         deployment = Mock()
+        deployment.get_client.return_value.cluster.get_config.return_value = "{}"
         deployment.openstack_machines_model = "openstack-machines"
         deployment.get_ovn_manager.return_value.get_machines.return_value = []
 
@@ -2684,6 +2710,7 @@ class TestRemoveNode:
         juju_helper,
     ):
         deployment = Mock()
+        deployment.get_client.return_value.cluster.get_config.return_value = "{}"
         deployment.openstack_machines_model = "openstack-machines"
         deployment.get_manifest.return_value = Mock()
         deployment.get_tfhelper.return_value = Mock()
@@ -2727,6 +2754,7 @@ class TestRemoveNode:
         juju_helper,
     ):
         deployment = Mock()
+        deployment.get_client.return_value.cluster.get_config.return_value = "{}"
         deployment.openstack_machines_model = "openstack-machines"
         deployment.get_manifest.return_value = Mock()
         deployment.get_tfhelper.return_value = Mock()
@@ -2761,6 +2789,7 @@ class TestRemoveNode:
         juju_helper,
     ):
         deployment = Mock()
+        deployment.get_client.return_value.cluster.get_config.return_value = "{}"
         deployment.openstack_machines_model = "openstack-machines"
         deployment.get_manifest.return_value = Mock()
         deployment.get_tfhelper.return_value = Mock()

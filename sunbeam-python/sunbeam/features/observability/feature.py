@@ -16,6 +16,7 @@ import queue
 from pathlib import Path
 
 import click
+from jubilant.statustypes import AppStatus
 from packaging.version import Version
 from rich.console import Console
 from rich.table import Table
@@ -46,6 +47,7 @@ from sunbeam.core.common import (
 from sunbeam.core.deployment import Deployment
 from sunbeam.core.juju import (
     ActionFailedException,
+    JujuException,
     JujuHelper,
     JujuStepHelper,
     JujuWaitException,
@@ -129,15 +131,77 @@ OBSERVABILITY_OFFER_INTERFACES = [
     "prometheus_remote_write",
     "loki_push_api",
 ]
-OBSERVABILITY_AGNET_INTEGRATION_APPS = ["openstack-hypervisor", "microceph", "k8s"]
+OBSERVABILITY_AGENT_INTEGRATION_APPS = ["openstack-hypervisor", "microceph", "k8s"]
 OBSERVABILITY_AGENT_APP = "opentelemetry-collector"
 OBSERVABILITY_AGENT_INFRA_APP = "opentelemetry-collector-infra"
-MICROOVN_APP = "microovn"
+MICROOVN_APPS = {"microovn", "microovn-arm64"}
+NETWORK_AGENTS_CHARM = "openstack-network-agents"
 SUNBEAM_MACHINE_APP = "sunbeam-machine"
 SUNBEAM_CLUSTERD_APP = "sunbeam-clusterd"
 
 HARDWARE_OBSERVER_APP = "hardware-observer"
 HARDWARE_OBSERVER_CHANNEL = "latest/stable"
+
+
+def machine_collector_applications(
+    jhelper: JujuHelper, model: str, apps: dict[str, AppStatus]
+) -> list[str]:
+    """Select applications with a machine collector cos-agent relation."""
+    network_apps = sorted(
+        name for name, app in apps.items() if app.charm_name == NETWORK_AGENTS_CHARM
+    )
+    log_providers = []
+    if network_apps:
+        endpoints = jhelper.get_application_endpoints(network_apps, model)
+        log_providers = [
+            name for name in network_apps if "cos-agent" in endpoints.get(name, set())
+        ]
+
+    # Each collector unit must share the MicroOVN principal of its network
+    # agents to exchange data over the container-scoped cos-agent relation.
+    return [
+        *OBSERVABILITY_AGENT_INTEGRATION_APPS,
+        *sorted(MICROOVN_APPS & apps.keys()),
+        *log_providers,
+    ]
+
+
+def refresh_machine_collector_integrations(
+    deployment: Deployment, jhelper: JujuHelper
+) -> None:
+    """Pick up principals and log providers installed after observability."""
+    try:
+        client = deployment.get_client()
+        config = read_config(client, OBSERVABILITY_AGENT_CONFIG_KEY)
+        configured = set(config.get("observability-agent-integration-apps", []))
+        if not configured:
+            return
+        model = deployment.openstack_machines_model
+        apps = jhelper.get_model_status(model).apps
+        if (collector := apps.get(OBSERVABILITY_AGENT_APP)) is None:
+            return
+        integrations = machine_collector_applications(jhelper, model, apps)
+        related = {
+            relation.related_app
+            for relation in collector.relations.get("cos-agent", [])
+        }
+        if set(integrations) == configured and configured <= related:
+            return
+        tfhelper = deployment.get_tfhelper(OBSERVABILITY_AGENT_TFPLAN)
+        tfhelper.init()
+        tfhelper.update_tfvars_and_apply_tf(
+            client,
+            deployment.get_manifest(),
+            tfvar_config=OBSERVABILITY_AGENT_CONFIG_KEY,
+            override_tfvars={"observability-agent-integration-apps": integrations},
+            tf_apply_extra_args=[
+                "-target=juju_integration.observability-agent-integrations"
+            ],
+        )
+    except ConfigItemNotFoundException:
+        return
+    except (JujuException, TerraformException, TerraformStateLockedException) as error:
+        LOG.warning("Could not refresh machine collector integrations: %s", error)
 
 
 class ProviderType(enum.Enum):
@@ -401,14 +465,12 @@ class DeployObservabilityAgentStep(BaseStep, JujuStepHelper):
 
     def run(self, context: StepContext) -> Result:
         """Execute configuration using terraform."""
-        model_status = self.jhelper.get_model_status(self.model)
-        integration_apps = list(OBSERVABILITY_AGNET_INTEGRATION_APPS)
-        # network role is optional, only add microovn if it's deployed in the model
-        if MICROOVN_APP in model_status.apps:
-            integration_apps.append(MICROOVN_APP)
+        apps = self.jhelper.get_model_status(self.model).apps
         extra_tfvars = {
             "principal-application-model-uuid": self.jhelper.get_model_uuid(self.model),
-            "observability-agent-integration-apps": integration_apps,
+            "observability-agent-integration-apps": machine_collector_applications(
+                self.jhelper, self.model, apps
+            ),
             "observability-agent-integration-apps-juju-info": [SUNBEAM_MACHINE_APP],
             # Workaround for https://github.com/canonical/opentelemetry-collector-k8s-operator/issues/265
             "opentelemetry-collector-config": {"tls_insecure_skip_verify": True},

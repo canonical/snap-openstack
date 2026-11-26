@@ -202,6 +202,27 @@ class TestJoinNodeValidation:
         assert first_plan[0].__class__.__name__ == "ClusterJoinNodeStep"
 
 
+@pytest.mark.parametrize("force_arg", [[], ["--force"]], ids=["normal", "force"])
+def test_remove_requires_ndr_placement_to_be_drained(
+    daemon_group_check, run_preflight, run_plan_cmd, juju_helper_cmd, force_arg
+):
+    deployment = Mock()
+    deployment.get_ovn_manager.return_value.get_machines.return_value = []
+    cluster = deployment.get_client.return_value.cluster
+    cluster.get_config.return_value = (
+        '{"instances": {"node-1": [{"host": "node-1.red.v4"}]}}'
+    )
+
+    result = CliRunner().invoke(remove, [*force_arg, "node-1"], obj=deployment)
+
+    assert result.exit_code == 1
+    assert "Drain dynamic routing placement" in result.output
+    run_plan_cmd.assert_not_called()
+    cluster.unlock_terraform_plan.assert_called_once_with(
+        *cluster.lock_terraform_plan.call_args.args
+    )
+
+
 class TestRemoveNodeRoleDistributor:
     def test_remove_cleans_role_distributor_before_machine_removal_and_reapplies(
         self,
@@ -211,11 +232,19 @@ class TestRemoveNodeRoleDistributor:
         juju_helper_cmd,
     ):
         deployment = Mock()
+        deployment.get_client.return_value.cluster.get_config.return_value = "{}"
         deployment.openstack_machines_model = "openstack-machines"
         deployment.get_manifest.return_value = Mock()
         deployment.get_tfhelper.return_value = Mock()
         deployment.get_ovn_manager.return_value.get_machines.return_value = ["1"]
 
+        cluster = deployment.get_client.return_value.cluster
+
+        def run_plan_with_placement_lock(*args):
+            cluster.lock_terraform_plan.assert_called_once()
+            cluster.unlock_terraform_plan.assert_not_called()
+
+        run_plan_cmd.side_effect = run_plan_with_placement_lock
         runner = CliRunner()
         result = runner.invoke(remove, ["node-1"], obj=deployment)
 
@@ -250,6 +279,7 @@ class TestRemoveNodeRoleDistributor:
         juju_helper_cmd,
     ):
         deployment = Mock()
+        deployment.get_client.return_value.cluster.get_config.return_value = "{}"
         deployment.openstack_machines_model = "openstack-machines"
         deployment.get_manifest.return_value = Mock()
         deployment.get_tfhelper.return_value = Mock()
@@ -280,6 +310,7 @@ class TestRemoveNodeRoleDistributor:
         juju_helper_cmd,
     ):
         deployment = Mock()
+        deployment.get_client.return_value.cluster.get_config.return_value = "{}"
         deployment.openstack_machines_model = "openstack-machines"
         deployment.get_manifest.return_value = Mock()
         deployment.get_tfhelper.return_value = Mock()
@@ -312,6 +343,7 @@ class TestConfigureSRIOVInfraValidation:
 
     def _deployment(self, pci_aliases=None):
         deployment = Mock()
+        deployment.get_client.return_value.cluster.get_config.return_value = "{}"
         client = deployment.get_client.return_value
         client.cluster.get_node_info.return_value = {"role": ["compute"]}
         manifest = deployment.get_manifest.return_value

@@ -136,3 +136,15 @@ variable "ca-offer-url" {
   type        = string
   default     = null
 }
+
+variable "ndr_rabbitmq_offer_url" {
+  description = "Control-plane RabbitMQ offer for Neutron dynamic routing agents"
+  type        = string
+  default     = null
+}
+
+variable "ndr_applications" {
+  description = "Network-agents applications with Neutron dynamic routing enabled"
+  type        = list(string)
+  default     = []
+}

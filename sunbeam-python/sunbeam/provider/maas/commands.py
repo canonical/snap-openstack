@@ -71,6 +71,7 @@ from sunbeam.core.manifest import AddManifestStep
 from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.core.terraform import TerraformInitStep
 from sunbeam.feature_gates import feature_gate_option
+from sunbeam.features.dynamic_routing.feature import DynamicRoutingFeature
 from sunbeam.provider.base import ProviderBase
 from sunbeam.provider.common.multiregion import connect_to_region_controller
 from sunbeam.provider.maas.client import (
@@ -1871,7 +1872,8 @@ def remove_node(ctx: click.Context, name: str, force: bool, show_hints: bool) ->
             ),
         ]
 
-    run_plan(plan, console, show_hints)
+    with DynamicRoutingFeature().node_removal_guard(client, name):
+        run_plan(plan, console, show_hints)
     click.echo(f"Removed node {name} from the cluster.")
 
 
