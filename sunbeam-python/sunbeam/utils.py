@@ -395,13 +395,21 @@ class DefaultableMappingParameter(click.ParamType):
         self.value_name = value
         self.sep = separator
 
-    def to_info_dict(self) -> dict:
+    class InfoDict(click.types.ParamTypeInfoDict):
+        """Metadata for a defaultable mapping parameter."""
+
+        key_name: str
+        value_name: str
+        separator: str
+
+    def to_info_dict(self) -> InfoDict:
         """Return a dictionary containing the parameter's information."""
-        info_dict = super().to_info_dict()
-        info_dict["key_name"] = self.key_name
-        info_dict["value_name"] = self.value_name
-        info_dict["separator"] = self.sep
-        return info_dict
+        return {
+            **super().to_info_dict(),
+            "key_name": self.key_name,
+            "value_name": self.value_name,
+            "separator": self.sep,
+        }
 
     def convert(self, value: str, param, ctx) -> tuple[str, str]:
         """Convert the value to a tuple.
@@ -415,7 +423,9 @@ class DefaultableMappingParameter(click.ParamType):
             return (split[0], split[1])
         self.fail(f"Invalid mapping '{value}'.", param, ctx)
 
-    def get_metavar(self, param: click.Parameter) -> str:
+    def get_metavar(
+        self, param: click.Parameter, ctx: click.Context | None = None
+    ) -> str:
         """Define metavar representation for the parameter."""
         repr_str = f"{self.key_name}|{self.key_name}{self.sep}{self.value_name}"
 
