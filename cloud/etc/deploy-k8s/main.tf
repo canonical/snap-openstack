@@ -26,7 +26,7 @@ resource "juju_application" "k8s" {
     name     = "k8s"
     channel  = var.k8s_channel
     revision = var.k8s_revision
-    base     = "ubuntu@24.04"
+    base     = "ubuntu@26.04"
   }
 
   config            = var.k8s_config

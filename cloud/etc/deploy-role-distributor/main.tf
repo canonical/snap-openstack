@@ -25,7 +25,7 @@ resource "juju_application" "role-distributor" {
   charm {
     name     = "role-distributor"
     channel  = var.charm_role_distributor_channel
-    base     = "ubuntu@24.04"
+    base     = "ubuntu@26.04"
     revision = var.charm_role_distributor_revision
   }
 

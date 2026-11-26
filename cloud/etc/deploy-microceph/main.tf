@@ -27,7 +27,7 @@ resource "juju_application" "microceph" {
     name     = "microceph"
     channel  = var.charm_microceph_channel
     revision = var.charm_microceph_revision
-    base     = "ubuntu@24.04"
+    base     = "ubuntu@26.04"
   }
 
   config = merge({

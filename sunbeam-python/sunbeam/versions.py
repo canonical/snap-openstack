@@ -13,16 +13,34 @@ def determine_version() -> str:
 
     try:
         snap = Snap()
-        risk = str(snap.config.get("deployment.version"))
+        version = str(snap.config.get("deployment.version"))
     except Exception:
-        risk = "2026.1"
+        version = "2026.2"
+    return version
+
+
+@cache
+def determine_risk() -> str:
+    # This function could be expanded to determine risk dynamically
+    from snaphelpers import Snap
+
+    try:
+        snap = Snap()
+        risk = str(snap.config.get("deployment.risk"))
+    except Exception:
+        risk = "beta"
     return risk
 
 
-SUPPORTED_RELEASE = "noble"
+def determine_channel() -> str:
+    """Return the default OpenStack charm channel for this deployment."""
+    return f"{determine_version()}/{determine_risk()}"
+
+
+SUPPORTED_RELEASE = "resolute"
 JUJU_CHANNEL = "3.6/stable"
-JUJU_BASE = "ubuntu@24.04"
-OPENSTACK_CHANNEL = f"{determine_version()}/stable"
+JUJU_BASE = "ubuntu@26.04"
+OPENSTACK_CHANNEL = determine_channel()
 RABBITMQ_CHANNEL = "4.0/stable"
 TRAEFIK_CHANNEL = "latest/stable"
 MICROCEPH_CHANNEL = "tentacle/stable"
@@ -34,7 +52,7 @@ MANUAL_TLS_CERTIFICATES_CHANNEL = "1/stable"
 BIND_CHANNEL = "9/stable"
 VAULT_CHANNEL = "2.0/stable"
 CONSUL_CHANNEL = "1.19/stable"
-K8S_CHANNEL = "1.32/stable"
+K8S_CHANNEL = "1.36/candidate"
 MULTUS_CHANNEL = "latest/stable"
 LXD_CHANNEL = "5.21/stable"
 CINDER_VOLUME_CHARM = "cinder-volume"
@@ -72,7 +90,7 @@ MACHINE_CHARMS = {
     "microovn": MICROOVN_CHANNEL,
     "role-distributor": ROLE_DISTRIBUTOR_CHANNEL,
     "openstack-network-agents": OPENSTACK_CHANNEL,
-    "microcluster-token-distributor": "v1/stable",
+    "microcluster-token-distributor": "v1/edge",
     "sunbeam-ovn-proxy": OPENSTACK_CHANNEL,
     "k8s": K8S_CHANNEL,
     "openstack-hypervisor": OPENSTACK_CHANNEL,
