@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - 'sunbeam-microcluster/**'
+      - '.github/scripts/install-dqlite.sh'
+      - '.github/workflows/*-golang.yml'
 
 jobs:
   test:

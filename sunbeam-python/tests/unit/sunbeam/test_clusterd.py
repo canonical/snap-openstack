@@ -509,7 +509,10 @@ class TestClusterService:
             "status_code": 0,
             "operation": "",
             "error_code": 500,
-            "error": "UNIQUE constraint failed: internal_token_records.name",
+            "error": (
+                'Failed to create "core_token_records" entry: '
+                "UNIQUE constraint failed: core_token_records.name"
+            ),
             "metadata": None,
         }
         mock_response = self._mock_response(
@@ -704,18 +707,32 @@ class TestClusterService:
         cs = ClusterService(mock_session, "http+unix://mock")
         cs.delete_token("node-2")
 
-    def test_delete_token_when_token_doesnot_exists(self):
+        assert mock_session.request.call_args.kwargs["method"] == "delete"
+        assert (
+            mock_session.request.call_args.kwargs["url"]
+            == "http+unix://mock/core/control/tokens/node-2"
+        )
+
+    @pytest.mark.parametrize(
+        "message",
+        [
+            "CoreTokenRecord not found",
+            "InternalTokenRecord not found",
+            "Failed to revoke token: CoreTokenRecord not found",
+        ],
+    )
+    def test_delete_token_when_token_does_not_exist(self, message):
         json_data = {
             "type": "error",
             "status": "",
             "status_code": 0,
             "operation": "",
             "error_code": 404,
-            "error": "InternalTokenRecord not found",
+            "error": message,
             "metadata": None,
         }
         mock_response = self._mock_response(
-            status=200,
+            status=404,
             json_data=json_data,
             raise_for_status=HTTPError("Internal Error"),
         )
@@ -755,11 +772,14 @@ class TestClusterService:
             "status_code": 0,
             "operation": "",
             "error_code": 404,
-            "error": 'No remote exists with the given name "node-3"',
+            "error": (
+                'Cluster member "node-3" not found in truststore; '
+                "please provide a node address"
+            ),
             "metadata": None,
         }
         mock_response = self._mock_response(
-            status=200,
+            status=404,
             json_data=json_data,
             raise_for_status=HTTPError("Internal Error"),
         )
@@ -769,7 +789,7 @@ class TestClusterService:
 
         cs = ClusterService(mock_session, "http+unix://mock")
         with pytest.raises(service.NodeNotExistInClusterException):
-            cs.delete_token("node-3")
+            cs.remove("node-3")
 
     def test_remove_when_node_is_last_member(self):
         json_data = {
@@ -777,7 +797,7 @@ class TestClusterService:
             "status": "",
             "status_code": 0,
             "operation": "",
-            "error_code": 404,
+            "error_code": 400,
             "error": (
                 "Cannot remove cluster members, there are no remaining "
                 "non-pending members"
@@ -785,7 +805,7 @@ class TestClusterService:
             "metadata": None,
         }
         mock_response = self._mock_response(
-            status=200,
+            status=400,
             json_data=json_data,
             raise_for_status=HTTPError("Internal Error"),
         )
@@ -795,7 +815,7 @@ class TestClusterService:
 
         cs = ClusterService(mock_session, "http+unix://mock")
         with pytest.raises(service.LastNodeRemovalFromClusterException):
-            cs.delete_token("node-3")
+            cs.remove("node-3")
 
     def test_add_node_info(self):
         json_data = {

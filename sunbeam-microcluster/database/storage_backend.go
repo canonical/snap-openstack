@@ -3,23 +3,23 @@ package database
 //go:generate -command mapper lxd-generate db mapper -t storage_backend.mapper.go
 //go:generate mapper reset
 //
-//go:generate mapper stmt -d github.com/canonical/microcluster/v2/cluster -e StorageBackend objects table=storage_backends
-//go:generate mapper stmt -d github.com/canonical/microcluster/v2/cluster -e StorageBackend objects-by-Name table=storage_backends
-//go:generate mapper stmt -d github.com/canonical/microcluster/v2/cluster -e StorageBackend objects-by-Type table=storage_backends
-//go:generate mapper stmt -d github.com/canonical/microcluster/v2/cluster -e StorageBackend objects-by-Principal table=storage_backends
-//go:generate mapper stmt -d github.com/canonical/microcluster/v2/cluster -e StorageBackend objects-by-ModelUUID table=storage_backends
-//go:generate mapper stmt -d github.com/canonical/microcluster/v2/cluster -e StorageBackend id table=storage_backends
-//go:generate mapper stmt -d github.com/canonical/microcluster/v2/cluster -e StorageBackend create table=storage_backends
-//go:generate mapper stmt -d github.com/canonical/microcluster/v2/cluster -e StorageBackend delete-by-Name table=storage_backends
-//go:generate mapper stmt -d github.com/canonical/microcluster/v2/cluster -e StorageBackend update table=storage_backends
+//go:generate mapper stmt -d github.com/canonical/microcluster/v3/microcluster/db -e StorageBackend objects table=storage_backends
+//go:generate mapper stmt -d github.com/canonical/microcluster/v3/microcluster/db -e StorageBackend objects-by-Name table=storage_backends
+//go:generate mapper stmt -d github.com/canonical/microcluster/v3/microcluster/db -e StorageBackend objects-by-Type table=storage_backends
+//go:generate mapper stmt -d github.com/canonical/microcluster/v3/microcluster/db -e StorageBackend objects-by-Principal table=storage_backends
+//go:generate mapper stmt -d github.com/canonical/microcluster/v3/microcluster/db -e StorageBackend objects-by-ModelUUID table=storage_backends
+//go:generate mapper stmt -d github.com/canonical/microcluster/v3/microcluster/db -e StorageBackend id table=storage_backends
+//go:generate mapper stmt -d github.com/canonical/microcluster/v3/microcluster/db -e StorageBackend create table=storage_backends
+//go:generate mapper stmt -d github.com/canonical/microcluster/v3/microcluster/db -e StorageBackend delete-by-Name table=storage_backends
+//go:generate mapper stmt -d github.com/canonical/microcluster/v3/microcluster/db -e StorageBackend update table=storage_backends
 //
-//go:generate mapper method -i -d github.com/canonical/microcluster/v2/cluster -e StorageBackend GetMany
-//go:generate mapper method -i -d github.com/canonical/microcluster/v2/cluster -e StorageBackend GetOne
-//go:generate mapper method -i -d github.com/canonical/microcluster/v2/cluster -e StorageBackend ID
-//go:generate mapper method -i -d github.com/canonical/microcluster/v2/cluster -e StorageBackend Exists
-//go:generate mapper method -i -d github.com/canonical/microcluster/v2/cluster -e StorageBackend Create
-//go:generate mapper method -i -d github.com/canonical/microcluster/v2/cluster -e StorageBackend DeleteOne-by-Name
-//go:generate mapper method -i -d github.com/canonical/microcluster/v2/cluster -e StorageBackend Update
+//go:generate mapper method -i -d github.com/canonical/microcluster/v3/microcluster/db -e StorageBackend GetMany
+//go:generate mapper method -i -d github.com/canonical/microcluster/v3/microcluster/db -e StorageBackend GetOne
+//go:generate mapper method -i -d github.com/canonical/microcluster/v3/microcluster/db -e StorageBackend ID
+//go:generate mapper method -i -d github.com/canonical/microcluster/v3/microcluster/db -e StorageBackend Exists
+//go:generate mapper method -i -d github.com/canonical/microcluster/v3/microcluster/db -e StorageBackend Create
+//go:generate mapper method -i -d github.com/canonical/microcluster/v3/microcluster/db -e StorageBackend DeleteOne-by-Name
+//go:generate mapper method -i -d github.com/canonical/microcluster/v3/microcluster/db -e StorageBackend Update
 
 // StorageBackend is used to track StorageBackend information.
 type StorageBackend struct {

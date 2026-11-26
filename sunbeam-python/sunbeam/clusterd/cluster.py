@@ -90,7 +90,7 @@ class MicroClusterService(service.BaseService):
 
         Raises TokenNotFoundException if token does not exist.
         """
-        self._delete(f"/core/1.0/tokens/{name}")
+        self._delete(f"/core/control/tokens/{name}")
 
 
 class ExtendedAPIService(service.BaseService):

@@ -7,14 +7,14 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/canonical/microcluster/v2/state"
+	"github.com/canonical/microcluster/v3/microcluster/types"
 
 	"github.com/canonical/snap-openstack/sunbeam-microcluster/api/apitypes"
 	"github.com/canonical/snap-openstack/sunbeam-microcluster/database"
 )
 
 // ListNodes return all the nodes, filterable by role (Optional)
-func ListNodes(ctx context.Context, s state.State, roles []string) (apitypes.Nodes, error) {
+func ListNodes(ctx context.Context, s types.State, roles []string) (apitypes.Nodes, error) {
 	nodes := apitypes.Nodes{}
 
 	// Get the nodes from the database.
@@ -51,7 +51,7 @@ func ListNodes(ctx context.Context, s state.State, roles []string) (apitypes.Nod
 }
 
 // GetNode returns a Node with the given name
-func GetNode(ctx context.Context, s state.State, name string) (apitypes.Node, error) {
+func GetNode(ctx context.Context, s types.State, name string) (apitypes.Node, error) {
 	node := apitypes.Node{MachineID: -1}
 	err := s.Database().Transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		record, err := database.GetNode(ctx, tx, name)
@@ -79,7 +79,7 @@ func GetNode(ctx context.Context, s state.State, name string) (apitypes.Node, er
 }
 
 // AddNode adds a node to the database
-func AddNode(ctx context.Context, s state.State, name string, role []string, machineid int, systemid string, arch string, isDPU bool, imageName string) error {
+func AddNode(ctx context.Context, s types.State, name string, role []string, machineid int, systemid string, arch string, isDPU bool, imageName string) error {
 	nodeRole, err := roleToStr(role)
 	if err != nil {
 		return err
@@ -104,7 +104,7 @@ func AddNode(ctx context.Context, s state.State, name string, role []string, mac
 }
 
 // UpdateNode updates a node record in the database
-func UpdateNode(ctx context.Context, s state.State, name string, role []string, machineid int, systemid string, arch string, isDPU *bool, imageName *string) error {
+func UpdateNode(ctx context.Context, s types.State, name string, role []string, machineid int, systemid string, arch string, isDPU *bool, imageName *string) error {
 	nodeRole, err := roleToStr(role)
 	if err != nil {
 		return err
@@ -153,7 +153,7 @@ func UpdateNode(ctx context.Context, s state.State, name string, role []string, 
 }
 
 // DeleteNode deletes a node from database
-func DeleteNode(ctx context.Context, s state.State, name string) error {
+func DeleteNode(ctx context.Context, s types.State, name string) error {
 	// Delete node from the database.
 	err := s.Database().Transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		err := database.DeleteNode(ctx, tx, name)

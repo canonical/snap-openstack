@@ -5,10 +5,8 @@ import (
 	"net/http"
 	"net/url"
 
-	"github.com/canonical/lxd/lxd/response"
 	"github.com/canonical/lxd/shared/api"
-	"github.com/canonical/microcluster/v2/rest"
-	"github.com/canonical/microcluster/v2/state"
+	"github.com/canonical/microcluster/v3/microcluster/types"
 	"github.com/gorilla/mux"
 
 	"github.com/canonical/snap-openstack/sunbeam-microcluster/access"
@@ -16,7 +14,7 @@ import (
 )
 
 // /1.0/config/<name> endpoint.
-var configCmd = rest.Endpoint{
+var configCmd = types.Endpoint{
 	Path: "config/{key}",
 
 	Get:    access.ClusterCATrustedEndpoint(cmdConfigGet, true),
@@ -24,60 +22,60 @@ var configCmd = rest.Endpoint{
 	Delete: access.ClusterCATrustedEndpoint(cmdConfigDelete, true),
 }
 
-func cmdConfigGet(s state.State, r *http.Request) response.Response {
+func cmdConfigGet(s types.State, r *http.Request) types.Response {
 	var key string
 	key, err := url.PathUnescape(mux.Vars(r)["key"])
 	if err != nil {
-		return response.InternalError(err)
+		return types.InternalError(err)
 	}
 	config, err := sunbeam.GetConfig(r.Context(), s, key)
 	if err != nil {
 		if err, ok := err.(api.StatusError); ok {
 			if err.Status() == http.StatusNotFound {
-				return response.NotFound(err)
+				return types.NotFound(err)
 			}
 		}
-		return response.InternalError(err)
+		return types.InternalError(err)
 	}
 
-	return response.SyncResponse(true, config)
+	return types.SyncResponse(true, config)
 }
 
-func cmdConfigPut(s state.State, r *http.Request) response.Response {
+func cmdConfigPut(s types.State, r *http.Request) types.Response {
 	key, err := url.PathUnescape(mux.Vars(r)["key"])
 	if err != nil {
-		return response.InternalError(err)
+		return types.InternalError(err)
 	}
 
 	var body bytes.Buffer
 	_, err = body.ReadFrom(r.Body)
 	if err != nil {
-		return response.InternalError(err)
+		return types.InternalError(err)
 	}
 
 	err = sunbeam.UpdateConfig(r.Context(), s, key, body.String())
 	if err != nil {
-		return response.InternalError(err)
+		return types.InternalError(err)
 	}
 
-	return response.EmptySyncResponse
+	return types.EmptySyncResponse
 }
 
-func cmdConfigDelete(s state.State, r *http.Request) response.Response {
+func cmdConfigDelete(s types.State, r *http.Request) types.Response {
 	key, err := url.PathUnescape(mux.Vars(r)["key"])
 	if err != nil {
-		return response.InternalError(err)
+		return types.InternalError(err)
 	}
 
 	err = sunbeam.DeleteConfig(r.Context(), s, key)
 	if err != nil {
 		if err, ok := err.(api.StatusError); ok {
 			if err.Status() == http.StatusNotFound {
-				return response.NotFound(err)
+				return types.NotFound(err)
 			}
 		}
-		return response.InternalError(err)
+		return types.InternalError(err)
 	}
 
-	return response.EmptySyncResponse
+	return types.EmptySyncResponse
 }

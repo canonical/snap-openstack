@@ -1,4 +1,4 @@
-package main
+package access
 
 import (
 	"context"
@@ -131,7 +131,7 @@ func TestAuthenticateClient(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			allowed, err := authenticateClient(context.Background(), nil, tc.request, tc.trustedCerts)
+			allowed, err := AuthenticateClient(context.Background(), nil, tc.request, tc.trustedCerts)
 
 			if err != nil {
 				t.Errorf("Expected no error, got %v", err)

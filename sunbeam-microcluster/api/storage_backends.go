@@ -5,10 +5,8 @@ import (
 	"net/http"
 	"net/url"
 
-	"github.com/canonical/lxd/lxd/response"
 	"github.com/canonical/lxd/shared/api"
-	"github.com/canonical/microcluster/v2/rest"
-	"github.com/canonical/microcluster/v2/state"
+	"github.com/canonical/microcluster/v3/microcluster/types"
 	"github.com/gorilla/mux"
 
 	"github.com/canonical/snap-openstack/sunbeam-microcluster/access"
@@ -17,7 +15,7 @@ import (
 )
 
 // /1.0/storage-backend endpoint.
-var storageBackendsCmd = rest.Endpoint{
+var storageBackendsCmd = types.Endpoint{
 	Path: "storage-backend",
 
 	Get:  access.ClusterCATrustedEndpoint(cmdStorageBackendsGetAll, true),
@@ -25,7 +23,7 @@ var storageBackendsCmd = rest.Endpoint{
 }
 
 // /1.0/storage-backend/<backend-name> endpoint.
-var storageBackendCmd = rest.Endpoint{
+var storageBackendCmd = types.Endpoint{
 	Path: "storage-backend/{backendname}",
 
 	Get:    access.ClusterCATrustedEndpoint(cmdStorageBackendGet, true),
@@ -33,85 +31,85 @@ var storageBackendCmd = rest.Endpoint{
 	Put:    access.ClusterCATrustedEndpoint(cmdStorageBackendPut, true),
 }
 
-func cmdStorageBackendsGetAll(s state.State, r *http.Request) response.Response {
+func cmdStorageBackendsGetAll(s types.State, r *http.Request) types.Response {
 
 	storageBackends, err := sunbeam.ListStorageBackends(r.Context(), s)
 	if err != nil {
-		return response.InternalError(err)
+		return types.InternalError(err)
 	}
 
-	return response.SyncResponse(true, storageBackends)
+	return types.SyncResponse(true, storageBackends)
 }
 
-func cmdStorageBackendsPost(s state.State, r *http.Request) response.Response {
+func cmdStorageBackendsPost(s types.State, r *http.Request) types.Response {
 	var req apitypes.StorageBackend
 
 	err := json.NewDecoder(r.Body).Decode(&req)
 	if err != nil {
-		return response.InternalError(err)
+		return types.InternalError(err)
 	}
 
 	err = sunbeam.AddStorageBackend(r.Context(), s, req.Name, req.Type, req.Principal, req.ModelUUID, req.Config)
 	if err != nil {
-		return response.InternalError(err)
+		return types.InternalError(err)
 	}
 
-	return response.EmptySyncResponse
+	return types.EmptySyncResponse
 }
 
-func cmdStorageBackendGet(s state.State, r *http.Request) response.Response {
+func cmdStorageBackendGet(s types.State, r *http.Request) types.Response {
 	var backendName string
 	backendName, err := url.PathUnescape(mux.Vars(r)["backendname"])
 	if err != nil {
-		return response.InternalError(err)
+		return types.InternalError(err)
 	}
 	backend, err := sunbeam.GetStorageBackend(r.Context(), s, backendName)
 	if err != nil {
 		if err, ok := err.(api.StatusError); ok {
 			if err.Status() == http.StatusNotFound {
-				return response.NotFound(err)
+				return types.NotFound(err)
 			}
 		}
-		return response.InternalError(err)
+		return types.InternalError(err)
 	}
 
-	return response.SyncResponse(true, backend)
+	return types.SyncResponse(true, backend)
 }
 
-func cmdStorageBackendDelete(s state.State, r *http.Request) response.Response {
+func cmdStorageBackendDelete(s types.State, r *http.Request) types.Response {
 	backendName, err := url.PathUnescape(mux.Vars(r)["backendname"])
 	if err != nil {
-		return response.SmartError(err)
+		return types.SmartError(err)
 	}
 	err = sunbeam.DeleteStorageBackend(r.Context(), s, backendName)
 	if err != nil {
 		if err, ok := err.(api.StatusError); ok {
 			if err.Status() == http.StatusNotFound {
-				return response.NotFound(err)
+				return types.NotFound(err)
 			}
 		}
-		return response.InternalError(err)
+		return types.InternalError(err)
 	}
 
-	return response.EmptySyncResponse
+	return types.EmptySyncResponse
 }
 
-func cmdStorageBackendPut(s state.State, r *http.Request) response.Response {
+func cmdStorageBackendPut(s types.State, r *http.Request) types.Response {
 	backendName, err := url.PathUnescape(mux.Vars(r)["backendname"])
 	if err != nil {
-		return response.SmartError(err)
+		return types.SmartError(err)
 	}
 
 	var req apitypes.StorageBackend
 	err = json.NewDecoder(r.Body).Decode(&req)
 	if err != nil {
-		return response.InternalError(err)
+		return types.InternalError(err)
 	}
 
 	err = sunbeam.UpdateStorageBackend(r.Context(), s, backendName, req.Type, req.Principal, req.ModelUUID, req.Config)
 	if err != nil {
-		return response.InternalError(err)
+		return types.InternalError(err)
 	}
 
-	return response.EmptySyncResponse
+	return types.EmptySyncResponse
 }
