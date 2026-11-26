@@ -2569,6 +2569,7 @@ class TestRemoveNode:
     ):
         maas_client, get_machine = mock_maas_machine
         deployment = Mock()
+        deployment.get_client.return_value.cluster.get_config.return_value = "{}"
         deployment.openstack_machines_model = "openstack-machines"
         deployment.get_ovn_manager.return_value.get_machines.return_value = []
 
@@ -2660,6 +2661,7 @@ class TestRemoveNode:
         _, get_machine = mock_maas_machine
         get_machine.side_effect = ValueError("Machine 'node-1' not found.")
         deployment = Mock()
+        deployment.get_client.return_value.cluster.get_config.return_value = "{}"
         deployment.openstack_machines_model = "openstack-machines"
         deployment.get_ovn_manager.return_value.get_machines.return_value = []
 
