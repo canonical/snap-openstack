@@ -7,7 +7,7 @@ import logging
 from enum import StrEnum
 from typing import Annotated, Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field, IPvAnyAddress, model_validator
 from rich.console import Console
 
 from sunbeam.core.manifest import StorageBackendConfig
@@ -40,7 +40,7 @@ class IbmibmstorageConfig(StorageBackendConfig):
     """
 
     # Mandatory connection parameters
-    san_ip: Annotated[str, Field(description="IP address of SAN controller")]
+    san_ip: Annotated[IPvAnyAddress, Field(description="IP address of SAN controller")]
     san_login: Annotated[
         str,
         Field(description="Username for SAN controller"),

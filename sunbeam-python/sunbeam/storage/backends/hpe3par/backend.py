@@ -6,7 +6,7 @@
 import logging
 from typing import Annotated, Literal, Optional
 
-from pydantic import Field
+from pydantic import Field, IPvAnyAddress
 from rich.console import Console
 
 from sunbeam.core.manifest import StorageBackendConfig
@@ -25,7 +25,9 @@ class HPEthreeparConfig(StorageBackendConfig):
     """
 
     # Mandatory connection parameters
-    san_ip: Annotated[str, Field(description="HPE 3Par management IP or hostname")]
+    san_ip: Annotated[
+        IPvAnyAddress, Field(description="HPE 3Par management IP address")
+    ]
     san_login: Annotated[
         str,
         Field(description="HPE 3Par management login username"),

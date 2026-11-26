@@ -46,6 +46,7 @@ def validate_pem_certificates(value: str) -> str:
 
 PEMCertificates = Annotated[str, pydantic.AfterValidator(validate_pem_certificates)]
 
+
 # =============================================================================
 # Exceptions
 # =============================================================================
@@ -105,3 +106,46 @@ class SecretDictField:
     def __repr__(self) -> str:
         """Return a string representation of the SecretDictField."""
         return f"SecretDictField(field={self.field})"
+
+
+def _alias_strings(alias: Any) -> list[str]:
+    if isinstance(alias, str):
+        return [alias]
+    choices = getattr(alias, "choices", None)
+    if not choices:
+        return []
+    return [choice for choice in choices if isinstance(choice, str)]
+
+
+def normalize_backend_config(
+    config_type: type[pydantic.BaseModel], config: dict[str, Any]
+) -> tuple[dict[str, Any], list[str]]:
+    """Map config keys onto model field names.
+
+    Charm-style aliases in kebab-case are mapped to the snake_case names.
+    An explicit field name wins over an alias for the same field.
+    Unknown keys are returned and not kept.
+    """
+    alias_to_field: dict[str, str] = {}
+    for name, finfo in config_type.model_fields.items():
+        alias_to_field[name] = name
+        alias_to_field.setdefault(name.replace("_", "-"), name)
+        for alias in (finfo.alias, finfo.validation_alias, finfo.serialization_alias):
+            for choice in _alias_strings(alias):
+                alias_to_field.setdefault(choice, name)
+
+    normalized: dict[str, Any] = {}
+    aliased: dict[str, Any] = {}
+    unknown: list[str] = []
+    for key, value in config.items():
+        field = alias_to_field.get(key)
+        if field is None:
+            unknown.append(str(key))
+            continue
+        if key == field:
+            normalized[field] = value
+        else:
+            aliased[field] = value
+    for field, value in aliased.items():
+        normalized.setdefault(field, value)
+    return normalized, unknown
