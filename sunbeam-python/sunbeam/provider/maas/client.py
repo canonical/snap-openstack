@@ -114,12 +114,7 @@ class MaasClient:
 
     def get_machine(self, machine: str) -> dict:
         """Get machine."""
-        kwargs = {
-            "hostname": machine,
-        }
-        if self.resource_tag:
-            kwargs["tags"] = self.resource_tag
-        machines = self._client.machines.list.__self__._handler.read(**kwargs)  # type: ignore # noqa
+        machines = self.list_machines(hostname=machine)
         if len(machines) == 0:
             raise ValueError(f"Machine {machine!r} not found.")
         if len(machines) > 1:
@@ -346,6 +341,7 @@ def _convert_raw_machine(machine_raw: dict, root_disk: dict | None) -> dict:
     machine = {
         "system_id": machine_raw["system_id"],
         "hostname": machine_raw["hostname"],
+        "fqdn": machine_raw["fqdn"],
         "roles": list(set(tag_names).intersection(RoleTags.values())),
         "zone": machine_raw["zone"]["name"],
         "status": machine_raw["status_name"],
