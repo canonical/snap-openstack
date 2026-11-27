@@ -11,6 +11,7 @@ import lightkube.core.exceptions
 import pytest
 import tenacity
 from lightkube import ApiError
+from lightkube.models.meta_v1 import ObjectMeta
 from lightkube.types import PatchType
 
 from sunbeam.clusterd.service import (
@@ -491,11 +492,82 @@ class TestEnsureL2AdvertisementByHostStep:
         api_error = ApiError.__new__(ApiError)
         api_error.status = Mock(code=500)
         step.kube.apply = Mock(side_effect=api_error)
+        step._legacy_to_remove = True
 
         result = step.run(None)
 
         step.kube.apply.assert_called_once()
+        step.kube.delete.assert_not_called()
         assert result.result_type == ResultType.FAILED
+
+    @pytest.mark.parametrize("selector_hostname", [None, "node1", "retired-node"])
+    def test_retires_legacy_advertisement_after_reconciling_replacements(
+        self, step, step_context, selector_hostname
+    ):
+        step.remove_legacy = True
+        step.network = Networks.PUBLIC
+        step.deployment.get_space.return_value = "public"
+        step.jhelper.get_machine_interfaces.side_effect = lambda model, machine_id: (
+            {"eth1": Mock(space="public")}
+            if machine_id == "1"
+            else {"eth0": Mock(space="internal")}
+        )
+        step.kube.list.return_value = (
+            [
+                step.l2_advertisement_resource(
+                    metadata=ObjectMeta(
+                        name="public-node1", labels=step._labels("node1", "public")
+                    ),
+                    spec={
+                        "ipAddressPools": ["test-pool"],
+                        "interfaces": ["eth1"],
+                        "nodeSelectors": [
+                            {"matchLabels": {"sunbeam/hostname": selector_hostname}}
+                        ],
+                    },
+                )
+            ]
+            if selector_hostname is not None
+            else []
+        )
+
+        with patch("sunbeam.steps.k8s.get_kube_client", return_value=step.kube):
+            assert step.is_skip(step_context).result_type == ResultType.COMPLETED
+            assert step.run(step_context).result_type == ResultType.COMPLETED
+
+        operations = [call[0] for call in step.kube.mock_calls]
+        assert operations == (
+            ["list", "get", "delete"]
+            if selector_hostname == "node1"
+            else ["list", "get", "apply", "delete"]
+        )
+        if selector_hostname != "node1":
+            replacement = step.kube.apply.call_args.args[0]
+            assert replacement.metadata.name == "public-node1"
+            assert replacement.spec["nodeSelectors"] == [
+                {"matchLabels": {"sunbeam/hostname": "node1"}}
+            ]
+        step.kube.delete.assert_called_once_with(
+            step.l2_advertisement_resource, "test-pool", namespace="metallb-system"
+        )
+
+    def test_keeps_legacy_public_advertisement_without_replacement_nodes(
+        self, step, step_context
+    ):
+        step.remove_legacy = True
+        step.network = Networks.PUBLIC
+        step.deployment.get_space.return_value = "public"
+        step.jhelper.get_machine_interfaces.return_value = {
+            "eth0": Mock(space="internal")
+        }
+        step.kube.list.return_value = []
+
+        with patch("sunbeam.steps.k8s.get_kube_client", return_value=step.kube):
+            result = step.is_skip(step_context)
+
+        assert result.result_type == ResultType.SKIPPED
+        step.kube.get.assert_not_called()
+        step.kube.delete.assert_not_called()
 
     def test_run_missing_machine_skips(self, step):
         step.to_update = [{"name": "node1", "machineid": "1"}]
@@ -524,10 +596,13 @@ class TestEnsureL2AdvertisementByHostStep:
         step.kube.delete.assert_called_once()
         assert result.result_type == ResultType.COMPLETED
 
-    def test_get_interface_cached(self, step):
-        step._ifnames = {"node1": "eth0"}
-        result = step._get_interface({"name": "node1"})
-        assert result == "eth0"
+    def test_get_interface_cached(self, step, jhelper):
+        step.deployment.get_space.return_value = "management"
+        jhelper.get_machine_interfaces.return_value = {"eth0": Mock(space="management")}
+        node = {"name": "node1", "machineid": "1"}
+        assert step._get_interface(node) == "eth0"
+        assert step._get_interface(node) == "eth0"
+        jhelper.get_machine_interfaces.assert_called_once()
 
     def test_get_interface_found(self, step, jhelper, deployment):
         jhelper.get_machine_interfaces.return_value = {
@@ -537,7 +612,6 @@ class TestEnsureL2AdvertisementByHostStep:
         deployment.get_space.return_value = "management"
         result = step._get_interface({"name": "node1", "machineid": "1"})
         assert result == "eth0"
-        assert step._ifnames["node1"] == "eth0"
 
     def test_get_interface_not_found(self, step, jhelper, deployment):
         """Test that _get_interface raises exception when interface is not found."""
@@ -599,7 +673,11 @@ _l2_outdated_testcases = {
         [
             _to_kube_object(
                 metadata={"labels": {"sunbeam/hostname": "node1"}},
-                spec={"ipAddressPools": ["test-pool"], "interfaces": ["eth0"]},
+                spec={
+                    "ipAddressPools": ["test-pool"],
+                    "interfaces": ["eth0"],
+                    "nodeSelectors": [{"matchLabels": {"sunbeam/hostname": "node1"}}],
+                },
             )
         ],
         [],
@@ -1488,6 +1566,60 @@ class TestEnsureCiliumDeviceByHostStep:
         assert result.result_type == ResultType.SKIPPED
         step.client.cluster.lock_terraform_plan.assert_called_once()
         step.client.cluster.unlock_terraform_plan.assert_called_once()
+
+    @pytest.mark.parametrize(
+        ("replacement", "public", "expected_devices"),
+        [
+            ("false", True, "eth1.2743"),
+            ("true", True, "eth0,eth1.101,eth1.2743"),
+            ("true", False, "eth0,eth1.2743"),
+        ],
+    )
+    def test_run_reconciles_oam_only_for_kube_proxy_replacement(
+        self, step, step_context, replacement, public, expected_devices
+    ):
+        step.deployment.get_space.side_effect = lambda network: network.value
+        step.client.cluster.list_nodes_by_role.return_value = [
+            {"name": "node1", "machineid": "1"}
+        ]
+        interfaces = {
+            "eth0": Mock(space="management"),
+            "eth1.2743": Mock(space="internal"),
+        }
+        if public:
+            interfaces["eth1.101"] = Mock(space="public")
+        step.jhelper.get_machine_interfaces.return_value = interfaces
+        step.kube.get.return_value = Mock(data={"kube-proxy-replacement": replacement})
+        step.kube.list.return_value = [
+            step.cilium_node_config_resource(
+                metadata=ObjectMeta(labels={"sunbeam/hostname": "node1"}),
+                spec={
+                    "nodeSelector": {"matchLabels": {"sunbeam/hostname": "node1"}},
+                    "defaults": {"devices": "eth1.2743"},
+                },
+            )
+        ]
+        step._restart_cilium_on_node = Mock()
+
+        with patch("sunbeam.steps.k8s.get_kube_client", return_value=step.kube):
+            if replacement == "false":
+                assert step.run(step_context).result_type == ResultType.SKIPPED
+                step.kube.apply.assert_not_called()
+                step._restart_cilium_on_node.assert_not_called()
+                return
+
+            assert step.run(step_context).result_type == ResultType.COMPLETED
+            applied = step.kube.apply.call_args.args[0]
+            assert applied.spec["defaults"] == {
+                "devices": expected_devices,
+                "direct-routing-device": "eth1.2743",
+            }
+            applied.metadata.annotations["sunbeam/restart-pending"] = "false"
+            step.kube.list.return_value = [applied]
+            assert step.run(step_context).result_type == ResultType.SKIPPED
+
+        step.kube.apply.assert_called_once()
+        step._restart_cilium_on_node.assert_called_once_with("node1")
 
     def test_run_outdated_device(self, step, step_context):
         step._get_outdated_resources = Mock(return_value=(["node1"], []))
