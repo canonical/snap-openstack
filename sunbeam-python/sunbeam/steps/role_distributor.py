@@ -99,6 +99,8 @@ def _control_machine_ids(client: Client) -> list[str]:
 class DeployRoleDistributorApplicationStep(DeployMachineApplicationStep):
     """Deploy role-distributor and publish topology-derived assignments."""
 
+    uses_target_charm_base = True
+
     def __init__(
         self,
         deployment: Deployment,

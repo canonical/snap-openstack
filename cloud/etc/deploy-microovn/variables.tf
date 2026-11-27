@@ -148,3 +148,9 @@ variable "ndr_applications" {
   type        = list(string)
   default     = []
 }
+
+variable "charm_base" {
+  description = "Ubuntu base of the target Juju machines"
+  type        = string
+  default     = "ubuntu@24.04"
+}

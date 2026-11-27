@@ -5,18 +5,23 @@ import click
 from rich.console import Console
 
 from sunbeam.versions import (
-    JUJU_BASE,
     JUJU_CHANNEL,
     LXD_CHANNEL,
     OPENSTACK_CHANNEL,
-    SUPPORTED_RELEASE,
+    SUPPORTED_RELEASE_BASES,
 )
 
 console = Console()
 
 
-PREPARE_NODE_TEMPLATE = f"""[ $(lsb_release -sc) != '{SUPPORTED_RELEASE}' ] && \
-{{ echo 'ERROR: Sunbeam deploy only supported on {SUPPORTED_RELEASE}'; exit 1; }}
+RELEASE_CASES = "\n".join(
+    f"    {release}) juju_base='{base}' ;;"
+    for release, base in SUPPORTED_RELEASE_BASES.items()
+)
+PREPARE_NODE_TEMPLATE = f"""case "$(lsb_release -sc)" in
+{RELEASE_CASES}
+    *) echo 'ERROR: Sunbeam deployment requires Noble or Resolute'; exit 1 ;;
+esac
 
 # :warning: Node Preparation for OpenStack Sunbeam :warning:
 # All of these commands perform privileged operations
@@ -215,9 +220,10 @@ if [ $? -ne 0 ]; then
     set -e
     if printenv | grep -q "^HTTP_PROXY"; then
         sudo --preserve-env --user $USER juju download juju-controller \\
-            --channel {JUJU_CHANNEL} --base {JUJU_BASE}
+            --channel {JUJU_CHANNEL} --base "$juju_base"
         mv juju-controller_r*.charm juju-controller.charm
         sudo --preserve-env --user $USER juju bootstrap localhost \\
+            --bootstrap-base "$juju_base" \\
             --controller-charm-path=juju-controller.charm \\
             --config "juju-http-proxy=$HTTP_PROXY" \\
             --config "juju-https-proxy=$HTTPS_PROXY" \\
@@ -246,7 +252,7 @@ if [ $? -ne 0 ]; then
         sudo --preserve-env --user $USER juju wait-for unit controller/0 \\
             --query 'life=="alive"'
     else
-        sudo --user $USER juju bootstrap localhost
+        sudo --user $USER juju bootstrap localhost --bootstrap-base "$juju_base"
     fi
     echo "Juju bootstrap complete, you can now bootstrap sunbeam!"
 fi

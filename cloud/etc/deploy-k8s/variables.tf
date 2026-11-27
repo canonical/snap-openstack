@@ -35,3 +35,9 @@ variable "endpoint_bindings" {
   type        = set(map(string))
   default     = null
 }
+
+variable "charm_base" {
+  description = "Ubuntu base of the target Juju machines"
+  type        = string
+  default     = "ubuntu@24.04"
+}

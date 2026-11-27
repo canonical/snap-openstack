@@ -19,22 +19,27 @@ def determine_version() -> str:
     return risk
 
 
-SUPPORTED_RELEASE = "noble"
+SUPPORTED_RELEASE_BASES = {"noble": "ubuntu@24.04", "resolute": "ubuntu@26.04"}
+_DEPLOYMENT_VERSION = determine_version()
+_IS_GAZPACHO = _DEPLOYMENT_VERSION == "2026.1"
+
 JUJU_CHANNEL = "3.6/stable"
 JUJU_BASE = "ubuntu@24.04"
-OPENSTACK_CHANNEL = f"{determine_version()}/stable"
-RABBITMQ_CHANNEL = "4.0/stable"
+# Gazpacho uses channels with published Resolute revisions on both host bases.
+OPENSTACK_CHANNEL = f"{_DEPLOYMENT_VERSION}/{'edge' if _IS_GAZPACHO else 'stable'}"
+RABBITMQ_CHANNEL = "4.0/edge" if _IS_GAZPACHO else "4.0/stable"
 TRAEFIK_CHANNEL = "latest/stable"
 MICROCEPH_CHANNEL = "tentacle/stable"
 MICROOVN_CHANNEL = "26.03/stable"
-ROLE_DISTRIBUTOR_CHANNEL = "latest/stable"
+ROLE_DISTRIBUTOR_CHANNEL = "latest/edge" if _IS_GAZPACHO else "latest/stable"
+TOKEN_DISTRIBUTOR_CHANNEL = "v1/candidate" if _IS_GAZPACHO else "v1/stable"
 MYSQL_CHANNEL = "8.0/stable"
-CERT_AUTH_CHANNEL = "1/stable"
-MANUAL_TLS_CERTIFICATES_CHANNEL = "1/stable"
+CERT_AUTH_CHANNEL = "1/candidate" if _IS_GAZPACHO else "1/stable"
+MANUAL_TLS_CERTIFICATES_CHANNEL = "1/beta"
 BIND_CHANNEL = "9/stable"
 VAULT_CHANNEL = "2.0/stable"
 CONSUL_CHANNEL = "1.19/stable"
-K8S_CHANNEL = "1.32/stable"
+K8S_CHANNEL = "1.36/candidate" if _IS_GAZPACHO else "1.32/stable"
 K8S_MIN_SUPPORTED_TRACK = "1.32"
 MULTUS_CHANNEL = "latest/stable"
 LXD_CHANNEL = "5.21/stable"
@@ -73,7 +78,7 @@ MACHINE_CHARMS = {
     "microovn": MICROOVN_CHANNEL,
     "role-distributor": ROLE_DISTRIBUTOR_CHANNEL,
     "openstack-network-agents": OPENSTACK_CHANNEL,
-    "microcluster-token-distributor": "v1/stable",
+    "microcluster-token-distributor": TOKEN_DISTRIBUTOR_CHANNEL,
     "sunbeam-ovn-proxy": OPENSTACK_CHANNEL,
     "k8s": K8S_CHANNEL,
     "openstack-hypervisor": OPENSTACK_CHANNEL,

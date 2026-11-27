@@ -35,3 +35,9 @@ variable "machine_model_uuid" {
   description = "UUID of Juju model to use for deployment"
   type        = string
 }
+
+variable "charm_base" {
+  description = "Ubuntu base of the target Juju machines"
+  type        = string
+  default     = "ubuntu@24.04"
+}

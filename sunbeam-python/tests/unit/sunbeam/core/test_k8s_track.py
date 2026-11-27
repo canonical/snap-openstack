@@ -27,7 +27,7 @@ from sunbeam.core.k8s_track import (
 from sunbeam.core.manifest import AddManifestStep, Manifest
 from sunbeam.core.terraform import TerraformException, TerraformHelper
 from sunbeam.steps.k8s_upgrade import K8SCharmUpgradeStep
-from sunbeam.versions import DEPLOY_K8S_TFVAR_MAP
+from sunbeam.versions import DEPLOY_K8S_TFVAR_MAP, K8S_CHANNEL
 
 
 @pytest.fixture
@@ -232,7 +232,7 @@ def test_failed_first_apply_can_change_track_only_without_deployed_state(
 def test_new_deployment_without_controller_uses_default(client, state):
     assert (
         K8STrackGuard(client, None, "machines").resolve(None, persist=True)
-        == "1.32/stable"
+        == K8S_CHANNEL
     )
     assert K8S_TRACK_CONFIG_KEY not in state
 
@@ -421,7 +421,7 @@ def test_manifest_export_includes_effective_channel(
     result = CliRunner().invoke(generate, ["-f", str(path)], obj=deployment)
 
     assert result.exit_code == 0, result.output
-    assert f"channel: {deployed_channel or '1.32/stable'}" in path.read_text()
+    assert f"channel: {deployed_channel or K8S_CHANNEL}" in path.read_text()
     assert deployment.get_manifest().core.software.charms["k8s"].channel is None
 
 

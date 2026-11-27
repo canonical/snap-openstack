@@ -40,6 +40,7 @@ module "cinder-volume" {
 
   machine_model_uuid             = data.juju_model.model.uuid
   application_name               = each.value.application_name
+  charm_base                     = each.value.charm_base
   charm_channel                  = each.value.charm_channel
   charm_revision                 = each.value.charm_revision
   charm_config                   = each.value.charm_config

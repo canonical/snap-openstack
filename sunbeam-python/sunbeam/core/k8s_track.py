@@ -285,4 +285,8 @@ class K8STrackGuard:
 
         if requested_channel is not None:
             return requested_channel
-        return app.charm_channel if app is not None else f"{track}/stable"
+        if app is not None:
+            return app.charm_channel
+        if recorded_track is None and existing is None:
+            return K8S_CHANNEL
+        return f"{track}/stable"

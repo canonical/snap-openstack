@@ -31,6 +31,8 @@ SUBORDINATE_APPLICATIONS = [EPA_ORCHESTRATOR_APPLICATION]
 class DeploySunbeamMachineApplicationStep(DeployMachineApplicationStep):
     """Deploy openstack-hyervisor application using Terraform cloud."""
 
+    uses_target_charm_base = True
+
     def __init__(
         self,
         deployment: Deployment,

@@ -11,6 +11,7 @@ variable "cinder-volumes" {
   description = "Cinder Volume application configuration"
   type = map(object({
     application_name               = string
+    charm_base                     = optional(string, "ubuntu@24.04")
     charm_channel                  = string
     charm_revision                 = number
     charm_config                   = map(string)

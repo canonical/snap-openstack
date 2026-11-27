@@ -22,6 +22,7 @@ from sunbeam.core.common import (
 from sunbeam.core.deployment import Deployment, Networks
 from sunbeam.core.juju import (
     ApplicationNotFoundException,
+    JujuException,
     JujuHelper,
     JujuStepHelper,
 )
@@ -160,6 +161,17 @@ class DeployMicroOVNApplicationStep(DeployMachineApplicationStep):
         }
 
         machines_by_arch = self.ovn_manager.get_machines_by_architecture()
+        charm_base = self.jhelper.get_deployment_charm_base(
+            self.model,
+            APPLICATION,
+            machine_ids=[
+                machine
+                for machines in machines_by_arch.values()
+                for machine in machines
+            ],
+        )
+        if charm_base == "ubuntu@26.04":
+            extra_tfvars["charm_base"] = charm_base
         extra_tfvars["microovn_machine_ids_by_architecture"] = machines_by_arch
         distributor_ids = self.ovn_manager.get_token_distributor_machines()
         extra_tfvars["token_distributor_machine_ids"] = distributor_ids[:1]
@@ -173,7 +185,14 @@ class DeployMicroOVNApplicationStep(DeployMachineApplicationStep):
                 if agent_charm_manifest and agent_charm_manifest.channel
                 else versions.OPENSTACK_CHANNEL
             )
-            revisions = self.jhelper.get_available_charm_revisions(AGENT_APP, channel)
+            if charm_base == "ubuntu@26.04":
+                revisions = self.jhelper.get_available_charm_revisions(
+                    AGENT_APP, channel, charm_base
+                )
+            else:
+                revisions = self.jhelper.get_available_charm_revisions(
+                    AGENT_APP, channel
+                )
             arm64_revision = revisions.get(ovn.ARM64_ARCHITECTURE)
             if arm64_revision is not None:
                 extra_tfvars["charm_openstack_network_agents_arm64_revision"] = (
@@ -237,7 +256,7 @@ class DeployMicroOVNApplicationStep(DeployMachineApplicationStep):
                 tf_apply_extra_args=self.tf_apply_extra_args(),
                 reporter=context.reporter,
             )
-        except TerraformException as e:
+        except (JujuException, TerraformException) as e:
             return Result(ResultType.FAILED, str(e))
 
         if not self.wait_for_readiness:

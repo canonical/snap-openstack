@@ -312,6 +312,9 @@ class CoreConfig(pydantic.BaseModel):
 
     proxy: _ProxyConfig | None = None
     bootstrap: _BootstrapConfig | None = None
+    maas_base: typing.Literal["ubuntu@24.04", "ubuntu@26.04"] | None = Field(
+        default=None, description="Ubuntu base for machines provisioned by MAAS"
+    )
     database: str | None = None
     region: str | None = None
     addons: _Addons | None = None

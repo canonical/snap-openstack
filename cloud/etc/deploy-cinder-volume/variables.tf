@@ -101,3 +101,9 @@ variable "enable-telemetry-notifications" {
   type        = bool
   default     = false
 }
+
+variable "charm_base" {
+  description = "Ubuntu base of the target Juju machines"
+  type        = string
+  default     = "ubuntu@24.04"
+}

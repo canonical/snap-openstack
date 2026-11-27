@@ -164,6 +164,8 @@ def get_loadbalancer_config(client: Client) -> str | None:
 class DeployK8SApplicationStep(DeployMachineApplicationStep):
     """Deploy K8S application using Terraform."""
 
+    uses_target_charm_base = True
+
     _ADDONS_CONFIG = K8S_ADDONS_CONFIG_KEY
 
     def __init__(

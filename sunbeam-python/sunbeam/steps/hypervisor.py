@@ -78,6 +78,8 @@ HYPERVISOR_REFERENCES_POLL_INTERVAL = 10
 class DeployHypervisorApplicationStep(DeployMachineApplicationStep):
     """Deploy openstack-hyervisor application using Terraform cloud."""
 
+    uses_target_charm_base = True
+
     _CONFIG = CONFIG_KEY
 
     def __init__(
