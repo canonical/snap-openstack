@@ -1153,14 +1153,16 @@ class MaasBootstrapJujuStep(BootstrapJujuStep):
         password: str,
         bootstrap_args: list[str] | None = None,
         proxy_settings: dict | None = None,
+        *,
+        base: str | None = None,
     ):
-        bootstrap_args = bootstrap_args or []
+        bootstrap_args = list(bootstrap_args or ())
         bootstrap_args.extend(
             (
                 "--bootstrap-constraints",
                 f"tags={maas_deployment.RoleTags.JUJU_CONTROLLER.value}",
                 "--bootstrap-base",
-                JUJU_BASE,
+                base or JUJU_BASE,
             )
         )
         if proxy_settings:
@@ -1574,7 +1576,7 @@ class MaasDeployMachinesStep(BaseStep):
         self.deployment = deployment
         self.jhelper = jhelper
         self.model = model
-        self.manifest = manifest
+        self.base = (manifest.core.config.maas_base if manifest else None) or JUJU_BASE
 
     def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not."""
@@ -1669,6 +1671,8 @@ class MaasDeployMachinesStep(BaseStep):
             juju_machine = self.jhelper.add_machine(
                 "system-id=" + node["systemid"],
                 self.model,
+                # Tagged custom images keep their existing base selection.
+                base=JUJU_BASE if node.get("image_name") else self.base,
                 constraints=constraints,
             )
             self.client.cluster.update_node_info(
@@ -1747,12 +1751,15 @@ class MaasDeployInfraMachinesStep(BaseStep):
         deployment: maas_deployment.MaasDeployment,
         jhelper: JujuHelper,
         model: str,
+        *,
+        base: str | None = None,
     ):
         super().__init__("Deploy Infra machines", "Deploying infra machines")
         self.maas_client = maas_client
         self.deployment = deployment
         self.jhelper = jhelper
         self.model = model
+        self.base = base or JUJU_BASE
 
     def is_skip(self, context: StepContext) -> Result:
         """Determines if the step should be skipped or not."""
@@ -1791,7 +1798,7 @@ class MaasDeployInfraMachinesStep(BaseStep):
             self.jhelper.add_machine(
                 "system-id=" + machine["system_id"],
                 self.model,
-                JUJU_BASE,
+                self.base,
                 constraints=[
                     "tags="
                     + maas_deployment.RoleTags.SUNBEAM.value

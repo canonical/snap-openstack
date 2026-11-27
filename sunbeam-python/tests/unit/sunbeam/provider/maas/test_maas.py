@@ -17,6 +17,7 @@ from sunbeam.core.checks import DiagnosticResultType
 from sunbeam.core.deployment import Networks
 from sunbeam.core.deployments import DeploymentsConfig
 from sunbeam.core.juju import ControllerNotFoundException
+from sunbeam.core.manifest import Manifest
 from sunbeam.provider.maas.client import MaasClient, _convert_raw_machine
 from sunbeam.provider.maas.commands import (
     configure_cmd,
@@ -58,6 +59,7 @@ from sunbeam.provider.maas.steps import (
     ZoneBalanceCheck,
     ZonesCheck,
 )
+from sunbeam.steps.certificates import DeployCertificatesProviderApplicationStep
 from sunbeam.steps.cinder_volume import (
     DisableCinderVolumeServicesStep,
     RemoveCinderVolumeServicesStep,
@@ -929,6 +931,28 @@ class TestIpRangesCheck:
 
 
 class TestMaasBootstrapJujuStep:
+    @pytest.mark.parametrize(
+        ("base", "expected"), [(None, "ubuntu@24.04"), ("ubuntu@26.04", "ubuntu@26.04")]
+    )
+    def test_bootstrap_base(self, snap, mocker, base, expected):
+        mocker.patch.object(maas_steps, "Snap", return_value=snap)
+        bootstrap_args = ["--bootstrap-constraints", "root-disk=5G"]
+        step = MaasBootstrapJujuStep(
+            Mock(),
+            "test_cloud",
+            "maas",
+            "controller",
+            "password",
+            bootstrap_args,
+            base=base,
+        )
+
+        assert (
+            step.bootstrap_args[step.bootstrap_args.index("--bootstrap-base") + 1]
+            == expected
+        )
+        assert bootstrap_args == ["--bootstrap-constraints", "root-disk=5G"]
+
     def test_is_skip_with_no_machines(self, snap, mocker, step_context):
         maas_client = Mock()
         mocker.patch(
@@ -1297,7 +1321,10 @@ class TestMaasDeployMachinesStep:
         client = Mock()
         jhelper = Mock()
         model = "test_model"
-        return MaasDeployMachinesStep(deployment, client, jhelper, model)
+        manifest = Manifest.model_validate(
+            {"core": {"config": {"maas_base": "ubuntu@26.04"}}}
+        )
+        return MaasDeployMachinesStep(deployment, client, jhelper, model, manifest)
 
     def test_is_skip_with_no_clusterd_nodes(
         self, maas_deploy_machines_step, step_context
@@ -1455,6 +1482,8 @@ class TestMaasDeployMachinesStep:
         assert result.result_type == ResultType.COMPLETED
         calls = step.jhelper.add_machine.call_args_list
         # First batch (non-DPU) deploys x86 before DPU
+        assert calls[0].kwargs["base"] == "ubuntu@26.04"
+        assert calls[1].kwargs["base"] == "ubuntu@24.04"
         assert calls[0].kwargs["constraints"] == ["tags=test-tag"]
         arm_constraints = calls[1].kwargs["constraints"]
         assert "tags=test-tag" in arm_constraints
@@ -1539,7 +1568,16 @@ class TestMaasDeployInfraMachinesStep:
         result = maas_deploy_machines_step.is_skip(step_context)
         assert result.result_type == ResultType.SKIPPED
 
-    def test_run(self, mocker, maas_deploy_machines_step, step_context):
+    @pytest.mark.parametrize("base", [None, "ubuntu@26.04"])
+    def test_run(self, maas_deploy_machines_step, step_context, base):
+        old_step = maas_deploy_machines_step
+        maas_deploy_machines_step = MaasDeployInfraMachinesStep(
+            old_step.maas_client,
+            old_step.deployment,
+            old_step.jhelper,
+            old_step.model,
+            base=base,
+        )
         maas_deploy_machines_step.machines_to_deploy = [
             {
                 "hostname": "test_node1",
@@ -1555,9 +1593,25 @@ class TestMaasDeployInfraMachinesStep:
         result = maas_deploy_machines_step.run(step_context)
         assert result.result_type == ResultType.COMPLETED
         assert maas_deploy_machines_step.jhelper.add_machine.call_count == 2
+        for add_machine in maas_deploy_machines_step.jhelper.add_machine.call_args_list:
+            assert add_machine.args[2] == (base or "ubuntu@24.04")
         assert (
             maas_deploy_machines_step.jhelper.wait_all_machines_deployed.call_count == 1
         )
+
+
+def test_maas_certificates_use_target_machine_base(step_context):
+    jhelper = Mock()
+    jhelper.get_machines.return_value = {"4": Mock(), "5": Mock()}
+    jhelper.get_deployment_charm_base.return_value = "ubuntu@26.04"
+    step = DeployCertificatesProviderApplicationStep(jhelper, Manifest(), "infra")
+
+    assert step.run(step_context).result_type == ResultType.COMPLETED
+    jhelper.get_deployment_charm_base.assert_called_once_with(
+        "infra", "tls-operator", machine_ids=["4"]
+    )
+    assert jhelper.deploy.call_args.kwargs["base"] == "ubuntu@26.04"
+    assert jhelper.deploy.call_args.kwargs["to"] == ["4"]
 
 
 class TestMaasConfigureMicrocephOSDStep:

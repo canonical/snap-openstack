@@ -341,6 +341,7 @@ def bootstrap(
     deployment: MaasDeployment = ctx.obj
     # Validate manifest file
     manifest = deployment.get_manifest(manifest_path)
+    maas_base = manifest.core.config.maas_base
 
     LOG.debug("Manifest used for deployment - core: %s", manifest.core)
     LOG.debug("Manifest used for deployment - features: %s", manifest.features)
@@ -433,6 +434,7 @@ def bootstrap(
                 deployment.juju_account.password,  # type: ignore
                 manifest.core.software.juju.bootstrap_args,
                 proxy_settings=proxy_settings,
+                base=maas_base,
             )
         )
         plan.append(
@@ -480,7 +482,7 @@ def bootstrap(
     )
     plan2.append(
         MaasDeployInfraMachinesStep(
-            maas_client, deployment, jhelper, deployment.infra_model
+            maas_client, deployment, jhelper, deployment.infra_model, base=maas_base
         )
     )
     plan2.append(
