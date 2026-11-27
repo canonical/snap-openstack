@@ -48,9 +48,9 @@ core:
       rabbitmq-k8s:
         channel: 4.0/edge
       microcluster-token-distributor:
-        channel: v1/stable
+        channel: v1/candidate
       role-distributor:
-        channel: latest/stable
+        channel: latest/edge
       sunbeam-ovn-proxy:
         channel: 2026.1/edge
 features:

@@ -51,9 +51,6 @@ jobs:
           - os: resolute
             charm-base: ubuntu@26.04
             k8s-track: "1.36"
-            k8s-channel: 1.36/candidate
-            juju-cli-channel: 3.6/edge
-            certificate-authority-channel: 1/candidate
     runs-on: [self-hosted, large, "${{ matrix.os }}", x64]
     env:
       K8S_TRACK: ${{ matrix.k8s-track }}
@@ -105,6 +102,10 @@ jobs:
           sudo snap connect openstack:dot-local-share-juju
           sudo snap connect openstack:dot-config-openstack
           sudo snap connect openstack:dot-local-share-openstack
+          if [ "$EXPECTED_OS" = resolute ]; then
+            # A sideloaded snap otherwise uses the embedded edge manifest.
+            sudo snap set openstack deployment.risk=stable
+          fi
 
           if [ -n "$JUJU_CLI_CHANNEL" ]; then
             # Keep the Kubernetes controller agent at the version used by LXD.
@@ -122,7 +123,9 @@ jobs:
           # have more than 32 GiB of memory where Sunbeam selects the multi mysql
           # mode instead. So we have to override the Sunbeam's decision to be
           # closer to the tutorial scenario.
-          uv run --project sunbeam-python --frozen --isolated --extra=dev python - <<'PY'
+          manifest_args=
+          if [ "$EXPECTED_OS" = noble ]; then
+            uv run --project sunbeam-python --frozen --isolated --extra=dev python - <<'PY'
           import os
           from pathlib import Path
           import yaml
@@ -139,7 +142,9 @@ jobs:
               juju.setdefault("bootstrap_args", []).append(f"--agent-version={agent_version}")
           Path("k8s-manifest.yml").write_text(yaml.safe_dump(manifest))
           PY
-          sg snap_daemon "openstack.sunbeam cluster bootstrap --manifest k8s-manifest.yml --accept-defaults --topology single --database single"
+            manifest_args="--manifest k8s-manifest.yml"
+          fi
+          sg snap_daemon "openstack.sunbeam cluster bootstrap $manifest_args --accept-defaults --topology single --database single"
           sg snap_daemon "openstack.sunbeam cluster list"
 
           # Verify both a machine charm and a Kubernetes charm selected the expected base.
@@ -161,15 +166,19 @@ jobs:
           check_charm_base admin/openstack-machines sunbeam-machine
           check_charm_base openstack keystone
 
-          # Verify bootstrap_model_configs from manifest were applied to the openstack model.
-          # The edge.yml sets logging-config for the openstack model; confirm it is not the default.
-          actual_logging=$(juju model-config -m openstack logging-config)
-          expected_logging="<root>=WARNING;unit=DEBUG"
-          if [ "$actual_logging" != "$expected_logging" ]; then
-            echo "ERROR: logging-config mismatch: expected '$expected_logging', got '$actual_logging'"
-            exit 1
+          if [ "$EXPECTED_OS" = resolute ]; then
+            check_charm_base admin/openstack-machines role-distributor
+            check_charm_base admin/openstack-machines microcluster-token-distributor
+          else
+            # Verify bootstrap_model_configs from the CI manifest were applied.
+            actual_logging=$(juju model-config -m openstack logging-config)
+            expected_logging="<root>=WARNING;unit=DEBUG"
+            if [ "$actual_logging" != "$expected_logging" ]; then
+              echo "ERROR: logging-config mismatch: expected '$expected_logging', got '$actual_logging'"
+              exit 1
+            fi
+            echo "OK: logging-config correctly set to '$actual_logging'"
           fi
-          echo "OK: logging-config correctly set to '$actual_logging'"
           # Note: Moving configure before enabling caas just to ensure caas images are not downloaded
           # To download caas image, require ports to open on firewall to access fedora images.
           sg snap_daemon "openstack.sunbeam configure --accept-defaults --openrc demo-openrc"
@@ -229,7 +238,11 @@ jobs:
           sg snap_daemon "openstack.sunbeam cluster refresh mysql"
           sg snap_daemon "openstack.sunbeam cluster refresh vault"
           sg snap_daemon "openstack.sunbeam cluster refresh ingress"
-          sg snap_daemon "openstack.sunbeam cluster refresh --manifest k8s-manifest.yml"
+          if [ -n "$manifest_args" ]; then
+            sg snap_daemon "openstack.sunbeam cluster refresh $manifest_args"
+          else
+            sg snap_daemon "openstack.sunbeam cluster refresh --force"
+          fi
 
       - name: Verify Kubernetes resource compatibility
         working-directory: sunbeam-python
