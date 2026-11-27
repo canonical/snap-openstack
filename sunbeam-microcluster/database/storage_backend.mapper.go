@@ -12,60 +12,60 @@ import (
 
 	"github.com/canonical/lxd/lxd/db/query"
 	"github.com/canonical/lxd/shared/api"
-	"github.com/canonical/microcluster/v2/cluster"
+	"github.com/canonical/microcluster/v3/microcluster/db"
 )
 
 var _ = api.ServerEnvironment{}
 
-var storageBackendObjects = cluster.RegisterStmt(`
+var storageBackendObjects = db.RegisterStmt(`
 SELECT storage_backends.id, storage_backends.name, storage_backends.type, storage_backends.config, storage_backends.principal, storage_backends.model_uuid
   FROM storage_backends
   ORDER BY storage_backends.name
 `)
 
-var storageBackendObjectsByName = cluster.RegisterStmt(`
+var storageBackendObjectsByName = db.RegisterStmt(`
 SELECT storage_backends.id, storage_backends.name, storage_backends.type, storage_backends.config, storage_backends.principal, storage_backends.model_uuid
   FROM storage_backends
   WHERE ( storage_backends.name = ? )
   ORDER BY storage_backends.name
 `)
 
-var storageBackendObjectsByType = cluster.RegisterStmt(`
+var storageBackendObjectsByType = db.RegisterStmt(`
 SELECT storage_backends.id, storage_backends.name, storage_backends.type, storage_backends.config, storage_backends.principal, storage_backends.model_uuid
   FROM storage_backends
   WHERE ( storage_backends.type = ? )
   ORDER BY storage_backends.name
 `)
 
-var storageBackendObjectsByPrincipal = cluster.RegisterStmt(`
+var storageBackendObjectsByPrincipal = db.RegisterStmt(`
 SELECT storage_backends.id, storage_backends.name, storage_backends.type, storage_backends.config, storage_backends.principal, storage_backends.model_uuid
   FROM storage_backends
   WHERE ( storage_backends.principal = ? )
   ORDER BY storage_backends.name
 `)
 
-var storageBackendObjectsByModelUUID = cluster.RegisterStmt(`
+var storageBackendObjectsByModelUUID = db.RegisterStmt(`
 SELECT storage_backends.id, storage_backends.name, storage_backends.type, storage_backends.config, storage_backends.principal, storage_backends.model_uuid
   FROM storage_backends
   WHERE ( storage_backends.model_uuid = ? )
   ORDER BY storage_backends.name
 `)
 
-var storageBackendID = cluster.RegisterStmt(`
+var storageBackendID = db.RegisterStmt(`
 SELECT storage_backends.id FROM storage_backends
   WHERE storage_backends.name = ?
 `)
 
-var storageBackendCreate = cluster.RegisterStmt(`
+var storageBackendCreate = db.RegisterStmt(`
 INSERT INTO storage_backends (name, type, config, principal, model_uuid)
   VALUES (?, ?, ?, ?, ?)
 `)
 
-var storageBackendDeleteByName = cluster.RegisterStmt(`
+var storageBackendDeleteByName = db.RegisterStmt(`
 DELETE FROM storage_backends WHERE name = ?
 `)
 
-var storageBackendUpdate = cluster.RegisterStmt(`
+var storageBackendUpdate = db.RegisterStmt(`
 UPDATE storage_backends
   SET name = ?, type = ?, config = ?, principal = ?, model_uuid = ?
  WHERE id = ?
@@ -139,7 +139,7 @@ func GetStorageBackends(ctx context.Context, tx *sql.Tx, filters ...StorageBacke
 	queryParts := [2]string{}
 
 	if len(filters) == 0 {
-		sqlStmt, err = cluster.Stmt(tx, storageBackendObjects)
+		sqlStmt, err = db.Stmt(tx, storageBackendObjects)
 		if err != nil {
 			return nil, fmt.Errorf("Failed to get \"storageBackendObjects\" prepared statement: %w", err)
 		}
@@ -149,7 +149,7 @@ func GetStorageBackends(ctx context.Context, tx *sql.Tx, filters ...StorageBacke
 		if filter.Type != nil && filter.Name == nil && filter.Principal == nil && filter.ModelUUID == nil {
 			args = append(args, []any{filter.Type}...)
 			if len(filters) == 1 {
-				sqlStmt, err = cluster.Stmt(tx, storageBackendObjectsByType)
+				sqlStmt, err = db.Stmt(tx, storageBackendObjectsByType)
 				if err != nil {
 					return nil, fmt.Errorf("Failed to get \"storageBackendObjectsByType\" prepared statement: %w", err)
 				}
@@ -157,7 +157,7 @@ func GetStorageBackends(ctx context.Context, tx *sql.Tx, filters ...StorageBacke
 				break
 			}
 
-			query, err := cluster.StmtString(storageBackendObjectsByType)
+			query, err := db.StmtString(storageBackendObjectsByType)
 			if err != nil {
 				return nil, fmt.Errorf("Failed to get \"storageBackendObjects\" prepared statement: %w", err)
 			}
@@ -173,7 +173,7 @@ func GetStorageBackends(ctx context.Context, tx *sql.Tx, filters ...StorageBacke
 		} else if filter.Principal != nil && filter.Name == nil && filter.Type == nil && filter.ModelUUID == nil {
 			args = append(args, []any{filter.Principal}...)
 			if len(filters) == 1 {
-				sqlStmt, err = cluster.Stmt(tx, storageBackendObjectsByPrincipal)
+				sqlStmt, err = db.Stmt(tx, storageBackendObjectsByPrincipal)
 				if err != nil {
 					return nil, fmt.Errorf("Failed to get \"storageBackendObjectsByPrincipal\" prepared statement: %w", err)
 				}
@@ -181,7 +181,7 @@ func GetStorageBackends(ctx context.Context, tx *sql.Tx, filters ...StorageBacke
 				break
 			}
 
-			query, err := cluster.StmtString(storageBackendObjectsByPrincipal)
+			query, err := db.StmtString(storageBackendObjectsByPrincipal)
 			if err != nil {
 				return nil, fmt.Errorf("Failed to get \"storageBackendObjects\" prepared statement: %w", err)
 			}
@@ -197,7 +197,7 @@ func GetStorageBackends(ctx context.Context, tx *sql.Tx, filters ...StorageBacke
 		} else if filter.Name != nil && filter.Type == nil && filter.Principal == nil && filter.ModelUUID == nil {
 			args = append(args, []any{filter.Name}...)
 			if len(filters) == 1 {
-				sqlStmt, err = cluster.Stmt(tx, storageBackendObjectsByName)
+				sqlStmt, err = db.Stmt(tx, storageBackendObjectsByName)
 				if err != nil {
 					return nil, fmt.Errorf("Failed to get \"storageBackendObjectsByName\" prepared statement: %w", err)
 				}
@@ -205,7 +205,7 @@ func GetStorageBackends(ctx context.Context, tx *sql.Tx, filters ...StorageBacke
 				break
 			}
 
-			query, err := cluster.StmtString(storageBackendObjectsByName)
+			query, err := db.StmtString(storageBackendObjectsByName)
 			if err != nil {
 				return nil, fmt.Errorf("Failed to get \"storageBackendObjects\" prepared statement: %w", err)
 			}
@@ -221,7 +221,7 @@ func GetStorageBackends(ctx context.Context, tx *sql.Tx, filters ...StorageBacke
 		} else if filter.ModelUUID != nil && filter.Name == nil && filter.Type == nil && filter.Principal == nil {
 			args = append(args, []any{filter.ModelUUID}...)
 			if len(filters) == 1 {
-				sqlStmt, err = cluster.Stmt(tx, storageBackendObjectsByModelUUID)
+				sqlStmt, err = db.Stmt(tx, storageBackendObjectsByModelUUID)
 				if err != nil {
 					return nil, fmt.Errorf("Failed to get \"storageBackendObjectsByModelUUID\" prepared statement: %w", err)
 				}
@@ -229,7 +229,7 @@ func GetStorageBackends(ctx context.Context, tx *sql.Tx, filters ...StorageBacke
 				break
 			}
 
-			query, err := cluster.StmtString(storageBackendObjectsByModelUUID)
+			query, err := db.StmtString(storageBackendObjectsByModelUUID)
 			if err != nil {
 				return nil, fmt.Errorf("Failed to get \"storageBackendObjects\" prepared statement: %w", err)
 			}
@@ -288,7 +288,7 @@ func GetStorageBackend(ctx context.Context, tx *sql.Tx, name string) (*StorageBa
 // GetStorageBackendID return the ID of the StorageBackend with the given key.
 // generator: StorageBackend ID
 func GetStorageBackendID(ctx context.Context, tx *sql.Tx, name string) (int64, error) {
-	stmt, err := cluster.Stmt(tx, storageBackendID)
+	stmt, err := db.Stmt(tx, storageBackendID)
 	if err != nil {
 		return -1, fmt.Errorf("Failed to get \"storageBackendID\" prepared statement: %w", err)
 	}
@@ -345,7 +345,7 @@ func CreateStorageBackend(ctx context.Context, tx *sql.Tx, object StorageBackend
 	args[4] = object.ModelUUID
 
 	// Prepared statement to use.
-	stmt, err := cluster.Stmt(tx, storageBackendCreate)
+	stmt, err := db.Stmt(tx, storageBackendCreate)
 	if err != nil {
 		return -1, fmt.Errorf("Failed to get \"storageBackendCreate\" prepared statement: %w", err)
 	}
@@ -367,7 +367,7 @@ func CreateStorageBackend(ctx context.Context, tx *sql.Tx, object StorageBackend
 // DeleteStorageBackend deletes the StorageBackend matching the given key parameters.
 // generator: StorageBackend DeleteOne-by-Name
 func DeleteStorageBackend(_ context.Context, tx *sql.Tx, name string) error {
-	stmt, err := cluster.Stmt(tx, storageBackendDeleteByName)
+	stmt, err := db.Stmt(tx, storageBackendDeleteByName)
 	if err != nil {
 		return fmt.Errorf("Failed to get \"storageBackendDeleteByName\" prepared statement: %w", err)
 	}
@@ -399,7 +399,7 @@ func UpdateStorageBackend(ctx context.Context, tx *sql.Tx, name string, object S
 		return err
 	}
 
-	stmt, err := cluster.Stmt(tx, storageBackendUpdate)
+	stmt, err := db.Stmt(tx, storageBackendUpdate)
 	if err != nil {
 		return fmt.Errorf("Failed to get \"storageBackendUpdate\" prepared statement: %w", err)
 	}

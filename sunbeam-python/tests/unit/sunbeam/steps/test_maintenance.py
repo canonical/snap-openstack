@@ -199,7 +199,7 @@ class TestCreateWatcherHostMaintenanceAuditStep:
 
 class TestCreateWatcherWorkloadBalancingAuditStep:
     def test_create_audit(self, mock_watcher_helper, mock_watcher_client):
-        step = CreateWatcherWorkloadBalancingAuditStep(Mock(), "fake-node")
+        step = CreateWatcherWorkloadBalancingAuditStep(Mock())
         result = step._create_audit()
         assert result == mock_watcher_helper.create_audit.return_value
         mock_watcher_helper.get_workload_balancing_audit_template.assert_called_once_with(

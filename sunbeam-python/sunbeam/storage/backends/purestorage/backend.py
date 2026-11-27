@@ -7,7 +7,7 @@ import logging
 from enum import StrEnum
 from typing import Annotated, Literal
 
-from pydantic import Field
+from pydantic import Field, IPvAnyAddress
 from rich.console import Console
 
 from sunbeam.core.manifest import StorageBackendConfig
@@ -40,7 +40,8 @@ class PureStorageConfig(StorageBackendConfig):
 
     # Mandatory connection parameters
     san_ip: Annotated[
-        str, Field(description="Pure Storage FlashArray management IP or hostname")
+        IPvAnyAddress,
+        Field(description="Pure Storage FlashArray management IP address"),
     ]
     pure_api_token: Annotated[
         str,

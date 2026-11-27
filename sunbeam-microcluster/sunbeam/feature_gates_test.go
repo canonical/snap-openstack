@@ -239,7 +239,7 @@ func TestFeatureGateNamingConventions(t *testing.T) {
 			name := tc.gateKey[8:]
 			followsConvention := true
 			for _, ch := range name {
-				if !((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '-' || ch == '_') {
+				if (ch < 'a' || ch > 'z') && (ch < '0' || ch > '9') && ch != '-' && ch != '_' {
 					followsConvention = false
 					break
 				}

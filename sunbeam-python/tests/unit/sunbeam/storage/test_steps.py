@@ -1,16 +1,23 @@
 # SPDX-FileCopyrightText: 2025 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
+from copy import deepcopy
+from types import SimpleNamespace
 from typing import Annotated
 from unittest.mock import Mock, patch
 
 import pydantic
 import pytest
+from requests.exceptions import Timeout
 
+from sunbeam.clusterd.service import (
+    ClusterServiceUnavailableException,
+    ConfigItemNotFoundException,
+)
 from sunbeam.core.common import ResultType
 from sunbeam.core.questions import PasswordPromptQuestion, PromptQuestion
 from sunbeam.core.steps import DeployMachineApplicationStep
-from sunbeam.storage.models import SecretDictField
+from sunbeam.storage.models import BackendValidationException, SecretDictField
 from sunbeam.storage.steps import (
     BaseStorageBackendDeployStep,
     DeploySpecificCinderVolumeStep,
@@ -293,9 +300,134 @@ class TestPromptBackendConfig:
         assert preseed["secret_field"] == "cli-secret"
         assert preseed["optional_field"] == "manifest-optional"
 
+    def test_accept_defaults_rejects_empty_required_value(
+        self, basic_client, basic_manifest, mock_backend
+    ):
+        """Blank CLI values must not be treated as present answers."""
+        basic_manifest.storage = None
+
+        with (
+            patch("sunbeam.storage.steps.load_answers", return_value={}),
+            patch("sunbeam.storage.steps.write_answers") as mock_write_answers,
+            pytest.raises(BackendValidationException, match="required_field"),
+        ):
+            prompt_backend_config(
+                basic_client,
+                mock_backend,
+                basic_manifest,
+                "test-backend",
+                {"required_field": "", "secret_field": "secret"},
+                accept_defaults=True,
+            )
+
+        mock_write_answers.assert_not_called()
+
+    def test_accept_defaults_rejects_whitespace_and_saved_blank(
+        self, basic_client, basic_manifest, mock_backend
+    ):
+        """Whitespace and a blank saved answer are not usable defaults."""
+        basic_manifest.storage = None
+
+        with (
+            patch(
+                "sunbeam.storage.steps.load_answers",
+                return_value={"secret_field": "   "},
+            ),
+            patch("sunbeam.storage.steps.write_answers"),
+            pytest.raises(BackendValidationException, match="required_field"),
+        ):
+            prompt_backend_config(
+                basic_client,
+                mock_backend,
+                basic_manifest,
+                "test-backend",
+                {"required_field": "  "},
+                accept_defaults=True,
+            )
+
+    def test_accept_defaults_keeps_non_empty_required_values(
+        self, basic_client, basic_manifest, mock_backend
+    ):
+        """Non-empty required values still skip interactive prompts."""
+        basic_manifest.storage = None
+
+        with (
+            patch("sunbeam.storage.steps.load_answers", return_value={}),
+            patch("sunbeam.storage.steps.write_answers") as mock_write_answers,
+        ):
+            variables = prompt_backend_config(
+                basic_client,
+                mock_backend,
+                basic_manifest,
+                "test-backend",
+                {"required_field": "192.0.2.10", "secret_field": "secret"},
+                accept_defaults=True,
+            )
+
+        assert variables["required_field"] == "192.0.2.10"
+        assert variables["secret_field"] == "secret"
+        mock_write_answers.assert_called_once()
+
+    def test_accept_defaults_applies_alias_keys(
+        self, basic_client, basic_manifest, mock_backend
+    ):
+        """Kebab-case config keys are stored under model field names."""
+        basic_manifest.storage = None
+
+        with (
+            patch("sunbeam.storage.steps.load_answers", return_value={}),
+            patch("sunbeam.storage.steps.write_answers"),
+        ):
+            variables = prompt_backend_config(
+                basic_client,
+                mock_backend,
+                basic_manifest,
+                "test-backend",
+                {
+                    "required-field": "value",
+                    "secret-field": "secret",
+                    "optional-field": "opt",
+                },
+                accept_defaults=True,
+            )
+
+        assert variables["required_field"] == "value"
+        assert variables["secret_field"] == "secret"
+        assert variables["optional_field"] == "opt"
+
+    def test_noncompliant_value_is_rejected(
+        self, basic_client, basic_manifest, mock_backend
+    ):
+        """A bad provided value fails the command instead of being dropped."""
+        basic_manifest.storage = None
+
+        with (
+            patch("sunbeam.storage.steps.load_answers", return_value={}),
+            patch("sunbeam.storage.steps.write_answers") as mock_write_answers,
+            pytest.raises(BackendValidationException, match="int_field"),
+        ):
+            prompt_backend_config(
+                basic_client,
+                mock_backend,
+                basic_manifest,
+                "test-backend",
+                {
+                    "required_field": "value",
+                    "secret_field": "secret",
+                    "int_field": "not-an-int",
+                },
+                accept_defaults=True,
+            )
+
+        mock_write_answers.assert_not_called()
+
 
 class TestDeploySpecificCinderVolumeStep:
     """Tests for DeploySpecificCinderVolumeStep class."""
+
+    @pytest.fixture(autouse=True)
+    def no_recorded_backends(self, basic_client):
+        basic_client.cluster.get_storage_backends.return_value.root = []
 
     @pytest.fixture
     def mock_backend_instance(self):
@@ -479,6 +611,7 @@ class TestDeploySpecificCinderVolumeStep:
         )
         assert step.extra_tfvars == extra_tfvars
 
+    @pytest.mark.parametrize("missing_config", [False, True])
     @patch("sunbeam.storage.steps.read_config")
     @patch("sunbeam.storage.steps.get_optional_control_plane_offers")
     @patch("sunbeam.storage.steps.get_mandatory_control_plane_offers")
@@ -492,10 +625,13 @@ class TestDeploySpecificCinderVolumeStep:
         basic_deployment,
         mock_backend_instance,
         step_context,
+        missing_config,
     ):
         """Test that extra_tfvars are applied to terraform vars."""
         # Setup mocks
         mock_read_config.return_value = {"model": "test-uuid"}
+        if missing_config:
+            mock_read_config.side_effect = ConfigItemNotFoundException("missing")
         mock_get_offers.return_value = {
             "keystone-offer-url": "keystone-url",
             "amqp-offer-url": "amqp-url",
@@ -540,7 +676,8 @@ class TestDeploySpecificCinderVolumeStep:
         }
 
         # Run the step
-        deploy_specific_cinder_volume_step.run(step_context)
+        result = deploy_specific_cinder_volume_step.run(step_context)
+        assert result.result_type == ResultType.COMPLETED
 
         # Verify tfhelper was called with extra_tfvars applied
         assert deploy_specific_cinder_volume_step.tfhelper.update_tfvars_and_apply_tf.called
@@ -570,6 +707,72 @@ class TestDeploySpecificCinderVolumeStep:
             tfvars["cinder-volumes"]["cinder-volume-noha"]["charm_config"].get("test")
             == "value"
         )
+
+    @pytest.mark.parametrize(
+        "saved",
+        [
+            None,
+            {},
+            {"backends": {}},
+            {"backends": None},
+            {"backends": []},
+            {"backends": {"test-backend": None}},
+            {"backends": {"test-backend": {}}},
+            {"backends": {"test-backend": "invalid"}},
+        ],
+    )
+    @patch("sunbeam.storage.steps.read_config")
+    def test_run_rejects_missing_backend_variables(
+        self,
+        mock_read_config,
+        saved,
+        deploy_specific_cinder_volume_step,
+        basic_client,
+        basic_tfhelper,
+        step_context,
+    ):
+        """Incomplete saved variables must not reach persistence or apply."""
+        basic_client.cluster.get_storage_backends.return_value.root = [
+            SimpleNamespace(name="test-backend")
+        ]
+        mock_read_config.return_value = deepcopy(saved)
+
+        result = deploy_specific_cinder_volume_step.run(step_context)
+
+        assert result.result_type == ResultType.FAILED
+        assert "Restore the saved variables" in result.message
+        assert mock_read_config.return_value == saved
+        basic_tfhelper.update_tfvars_and_apply_tf.assert_not_called()
+        basic_client.cluster.update_config.assert_not_called()
+        basic_client.cluster.add_config.assert_not_called()
+
+    @pytest.mark.parametrize("source", ["backends", "variables"])
+    @pytest.mark.parametrize(
+        "error",
+        [ClusterServiceUnavailableException("unavailable"), Timeout(), ValueError()],
+    )
+    @patch("sunbeam.storage.steps.read_config")
+    def test_run_backend_lookup_failure(
+        self,
+        mock_read_config,
+        source,
+        error,
+        deploy_specific_cinder_volume_step,
+        basic_client,
+        basic_tfhelper,
+        step_context,
+    ):
+        """Lookup failures cannot be treated as an empty deployment."""
+        if source == "backends":
+            basic_client.cluster.get_storage_backends.side_effect = error
+        else:
+            mock_read_config.side_effect = error
+
+        result = deploy_specific_cinder_volume_step.run(step_context)
+
+        assert result.result_type == ResultType.FAILED
+        assert "Unable to read storage backend configuration" in result.message
+        basic_tfhelper.update_tfvars_and_apply_tf.assert_not_called()
 
     @patch("sunbeam.storage.steps.read_config")
     @patch("sunbeam.storage.steps.get_optional_control_plane_offers")

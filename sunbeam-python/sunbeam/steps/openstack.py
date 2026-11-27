@@ -127,9 +127,13 @@ def pending_infra_app_changes(
     """List pending openstack plan changes that would alter an INFRA_APP.
 
     Runs terraform plan against the written tfvars and returns a message
-    per INFRA_APP application whose channel or revision the plan would
-    change, pointing at the dedicated `sunbeam cluster refresh
-    <subcommand>` flow.  Returns an empty list when nothing is pending.
+    per INFRA_APP application whose channel the plan would change, or
+    whose manifest-pinned revision it would change, pointing at the
+    dedicated `sunbeam cluster refresh <subcommand>` flow.  Revision
+    drift with no manifest pin is not reported: the plan carries no
+    revision for such applications and reads the deployed revision (or
+    a replace's "known after apply") as noise.  Returns an empty list
+    when nothing is pending.
 
     :param skip_charms: INFRA_APP charms to skip: flows that own a charm
         (e.g. `sunbeam enable vault` deploying vault-k8s) manage its
@@ -153,14 +157,28 @@ def pending_infra_app_changes(
         if not subcommand:
             continue
         _, before_channel, before_revision = _charm_identity(change["before"])
-        if before_channel != after_channel or before_revision != after_revision:
-            pending.append(
-                f"{(change['after'] or {}).get('name')}"
-                f" (charm {after_charm}):"
-                f" channel {before_channel} -> {after_channel},"
-                f" revision {before_revision} -> {after_revision}"
-                f" [{address}] — run `sunbeam cluster refresh {subcommand}`"
-            )
+        # The after values come from the merged tfvars: after_revision
+        # carries the manifest pin when the user set one, and is None
+        # otherwise.  Without a pin the plan reports the deployed
+        # revision (or a replace's "known after apply") as revision
+        # noise, so revisions are only drift when a pin exists.
+        channel_changed = before_channel != after_channel
+        revision_changed = (
+            after_revision is not None and before_revision != after_revision
+        )
+        if not channel_changed and not revision_changed:
+            continue
+        changes = []
+        if channel_changed:
+            changes.append(f"channel {before_channel} -> {after_channel}")
+        if revision_changed:
+            changes.append(f"revision {before_revision} -> {after_revision}")
+        pending.append(
+            f"{(change['after'] or {}).get('name')}"
+            f" (charm {after_charm}):"
+            f" {', '.join(changes)}"
+            f" [{address}] — run `sunbeam cluster refresh {subcommand}`"
+        )
     return pending
 
 
@@ -170,9 +188,10 @@ class ValidateInfraAppsStep(BaseStep):
     INFRA_APPS (mysql-k8s, mysql-router-k8s, vault-k8s, traefik-k8s) are
     upgraded by dedicated `sunbeam cluster refresh <subcommand>` flows:
     refuse to reapply the openstack plan while it would change their
-    channel or revision, pointing at the subcommand instead.  Must run
-    at the start of every command that reapplies the openstack plan,
-    after the plan is initialized and before anything is changed.
+    channel or manifest-pinned revision, pointing at the subcommand
+    instead.  Must run at the start of every command that reapplies the
+    openstack plan, after the plan is initialized and before anything
+    is changed.
 
     With a manifest, the gate plans against the tfvars merged from it
     and the stored values.  Without one (``manifest=None``), it plans
@@ -1204,6 +1223,26 @@ class UpdateOpenStackModelConfigStep(BaseStep):
         self.manifest = manifest
         self.deployment = deployment
         self.model_config = model_config or {}
+
+    def is_skip(self, context: StepContext) -> Result:
+        """Determines if the step should be skipped or not.
+
+        The openstack terraform plan only exists once the control plane has
+        been deployed. On bootstrapped-but-not-deployed clusters (e.g. MAAS
+        where bootstrap and deploy are separate commands), running this step
+        would create a partial TerraformVarsOpenstack entry that lacks values
+        computed by DeployControlPlaneStep (model, cloud, credential, offer
+        URLs) and would make cluster deploy treat the cluster as deployed.
+        The proxy is picked up by DeployControlPlaneStep at deploy time.
+
+        :return: ResultType.SKIPPED if the openstack plan was never applied,
+                ResultType.COMPLETED otherwise
+        """
+        try:
+            read_config(self.client, self._CONFIG)
+        except ConfigItemNotFoundException:
+            return Result(ResultType.SKIPPED, "OpenStack plan not applied yet")
+        return Result(ResultType.COMPLETED)
 
     def run(self, context: StepContext) -> Result:
         """Apply model configs to openstack terraform plan."""

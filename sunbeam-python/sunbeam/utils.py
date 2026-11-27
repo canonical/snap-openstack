@@ -33,6 +33,36 @@ REMOTE_ACCESS = "remote"
 IPVANYNETWORK_UNSET = "0.0.0.0/0"
 
 
+def hostnames_match(name: str, other: str) -> bool:
+    """Check whether two hostnames refer to the same machine.
+
+    The same machine may be known by its short hostname or its FQDN
+    depending on the subsystem. Only the two forms of the same name
+    match: node1 matches node1.example.com, but node1.maas does not match
+    node1.other.com.
+    """
+    return name == other or name.startswith(other + ".") or other.startswith(name + ".")
+
+
+def match_hostname(name: str, candidates: typing.Iterable[str]) -> str | None:
+    """Return the candidate that *name* refers to, deterministically.
+
+    An exact match wins over short-hostname matches, and a
+    short-hostname match is only accepted when it is unique, so the
+    result never depends on the order of *candidates*. Returns None
+    when there is no match or the short-hostname matches are
+    ambiguous.
+    """
+    candidates = list(candidates)
+    for candidate in candidates:
+        if candidate == name:
+            return candidate
+    matches = {
+        candidate for candidate in candidates if hostnames_match(name, candidate)
+    }
+    return matches.pop() if len(matches) == 1 else None
+
+
 def get_hypervisor_hostname() -> str:
     """Get FQDN as per libvirt."""
     # Use same logic used by libvirt
@@ -365,13 +395,21 @@ class DefaultableMappingParameter(click.ParamType):
         self.value_name = value
         self.sep = separator
 
-    def to_info_dict(self) -> dict:
+    class InfoDict(click.types.ParamTypeInfoDict):
+        """Metadata for a defaultable mapping parameter."""
+
+        key_name: str
+        value_name: str
+        separator: str
+
+    def to_info_dict(self) -> InfoDict:
         """Return a dictionary containing the parameter's information."""
-        info_dict = super().to_info_dict()
-        info_dict["key_name"] = self.key_name
-        info_dict["value_name"] = self.value_name
-        info_dict["separator"] = self.sep
-        return info_dict
+        return {
+            **super().to_info_dict(),
+            "key_name": self.key_name,
+            "value_name": self.value_name,
+            "separator": self.sep,
+        }
 
     def convert(self, value: str, param, ctx) -> tuple[str, str]:
         """Convert the value to a tuple.
@@ -385,7 +423,9 @@ class DefaultableMappingParameter(click.ParamType):
             return (split[0], split[1])
         self.fail(f"Invalid mapping '{value}'.", param, ctx)
 
-    def get_metavar(self, param: click.Parameter) -> str:
+    def get_metavar(
+        self, param: click.Parameter, ctx: click.Context | None = None
+    ) -> str:
         """Define metavar representation for the parameter."""
         repr_str = f"{self.key_name}|{self.key_name}{self.sep}{self.value_name}"
 

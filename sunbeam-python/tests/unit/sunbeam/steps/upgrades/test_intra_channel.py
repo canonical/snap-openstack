@@ -1,15 +1,27 @@
 # SPDX-FileCopyrightText: 2023 - Canonical Ltd
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import sys
+from copy import deepcopy
+from types import SimpleNamespace
 from unittest.mock import Mock, call, patch
 
-from sunbeam.core.common import Result, ResultType, Role
+import pytest
+from requests.exceptions import Timeout
+
+from sunbeam.clusterd.service import (
+    ClusterServiceUnavailableException,
+    ConfigItemNotFoundException,
+)
+from sunbeam.core.common import Result, ResultType, Role, SunbeamException
 from sunbeam.core.juju import (
     ActionFailedException,
     ApplicationNotFoundException,
+    JujuException,
     JujuWaitException,
 )
+from sunbeam.core.manifest import CharmManifest
 from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.core.terraform import TerraformInitStep
 from sunbeam.steps.k8s import (
@@ -34,6 +46,7 @@ from sunbeam.steps.upgrades.intra_channel import (
     ReapplyInfraModelConfigStep,
     RefreshSnapStep,
 )
+from sunbeam.storage.steps import DeploySpecificCinderVolumeStep
 
 _INTRA_CHANNEL = "sunbeam.steps.upgrades.intra_channel"
 
@@ -936,6 +949,7 @@ class TestLatestInChannelCoordinator:
         ovn_manager.get_roles_for_microovn.return_value = []
         self.client = Mock()
         self.client.cluster.list_nodes_by_role.return_value = []
+        self.client.cluster.get_storage_backends.return_value.root = []
         self.jhelper = Mock()
         self.manifest = Mock()
 
@@ -980,13 +994,23 @@ class TestLatestInChannelCoordinator:
             plan = coordinator.get_plan()
 
         step_types = [type(step) for step in plan]
-        assert EnsureCiliumDeviceByHostStep in step_types
+        cilium_index = step_types.index(EnsureCiliumDeviceByHostStep)
+        assert (
+            plan.index(
+                mock_maas_steps_module.MaasCreateLoadBalancerIPPoolsStep.return_value
+            )
+            < cilium_index
+        )
         assert OpenStackPatchLoadBalancerServicesIPPoolStep in step_types
         assert EnsureDefaultL2AdvertisementMutedStep in step_types
         l2_steps = [
             step for step in plan if isinstance(step, EnsureL2AdvertisementByHostStep)
         ]
         assert len(l2_steps) == 3
+        mute_index = step_types.index(EnsureDefaultL2AdvertisementMutedStep)
+        assert all(cilium_index < plan.index(step) < mute_index for step in l2_steps)
+        assert not l2_steps[0].remove_legacy
+        assert all(step.remove_legacy for step in l2_steps[1:])
         storage_l2_steps = [step for step in l2_steps if step.network.name == "STORAGE"]
         assert len(storage_l2_steps) == 1
         assert storage_l2_steps[0].pool == "test-storage-ippool"
@@ -1068,18 +1092,286 @@ class TestLatestInChannelCoordinator:
             < microovn_deploy_index
         )
 
+    @pytest.mark.parametrize("principal", [None, "cinder-volume"])
+    @patch(f"{_INTRA_CHANNEL}.StorageBackendManager")
+    @patch(f"{_INTRA_CHANNEL}.is_maas_deployment", return_value=False)
+    def test_no_non_ha_backend(self, mock_is_maas, manager, principal):
+        """Empty and HA-only deployments need no non-HA config reapply."""
+        if principal:
+            self.client.cluster.get_storage_backends.return_value.root = [
+                SimpleNamespace(principal=principal)
+            ]
+        plan = LatestInChannelCoordinator(
+            self.deployment, self.client, self.jhelper, self.manifest
+        ).get_plan()
+
+        assert not any(isinstance(s, DeploySpecificCinderVolumeStep) for s in plan)
+        manager.assert_not_called()
+
+    @pytest.mark.parametrize("backend_count", [1, 2])
+    @pytest.mark.parametrize("app_channel", [None, "2024.1/edge"])
+    @patch(f"{_INTRA_CHANNEL}.StorageBackendManager")
+    @patch(f"{_INTRA_CHANNEL}.is_maas_deployment", return_value=False)
+    def test_non_ha_config_applied_before_snap_refresh(
+        self, mock_is_maas, manager, backend_count, app_channel, step_context
+    ):
+        """Refresh the shared non-HA snap using the effective manifest config."""
+        self.client.cluster.get_storage_backends.return_value.root = [
+            SimpleNamespace(
+                name=f"infini{i}", type="infinidat", principal="cinder-volume-noha"
+            )
+            for i in range(backend_count)
+        ] + [SimpleNamespace(name="ha0", type="ceph", principal="cinder-volume")]
+        backend = manager.return_value.get_backend.return_value
+        backend.tfplan = "storage-backend-plan"
+        backend.tfvar_config_key = "TerraformVarsStorageBackends"
+        charm = CharmManifest(
+            channel="2024.1/stable", config={"snap-channel": "2024.1/candidate"}
+        )
+        if app_channel:
+            charm = CharmManifest.model_validate(
+                {
+                    **charm.model_dump(),
+                    "config-map": {"cinder-volume-noha": {"snap-channel": app_channel}},
+                }
+            )
+        self.manifest.core.software.charms = {"cinder-volume": charm}
+        self.deployment.get_tfhelper.return_value.output.return_value = {}
+        plan = LatestInChannelCoordinator(
+            self.deployment, self.client, self.jhelper, self.manifest
+        ).get_plan()
+        deploy_steps = [
+            s for s in plan if isinstance(s, DeploySpecificCinderVolumeStep)
+        ]
+        assert len(deploy_steps) == 1
+        backend.register_terraform_plan.assert_called_once_with(self.deployment)
+        deploy = deploy_steps[0]
+        refresh = next(s for s in plan if isinstance(s, RefreshSnapStep))
+        assert plan.index(deploy) < plan.index(refresh)
+        assert not deploy.supports_ha
+
+        saved = {
+            "model": "model-uuid",
+            "backends": {
+                b.name: {"principal_application": b.principal}
+                for b in self.client.cluster.get_storage_backends.return_value.root
+            },
+            "cinder-volumes": {"cinder-volume-noha": {"machine_ids": ["7"]}},
+        }
+        events = []
+
+        def apply_config(*args, **kwargs):
+            variables = kwargs["override_tfvars"]
+            principal = variables["cinder-volumes"]["cinder-volume-noha"]
+            assert principal["charm_config"] == {
+                "snap-channel": app_channel or "2024.1/candidate",
+                "snap-name": "cinder-volume_noha",
+            }
+            assert principal["machine_ids"] == ["7"]
+            assert variables["backends"] == saved["backends"]
+            events.append("config")
+
+        deploy.tfhelper.update_tfvars_and_apply_tf.side_effect = apply_config
+        with patch("sunbeam.storage.steps.read_config", return_value=deepcopy(saved)):
+            assert deploy.run(step_context).result_type == ResultType.COMPLETED
+
+        def get_app(name, model):
+            if name in ("cinder-volume", "cinder-volume-noha"):
+                return SimpleNamespace(units=[f"{name}/0"])
+            raise ApplicationNotFoundException(name)
+
+        self.jhelper.get_application.side_effect = get_app
+        self.jhelper.run_action.side_effect = lambda *a, **k: events.append(a[0])
+        assert refresh.run(step_context).result_type == ResultType.COMPLETED
+        assert events == ["config", "cinder-volume/0", "cinder-volume-noha/0"]
+        self.jhelper.run_action.assert_any_call(
+            "cinder-volume-noha/0", "openstack-machines", "refresh-snap", timeout=600
+        )
+
+    @pytest.mark.parametrize("missing_backend", [None, "infini0", "infini1", "ha0"])
+    @patch(f"{_INTRA_CHANNEL}.StorageBackendManager")
+    @patch(f"{_INTRA_CHANNEL}.is_maas_deployment", return_value=False)
+    def test_incomplete_backend_variables_prevent_reapply(
+        self, mock_is_maas, manager, missing_backend, step_context
+    ):
+        """The shared plan needs variables for every recorded backend."""
+        records = [
+            SimpleNamespace(
+                name="infini0", type="infinidat", principal="cinder-volume-noha"
+            ),
+            SimpleNamespace(
+                name="infini1", type="infinidat", principal="cinder-volume-noha"
+            ),
+            SimpleNamespace(name="ha0", type="ceph", principal="cinder-volume"),
+        ]
+        self.client.cluster.get_storage_backends.return_value.root = records
+        backend = manager.return_value.get_backend.return_value
+        backend.tfplan = "storage-backend-plan"
+        backend.tfvar_config_key = "TerraformVarsStorageBackends"
+        plan = LatestInChannelCoordinator(
+            self.deployment, self.client, self.jhelper, self.manifest
+        ).get_plan()
+        deploy = next(s for s in plan if isinstance(s, DeploySpecificCinderVolumeStep))
+        saved = {
+            "model": "model-uuid",
+            "backends": {
+                b.name: {"principal_application": b.principal}
+                for b in records
+                if b.name != missing_backend
+            },
+            "cinder-volumes": {"cinder-volume-noha": {"machine_ids": ["7"]}},
+        }
+        with patch("sunbeam.storage.steps.read_config") as read_config:
+            if missing_backend is None:
+                read_config.side_effect = ConfigItemNotFoundException("missing")
+            else:
+                read_config.return_value = deepcopy(saved)
+            result = deploy.run(step_context)
+
+        assert result.result_type == ResultType.FAILED
+        assert "TerraformVarsStorageBackends" in result.message
+        assert (missing_backend or "infini0") in result.message
+        if missing_backend is not None:
+            assert read_config.return_value == saved
+        deploy.tfhelper.update_tfvars_and_apply_tf.assert_not_called()
+        self.client.cluster.update_config.assert_not_called()
+        self.client.cluster.add_config.assert_not_called()
+        self.jhelper.wait_application_ready.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "error",
+        [ClusterServiceUnavailableException("unavailable"), Timeout(), ValueError()],
+    )
+    @patch(f"{_INTRA_CHANNEL}.is_maas_deployment", return_value=False)
+    def test_backend_lookup_failure_aborts_refresh(self, mock_is_maas, error):
+        """Lookup failures must not allow refresh against stale config."""
+        self.client.cluster.get_storage_backends.side_effect = error
+        coordinator = LatestInChannelCoordinator(
+            self.deployment, self.client, self.jhelper, self.manifest
+        )
+        with pytest.raises(SunbeamException, match="Check clusterd connectivity"):
+            coordinator.run_plan()
+        self.jhelper.charm_refresh.assert_not_called()
+        self.jhelper.run_action.assert_not_called()
+
+    @patch(f"{_INTRA_CHANNEL}.StorageBackendManager")
+    @patch(f"{_INTRA_CHANNEL}.is_maas_deployment", return_value=False)
+    def test_unregistered_backend_aborts_refresh(self, mock_is_maas, manager):
+        """Missing backend support must not silently skip manifest config."""
+        self.client.cluster.get_storage_backends.return_value.root = [
+            SimpleNamespace(
+                name="infini0", type="infinidat", principal="cinder-volume-noha"
+            )
+        ]
+        manager.return_value.get_backend.side_effect = ValueError("not registered")
+        coordinator = LatestInChannelCoordinator(
+            self.deployment, self.client, self.jhelper, self.manifest
+        )
+        with pytest.raises(
+            SunbeamException, match="infinidat.*infini0.*not registered"
+        ):
+            coordinator.run_plan()
+        self.jhelper.charm_refresh.assert_not_called()
+        self.jhelper.run_action.assert_not_called()
+
 
 class TestMySQLInChannelUpgradeCoordinator:
     def test_get_plan_refreshes_router_before_mysql(self):
         """mysql-router must be refreshed before mysql-k8s"""
+        jhelper = Mock()
+        jhelper.get_model_status.return_value.apps = {
+            "mysql": Mock(charm_name="mysql-k8s")
+        }
         coordinator = MySQLInChannelUpgradeCoordinator(
-            Mock(), Mock(), Mock(), Mock(), reset_mysql_upgrade_state=False
+            Mock(), Mock(), jhelper, Mock(), reset_mysql_upgrade_state=False
         )
         step_types = [type(step) for step in coordinator.get_plan()]
 
         assert step_types.index(MySQLRouterCharmRefreshStep) < step_types.index(
             MySQLCharmUpgradeStep
         )
+
+    def test_get_plan_refreshes_all_mysql_apps_with_in_progress_first(self):
+        """Resume an interrupted database before refreshing the others."""
+        client = Mock()
+        client.cluster.get_config.return_value = json.dumps(
+            {"application": "nova-mysql", "state": "SCALED_UP"}
+        )
+        jhelper = Mock()
+        jhelper.get_model_status.return_value.apps = {
+            "keystone-mysql": Mock(charm_name="mysql-k8s"),
+            "nova-mysql": Mock(charm_name="mysql-k8s"),
+            "nova-mysql-router": Mock(charm_name="mysql-router-k8s"),
+        }
+        coordinator = MySQLInChannelUpgradeCoordinator(
+            Mock(), client, jhelper, Mock(), reset_mysql_upgrade_state=False
+        )
+
+        plan = coordinator.get_plan()
+        upgrades = [step for step in plan if isinstance(step, MySQLCharmUpgradeStep)]
+
+        assert [step.application for step in upgrades] == [
+            "nova-mysql",
+            "keystone-mysql",
+        ]
+        assert isinstance(plan[0], MySQLRouterCharmRefreshStep)
+
+    @pytest.mark.parametrize("mysql_apps", [[], ["keystone-mysql"]])
+    def test_get_plan_reports_saved_application_not_deployed(self, mysql_apps):
+        """Reject a saved upgrade if its database is absent from Juju status."""
+        client = Mock()
+        client.cluster.get_config.return_value = json.dumps(
+            {"application": "nova-mysql", "state": "SCALED_UP"}
+        )
+        jhelper = Mock()
+        jhelper.get_model_status.return_value.apps = {
+            name: Mock(charm_name="mysql-k8s") for name in mysql_apps
+        }
+        coordinator = MySQLInChannelUpgradeCoordinator(
+            Mock(), client, jhelper, Mock(), reset_mysql_upgrade_state=False
+        )
+
+        with pytest.raises(SunbeamException, match="nova-mysql.*not found"):
+            coordinator.get_plan()
+
+    def test_get_plan_reports_model_status_failure(self):
+        """Report Juju discovery failures before constructing the plan."""
+        client = Mock()
+        jhelper = Mock()
+        jhelper.get_model_status.side_effect = JujuException("status unavailable")
+        coordinator = MySQLInChannelUpgradeCoordinator(
+            Mock(), client, jhelper, Mock(), reset_mysql_upgrade_state=False
+        )
+
+        with pytest.raises(
+            SunbeamException,
+            match="Failed to discover MySQL applications.*status unavailable",
+        ):
+            coordinator.get_plan()
+
+        client.cluster.get_config.assert_not_called()
+
+    def test_get_plan_resets_state_only_for_first_mysql_app(self):
+        """A reset clears shared state once, before building later upgrade steps."""
+        client = Mock()
+        jhelper = Mock()
+        jhelper.get_model_status.return_value.apps = {
+            "nova-mysql": Mock(charm_name="mysql-k8s"),
+            "keystone-mysql": Mock(charm_name="mysql-k8s"),
+        }
+        coordinator = MySQLInChannelUpgradeCoordinator(
+            Mock(), client, jhelper, Mock(), reset_mysql_upgrade_state=True
+        )
+
+        plan = coordinator.get_plan()
+        upgrades = [step for step in plan if isinstance(step, MySQLCharmUpgradeStep)]
+
+        assert [step.application for step in upgrades] == [
+            "keystone-mysql",
+            "nova-mysql",
+        ]
+        client.cluster.delete_config.assert_called_once_with("mysql_k8s_upgrade_state")
+        client.cluster.get_config.assert_not_called()
 
 
 class TestReapplyInfraModelConfigStep:
@@ -1408,6 +1700,7 @@ class TestRefreshSnapStep:
         deployment.get_ovn_manager = Mock(return_value=ovn_manager)
         client = Mock()
         client.cluster.list_nodes_by_role.return_value = []
+        client.cluster.get_storage_backends.return_value.root = []
         jhelper = Mock()
         manifest = Mock()
 
@@ -1435,6 +1728,7 @@ class TestRefreshSnapStep:
         deployment.get_ovn_manager = Mock(return_value=ovn_manager)
         client = Mock()
         client.cluster.list_nodes_by_role.return_value = []
+        client.cluster.get_storage_backends.return_value.root = []
         jhelper = Mock()
         manifest = Mock()
 

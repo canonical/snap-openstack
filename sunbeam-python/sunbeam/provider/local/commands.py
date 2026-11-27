@@ -84,6 +84,7 @@ from sunbeam.feature_gates import (
     feature_gate_command,
     feature_gate_option,
 )
+from sunbeam.features.dynamic_routing.feature import DynamicRoutingFeature
 from sunbeam.provider.base import ProviderBase
 from sunbeam.provider.common.multiregion import connect_to_region_controller
 from sunbeam.provider.local.deployment import LOCAL_TYPE, LocalDeployment
@@ -750,7 +751,7 @@ def bootstrap(  # noqa: C901
     plan.append(ClusterInitStep(client, roles_to_str_list(roles), 0, management_cidr))
     plan.append(SyncFeatureGatesToCluster(client))
     plan.append(SaveManagementCidrStep(client, management_cidr))
-    plan.append(AddManifestStep(client, manifest_path))
+    plan.append(AddManifestStep(deployment, manifest_path))
     plan.append(
         PromptForProxyStep(
             deployment, accept_defaults=accept_defaults, manifest=manifest
@@ -1076,7 +1077,7 @@ def configure_sriov(
             show_hints,
         )
     if manifest_path:
-        run_plan([AddManifestStep(client, manifest_path)], console, show_hints)
+        run_plan([AddManifestStep(deployment, manifest_path)], console, show_hints)
 
     plan: list[BaseStep] = [
         LocalConfigSRIOVStep(
@@ -2023,7 +2024,8 @@ def remove(ctx: click.Context, name: str, force: bool, show_hints: bool) -> None
             ]
         )
 
-    run_plan(plan, console, show_hints)
+    with DynamicRoutingFeature().node_removal_guard(client, name):
+        run_plan(plan, console, show_hints)
     click.echo(f"Removed node {name} from the cluster")
     # Removing machine does not clean up all deployed juju components. This is
     # deliberate, see https://bugs.launchpad.net/juju/+bug/1851489.
@@ -2086,7 +2088,7 @@ def configure_cmd(
     node = client.cluster.get_node_info(name)
 
     plan = [
-        AddManifestStep(client, manifest_path),
+        AddManifestStep(deployment, manifest_path),
         JujuLoginStep(deployment.juju_account),
     ]
     if deployment.region_ctrl_juju_controller:

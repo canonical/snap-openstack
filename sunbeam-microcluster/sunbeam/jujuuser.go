@@ -5,21 +5,21 @@ import (
 	"database/sql"
 	"fmt"
 
-	"github.com/canonical/microcluster/v2/state"
+	"github.com/canonical/microcluster/v3/microcluster/types"
 
 	"github.com/canonical/snap-openstack/sunbeam-microcluster/api/apitypes"
 	"github.com/canonical/snap-openstack/sunbeam-microcluster/database"
 )
 
 // ListJujuUsers returns the jujuusers from the database
-func ListJujuUsers(ctx context.Context, s state.State) (apitypes.JujuUsers, error) {
+func ListJujuUsers(ctx context.Context, s types.State) (apitypes.JujuUsers, error) {
 	users := apitypes.JujuUsers{}
 
 	// Get the juju users from the database.
 	err := s.Database().Transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		records, err := database.GetJujuUsers(ctx, tx)
 		if err != nil {
-			return fmt.Errorf("Failed to fetch juju user: %w", err)
+			return fmt.Errorf("failed to fetch juju user: %w", err)
 		}
 
 		for _, user := range records {
@@ -39,7 +39,7 @@ func ListJujuUsers(ctx context.Context, s state.State) (apitypes.JujuUsers, erro
 }
 
 // GetJujuUser returns a JujuUser with the given name
-func GetJujuUser(ctx context.Context, s state.State, name string) (apitypes.JujuUser, error) {
+func GetJujuUser(ctx context.Context, s types.State, name string) (apitypes.JujuUser, error) {
 	jujuUser := apitypes.JujuUser{}
 	err := s.Database().Transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		record, err := database.GetJujuUser(ctx, tx, name)
@@ -57,12 +57,12 @@ func GetJujuUser(ctx context.Context, s state.State, name string) (apitypes.Juju
 }
 
 // AddJujuUser adds a Jujuuser to the database
-func AddJujuUser(ctx context.Context, s state.State, name string, token string) error {
+func AddJujuUser(ctx context.Context, s types.State, name string, token string) error {
 	// Add juju user to the database.
 	err := s.Database().Transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		_, err := database.CreateJujuUser(ctx, tx, database.JujuUser{Username: name, Token: token})
 		if err != nil {
-			return fmt.Errorf("Failed to record juju user: %w", err)
+			return fmt.Errorf("failed to record juju user: %w", err)
 		}
 
 		return nil
@@ -75,12 +75,12 @@ func AddJujuUser(ctx context.Context, s state.State, name string, token string) 
 }
 
 // DeleteJujuUser deletes the juju user record from the database
-func DeleteJujuUser(ctx context.Context, s state.State, name string) error {
+func DeleteJujuUser(ctx context.Context, s types.State, name string) error {
 	// Delete juju user from the database.
 	err := s.Database().Transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		err := database.DeleteJujuUser(ctx, tx, name)
 		if err != nil {
-			return fmt.Errorf("Failed to delete juju user: %w", err)
+			return fmt.Errorf("failed to delete juju user: %w", err)
 		}
 
 		return nil
@@ -93,7 +93,7 @@ func DeleteJujuUser(ctx context.Context, s state.State, name string) error {
 }
 
 // UpdateJujuUser updates the juju user's token in the database
-func UpdateJujuUser(ctx context.Context, s state.State, name string, token string) error {
+func UpdateJujuUser(ctx context.Context, s types.State, name string, token string) error {
 	// Update juju user in the database.
 	err := s.Database().Transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		jujuUser := database.JujuUser{Username: name, Token: token}

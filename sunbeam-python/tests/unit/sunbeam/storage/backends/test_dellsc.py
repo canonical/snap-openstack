@@ -349,7 +349,8 @@ class TestDellSCConfigValidation:
                 "secondary-sc-api-port": 3034,
             }
         )
-        assert config.secondary_san_ip == "192.168.1.2"
+        assert str(config.secondary_san_ip) == "192.168.1.2"
+        assert config.model_dump(by_alias=True)["secondary-san-ip"] == "192.168.1.2"
         assert config.secondary_san_login == "admin2"
         assert config.secondary_san_password == "secret2"
         assert config.secondary_sc_api_port == 3034

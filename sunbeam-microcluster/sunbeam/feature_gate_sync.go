@@ -9,7 +9,7 @@ import (
 
 	"github.com/canonical/go-snapctl"
 	"github.com/canonical/lxd/shared/logger"
-	"github.com/canonical/microcluster/v2/state"
+	"github.com/canonical/microcluster/v3/microcluster/types"
 )
 
 const (
@@ -40,7 +40,7 @@ func (c *goSnapctlClient) Unset(key string) error {
 
 // featureGateSyncer manages synchronization of feature gates from cluster to snap config
 type featureGateSyncer struct {
-	state          state.State
+	state          types.State
 	lastSyncTime   time.Time
 	lastKnownGates map[string]bool
 	mu             sync.RWMutex
@@ -48,7 +48,7 @@ type featureGateSyncer struct {
 }
 
 // newFeatureGateSyncer creates a new feature gate syncer
-func newFeatureGateSyncer(s state.State) *featureGateSyncer {
+func newFeatureGateSyncer(s types.State) *featureGateSyncer {
 	return &featureGateSyncer{
 		state:          s,
 		lastKnownGates: make(map[string]bool),
@@ -58,7 +58,7 @@ func newFeatureGateSyncer(s state.State) *featureGateSyncer {
 
 // StartFeatureGateSync starts a background goroutine that syncs feature gates
 // from the cluster database to the local snap configuration.
-func StartFeatureGateSync(ctx context.Context, s state.State) {
+func StartFeatureGateSync(ctx context.Context, s types.State) {
 	syncer := newFeatureGateSyncer(s)
 
 	go syncer.syncLoop(ctx)
@@ -84,8 +84,6 @@ func (fgs *featureGateSyncer) syncLoop(ctx context.Context) {
 		}
 	}
 }
-
-
 
 // hasFeaturePrefix checks if a gate key starts with "feature."
 func hasFeaturePrefix(gateKey string) bool {

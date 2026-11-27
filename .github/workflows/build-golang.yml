@@ -6,18 +6,20 @@ on:
 jobs:
   build:
     name: Build binary
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-26.04]
+    runs-on: ${{ matrix.runner }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
       - name: Setup GO
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v6
         with:
-          go-version: '1.24'
-      - name: Install dependencies
-        run: |
-          sudo add-apt-repository -y ppa:dqlite/dev
-          sudo apt install build-essential libdqlite1.17-dev -y
+          go-version: '1.27'
+          cache-dependency-path: sunbeam-microcluster/go.sum
+      - name: Build dqlite 1.17
+        run: bash .github/scripts/install-dqlite.sh
       - name: Build binary
         working-directory: ./sunbeam-microcluster
         run: make build

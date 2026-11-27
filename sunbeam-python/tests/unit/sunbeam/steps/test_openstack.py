@@ -1516,6 +1516,53 @@ class TestUpdateOpenStackModelConfigStep:
 
         assert result.result_type == ResultType.COMPLETED
 
+    def test_is_skip_plan_not_applied(
+        self, tfhelper, manifest, deployment, step_context, snap_patch, snap_mock
+    ):
+        """is_skip returns SKIPPED when the openstack plan was never applied.
+
+        TerraformVarsOpenstack only exists after DeployControlPlaneStep ran.
+        On bootstrapped-but-not-deployed clusters, running the step would
+        write a partial TerraformVarsOpenstack entry and break fresh-deployment
+        detection in cluster deploy.
+        """
+        with patch(
+            "sunbeam.steps.openstack.read_config",
+            side_effect=ConfigItemNotFoundException("absent"),
+        ):
+            step = UpdateOpenStackModelConfigStep(deployment, tfhelper, manifest)
+            result = step.is_skip(step_context)
+
+        assert result.result_type == ResultType.SKIPPED
+        assert "not applied yet" in result.message
+
+    def test_is_skip_plan_applied(
+        self, tfhelper, manifest, deployment, step_context, snap_patch, snap_mock
+    ):
+        """is_skip returns COMPLETED when TerraformVarsOpenstack exists."""
+        with patch(
+            "sunbeam.steps.openstack.read_config",
+            return_value={"config": {}},
+        ):
+            step = UpdateOpenStackModelConfigStep(deployment, tfhelper, manifest)
+            result = step.is_skip(step_context)
+
+        assert result.result_type == ResultType.COMPLETED
+
+    def test_is_skip_plan_not_applied_does_not_run_tf(
+        self, tfhelper, manifest, deployment, step_context, snap_patch, snap_mock
+    ):
+        """When skipped, terraform must not be touched at all."""
+        with patch(
+            "sunbeam.steps.openstack.read_config",
+            side_effect=ConfigItemNotFoundException("absent"),
+        ):
+            step = UpdateOpenStackModelConfigStep(deployment, tfhelper, manifest)
+            result = step.is_skip(step_context)
+
+        assert result.result_type == ResultType.SKIPPED
+        tfhelper.update_tfvars_and_apply_tf.assert_not_called()
+
 
 class TestDeployControlPlaneStepModelConfigPersisted:
     """Verifies that DeployControlPlaneStep persists model config to the DB."""
@@ -2247,6 +2294,168 @@ class TestValidateInfraAppsStep:
         assert len(pending) == 1
         assert "traefik" in pending[0]
         assert "vault" not in pending[0]
+
+    def test_pending_changes_ignores_revision_drift_without_pin(self, tfhelper):
+        """Revision drift is not reported when the manifest pins no revision.
+
+        Without a pin the plan's after revision is noise: it reads the
+        deployed revision (or a replace's "known after apply") because
+        the tfvars carry no revision.  E.g. a forced mysql replace with
+        unchanged channel must not point at `sunbeam cluster refresh
+        mysql`.
+        """
+        tfhelper.plan_resource_changes.return_value = {
+            "module.single-mysql[0].juju_application.mysql": {
+                "actions": ["delete", "create"],
+                "type": "juju_application",
+                "before": {
+                    "name": "mysql",
+                    "charm": [
+                        {
+                            "name": "mysql-k8s",
+                            "channel": "8.0/candidate",
+                            "revision": 459,
+                        }
+                    ],
+                },
+                "after": {
+                    "name": "mysql",
+                    "charm": [{"name": "mysql-k8s", "channel": "8.0/candidate"}],
+                },
+            }
+        }
+
+        assert pending_infra_app_changes(tfhelper) == []
+
+    def test_pending_changes_pinned_revision_drift_fails(self, tfhelper):
+        """A manifest-pinned revision the plan would change is reported."""
+        tfhelper.plan_resource_changes.return_value = {
+            "module.single-mysql[0].juju_application.mysql": {
+                "actions": ["update"],
+                "type": "juju_application",
+                "before": {
+                    "name": "mysql",
+                    "charm": [
+                        {
+                            "name": "mysql-k8s",
+                            "channel": "8.0/candidate",
+                            "revision": 423,
+                        }
+                    ],
+                },
+                "after": {
+                    "name": "mysql",
+                    "charm": [
+                        {
+                            "name": "mysql-k8s",
+                            "channel": "8.0/candidate",
+                            "revision": 459,
+                        }
+                    ],
+                },
+            }
+        }
+
+        pending = pending_infra_app_changes(tfhelper)
+
+        assert len(pending) == 1
+        # A pinned-revision-only drift reports no channel entry.
+        assert "channel" not in pending[0]
+        assert "revision 423 -> 459" in pending[0]
+        assert "sunbeam cluster refresh mysql" in pending[0]
+
+    def test_pending_changes_channel_only_drift_reports_no_revision(self, tfhelper):
+        """Channel drift with no manifest revision pin reports no revision entry."""
+        tfhelper.plan_resource_changes.return_value = {
+            "module.single-mysql[0].juju_application.mysql": {
+                "actions": ["update"],
+                "type": "juju_application",
+                "before": {
+                    "name": "mysql",
+                    "charm": [{"name": "mysql-k8s", "channel": "8.0/candidate"}],
+                },
+                "after": {
+                    "name": "mysql",
+                    "charm": [{"name": "mysql-k8s", "channel": "8.0/stable"}],
+                },
+            }
+        }
+
+        pending = pending_infra_app_changes(tfhelper)
+
+        assert len(pending) == 1
+        assert "revision" not in pending[0]
+        assert "8.0/candidate -> 8.0/stable" in pending[0]
+
+    def test_pending_changes_channel_and_revision_drift_reported(self, tfhelper):
+        """Both channel and pinned revision drift are reported together."""
+        tfhelper.plan_resource_changes.return_value = {
+            "module.single-mysql[0].juju_application.mysql": {
+                "actions": ["update"],
+                "type": "juju_application",
+                "before": {
+                    "name": "mysql",
+                    "charm": [
+                        {
+                            "name": "mysql-k8s",
+                            "channel": "8.0/candidate",
+                            "revision": 423,
+                        }
+                    ],
+                },
+                "after": {
+                    "name": "mysql",
+                    "charm": [
+                        {
+                            "name": "mysql-k8s",
+                            "channel": "8.0/stable",
+                            "revision": 459,
+                        }
+                    ],
+                },
+            }
+        }
+
+        pending = pending_infra_app_changes(tfhelper)
+
+        assert len(pending) == 1
+        assert "channel 8.0/candidate -> 8.0/stable" in pending[0]
+        assert "revision 423 -> 459" in pending[0]
+
+    def test_pending_changes_revision_drift_on_replace_reported(self, tfhelper):
+        """A pinned revision drift on a delete/create replace is reported."""
+        tfhelper.plan_resource_changes.return_value = {
+            "module.single-mysql[0].juju_application.mysql": {
+                "actions": ["delete", "create"],
+                "type": "juju_application",
+                "before": {
+                    "name": "mysql",
+                    "charm": [
+                        {
+                            "name": "mysql-k8s",
+                            "channel": "8.0/candidate",
+                            "revision": 423,
+                        }
+                    ],
+                },
+                "after": {
+                    "name": "mysql",
+                    "charm": [
+                        {
+                            "name": "mysql-k8s",
+                            "channel": "8.0/candidate",
+                            "revision": 459,
+                        }
+                    ],
+                },
+            }
+        }
+
+        pending = pending_infra_app_changes(tfhelper)
+
+        assert len(pending) == 1
+        assert "channel" not in pending[0]
+        assert "revision 423 -> 459" in pending[0]
 
     def test_run_skips_own_charms(self, client, tfhelper, step_context):
         """ValidateInfraAppsStep completes when only owned charms drift.

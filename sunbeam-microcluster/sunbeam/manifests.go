@@ -5,21 +5,21 @@ import (
 	"database/sql"
 	"fmt"
 
-	"github.com/canonical/microcluster/v2/state"
+	"github.com/canonical/microcluster/v3/microcluster/types"
 
 	"github.com/canonical/snap-openstack/sunbeam-microcluster/api/apitypes"
 	"github.com/canonical/snap-openstack/sunbeam-microcluster/database"
 )
 
 // ListManifests return all the manifests
-func ListManifests(ctx context.Context, s state.State) (apitypes.Manifests, error) {
+func ListManifests(ctx context.Context, s types.State) (apitypes.Manifests, error) {
 	manifests := apitypes.Manifests{}
 
 	// Get the manifests from the database.
 	err := s.Database().Transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		records, err := database.GetManifestItems(ctx, tx)
 		if err != nil {
-			return fmt.Errorf("Failed to fetch manifests: %w", err)
+			return fmt.Errorf("failed to fetch manifests: %w", err)
 		}
 
 		for _, manifest := range records {
@@ -40,7 +40,7 @@ func ListManifests(ctx context.Context, s state.State) (apitypes.Manifests, erro
 }
 
 // GetManifest returns a Manifest with the given id
-func GetManifest(ctx context.Context, s state.State, manifestid string) (apitypes.Manifest, error) {
+func GetManifest(ctx context.Context, s types.State, manifestid string) (apitypes.Manifest, error) {
 	manifest := apitypes.Manifest{}
 
 	err := s.Database().Transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
@@ -67,12 +67,12 @@ func GetManifest(ctx context.Context, s state.State, manifestid string) (apitype
 }
 
 // AddManifest adds a manifest to the database
-func AddManifest(ctx context.Context, s state.State, manifestid string, data string) error {
+func AddManifest(ctx context.Context, s types.State, manifestid string, data string) error {
 	// Add manifest to the database.
 	err := s.Database().Transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		_, err := database.CreateManifestItem(ctx, tx, database.ManifestItem{ManifestID: manifestid, Data: data})
 		if err != nil {
-			return fmt.Errorf("Failed to record manifest: %w", err)
+			return fmt.Errorf("failed to record manifest: %w", err)
 		}
 
 		return nil
@@ -85,12 +85,12 @@ func AddManifest(ctx context.Context, s state.State, manifestid string, data str
 }
 
 // DeleteManifest deletes a manifest from database
-func DeleteManifest(ctx context.Context, s state.State, manifestid string) error {
+func DeleteManifest(ctx context.Context, s types.State, manifestid string) error {
 	// Delete manifest from the database.
 	err := s.Database().Transaction(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		err := database.DeleteManifestItem(ctx, tx, manifestid)
 		if err != nil {
-			return fmt.Errorf("Failed to delete manifest: %w", err)
+			return fmt.Errorf("failed to delete manifest: %w", err)
 		}
 
 		return nil

@@ -4,20 +4,24 @@
 import logging
 import queue
 
+from requests.exceptions import RequestException
 from rich.console import Console
 
 from sunbeam.clusterd.client import Client
+from sunbeam.clusterd.service import RemoteException
 from sunbeam.core.common import (
     BaseStep,
     Result,
     ResultType,
     StepContext,
+    SunbeamException,
     update_status_background,
 )
 from sunbeam.core.deployment import Deployment, Networks
 from sunbeam.core.juju import (
     ActionFailedException,
     ApplicationNotFoundException,
+    JujuException,
     JujuHelper,
     JujuStepHelper,
     JujuWaitException,
@@ -42,6 +46,9 @@ from sunbeam.steps.mysql import (
     MySQLCharmUpgradeStep,
     MySQLRouterCharmRefreshStep,
     ReapplyMySQLTerraformPlanStep,
+    get_mysql_applications,
+    in_progress_mysql_application,
+    load_upgrade_state,
 )
 from sunbeam.steps.openstack import (
     OpenStackPatchLoadBalancerServicesIPPoolStep,
@@ -53,6 +60,12 @@ from sunbeam.steps.openstack import (
 from sunbeam.steps.role_distributor import DeployRoleDistributorApplicationStep
 from sunbeam.steps.sunbeam_machine import DeploySunbeamMachineApplicationStep
 from sunbeam.steps.upgrades.base import UpgradeCoordinator, UpgradeFeatures
+from sunbeam.storage.base import StorageBackendBase
+from sunbeam.storage.manager import StorageBackendManager
+from sunbeam.storage.steps import (
+    PRINCIPAL_NON_HA_APPLICATION,
+    DeploySpecificCinderVolumeStep,
+)
 
 LOG = logging.getLogger(__name__)
 console = Console()
@@ -71,6 +84,7 @@ SNAP_APPS_MACHINE_MODEL: list[str] = [
     "openstack-hypervisor",
     "openstack-network-agents",
     "cinder-volume",
+    "cinder-volume-noha",
     "epa-orchestrator",
     "manila-data",
     # consul-client apps deployed by the instance-recovery feature;
@@ -421,6 +435,48 @@ class RefreshSnapStep(BaseStep, JujuStepHelper):
         return Result(ResultType.COMPLETED)
 
 
+def _get_shared_non_ha_cinder_volume_backend(
+    client: Client,
+) -> tuple[str, StorageBackendBase] | None:
+    """Return (backend_name, backend_instance) for the shared non-HA backend.
+
+    Non-HA storage backends (added via `sunbeam storage add`) all share a
+    single principal application, `cinder-volume-noha`. Its charm config
+    (including `snap-channel`) is only ever written by the storage-backend
+    Terraform plan, which is otherwise only touched by `sunbeam storage
+    add`/`sunbeam storage remove`. If any such backend is deployed, return
+    one of them (any instance works, since the principal application and
+    its config are shared) so its config can be reapplied from the manifest.
+    """
+    try:
+        backends = client.cluster.get_storage_backends().root
+    except (RemoteException, RequestException, ValueError) as e:
+        raise SunbeamException(
+            "Unable to list storage backends for cinder-volume-noha refresh. "
+            "Check clusterd connectivity and retry cluster refresh."
+        ) from e
+
+    non_ha_backend = next(
+        (b for b in backends if b.principal == PRINCIPAL_NON_HA_APPLICATION),
+        None,
+    )
+    if non_ha_backend is None:
+        return None
+
+    manager = StorageBackendManager()
+    try:
+        backend_instance = manager.get_backend(non_ha_backend.type)
+    except ValueError as e:
+        raise SunbeamException(
+            f"Storage backend type {non_ha_backend.type!r} for "
+            f"{non_ha_backend.name!r} is not registered. Cannot reapply "
+            "cinder-volume-noha config; restore support for this backend "
+            "before retrying cluster refresh."
+        ) from e
+
+    return non_ha_backend.name, backend_instance
+
+
 class LatestInChannelCoordinator(UpgradeCoordinator):
     """Coordinator for refreshing charms in their current channel."""
 
@@ -438,37 +494,68 @@ class LatestInChannelCoordinator(UpgradeCoordinator):
             ),
             LatestInChannel(self.deployment, self.jhelper, self.manifest),
             ReapplyInfraModelConfigStep(self.deployment, self.jhelper, self.manifest),
-            RefreshSnapStep(self.deployment, self.jhelper),
-            # Microceph introduces new offer urls for rgw and so microceph
-            # plan need to be applied before openstack plan
-            TerraformInitStep(self.deployment.get_tfhelper("microceph-plan")),
-            DeployMicrocephApplicationStep(
-                self.deployment,
-                self.client,
-                self.deployment.get_tfhelper("microceph-plan"),
-                self.jhelper,
-                self.manifest,
-                self.deployment.openstack_machines_model,
-            ),
-            TerraformInitStep(self.deployment.get_tfhelper("openstack-plan")),
-            ReapplyOpenStackTerraformPlanStep(
-                self.deployment,
-                self.client,
-                self.deployment.get_tfhelper("openstack-plan"),
-                self.jhelper,
-                self.manifest,
-                self.deployment.openstack_machines_model,
-            ),
-            TerraformInitStep(self.deployment.get_tfhelper("sunbeam-machine-plan")),
-            DeploySunbeamMachineApplicationStep(
-                self.deployment,
-                self.client,
-                self.deployment.get_tfhelper("sunbeam-machine-plan"),
-                self.jhelper,
-                self.manifest,
-                self.deployment.openstack_machines_model,
-            ),
         ]
+
+        # Reapply manifest-driven config (e.g. snap-channel) to the shared
+        # cinder-volume-noha application *before* RefreshSnapStep runs the
+        # refresh-snap action against it, so the action picks up any
+        # manifest changes rather than stale config.
+        non_ha_backend = _get_shared_non_ha_cinder_volume_backend(self.client)
+        if non_ha_backend is not None:
+            backend_name, backend_instance = non_ha_backend
+            backend_instance.register_terraform_plan(self.deployment)
+            tfhelper = self.deployment.get_tfhelper(backend_instance.tfplan)
+            plan.extend(
+                [
+                    TerraformInitStep(tfhelper),
+                    DeploySpecificCinderVolumeStep(
+                        self.deployment,
+                        self.client,
+                        tfhelper,
+                        self.jhelper,
+                        self.manifest,
+                        backend_name,
+                        backend_instance,
+                        self.deployment.openstack_machines_model,
+                        supports_ha=False,
+                    ),
+                ]
+            )
+
+        plan.append(RefreshSnapStep(self.deployment, self.jhelper))
+        plan.extend(
+            [
+                # Microceph introduces new offer urls for rgw and so microceph
+                # plan need to be applied before openstack plan
+                TerraformInitStep(self.deployment.get_tfhelper("microceph-plan")),
+                DeployMicrocephApplicationStep(
+                    self.deployment,
+                    self.client,
+                    self.deployment.get_tfhelper("microceph-plan"),
+                    self.jhelper,
+                    self.manifest,
+                    self.deployment.openstack_machines_model,
+                ),
+                TerraformInitStep(self.deployment.get_tfhelper("openstack-plan")),
+                ReapplyOpenStackTerraformPlanStep(
+                    self.deployment,
+                    self.client,
+                    self.deployment.get_tfhelper("openstack-plan"),
+                    self.jhelper,
+                    self.manifest,
+                    self.deployment.openstack_machines_model,
+                ),
+                TerraformInitStep(self.deployment.get_tfhelper("sunbeam-machine-plan")),
+                DeploySunbeamMachineApplicationStep(
+                    self.deployment,
+                    self.client,
+                    self.deployment.get_tfhelper("sunbeam-machine-plan"),
+                    self.jhelper,
+                    self.manifest,
+                    self.deployment.openstack_machines_model,
+                ),
+            ]
+        )
 
         if is_maas_deployment(self.deployment):
             from sunbeam.provider.maas.client import MaasClient  # noqa: PLC0415
@@ -479,19 +566,16 @@ class LatestInChannelCoordinator(UpgradeCoordinator):
             maas_client = MaasClient.from_deployment(self.deployment)
             plan.extend(
                 [
+                    MaasCreateLoadBalancerIPPoolsStep(
+                        self.deployment,  # type: ignore [arg-type]
+                        self.client,
+                        maas_client,
+                    ),
                     EnsureCiliumDeviceByHostStep(
                         self.deployment,
                         self.client,
                         self.jhelper,
                         self.deployment.openstack_machines_model,
-                    ),
-                    EnsureDefaultL2AdvertisementMutedStep(
-                        self.deployment, self.client, self.jhelper
-                    ),
-                    MaasCreateLoadBalancerIPPoolsStep(
-                        self.deployment,  # type: ignore [arg-type]
-                        self.client,
-                        maas_client,
                     ),
                     EnsureL2AdvertisementByHostStep(
                         self.deployment,
@@ -508,6 +592,7 @@ class LatestInChannelCoordinator(UpgradeCoordinator):
                         self.deployment.openstack_machines_model,
                         Networks.PUBLIC,
                         self.deployment.public_ip_pool,  # type: ignore [attr-defined]
+                        remove_legacy=True,
                     ),
                     EnsureL2AdvertisementByHostStep(
                         self.deployment,
@@ -517,6 +602,10 @@ class LatestInChannelCoordinator(UpgradeCoordinator):
                         Networks.STORAGE,
                         self.deployment.storage_ip_pool,  # type: ignore [attr-defined]
                         optional_if_pool_missing=True,
+                        remove_legacy=True,
+                    ),
+                    EnsureDefaultL2AdvertisementMutedStep(
+                        self.deployment, self.client, self.jhelper
                     ),
                     OpenStackPatchLoadBalancerServicesIPPoolStep(
                         self.client,
@@ -629,6 +718,32 @@ class MySQLInChannelUpgradeCoordinator(UpgradeCoordinator):
 
     def get_plan(self) -> list[BaseStep]:
         """Return the upgrade plan."""
+        try:
+            mysql_apps = get_mysql_applications(self.jhelper, OPENSTACK_MODEL)
+        except JujuException as exc:
+            raise SunbeamException(
+                f"Failed to discover MySQL applications in {OPENSTACK_MODEL}: {exc}"
+            ) from exc
+        # Resume the saved database first unless the user requested a reset.
+        if not self.reset_mysql_upgrade_state:
+            try:
+                persisted = load_upgrade_state(self.client)
+            except RemoteException as exc:
+                raise SunbeamException(
+                    f"Failed to load MySQL upgrade state from clusterd: {exc}"
+                ) from exc
+            if persisted:
+                in_progress = in_progress_mysql_application(persisted)
+                if in_progress not in mysql_apps:
+                    raise SunbeamException(
+                        f"MySQL upgrade state refers to {in_progress}, but that "
+                        f"application was not found in {OPENSTACK_MODEL}. "
+                        "Check the application and upgrade state before retrying."
+                    )
+                # Discovery returns a new list, so it is safe to reorder here.
+                mysql_apps.remove(in_progress)
+                mysql_apps.insert(0, in_progress)
+
         plan = [
             MySQLRouterCharmRefreshStep(
                 self.deployment,
@@ -636,13 +751,21 @@ class MySQLInChannelUpgradeCoordinator(UpgradeCoordinator):
                 self.jhelper,
                 self.manifest,
             ),
-            MySQLCharmUpgradeStep(
-                self.deployment,
-                self.client,
-                self.jhelper,
-                self.manifest,
-                self.reset_mysql_upgrade_state,
-            ),
+            # Plan steps run in order, one database upgrade at a time.
+            *[
+                MySQLCharmUpgradeStep(
+                    self.deployment,
+                    self.client,
+                    self.jhelper,
+                    self.manifest,
+                    # index 0 is the first database, so reset the shared state once.
+                    reset_mysql_upgrade_state=(
+                        self.reset_mysql_upgrade_state and index == 0
+                    ),
+                    application=app,
+                )
+                for index, app in enumerate(mysql_apps)
+            ],
             TerraformInitStep(self.deployment.get_tfhelper("openstack-plan")),
             ReapplyMySQLTerraformPlanStep(
                 self.deployment,

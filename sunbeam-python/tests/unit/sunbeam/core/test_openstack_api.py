@@ -62,6 +62,20 @@ class TestOpenStackAPI:
             project_name=FAKE_CREDS.get("OS_PROJECT_NAME"),
             user_domain_name=FAKE_CREDS.get("OS_USER_DOMAIN_NAME"),
             project_domain_name=FAKE_CREDS.get("OS_PROJECT_DOMAIN_NAME"),
+            cacert=None,
+        )
+
+    def test_get_admin_connection_with_cacert(
+        self, retrieve_admin_credentials, os_connect
+    ):
+        retrieve_admin_credentials.return_value = {
+            **FAKE_CREDS,
+            "OS_CACERT": "/home/ubuntu/.config/openstack/ca_bundle.pem",
+        }
+        sunbeam.core.openstack_api.get_admin_connection(Mock(), Mock())
+        assert (
+            os_connect.call_args.kwargs["cacert"]
+            == "/home/ubuntu/.config/openstack/ca_bundle.pem"
         )
 
     def test_guests_on_hypervisor(self):

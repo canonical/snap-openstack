@@ -1990,13 +1990,6 @@ class FakeIPPool:
         self.spec = {"addresses": addresses}
 
 
-class FakeL2Advertisement:
-    """k8s ipaddresspool."""
-
-    def __init__(self, name):
-        self.spec = {"ipAddressPools": [name]}
-
-
 class TestMaasCreateLoadBalancerIPPoolsStep:
     @pytest.fixture
     def read_config(self, mocker):
@@ -2029,6 +2022,7 @@ class TestMaasCreateLoadBalancerIPPoolsStep:
 
     def test_run(self, deployment_k8s, mocker, read_config, step_context):
         pool_name = deployment_k8s.public_api_label
+        deployment_k8s.public_ip_pool = pool_name
         ippool_from_maas = {
             "10.149.100.128/25": [
                 {"label": pool_name, "start": "10.149.100.200", "end": "10.149.100.210"}
@@ -2043,14 +2037,7 @@ class TestMaasCreateLoadBalancerIPPoolsStep:
             "sunbeam.core.steps.l_client.Client",
             new=Mock(
                 return_value=Mock(
-                    get=Mock(
-                        side_effect=[
-                            FakeIPPool(["10.149.100.200-10.149.100.210"]),
-                            FakeL2Advertisement(pool_name),
-                            FakeIPPool(["10.149.100.200-10.149.100.210"]),
-                            FakeL2Advertisement(pool_name),
-                        ]
-                    )
+                    get=Mock(return_value=FakeIPPool(["10.149.100.200-10.149.100.210"]))
                 )
             ),
         )
@@ -2066,6 +2053,10 @@ class TestMaasCreateLoadBalancerIPPoolsStep:
         assert result.result_type == ResultType.COMPLETED
         get_ip_ranges_from_space_mock.assert_any_call(maas_client, "public_space")
         step.kube.create.assert_not_called()
+        step.kube.get.assert_called_once_with(
+            step.lbpool_resource, name=pool_name, namespace="metallb-system"
+        )
+        step.kube.delete.assert_not_called()
 
     def test_run_with_missing_ipaddresspool(
         self, deployment_k8s, mocker, read_config, step_context
@@ -2081,9 +2072,11 @@ class TestMaasCreateLoadBalancerIPPoolsStep:
         maas_client = Mock()
         k8s_snap = Mock()
         mocker.patch("sunbeam.core.k8s.Snap", k8s_snap)
+        api_error = ApiError.__new__(ApiError)
+        api_error.status = Mock(code=404)
         mocker.patch(
             "sunbeam.core.steps.l_client.Client",
-            new=Mock(return_value=Mock(get=Mock(side_effect=[None, None, None, None]))),
+            new=Mock(return_value=Mock(get=Mock(side_effect=api_error))),
         )
         k8s_snap().config.get.return_value = "k8s"
 
@@ -2108,62 +2101,6 @@ class TestMaasCreateLoadBalancerIPPoolsStep:
             "addresses"
         ) == ["10.149.100.200-10.149.100.210"]
 
-    def test_run_with_missing_l2advertisement(
-        self,
-        deployment_k8s,
-        mocker,
-        read_config,
-        step_context,
-    ):
-        pool_name = deployment_k8s.public_api_label
-        ippool_from_maas = {
-            "10.149.100.128/25": [
-                {"label": pool_name, "start": "10.149.100.200", "end": "10.149.100.210"}
-            ]
-        }
-
-        cclient = Mock()
-        maas_client = Mock()
-        k8s_snap = Mock()
-        mocker.patch("sunbeam.core.k8s.Snap", k8s_snap)
-        api_error = ApiError.__new__(ApiError)
-        api_error.status = Mock(code=404)
-        mocker.patch(
-            "sunbeam.core.steps.l_client.Client",
-            new=Mock(
-                return_value=Mock(
-                    get=Mock(
-                        side_effect=[
-                            FakeIPPool(["10.149.100.200-10.149.100.210"]),
-                            api_error,
-                            FakeIPPool(["10.149.100.200-10.149.100.210"]),
-                            api_error,
-                        ]
-                    )
-                )
-            ),
-        )
-        k8s_snap().config.get.return_value = "k8s"
-
-        def get_ip_ranges_side_effect(client, space):
-            if space == "public_space":
-                return ippool_from_maas
-            return {}  # No storage ranges
-
-        get_ip_ranges_from_space_mock = mocker.patch(
-            "sunbeam.provider.maas.client.get_ip_ranges_from_space",
-            side_effect=get_ip_ranges_side_effect,
-        )
-
-        step = MaasCreateLoadBalancerIPPoolsStep(deployment_k8s, cclient, maas_client)
-
-        result = step.run(step_context)
-        assert result.result_type == ResultType.COMPLETED
-        get_ip_ranges_from_space_mock.assert_any_call(maas_client, "public_space")
-        # Only 2 get calls for public pool (ipaddresspool + l2advertisement)
-        assert step.kube.get.call_count == 2
-        assert step.kube.delete.call_count == 0
-
     def test_run_with_different_ippool(
         self, deployment_k8s, mocker, read_config, step_context
     ):
@@ -2182,14 +2119,7 @@ class TestMaasCreateLoadBalancerIPPoolsStep:
             "sunbeam.core.steps.l_client.Client",
             new=Mock(
                 return_value=Mock(
-                    get=Mock(
-                        side_effect=[
-                            FakeIPPool(["10.149.100.120-10.149.100.130"]),
-                            FakeL2Advertisement(pool_name),
-                            FakeIPPool(["10.149.100.120-10.149.100.130"]),
-                            FakeL2Advertisement(pool_name),
-                        ]
-                    )
+                    get=Mock(return_value=FakeIPPool(["10.149.100.120-10.149.100.130"]))
                 )
             ),
         )
@@ -2554,6 +2484,29 @@ class TestRemoveNode:
     @patch("sunbeam.provider.maas.commands.JujuHelper")
     @patch("sunbeam.provider.maas.commands.run_preflight_checks")
     @patch("sunbeam.provider.maas.commands.run_plan")
+    @pytest.mark.parametrize("force_arg", [[], ["--force"]], ids=["normal", "force"])
+    def test_remove_requires_ndr_placement_to_be_drained(
+        self, run_plan_cmd, run_preflight, juju_helper, mock_maas_machine, force_arg
+    ):
+        deployment = Mock()
+        deployment.get_ovn_manager.return_value.get_machines.return_value = []
+        cluster = deployment.get_client.return_value.cluster
+        cluster.get_config.return_value = (
+            '{"instances": {"node-1": [{"host": "node-1.red.v4"}]}}'
+        )
+
+        result = CliRunner().invoke(remove_node, [*force_arg, "node-1"], obj=deployment)
+
+        assert result.exit_code == 1
+        assert "Drain dynamic routing placement" in result.output
+        assert run_plan_cmd.call_count == 1
+        cluster.unlock_terraform_plan.assert_called_once_with(
+            *cluster.lock_terraform_plan.call_args.args
+        )
+
+    @patch("sunbeam.provider.maas.commands.JujuHelper")
+    @patch("sunbeam.provider.maas.commands.run_preflight_checks")
+    @patch("sunbeam.provider.maas.commands.run_plan")
     @pytest.mark.parametrize(
         ("cli_args", "force"),
         [(["node-1"], False), (["--force", "node-1"], True)],
@@ -2569,6 +2522,7 @@ class TestRemoveNode:
     ):
         maas_client, get_machine = mock_maas_machine
         deployment = Mock()
+        deployment.get_client.return_value.cluster.get_config.return_value = "{}"
         deployment.openstack_machines_model = "openstack-machines"
         deployment.get_ovn_manager.return_value.get_machines.return_value = []
 
@@ -2643,6 +2597,7 @@ class TestRemoveNode:
         _, get_machine = mock_maas_machine
         get_machine.side_effect = ValueError("Machine 'node-1' not found.")
         deployment = Mock()
+        deployment.get_client.return_value.cluster.get_config.return_value = "{}"
         deployment.get_ovn_manager.return_value.get_machines.return_value = []
 
         result = CliRunner().invoke(remove_node, ["node-1"], obj=deployment)
@@ -2660,6 +2615,7 @@ class TestRemoveNode:
         _, get_machine = mock_maas_machine
         get_machine.side_effect = ValueError("Machine 'node-1' not found.")
         deployment = Mock()
+        deployment.get_client.return_value.cluster.get_config.return_value = "{}"
         deployment.openstack_machines_model = "openstack-machines"
         deployment.get_ovn_manager.return_value.get_machines.return_value = []
 
@@ -2684,6 +2640,7 @@ class TestRemoveNode:
         juju_helper,
     ):
         deployment = Mock()
+        deployment.get_client.return_value.cluster.get_config.return_value = "{}"
         deployment.openstack_machines_model = "openstack-machines"
         deployment.get_manifest.return_value = Mock()
         deployment.get_tfhelper.return_value = Mock()
@@ -2727,6 +2684,7 @@ class TestRemoveNode:
         juju_helper,
     ):
         deployment = Mock()
+        deployment.get_client.return_value.cluster.get_config.return_value = "{}"
         deployment.openstack_machines_model = "openstack-machines"
         deployment.get_manifest.return_value = Mock()
         deployment.get_tfhelper.return_value = Mock()
@@ -2761,6 +2719,7 @@ class TestRemoveNode:
         juju_helper,
     ):
         deployment = Mock()
+        deployment.get_client.return_value.cluster.get_config.return_value = "{}"
         deployment.openstack_machines_model = "openstack-machines"
         deployment.get_manifest.return_value = Mock()
         deployment.get_tfhelper.return_value = Mock()

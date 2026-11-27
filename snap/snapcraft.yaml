@@ -1,5 +1,5 @@
 name: openstack
-base: core24
+base: core26
 summary: Dead simple OpenStack installation
 license: Apache-2.0
 description: |
@@ -88,7 +88,7 @@ parts:
       - --prefix=
       - --enable-build-raft
     stage-packages:
-      - libuv1
+      - libuv1t64
       - liblz4-1
       - libsqlite3-0
     build-packages:
@@ -110,7 +110,7 @@ parts:
     source: ./sunbeam-microcluster
     source-type: local
     build-snaps:
-      - go/1.24/stable
+      - go/1.27/stable
     build-environment:
       - GOFLAGS: -mod=readonly -ldflags=-s
     override-build: |
@@ -249,18 +249,21 @@ parts:
       - cargo
     stage-packages:
       - openssh-client
+      - python3-venv
     override-build: |
       uv export --directory sunbeam-python --extra=openstackclients --frozen --no-hashes --format=requirements-txt -o requirements.txt
       craftctl default
     override-prime: |
       craftctl default
       # Write out snap hooks
-      snap-helpers write-hooks
+      ./bin/python3 ./bin/snap-helpers write-hooks
+      # Keep hooks on the snap's virtual environment when run by snapd.
+      sed -i '1c\#!/snap/openstack/current/bin/python3' snap/hooks/*
       # This is the last step, let's now compile all our pyc files.
       ./bin/python3 -m compileall .
       # Generate completer script snippets
       mkdir -p usr/share/bash-completion/completions
-      ./bin/openstack complete > usr/share/bash-completion/completions/openstack
+      ./bin/python3 ./bin/openstack complete > usr/share/bash-completion/completions/openstack
       echo "complete -F _openstack openstack.openstack" >> usr/share/bash-completion/completions/openstack
       # Pre-generate sunbeam completion cache
       cp completions/sunbeam-completion usr/share/bash-completion/completions/sunbeam-completion

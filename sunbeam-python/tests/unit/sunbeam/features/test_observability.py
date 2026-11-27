@@ -402,27 +402,40 @@ class TestDeployObservabilityAgentStep:
         jhelper.wait_application_ready.assert_called_once()
         assert result.result_type == ResultType.COMPLETED
 
-    def test_run_includes_microovn_when_present(
+    def test_run_connects_both_microovn_architectures_and_supported_agents(
         self, deployment, tfhelper, jhelper, observabilityfeature, step_context
     ):
-        """Microovn is added to integration-apps when it exists in the model."""
-        jhelper.get_model_status.return_value = Mock(
-            apps={
-                "openstack-hypervisor": Mock(),
-                "microovn": Mock(),
-            }
-        )
-
+        jhelper.get_model_status.return_value.apps = {
+            "microovn": Mock(),
+            "microovn-arm64": Mock(),
+            "openstack-network-agents": Mock(charm_name="openstack-network-agents"),
+            "openstack-network-agents-arm64": Mock(
+                charm_name="openstack-network-agents"
+            ),
+            "legacy-agents": Mock(charm_name="openstack-network-agents"),
+        }
+        jhelper.get_application_endpoints.return_value = {
+            "openstack-network-agents": {"cos-agent", "juju-info"},
+            "openstack-network-agents-arm64": {"cos-agent", "juju-info"},
+            "legacy-agents": {"juju-info"},
+        }
         step = observability_feature.DeployObservabilityAgentStep(
             deployment, Mock(), observabilityfeature, tfhelper, jhelper
         )
-        step.run(step_context)
 
-        call_kwargs = tfhelper.update_tfvars_and_apply_tf.call_args.kwargs
-        integration_apps = call_kwargs["override_tfvars"][
-            "observability-agent-integration-apps"
+        assert step.run(step_context).result_type == ResultType.COMPLETED
+        override = tfhelper.update_tfvars_and_apply_tf.call_args.kwargs[
+            "override_tfvars"
         ]
-        assert "microovn" in integration_apps
+        assert override["observability-agent-integration-apps"] == [
+            "openstack-hypervisor",
+            "microceph",
+            "k8s",
+            "microovn",
+            "microovn-arm64",
+            "openstack-network-agents",
+            "openstack-network-agents-arm64",
+        ]
 
     def test_run_excludes_microovn_when_absent(
         self, deployment, tfhelper, jhelper, observabilityfeature, step_context
@@ -486,6 +499,43 @@ class TestDeployObservabilityAgentStep:
         jhelper.wait_application_ready.assert_called_once()
         assert result.result_type == ResultType.FAILED
         assert result.message == "timed out"
+
+
+def test_refresh_collector_integrates_network_agents_deployed_later(
+    deployment, jhelper, read_config_obs
+):
+    related = ["openstack-hypervisor", "microceph", "k8s", "microovn"]
+    read_config_obs.return_value = {"observability-agent-integration-apps": related}
+    collector = Mock(
+        relations={"cos-agent": [AppStatusRelation(related_app=app) for app in related]}
+    )
+    jhelper.get_model_status.return_value.apps = {
+        "opentelemetry-collector": collector,
+        "microovn": Mock(),
+        "openstack-network-agents": Mock(charm_name="openstack-network-agents"),
+    }
+    jhelper.get_application_endpoints.return_value = {
+        "openstack-network-agents": {"cos-agent"}
+    }
+
+    observability_feature.refresh_machine_collector_integrations(deployment, jhelper)
+
+    tfhelper = deployment.get_tfhelper.return_value
+    tfhelper.init.assert_called_once()
+    tfhelper.update_tfvars_and_apply_tf.assert_called_once_with(
+        deployment.get_client(),
+        deployment.get_manifest(),
+        tfvar_config=observability_feature.OBSERVABILITY_AGENT_CONFIG_KEY,
+        override_tfvars={
+            "observability-agent-integration-apps": [
+                *related,
+                "openstack-network-agents",
+            ]
+        },
+        tf_apply_extra_args=[
+            "-target=juju_integration.observability-agent-integrations"
+        ],
+    )
 
 
 class TestRemoveObservabilityAgentStep:

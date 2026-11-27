@@ -816,6 +816,7 @@ class _CommonK8SStepMixin:
     jhelper: JujuHelper
     model: str
     node: str
+    k8s_node_name: str = ""
 
     def skip_checks(self, status: Status | None = None) -> Result:
         """Determines if the step should be skipped or not.
@@ -876,15 +877,34 @@ class _CommonK8SStepMixin:
             return Result(ResultType.FAILED, str(e))
 
         try:
-            find_node(self.kube, self.node)
+            node = find_node(self.kube, self.node)
         except K8SNodeNotFoundError as e:
             LOG.debug("Node not found in k8s cluster")
             return Result(ResultType.SKIPPED, str(e))
         except K8SError as e:
             LOG.debug("Failed to find node in k8s cluster", exc_info=True)
             return Result(ResultType.FAILED, str(e))
+        if node.metadata and node.metadata.name:
+            # The k8s node name can differ from the name clusterd knows the
+            # node by (short hostname vs FQDN); run() must act on the
+            # resolved k8s name, not on self.node.
+            self.k8s_node_name = node.metadata.name
 
         return Result(ResultType.COMPLETED)
+
+    def _k8s_node_unresolved_result(self) -> Result | None:
+        """FAILED Result when the k8s node name was not resolved.
+
+        run_plan() runs is_skip() (which calls skip_checks()) before run(),
+        so the name is always resolved on the normal path; a direct run()
+        call must not cordon or drain an empty node name.
+        """
+        if not self.k8s_node_name:
+            return Result(
+                ResultType.FAILED,
+                f"k8s node name for '{self.node}' was not resolved",
+            )
+        return None
 
 
 class MigrateK8SKubeconfigStep(BaseStep, _CommonK8SStepMixin):
@@ -1062,7 +1082,9 @@ class CheckApplicationK8SDistributionStep(BaseStep, _CommonK8SStepMixin):
 
         for app in apps:
             app_label = {"app.kubernetes.io/name": app}
-            pods = fetch_pods_for_eviction(self.kube, self.node, labels=app_label)
+            pods = fetch_pods_for_eviction(
+                self.kube, self.k8s_node_name, labels=app_label
+            )
             nb_pods = len(pods)
             LOG.debug("Node %s has %d %s pods", self.node, nb_pods, app)
             if nb_pods > 0:
@@ -1117,9 +1139,11 @@ class CordonK8SUnitStep(BaseStep, _CommonK8SStepMixin):
 
     def run(self, context: StepContext) -> Result:
         """Cordon the unit."""
+        if failed := self._k8s_node_unresolved_result():
+            return failed
         self.update_status(context, "Cordoning unit")
         try:
-            cordon(self.kube, self.node)
+            cordon(self.kube, self.k8s_node_name)
         except K8SError as e:
             LOG.debug("Failed to cordon unit", exc_info=True)
             return Result(ResultType.FAILED, str(e))
@@ -1147,9 +1171,11 @@ class UncordonK8SUnitStep(BaseStep, _CommonK8SStepMixin):
 
     def run(self, context: StepContext) -> Result:
         """Uncordon the unit."""
+        if failed := self._k8s_node_unresolved_result():
+            return failed
         self.update_status(context, "Uncordoning unit")
         try:
-            uncordon(self.kube, self.node)
+            uncordon(self.kube, self.k8s_node_name)
         except K8SError as e:
             LOG.debug("Failed to cordon unit", exc_info=True)
             return Result(ResultType.FAILED, str(e))
@@ -1198,15 +1224,17 @@ class DrainK8SUnitStep(BaseStep, _CommonK8SStepMixin):
 
     def run(self, context: StepContext) -> Result:
         """Drain the unit."""
+        if failed := self._k8s_node_unresolved_result():
+            return failed
         self.update_status(context, "Evicting workloads")
         try:
-            drain(self.kube, self.node, remove_pvc=self.remove_pvc)
+            drain(self.kube, self.k8s_node_name, remove_pvc=self.remove_pvc)
         except K8SError as e:
             LOG.debug("Failed to drain unit", exc_info=True)
             return Result(ResultType.FAILED, str(e))
 
         self.update_status(context, "Waiting for workloads to leave")
-        self._wait_for_evicted_pods(self.kube, self.node)
+        self._wait_for_evicted_pods(self.kube, self.k8s_node_name)
 
         return Result(ResultType.COMPLETED)
 
@@ -1279,20 +1307,20 @@ class _PerHostK8SResourceStep(BaseStep):
         self.fqdn = fqdn
         self.to_update: list[dict] = []
         self.to_delete: list[dict] = []
-        self._ifnames: dict[str, str] = {}
+        self._machine_interfaces: dict[
+            str, dict[str, "jubilant.statustypes.NetworkInterface"]
+        ] = {}
 
     def _get_interface(self, node: dict) -> str:
-        """Get the network interface for the node in the configured space."""
-        name = node["name"]
-        if name in self._ifnames:
-            return self._ifnames[name]
+        """Get the node's interface in the configured space."""
         machine_id = str(node["machineid"])
-        machine_interfaces = self.jhelper.get_machine_interfaces(self.model, machine_id)
-        LOG.debug("Machine %r interfaces: %r", machine_id, machine_interfaces)
+        if machine_id not in self._machine_interfaces:
+            interfaces = self.jhelper.get_machine_interfaces(self.model, machine_id)
+            LOG.debug("Machine %r interfaces: %r", machine_id, interfaces)
+            self._machine_interfaces[machine_id] = interfaces
         network_space = self.deployment.get_space(self.network)
-        for ifname, iface in machine_interfaces.items():
+        for ifname, iface in self._machine_interfaces[machine_id].items():
             if (spaces := iface.space) and network_space in spaces.split():
-                self._ifnames[name] = ifname
                 return ifname
         raise self._InterfaceError(
             f"Node {node['name']} has no interface in {self.network.name} space"
@@ -1315,6 +1343,7 @@ class _PerHostK8SResourceStep(BaseStep):
         """Determines if the step should be skipped or not."""
         self.to_update = []
         self.to_delete = []
+        self._machine_interfaces.clear()
         control = Role.CONTROL.name.lower()
         region_controller = Role.REGION_CONTROLLER.name.lower()
         if self.fqdn:
@@ -1356,7 +1385,11 @@ class _PerHostK8SResourceStep(BaseStep):
             outdated, deleted = self._get_outdated_resources(
                 self.control_nodes, self.kube
             )
-        except (l_exceptions.ApiError, self._InterfaceError) as e:
+        except (
+            l_exceptions.ApiError,
+            self._InterfaceError,
+            MachineNotFoundException,
+        ) as e:
             LOG.debug("Failed to get outdated resources", exc_info=True)
             return Result(ResultType.FAILED, str(e))
 
@@ -1382,7 +1415,7 @@ class _PerHostK8SResourceStep(BaseStep):
 
 
 class EnsureCiliumDeviceByHostStep(_PerHostK8SResourceStep):
-    """Ensure each control node has a CiliumNodeConfig for its internal-space device."""
+    """Ensure each control node has Cilium device config for its Sunbeam networks."""
 
     _CILIUM_NAMESPACE = "kube-system"
     _RESTART_TIMEOUT = 300
@@ -1413,6 +1446,7 @@ class EnsureCiliumDeviceByHostStep(_PerHostK8SResourceStep):
             fqdn=fqdn,
         )
         self._reconcile_existing = reconcile_existing
+        self._kube_proxy_replacement: bool | None = None
         self.cilium_node_config_resource = (
             K8SHelper.get_lightkube_cilium_node_config_resource()
         )
@@ -1490,6 +1524,7 @@ class EnsureCiliumDeviceByHostStep(_PerHostK8SResourceStep):
 
     def run(self, context: StepContext) -> Result:
         """Recalculate and apply Cilium changes under the k8s plan lock."""
+        self._kube_proxy_replacement = None
         try:
             self._acquire_reconciliation_lock()
         except (
@@ -1522,6 +1557,53 @@ class EnsureCiliumDeviceByHostStep(_PerHostK8SResourceStep):
             "app.kubernetes.io/managed-by": self.deployment.name,
             HOSTNAME_LABEL: hostname,
         }
+
+    def _cilium_defaults(self, node: dict) -> dict[str, str]:
+        """Select explicit service-facing devices for the active datapath.
+
+        Kubernetes 1.36 uses Cilium's kube-proxy replacement. Restricting BPF
+        to the internal interface would leave VIPs on other API networks
+        unreachable. Include only interfaces in Sunbeam's API/management
+        spaces, preserving the exclusion of OVS/physnet uplinks. Keep direct
+        routing on the internal interface even when multiple devices match.
+
+        Read the running configuration rather than infer capabilities from
+        the charm track: same-track risk changes may change the datapath too.
+        """
+        internal = self._get_interface(node)
+        if self._kube_proxy_replacement is None:
+            config = self.kube.get(
+                core_v1.ConfigMap, "cilium-config", namespace=self._CILIUM_NAMESPACE
+            )
+            self._kube_proxy_replacement = (config.data or {}).get(
+                "kube-proxy-replacement", "false"
+            ) in ("true", "strict")
+        if not self._kube_proxy_replacement:
+            return {"devices": internal}
+
+        service_spaces = {
+            self.deployment.get_space(network)
+            for network in (
+                Networks.INTERNAL,
+                Networks.MANAGEMENT,
+                Networks.PUBLIC,
+            )
+        }
+        try:
+            service_spaces.add(self.deployment.get_space(Networks.STORAGE))
+        except ValueError:
+            # A deployment consisting of region controllers need not have storage.
+            LOG.debug("No storage space configured for Cilium devices")
+        interfaces = self.jhelper.get_machine_interfaces(
+            self.model, str(node["machineid"])
+        )
+        devices = {internal}
+        devices.update(
+            name
+            for name, interface in interfaces.items()
+            if interface.space and service_spaces.intersection(interface.space.split())
+        )
+        return {"devices": ",".join(sorted(devices)), "direct-routing-device": internal}
 
     def _get_outdated_resources(
         self, nodes: list[dict], kube: "l_client.Client"
@@ -1568,24 +1650,27 @@ class EnsureCiliumDeviceByHostStep(_PerHostK8SResourceStep):
                 )
                 continue
 
-            # Validate device
+            # Validate device selection and the direct-routing interface.
             defaults = config.spec.get("defaults", {})
-            interface = None
+            expected_defaults = None
             for node in nodes:
                 if node["name"] == hostname:
-                    interface = self._get_interface(node)
-            if not interface:
+                    expected_defaults = self._cilium_defaults(node)
+            if not expected_defaults:
                 LOG.debug(
                     "CiliumNodeConfig %s: no interface for node",
                     config.metadata.name,
                 )
                 continue
-            if defaults.get("devices") != interface:
+            if any(
+                defaults.get(key) != expected_defaults.get(key)
+                for key in ("devices", "direct-routing-device")
+            ):
                 LOG.debug(
-                    "CiliumNodeConfig %s has wrong device (got %s, want %s)",
+                    "CiliumNodeConfig %s has wrong defaults (got %s, want %s)",
                     config.metadata.name,
-                    defaults.get("devices"),
-                    interface,
+                    defaults,
+                    expected_defaults,
                 )
                 continue
 
@@ -1710,8 +1795,12 @@ class EnsureCiliumDeviceByHostStep(_PerHostK8SResourceStep):
         for node in self.to_update:
             name = node["name"]
             try:
-                interface = self._get_interface(node)
-            except MachineNotFoundException:
+                defaults = self._cilium_defaults(node)
+            except (
+                MachineNotFoundException,
+                self._InterfaceError,
+                l_exceptions.ApiError,
+            ) as e:
                 LOG.debug(
                     "Failed to get machine for CiliumNodeConfig on %s",
                     name,
@@ -1719,7 +1808,7 @@ class EnsureCiliumDeviceByHostStep(_PerHostK8SResourceStep):
                 )
                 return Result(
                     ResultType.FAILED,
-                    f"Machine not found for node {name}",
+                    f"Failed to determine Cilium device configuration for {name}: {e}",
                 )
 
             try:
@@ -1738,9 +1827,7 @@ class EnsureCiliumDeviceByHostStep(_PerHostK8SResourceStep):
                                     HOSTNAME_LABEL: name,
                                 },
                             },
-                            "defaults": {
-                                "devices": interface,
-                            },
+                            "defaults": defaults,
                         },
                     ),
                     field_manager=self.deployment.name,
@@ -1824,6 +1911,7 @@ class EnsureL2AdvertisementByHostStep(_PerHostK8SResourceStep):
         pool: str,
         fqdn: str | None = None,
         optional_if_pool_missing: bool = False,
+        remove_legacy: bool = False,
     ):
         super().__init__(
             "Ensure L2 advertisement",
@@ -1838,6 +1926,9 @@ class EnsureL2AdvertisementByHostStep(_PerHostK8SResourceStep):
         )
         self.pool = pool
         self.optional_if_pool_missing = optional_if_pool_missing
+        self.remove_legacy = remove_legacy
+        self._legacy_to_remove = False
+        self._has_replacement_nodes = False
         self.lbpool_resource = K8SHelper.get_lightkube_loadbalancer_resource()
         self.l2_advertisement_resource = (
             K8SHelper.get_lightkube_l2_advertisement_resource()
@@ -1845,9 +1936,11 @@ class EnsureL2AdvertisementByHostStep(_PerHostK8SResourceStep):
         self.l2_advertisement_namespace = K8SHelper.get_loadbalancer_namespace()
 
     def is_skip(self, context: StepContext) -> Result:
-        """Skip optional advertisements when the IPAddressPool is absent."""
+        """Check for per-host changes and a legacy advertisement to retire."""
         self.to_update = []
         self.to_delete = []
+        self._legacy_to_remove = False
+        self._has_replacement_nodes = False
         if self.optional_if_pool_missing:
             try:
                 kube = get_kube_client(self.client, self.kube_namespace)
@@ -1869,7 +1962,26 @@ class EnsureL2AdvertisementByHostStep(_PerHostK8SResourceStep):
                 LOG.debug("Failed to get ipaddresspool %s", self.pool, exc_info=True)
                 return Result(ResultType.FAILED, str(e))
 
-        return super().is_skip(context)
+        result = super().is_skip(context)
+        if (
+            result.result_type == ResultType.FAILED
+            or not self.remove_legacy
+            or self.fqdn
+            or not self._has_replacement_nodes
+        ):
+            return result
+        try:
+            self.kube.get(
+                self.l2_advertisement_resource,
+                name=self.pool,
+                namespace=self.l2_advertisement_namespace,
+            )
+        except l_exceptions.ApiError as e:
+            if e.status.code == 404:
+                return result
+            return Result(ResultType.FAILED, str(e))
+        self._legacy_to_remove = True
+        return Result(ResultType.COMPLETED)
 
     def _labels(self, name: str, space: str) -> dict[str, str]:
         """Return labels for the L2 advertisement."""
@@ -1896,10 +2008,24 @@ class EnsureL2AdvertisementByHostStep(_PerHostK8SResourceStep):
         """Return instance label for the L2 advertisement."""
         return self._name_label(network) + "-" + name
 
+    def _node_selectors(self, hostname: str) -> list[dict]:
+        return [{"matchLabels": {HOSTNAME_LABEL: hostname}}]
+
+    def _has_public_interface(self, node: dict) -> bool:
+        try:
+            self._get_interface(node)
+        except self._InterfaceError as e:
+            LOG.debug("%s", e)
+            return False
+        return True
+
     def _get_outdated_resources(
         self, nodes: list[dict], kube: "l_client.Client"
     ) -> tuple[list[str], list[str]]:
         """Get outdated L2 advertisement."""
+        if self.network == Networks.PUBLIC:
+            nodes = [node for node in nodes if self._has_public_interface(node)]
+        self._has_replacement_nodes = bool(nodes)
         node_names = {node["name"] for node in nodes}
         outdated: list[str] = [node["name"] for node in nodes]
         deleted: list[str] = []
@@ -1907,7 +2033,10 @@ class EnsureL2AdvertisementByHostStep(_PerHostK8SResourceStep):
         l2_advertisements = kube.list(
             self.l2_advertisement_resource,
             namespace=self.l2_advertisement_namespace,
-            labels={"app.kubernetes.io/name": self._name_label(self.pool)},
+            labels={
+                "app.kubernetes.io/managed-by": self.deployment.name,
+                "app.kubernetes.io/name": self._name_label(self.network.value.lower()),
+            },
         )
 
         for l2_ad in l2_advertisements:
@@ -1954,6 +2083,13 @@ class EnsureL2AdvertisementByHostStep(_PerHostK8SResourceStep):
                     l2_ad.metadata.name,
                 )
                 continue
+            if l2_ad.spec.get("nodeSelectors") != self._node_selectors(hostname):
+                LOG.debug(
+                    "L2 advertisement %s does not select node %s",
+                    l2_ad.metadata.name,
+                    hostname,
+                )
+                continue
             outdated.remove(hostname)
         return outdated, deleted
 
@@ -1976,13 +2112,7 @@ class EnsureL2AdvertisementByHostStep(_PerHostK8SResourceStep):
                     spec={
                         "ipAddressPools": [self.pool],
                         "interfaces": [interface],
-                        "nodeSelectors": [
-                            {
-                                "matchLabels": {
-                                    HOSTNAME_LABEL: name,
-                                }
-                            }
-                        ],
+                        "nodeSelectors": self._node_selectors(name),
                     },
                 ),
                 field_manager=self.deployment.name,
@@ -2040,6 +2170,20 @@ class EnsureL2AdvertisementByHostStep(_PerHostK8SResourceStep):
             except l_exceptions.ApiError:
                 LOG.debug("Failed to delete L2 advertisement", exc_info=True)
                 continue
+
+        if self._legacy_to_remove:
+            try:
+                self.kube.delete(
+                    self.l2_advertisement_resource,
+                    self.pool,
+                    namespace=self.l2_advertisement_namespace,
+                )
+            except l_exceptions.ApiError as e:
+                if e.status.code != 404:
+                    return Result(
+                        ResultType.FAILED,
+                        f"Failed to delete legacy L2 advertisement {self.pool}: {e}",
+                    )
 
         return Result(ResultType.COMPLETED)
 

@@ -27,6 +27,7 @@ from sunbeam.core.common import (
     read_config,
 )
 from sunbeam.core.juju import JujuAccount, JujuController, JujuHelper
+from sunbeam.core.k8s_track import K8STrackGuard
 from sunbeam.core.manifest import (
     FeatureGroupManifest,
     FeatureManifest,
@@ -275,8 +276,7 @@ class Deployment(pydantic.BaseModel):
             feature = features.get(name)
             group = groups.get(name)
             if not feature and not group:
-                LOG.warning("Feature %s is not found in feature manager", name)
-                continue
+                raise ValueError(f"Feature {name!r} is not found in feature manager")
             if feature and feature_or_group_manifest_dict:
                 feature_manifests[name] = _parse_feature(
                     feature, feature_or_group_manifest_dict
@@ -284,18 +284,18 @@ class Deployment(pydantic.BaseModel):
             elif group and feature_or_group_manifest_dict:
                 group_manifest = FeatureGroupManifest(root={})
                 for (
-                    name,
+                    feature_name,
                     feature_manifest_dict,
                 ) in feature_or_group_manifest_dict.items():
-                    feature = features.get(group.name + "." + name)
+                    feature = features.get(group.name + "." + feature_name)
                     if not feature:
-                        LOG.warning(
-                            "Feature %s is not found in group %s", name, group.name
+                        raise ValueError(
+                            f"Feature {feature_name!r} is not found in group "
+                            f"{group.name!r}"
                         )
-                        continue
                     if not feature_manifest_dict:
                         continue
-                    group_manifest.root[name] = _parse_feature(
+                    group_manifest.root[feature_name] = _parse_feature(
                         feature, feature_manifest_dict
                     )
                 if group_manifest.root:
@@ -334,6 +334,7 @@ class Deployment(pydantic.BaseModel):
 
     def parse_manifest(self, manifest_data: dict) -> Manifest:
         """Parse manifest data."""
+        manifest_data = copy.deepcopy(manifest_data)
         features = manifest_data.pop("features", {})
         storage = manifest_data.pop("storage", {})
         manifest = Manifest.model_validate(manifest_data)
@@ -345,7 +346,7 @@ class Deployment(pydantic.BaseModel):
 
     def get_manifest(self, manifest_file: pathlib.Path | None = None) -> Manifest:
         """Return the manifest for the deployment."""
-        if self._manifest is not None:
+        if self._manifest is not None and manifest_file is None:
             return self._manifest
 
         feature_manager = self.get_feature_manager()
@@ -357,12 +358,12 @@ class Deployment(pydantic.BaseModel):
             override_manifest = self.parse_manifest(manifest_dict)
             LOG.debug("Manifest loaded from file")
         else:
+            manifest_data = None
             try:
                 client = self.get_client()
-                override_manifest = self.parse_manifest(
-                    yaml.safe_load(client.cluster.get_latest_manifest()["data"])
+                manifest_data = yaml.safe_load(
+                    client.cluster.get_latest_manifest()["data"]
                 )
-                LOG.debug("Manifest loaded from clusterd")
             except ClusterServiceUnavailableException:
                 LOG.debug(
                     "Failed to get manifest from clusterd, might not be bootstrapped,"
@@ -378,6 +379,11 @@ class Deployment(pydantic.BaseModel):
                     "Failed to get clusterd client, might no be bootstrapped,"
                     " consider empty manifest from database"
                 )
+
+            if manifest_data is not None:
+                override_manifest = self.parse_manifest(manifest_data)
+                LOG.debug("Manifest loaded from clusterd")
+
             if override_manifest is None:
                 # Only get manifest from embedded if manifest not present in clusterd
                 snap = Snap()
@@ -385,9 +391,8 @@ class Deployment(pydantic.BaseModel):
                 if risk != RiskLevel.STABLE:
                     version = infer_version(snap)
                     manifest_file = embedded_manifest_path(snap, version, risk)
-                    override_manifest = self.parse_manifest(
-                        yaml.safe_load(manifest_file.read_text())
-                    )
+                    manifest_dict = yaml.safe_load(manifest_file.read_text())
+                    override_manifest = self.parse_manifest(manifest_dict)
                     LOG.debug("Manifest loaded from embedded manifest")
 
         if override_manifest is not None:
@@ -396,6 +401,41 @@ class Deployment(pydantic.BaseModel):
 
         self._manifest = manifest
         return manifest
+
+    def validate_manifest_for_infra(self, manifest: Manifest | dict) -> None:
+        """Validate the manifest against the deployment's infrastructure policy."""
+        self._k8s_track_guard().validate_manifest(manifest)
+
+    def _k8s_track_guard(self) -> K8STrackGuard:
+        return K8STrackGuard(
+            self.get_client(),
+            self.get_juju_helper() if self.juju_controller is not None else None,
+            self.openstack_machines_model,
+        )
+
+    def resolve_k8s_channel(
+        self,
+        channel: str | None,
+        revision: int | None = None,
+        *,
+        persist: bool = False,
+        config: dict | None = None,
+    ) -> str:
+        """Validate Kubernetes against its recorded deployment track."""
+        return self._k8s_track_guard().resolve(
+            channel, revision, persist=persist, config=config
+        )
+
+    def _validate_k8s_tfvars(self, tfvars: dict) -> None:
+        """Check final Terraform inputs, including feature-computed overrides."""
+        tfvars["k8s_channel"] = self.resolve_k8s_channel(
+            tfvars.get("k8s_channel"),
+            tfvars.get("k8s_revision"),
+            config=tfvars.get("k8s_config"),
+        )
+
+    def _k8s_terraform_apply(self):
+        return self._k8s_track_guard().terraform_apply()
 
     def _get_juju_clusterd_env(self) -> dict:
         env = {}
@@ -452,6 +492,12 @@ class Deployment(pydantic.BaseModel):
                 backend="http",
                 env=env,
                 clusterd_address=self.get_clusterd_http_address(),
+                validate_tfvars=self._validate_k8s_tfvars
+                if tfplan == "k8s-plan"
+                else None,
+                apply_context=self._k8s_terraform_apply
+                if tfplan == "k8s-plan"
+                else None,
             )
 
     @property

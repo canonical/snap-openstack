@@ -864,6 +864,25 @@ class JujuHelper:
             raise ActionFailedException(str(task))
         return task.results
 
+    def get_application_endpoints(
+        self, applications: list[str], model: str
+    ) -> dict[str, set[str]]:
+        """Return declared endpoint names, including those with no relation."""
+        with self._model(model) as juju:
+            try:
+                details = self.cli(
+                    "show-application",
+                    *applications,
+                    include_controller=False,
+                    juju=juju,
+                )
+            except jubilant.CLIError as error:
+                raise JujuException(str(error)) from error
+        return {
+            name: set(info.get("endpoint-bindings", {}))
+            for name, info in details.items()
+        }
+
     def get_application_actions(self, application: str, model: str) -> list[str]:
         """Return action names available for an application in a model."""
         with self._model(model) as juju:
@@ -1010,12 +1029,16 @@ class JujuHelper:
                 if "not found" in e.stderr:
                     raise ApplicationNotFoundException(f"App {app!r} not found") from e
                 raise JujuException(
-                    f"Failed to get config {config_value!r} from application {app!r}"
+                    f"Failed to get config from application {app!r}"
                 ) from e
         return config_value
 
     def set_app_config(self, app: str, model: str, config: dict) -> None:
         """Set charm config for an application.
+
+        The values are sent as YAML on stdin (`juju config <app> --file -`),
+        not as command-line arguments, so they don't show in the process
+        list or in jubilant's command log.
 
         :app: Name of the application.
         :model: Name of the model.
@@ -1023,7 +1046,9 @@ class JujuHelper:
         """
         with self._model(model) as juju:
             try:
-                juju.config(app, config)
+                juju.cli(
+                    "config", app, "--file", "-", stdin=yaml.safe_dump({app: config})
+                )
             except jubilant.CLIError as e:
                 if "not found" in e.stderr:
                     raise ApplicationNotFoundException(f"App {app!r} not found") from e
@@ -1593,6 +1618,110 @@ class JujuHelper:
                 timeout=timeout,
             )
 
+    @staticmethod
+    def _pending_subordinate_units(
+        status: "jubilant.statustypes.Status",
+        principal_app: str,
+        subordinate_app: str,
+        expected_status: Collection[str],
+        expected_workload_status_message: Collection[str] | None = None,
+    ) -> dict[str, str]:
+        """Return the subordinate units not yet in the expected workload status.
+
+        Subordinate units are listed under their principal unit, not under
+        the subordinate application, so they are collected from there. While
+        the subordinate is related to the principal, every principal unit
+        must have one; a principal unit without it is pending.
+
+        :return: Mapping of unit name to its current "status: message".
+        :raises JujuException: if the principal application is not in the status.
+        """
+        subordinate = status.apps.get(subordinate_app)
+        if subordinate is None or principal_app not in subordinate.subordinate_to:
+            # Not deployed, or not related: there are no subordinate units.
+            return {}
+
+        principal = status.apps.get(principal_app)
+        if principal is None:
+            raise JujuException(
+                f"Application {principal_app!r} not found, cannot check the "
+                f"{subordinate_app!r} units"
+            )
+
+        pending: dict[str, str] = {}
+        for principal_name, unit in principal.units.items():
+            subs = {
+                name: sub
+                for name, sub in unit.subordinates.items()
+                if name.startswith(f"{subordinate_app}/")
+            }
+            if not subs:
+                pending[principal_name] = f"no {subordinate_app} unit"
+            for name, sub in subs.items():
+                current = sub.workload_status.current
+                message = sub.workload_status.message
+                if current not in expected_status or (
+                    expected_workload_status_message is not None
+                    and message not in expected_workload_status_message
+                ):
+                    pending[name] = f"{current}: {message}" if message else current
+        return pending
+
+    def wait_subordinate_units_status(
+        self,
+        model: str,
+        principal_app: str,
+        subordinate_app: str,
+        status: list[str],
+        workload_status_message: list[str] | None = None,
+        timeout: int = 10 * 60,
+    ) -> None:
+        """Wait for every unit of a subordinate app to reach a workload status.
+
+        The status of a subordinate application only reflects the most severe
+        status among its units, so every subordinate unit is checked instead.
+        While the subordinate is related to the principal, a principal unit
+        without the subordinate is waited for too.
+
+        :model: Name of the model.
+        :principal_app: Principal application the subordinate is related to.
+        :subordinate_app: Subordinate application to check the units of.
+        :status: Accepted workload status values.
+        :workload_status_message: Accepted workload status messages, any if None.
+        :timeout: Waiting timeout in seconds.
+        :raises TimeoutError: naming the units not in the expected status.
+        :raises JujuException: if the principal application is missing.
+        """
+        last_pending: dict[str, str] = {}
+
+        def _ready(juju_status: "jubilant.statustypes.Status") -> bool:
+            nonlocal last_pending
+            last_pending = self._pending_subordinate_units(
+                juju_status,
+                principal_app,
+                subordinate_app,
+                status,
+                workload_status_message,
+            )
+            return not last_pending
+
+        LOG.debug(
+            "Waiting for %r units under %r to be %r with message %r",
+            subordinate_app,
+            principal_app,
+            status,
+            workload_status_message,
+        )
+        with self._model(model) as juju:
+            try:
+                self._wait(_ready, juju, delay=MODEL_DELAY, timeout=timeout)
+            except TimeoutError as e:
+                units = ", ".join(f"{u} ({s})" for u, s in sorted(last_pending.items()))
+                raise TimeoutError(
+                    f"Timed out after {timeout} seconds waiting for {subordinate_app} "
+                    f"units: {units or 'status unknown'}"
+                ) from e
+
     def is_k8s_model(self, model: str) -> bool:
         """Return True if the model is a k8s (CAAS) model.
 
@@ -1762,21 +1891,31 @@ class JujuHelper:
         :param charm_name: Name of charm to look up
         :param revision: Charm revision number to find
         """
-        output = json.loads(
-            self._juju.cli(
-                "info",
-                "--format",
-                "json",
-                charm_name,
-                include_model=False,
+        channels = self.get_charm_channels_for_revision(charm_name, revision)
+        return channels[0] if channels else None
+
+    @staticmethod
+    def get_charm_channels_for_revision(charm_name: str, revision: int) -> list[str]:
+        """Return the channels publishing a revision without contacting a controller."""
+        try:
+            output = json.loads(
+                jubilant.Juju().cli(
+                    "info",
+                    "--format",
+                    "json",
+                    charm_name,
+                    include_model=False,
+                )
             )
-        )
+        except (jubilant.CLIError, json.JSONDecodeError) as e:
+            raise JujuException(f"Cannot look up channels for {charm_name}: {e}") from e
+        channels = []
         for track, risks in output.get("channels", {}).items():
             for risk, entries in risks.items():
                 for entry in entries:
                     if entry.get("revision") == revision:
-                        return f"{track}/{risk}"
-        return None
+                        channels.append(f"{track}/{risk}")
+        return channels
 
     @staticmethod
     def manual_cloud(cloud_name: str, ip_address: str) -> dict[str, dict]:

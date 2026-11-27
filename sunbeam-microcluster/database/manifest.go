@@ -7,23 +7,23 @@ import (
 	"net/http"
 
 	"github.com/canonical/lxd/shared/api"
-	"github.com/canonical/microcluster/v2/cluster"
+	cluster "github.com/canonical/microcluster/v3/microcluster/db"
 )
 
 //go:generate -command mapper lxd-generate db mapper -t manifest.mapper.go
 //go:generate mapper reset
 //
-//go:generate mapper stmt -d github.com/canonical/microcluster/v2/cluster -e ManifestItem objects table=manifest
-//go:generate mapper stmt -d github.com/canonical/microcluster/v2/cluster -e ManifestItem objects-by-ManifestID table=manifest
-//go:generate mapper stmt -d github.com/canonical/microcluster/v2/cluster -e ManifestItem id table=manifest
-//go:generate mapper stmt -d github.com/canonical/microcluster/v2/cluster -e ManifestItem delete-by-ManifestID table=manifest
+//go:generate mapper stmt -d github.com/canonical/microcluster/v3/microcluster/db -e ManifestItem objects table=manifest
+//go:generate mapper stmt -d github.com/canonical/microcluster/v3/microcluster/db -e ManifestItem objects-by-ManifestID table=manifest
+//go:generate mapper stmt -d github.com/canonical/microcluster/v3/microcluster/db -e ManifestItem id table=manifest
+//go:generate mapper stmt -d github.com/canonical/microcluster/v3/microcluster/db -e ManifestItem delete-by-ManifestID table=manifest
 
 //
-//go:generate mapper method -i -d github.com/canonical/microcluster/v2/cluster -e ManifestItem GetMany table=manifest
-//go:generate mapper method -i -d github.com/canonical/microcluster/v2/cluster -e ManifestItem GetOne table=manifest
-//go:generate mapper method -i -d github.com/canonical/microcluster/v2/cluster -e ManifestItem ID table=manifest
-//go:generate mapper method -i -d github.com/canonical/microcluster/v2/cluster -e ManifestItem Exists table=manifest
-//go:generate mapper method -i -d github.com/canonical/microcluster/v2/cluster -e ManifestItem DeleteOne-by-ManifestID table=manifest
+//go:generate mapper method -i -d github.com/canonical/microcluster/v3/microcluster/db -e ManifestItem GetMany table=manifest
+//go:generate mapper method -i -d github.com/canonical/microcluster/v3/microcluster/db -e ManifestItem GetOne table=manifest
+//go:generate mapper method -i -d github.com/canonical/microcluster/v3/microcluster/db -e ManifestItem ID table=manifest
+//go:generate mapper method -i -d github.com/canonical/microcluster/v3/microcluster/db -e ManifestItem Exists table=manifest
+//go:generate mapper method -i -d github.com/canonical/microcluster/v3/microcluster/db -e ManifestItem DeleteOne-by-ManifestID table=manifest
 
 // ManifestItem is used to save the Sunbeam manifests provided by user.
 // AppliedDate is saved as Timestamp in database but retreived as string
@@ -57,7 +57,7 @@ func CreateManifestItem(ctx context.Context, tx *sql.Tx, object ManifestItem) (i
 	// Check if a ManifestItem with the same key exists.
 	exists, err := ManifestItemExists(ctx, tx, object.ManifestID)
 	if err != nil {
-		return -1, fmt.Errorf("Failed to check for duplicates: %w", err)
+		return -1, fmt.Errorf("failed to check for duplicates: %w", err)
 	}
 
 	if exists {
@@ -73,18 +73,18 @@ func CreateManifestItem(ctx context.Context, tx *sql.Tx, object ManifestItem) (i
 	// Prepared statement to use.
 	stmt, err := cluster.Stmt(tx, manifestItemCreate)
 	if err != nil {
-		return -1, fmt.Errorf("Failed to get \"manifestItemCreate\" prepared statement: %w", err)
+		return -1, fmt.Errorf("failed to get \"manifestItemCreate\" prepared statement: %w", err)
 	}
 
 	// Execute the statement.
 	result, err := stmt.Exec(args...)
 	if err != nil {
-		return -1, fmt.Errorf("Failed to create \"manifest\" entry: %w", err)
+		return -1, fmt.Errorf("failed to create \"manifest\" entry: %w", err)
 	}
 
 	id, err := result.LastInsertId()
 	if err != nil {
-		return -1, fmt.Errorf("Failed to fetch \"manifest\" entry ID: %w", err)
+		return -1, fmt.Errorf("failed to fetch \"manifest\" entry ID: %w", err)
 	}
 
 	return id, nil
@@ -99,14 +99,14 @@ func GetLatestManifestItem(ctx context.Context, tx *sql.Tx) (*ManifestItem, erro
 
 	sqlStmt, err = cluster.Stmt(tx, latestManifestItemObject)
 	if err != nil {
-		return nil, fmt.Errorf("Failed to get \"manifestItemObjects\" prepared statement: %w", err)
+		return nil, fmt.Errorf("failed to get \"manifestItemObjects\" prepared statement: %w", err)
 	}
 
 	// Result slice.
 	// objects := make([]ManifestItem, 0)
 	objects, err := getManifestItems(ctx, sqlStmt)
 	if err != nil {
-		return nil, fmt.Errorf("Failed to fetch from \"manifest\" table: %w", err)
+		return nil, fmt.Errorf("failed to fetch from \"manifest\" table: %w", err)
 	}
 
 	objectsLen := len(objects)

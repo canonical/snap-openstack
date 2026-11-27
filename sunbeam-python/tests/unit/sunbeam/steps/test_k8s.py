@@ -11,6 +11,7 @@ import lightkube.core.exceptions
 import pytest
 import tenacity
 from lightkube import ApiError
+from lightkube.models.meta_v1 import ObjectMeta
 from lightkube.types import PatchType
 
 from sunbeam.clusterd.service import (
@@ -33,6 +34,7 @@ from sunbeam.steps.k8s import (
     K8S_CLOUD_SUFFIX,
     AddK8SCloudStep,
     AddK8SCredentialStep,
+    CordonK8SUnitStep,
     DeployK8SApplicationStep,
     EnsureCiliumDeviceByHostStep,
     EnsureDefaultL2AdvertisementMutedStep,
@@ -491,11 +493,82 @@ class TestEnsureL2AdvertisementByHostStep:
         api_error = ApiError.__new__(ApiError)
         api_error.status = Mock(code=500)
         step.kube.apply = Mock(side_effect=api_error)
+        step._legacy_to_remove = True
 
         result = step.run(None)
 
         step.kube.apply.assert_called_once()
+        step.kube.delete.assert_not_called()
         assert result.result_type == ResultType.FAILED
+
+    @pytest.mark.parametrize("selector_hostname", [None, "node1", "retired-node"])
+    def test_retires_legacy_advertisement_after_reconciling_replacements(
+        self, step, step_context, selector_hostname
+    ):
+        step.remove_legacy = True
+        step.network = Networks.PUBLIC
+        step.deployment.get_space.return_value = "public"
+        step.jhelper.get_machine_interfaces.side_effect = lambda model, machine_id: (
+            {"eth1": Mock(space="public")}
+            if machine_id == "1"
+            else {"eth0": Mock(space="internal")}
+        )
+        step.kube.list.return_value = (
+            [
+                step.l2_advertisement_resource(
+                    metadata=ObjectMeta(
+                        name="public-node1", labels=step._labels("node1", "public")
+                    ),
+                    spec={
+                        "ipAddressPools": ["test-pool"],
+                        "interfaces": ["eth1"],
+                        "nodeSelectors": [
+                            {"matchLabels": {"sunbeam/hostname": selector_hostname}}
+                        ],
+                    },
+                )
+            ]
+            if selector_hostname is not None
+            else []
+        )
+
+        with patch("sunbeam.steps.k8s.get_kube_client", return_value=step.kube):
+            assert step.is_skip(step_context).result_type == ResultType.COMPLETED
+            assert step.run(step_context).result_type == ResultType.COMPLETED
+
+        operations = [call[0] for call in step.kube.mock_calls]
+        assert operations == (
+            ["list", "get", "delete"]
+            if selector_hostname == "node1"
+            else ["list", "get", "apply", "delete"]
+        )
+        if selector_hostname != "node1":
+            replacement = step.kube.apply.call_args.args[0]
+            assert replacement.metadata.name == "public-node1"
+            assert replacement.spec["nodeSelectors"] == [
+                {"matchLabels": {"sunbeam/hostname": "node1"}}
+            ]
+        step.kube.delete.assert_called_once_with(
+            step.l2_advertisement_resource, "test-pool", namespace="metallb-system"
+        )
+
+    def test_keeps_legacy_public_advertisement_without_replacement_nodes(
+        self, step, step_context
+    ):
+        step.remove_legacy = True
+        step.network = Networks.PUBLIC
+        step.deployment.get_space.return_value = "public"
+        step.jhelper.get_machine_interfaces.return_value = {
+            "eth0": Mock(space="internal")
+        }
+        step.kube.list.return_value = []
+
+        with patch("sunbeam.steps.k8s.get_kube_client", return_value=step.kube):
+            result = step.is_skip(step_context)
+
+        assert result.result_type == ResultType.SKIPPED
+        step.kube.get.assert_not_called()
+        step.kube.delete.assert_not_called()
 
     def test_run_missing_machine_skips(self, step):
         step.to_update = [{"name": "node1", "machineid": "1"}]
@@ -524,10 +597,13 @@ class TestEnsureL2AdvertisementByHostStep:
         step.kube.delete.assert_called_once()
         assert result.result_type == ResultType.COMPLETED
 
-    def test_get_interface_cached(self, step):
-        step._ifnames = {"node1": "eth0"}
-        result = step._get_interface({"name": "node1"})
-        assert result == "eth0"
+    def test_get_interface_cached(self, step, jhelper):
+        step.deployment.get_space.return_value = "management"
+        jhelper.get_machine_interfaces.return_value = {"eth0": Mock(space="management")}
+        node = {"name": "node1", "machineid": "1"}
+        assert step._get_interface(node) == "eth0"
+        assert step._get_interface(node) == "eth0"
+        jhelper.get_machine_interfaces.assert_called_once()
 
     def test_get_interface_found(self, step, jhelper, deployment):
         jhelper.get_machine_interfaces.return_value = {
@@ -537,7 +613,6 @@ class TestEnsureL2AdvertisementByHostStep:
         deployment.get_space.return_value = "management"
         result = step._get_interface({"name": "node1", "machineid": "1"})
         assert result == "eth0"
-        assert step._ifnames["node1"] == "eth0"
 
     def test_get_interface_not_found(self, step, jhelper, deployment):
         """Test that _get_interface raises exception when interface is not found."""
@@ -599,7 +674,11 @@ _l2_outdated_testcases = {
         [
             _to_kube_object(
                 metadata={"labels": {"sunbeam/hostname": "node1"}},
-                spec={"ipAddressPools": ["test-pool"], "interfaces": ["eth0"]},
+                spec={
+                    "ipAddressPools": ["test-pool"],
+                    "interfaces": ["eth0"],
+                    "nodeSelectors": [{"matchLabels": {"sunbeam/hostname": "node1"}}],
+                },
             )
         ],
         [],
@@ -1206,6 +1285,23 @@ class TestGetKubeClient:
         )
         assert result == mock_client.return_value
 
+    @patch("sunbeam.steps.k8s.read_config")
+    def test_get_kube_client_initializes_http_transport(self, mock_read_config, client):
+        mock_read_config.return_value = {
+            "apiVersion": "v1",
+            "kind": "Config",
+            "current-context": "test",
+            "clusters": [
+                {"name": "test", "cluster": {"server": "https://localhost:6443"}}
+            ],
+            "contexts": [
+                {"name": "test", "context": {"cluster": "test", "user": "test"}}
+            ],
+            "users": [{"name": "test", "user": {}}],
+        }
+
+        assert isinstance(get_kube_client(client), lightkube.Client)
+
     @patch("sunbeam.steps.k8s.read_config", side_effect=ConfigItemNotFoundException)
     @patch(
         "sunbeam.steps.k8s.K8SHelper.get_kubeconfig_key", return_value="kubeconfig-key"
@@ -1472,6 +1568,60 @@ class TestEnsureCiliumDeviceByHostStep:
         step.client.cluster.lock_terraform_plan.assert_called_once()
         step.client.cluster.unlock_terraform_plan.assert_called_once()
 
+    @pytest.mark.parametrize(
+        ("replacement", "public", "expected_devices"),
+        [
+            ("false", True, "eth1.2743"),
+            ("true", True, "eth0,eth1.101,eth1.2743"),
+            ("true", False, "eth0,eth1.2743"),
+        ],
+    )
+    def test_run_reconciles_oam_only_for_kube_proxy_replacement(
+        self, step, step_context, replacement, public, expected_devices
+    ):
+        step.deployment.get_space.side_effect = lambda network: network.value
+        step.client.cluster.list_nodes_by_role.return_value = [
+            {"name": "node1", "machineid": "1"}
+        ]
+        interfaces = {
+            "eth0": Mock(space="management"),
+            "eth1.2743": Mock(space="internal"),
+        }
+        if public:
+            interfaces["eth1.101"] = Mock(space="public")
+        step.jhelper.get_machine_interfaces.return_value = interfaces
+        step.kube.get.return_value = Mock(data={"kube-proxy-replacement": replacement})
+        step.kube.list.return_value = [
+            step.cilium_node_config_resource(
+                metadata=ObjectMeta(labels={"sunbeam/hostname": "node1"}),
+                spec={
+                    "nodeSelector": {"matchLabels": {"sunbeam/hostname": "node1"}},
+                    "defaults": {"devices": "eth1.2743"},
+                },
+            )
+        ]
+        step._restart_cilium_on_node = Mock()
+
+        with patch("sunbeam.steps.k8s.get_kube_client", return_value=step.kube):
+            if replacement == "false":
+                assert step.run(step_context).result_type == ResultType.SKIPPED
+                step.kube.apply.assert_not_called()
+                step._restart_cilium_on_node.assert_not_called()
+                return
+
+            assert step.run(step_context).result_type == ResultType.COMPLETED
+            applied = step.kube.apply.call_args.args[0]
+            assert applied.spec["defaults"] == {
+                "devices": expected_devices,
+                "direct-routing-device": "eth1.2743",
+            }
+            applied.metadata.annotations["sunbeam/restart-pending"] = "false"
+            step.kube.list.return_value = [applied]
+            assert step.run(step_context).result_type == ResultType.SKIPPED
+
+        step.kube.apply.assert_called_once()
+        step._restart_cilium_on_node.assert_called_once_with("node1")
+
     def test_run_outdated_device(self, step, step_context):
         step._get_outdated_resources = Mock(return_value=(["node1"], []))
         step._apply_changes = Mock(return_value=Result(ResultType.COMPLETED))
@@ -1702,6 +1852,87 @@ class TestEnsureCiliumDeviceByHostStep:
             patch_type=PatchType.MERGE,
         )
         assert result.result_type == ResultType.COMPLETED
+
+    @pytest.mark.parametrize("replacement", ["false", "true"])
+    def test_device_defaults_follow_datapath_and_exclude_physnet(
+        self, step, deployment, jhelper, replacement
+    ):
+        deployment.get_space.side_effect = lambda network: network.value
+        jhelper.get_machine_interfaces.return_value = {
+            "internal0": Mock(space="internal"),
+            "public0": Mock(space="public"),
+            "management0": Mock(space="management"),
+            "storage0": Mock(space="storage"),
+            "data0": Mock(space="data"),
+            "ovs-uplink": Mock(space=None),
+        }
+        step.kube.get.return_value = Mock(data={"kube-proxy-replacement": replacement})
+        step.to_update = [{"name": "node1", "machineid": "1"}]
+        step._restart_cilium_on_node = Mock()
+
+        assert step._apply_changes(None).result_type == ResultType.COMPLETED
+
+        obj = step.kube.apply.call_args.args[0]
+        assert obj._api_info.resource.group == "cilium.io"
+        assert obj._api_info.resource.version == "v2"
+        resource = obj.to_dict()
+        assert resource["spec"]["nodeSelector"] == {
+            "matchLabels": {"sunbeam/hostname": "node1"}
+        }
+        if replacement == "true":
+            assert resource["spec"]["defaults"] == {
+                "devices": "internal0,management0,public0,storage0",
+                "direct-routing-device": "internal0",
+            }
+        else:
+            assert resource["spec"]["defaults"] == {"devices": "internal0"}
+
+    def test_device_defaults_deduplicate_shared_spaces(self, step, jhelper):
+        jhelper.get_machine_interfaces.return_value = {"eth0": Mock(space="internal")}
+        step.kube.get.return_value = Mock(data={"kube-proxy-replacement": "true"})
+        assert step._cilium_defaults({"name": "node1", "machineid": "1"}) == {
+            "devices": "eth0",
+            "direct-routing-device": "eth0",
+        }
+
+    def test_region_controller_without_storage_space(self, step, deployment, jhelper):
+        def get_space(network):
+            if network == Networks.STORAGE:
+                raise ValueError("Storage space not configured")
+            return "internal"
+
+        deployment.get_space.side_effect = get_space
+        jhelper.get_machine_interfaces.return_value = {"eth0": Mock(space="internal")}
+        step.kube.get.return_value = Mock(data={"kube-proxy-replacement": "true"})
+        assert step._cilium_defaults({"name": "region1", "machineid": "1"}) == {
+            "devices": "eth0",
+            "direct-routing-device": "eth0",
+        }
+
+    def test_wrong_direct_routing_device_requires_reconciliation(self, step, jhelper):
+        jhelper.get_machine_interfaces.return_value = {"eth0": Mock(space="internal")}
+        step.kube.get.return_value = Mock(data={"kube-proxy-replacement": "true"})
+        config = Mock(
+            metadata=Mock(labels={"sunbeam/hostname": "node1"}, annotations={}),
+        )
+        config.spec = {
+            "nodeSelector": {"matchLabels": {"sunbeam/hostname": "node1"}},
+            "defaults": {"devices": "eth0", "direct-routing-device": "wrong"},
+        }
+        step.kube.list.return_value = [config]
+        nodes = [{"name": "node1", "machineid": "1"}]
+        assert step._get_outdated_resources(nodes, step.kube) == (["node1"], [])
+        config.spec["defaults"]["direct-routing-device"] = "eth0"
+        assert step._get_outdated_resources(nodes, step.kube) == ([], [])
+
+    def test_unreadable_datapath_does_not_apply_resources(self, step):
+        step.to_update = [{"name": "node1", "machineid": "1"}]
+        step._get_interface = Mock(return_value="eth0")
+        error = ApiError.__new__(ApiError)
+        error.status = Mock(code=403)
+        step.kube.get.side_effect = error
+        assert step._apply_changes(None).result_type == ResultType.FAILED
+        step.kube.apply.assert_not_called()
 
     def test_apply_changes_updates_config(self, step):
         step.to_update = [
@@ -2013,3 +2244,49 @@ class TestEnsureCiliumDeviceByHostStep:
         step.kube.delete.assert_called_once()
         # Step completes (restart failure is swallowed for delete path)
         assert result.result_type == ResultType.COMPLETED
+
+
+class TestCordonK8SUnitStepNodeResolution:
+    """Cordon/drain/uncordon steps act on the k8s node name (LP#2129793).
+
+    The steps receive the clusterd node name, but the k8s API needs the k8s
+    node name, which can differ (short hostname vs FQDN). skip_checks()
+    resolves the k8s name via find_node and run() must use it.
+    """
+
+    def _step(self):
+        client = Mock()
+        client.cluster.get_node_info.return_value = {
+            "role": ["control"],
+            "machineid": 0,
+        }
+        jhelper = Mock()
+        jhelper.get_application.return_value = Mock(units={"k8s/0": Mock(machine="0")})
+        return CordonK8SUnitStep(client, "node1.example.com", jhelper, "model")
+
+    def test_skip_checks_resolves_k8s_node_name(self):
+        """skip_checks stores the resolved k8s node name."""
+        step = self._step()
+        node = Mock()
+        node.metadata.name = "node1"
+        with (
+            patch("sunbeam.steps.k8s.read_config", return_value={}),
+            patch("sunbeam.steps.k8s.l_kubeconfig"),
+            patch("sunbeam.steps.k8s.l_client"),
+            patch("sunbeam.steps.k8s.find_node", return_value=node),
+        ):
+            result = step.is_skip(Mock())
+
+        assert result.result_type == ResultType.COMPLETED
+        assert step.k8s_node_name == "node1"
+
+    def test_cordon_uses_resolved_k8s_node_name(self):
+        """run() cordons the resolved k8s node, not the clusterd name."""
+        step = self._step()
+        step.kube = Mock()
+        step.k8s_node_name = "node1"
+        with patch("sunbeam.steps.k8s.cordon") as mock_cordon:
+            result = step.run(Mock())
+
+        assert result.result_type == ResultType.COMPLETED
+        mock_cordon.assert_called_once_with(step.kube, "node1")

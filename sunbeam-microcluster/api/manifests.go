@@ -5,10 +5,8 @@ import (
 	"net/http"
 	"net/url"
 
-	"github.com/canonical/lxd/lxd/response"
 	"github.com/canonical/lxd/shared/api"
-	"github.com/canonical/microcluster/v2/rest"
-	"github.com/canonical/microcluster/v2/state"
+	"github.com/canonical/microcluster/v3/microcluster/types"
 	"github.com/gorilla/mux"
 
 	"github.com/canonical/snap-openstack/sunbeam-microcluster/access"
@@ -17,7 +15,7 @@ import (
 )
 
 // /1.0/manifests endpoint.
-var manifestsCmd = rest.Endpoint{
+var manifestsCmd = types.Endpoint{
 	Path: "manifests",
 
 	Get:  access.ClusterCATrustedEndpoint(cmdManifestsGetAll, true),
@@ -26,67 +24,67 @@ var manifestsCmd = rest.Endpoint{
 
 // /1.0/manifests/<manifestid> endpoint.
 // /1.0/manifests/latest will give the latest inserted manifest record
-var manifestCmd = rest.Endpoint{
+var manifestCmd = types.Endpoint{
 	Path: "manifests/{manifestid}",
 
 	Get:    access.ClusterCATrustedEndpoint(cmdManifestGet, true),
 	Delete: access.ClusterCATrustedEndpoint(cmdManifestDelete, true),
 }
 
-func cmdManifestsGetAll(s state.State, r *http.Request) response.Response {
+func cmdManifestsGetAll(s types.State, r *http.Request) types.Response {
 
 	manifests, err := sunbeam.ListManifests(r.Context(), s)
 	if err != nil {
-		return response.InternalError(err)
+		return types.InternalError(err)
 	}
 
-	return response.SyncResponse(true, manifests)
+	return types.SyncResponse(true, manifests)
 }
 
-func cmdManifestGet(s state.State, r *http.Request) response.Response {
+func cmdManifestGet(s types.State, r *http.Request) types.Response {
 	var manifestid string
 	manifestid, err := url.PathUnescape(mux.Vars(r)["manifestid"])
 	if err != nil {
-		return response.InternalError(err)
+		return types.InternalError(err)
 	}
 	manifest, err := sunbeam.GetManifest(r.Context(), s, manifestid)
 	if err != nil {
 		if err, ok := err.(api.StatusError); ok {
 			if err.Status() == http.StatusNotFound {
-				return response.NotFound(err)
+				return types.NotFound(err)
 			}
 		}
-		return response.InternalError(err)
+		return types.InternalError(err)
 	}
 
-	return response.SyncResponse(true, manifest)
+	return types.SyncResponse(true, manifest)
 }
 
-func cmdManifestsPost(s state.State, r *http.Request) response.Response {
+func cmdManifestsPost(s types.State, r *http.Request) types.Response {
 	var req apitypes.Manifest
 
 	err := json.NewDecoder(r.Body).Decode(&req)
 	if err != nil {
-		return response.InternalError(err)
+		return types.InternalError(err)
 	}
 
 	err = sunbeam.AddManifest(r.Context(), s, req.ManifestID, req.Data)
 	if err != nil {
-		return response.InternalError(err)
+		return types.InternalError(err)
 	}
 
-	return response.EmptySyncResponse
+	return types.EmptySyncResponse
 }
 
-func cmdManifestDelete(s state.State, r *http.Request) response.Response {
+func cmdManifestDelete(s types.State, r *http.Request) types.Response {
 	manifestid, err := url.PathUnescape(mux.Vars(r)["manifestid"])
 	if err != nil {
-		return response.SmartError(err)
+		return types.SmartError(err)
 	}
 	err = sunbeam.DeleteManifest(r.Context(), s, manifestid)
 	if err != nil {
-		return response.InternalError(err)
+		return types.InternalError(err)
 	}
 
-	return response.EmptySyncResponse
+	return types.EmptySyncResponse
 }

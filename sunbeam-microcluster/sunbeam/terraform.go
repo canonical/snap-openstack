@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/canonical/lxd/shared/api"
-	"github.com/canonical/microcluster/v2/state"
+	"github.com/canonical/microcluster/v3/microcluster/types"
 
 	"github.com/canonical/snap-openstack/sunbeam-microcluster/api/apitypes"
 )
@@ -16,7 +16,7 @@ const tfstatePrefix = "tfstate-"
 const tflockPrefix = "tflock-"
 
 // GetTerraformStates returns the list of terraform states from the database
-func GetTerraformStates(ctx context.Context, s state.State) ([]string, error) {
+func GetTerraformStates(ctx context.Context, s types.State) ([]string, error) {
 	prefix := tfstatePrefix
 	states, err := GetConfigItemKeys(ctx, s, &prefix)
 	if err != nil {
@@ -32,14 +32,14 @@ func GetTerraformStates(ctx context.Context, s state.State) ([]string, error) {
 }
 
 // GetTerraformState returns the terraform state from the database
-func GetTerraformState(ctx context.Context, s state.State, name string) (string, error) {
+func GetTerraformState(ctx context.Context, s types.State, name string) (string, error) {
 	tfstateKey := tfstatePrefix + name
 	state, err := GetConfig(ctx, s, tfstateKey)
 	return state, err
 }
 
 // UpdateTerraformState updates the terraform state record in the database
-func UpdateTerraformState(ctx context.Context, s state.State, name string, lockID string, state string) (apitypes.Lock, error) {
+func UpdateTerraformState(ctx context.Context, s types.State, name string, lockID string, state string) (apitypes.Lock, error) {
 	var dbLock apitypes.Lock
 
 	tflockKey := tflockPrefix + name
@@ -67,14 +67,14 @@ func UpdateTerraformState(ctx context.Context, s state.State, name string, lockI
 }
 
 // DeleteTerraformState deletes the terraform state from the database
-func DeleteTerraformState(ctx context.Context, s state.State, name string) error {
+func DeleteTerraformState(ctx context.Context, s types.State, name string) error {
 	tfstateKey := tfstatePrefix + name
 	err := DeleteConfig(ctx, s, tfstateKey)
 	return err
 }
 
 // GetTerraformLocks returns the list of terraform locks from the database
-func GetTerraformLocks(ctx context.Context, s state.State) ([]string, error) {
+func GetTerraformLocks(ctx context.Context, s types.State) ([]string, error) {
 	prefix := tflockPrefix
 	locks, err := GetConfigItemKeys(ctx, s, &prefix)
 	if err != nil {
@@ -90,14 +90,14 @@ func GetTerraformLocks(ctx context.Context, s state.State) ([]string, error) {
 }
 
 // GetTerraformLock returns the terraform lock from the database
-func GetTerraformLock(ctx context.Context, s state.State, name string) (string, error) {
+func GetTerraformLock(ctx context.Context, s types.State, name string) (string, error) {
 	tflockKey := tflockPrefix + name
 	lock, err := GetConfig(ctx, s, tflockKey)
 	return lock, err
 }
 
 // UpdateTerraformLock updates the terraform lock record in the database
-func UpdateTerraformLock(ctx context.Context, s state.State, name string, lock string) (apitypes.Lock, error) {
+func UpdateTerraformLock(ctx context.Context, s types.State, name string, lock string) (apitypes.Lock, error) {
 	tflockKey := tflockPrefix + name
 	return updateTerraformLock(
 		lock,
@@ -164,7 +164,7 @@ func updateTerraformLock(
 }
 
 // DeleteTerraformLock deletes the terraform lock from the database
-func DeleteTerraformLock(ctx context.Context, s state.State, name string, lock string) (apitypes.Lock, error) {
+func DeleteTerraformLock(ctx context.Context, s types.State, name string, lock string) (apitypes.Lock, error) {
 	var reqLock apitypes.Lock
 	var dbLock apitypes.Lock
 

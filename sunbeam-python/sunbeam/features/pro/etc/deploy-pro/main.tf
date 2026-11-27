@@ -22,14 +22,16 @@ resource "juju_application" "ubuntu_pro" {
   model_uuid = data.juju_model.machine_model.uuid
 
   charm {
-    name    = "ubuntu-advantage"
-    channel = var.ubuntu-advantage-channel
-    base    = "ubuntu@24.04"
+    name     = "ubuntu-pro"
+    channel  = var.ubuntu-pro-channel
+    revision = var.ubuntu-pro-revision
+    base     = "ubuntu@24.04"
   }
 
-  config = {
+  # The token from the CLI always wins over a token key in the manifest config.
+  config = merge(var.ubuntu-pro-config, {
     token = var.token
-  }
+  })
 }
 
 resource "juju_integration" "juju_info" {

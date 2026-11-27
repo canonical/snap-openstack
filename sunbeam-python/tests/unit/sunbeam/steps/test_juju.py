@@ -188,6 +188,36 @@ class TestJujuLoginStep:
             result = step.run(step_context)
         assert result.result_type == ResultType.FAILED
 
+    def test_run_waits_for_child_before_reading_exitstatus(self, step_context):
+        """Value of exitstatus is None until the child is reaped; run() must wait()."""
+
+        class Process:
+            exitstatus = None
+            signalstatus = None
+            before = b""
+
+            def expect(self, *args, **kwargs):
+                return 0
+
+            def sendline(self, *args, **kwargs):
+                pass
+
+            def wait(self):
+                self.exitstatus = 0
+
+        process = Process()
+        spawn = Mock(
+            return_value=Mock(
+                __enter__=Mock(return_value=process),
+                __exit__=Mock(return_value=False),
+            )
+        )
+        with patch("sunbeam.steps.juju.pexpect.spawn", spawn):
+            step = juju.JujuLoginStep(Mock(user="test", password="test"))
+            step._get_juju_binary = Mock(return_value="juju")
+            result = step.run(step_context)
+        assert result.result_type == ResultType.COMPLETED
+
 
 class TestAddCloudJujuStep:
     def test_is_skip(self, step_context):

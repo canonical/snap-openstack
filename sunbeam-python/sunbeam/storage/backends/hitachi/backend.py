@@ -6,7 +6,7 @@
 import logging
 from typing import Annotated, Literal
 
-from pydantic import Field
+from pydantic import Field, IPvAnyAddress
 from rich.console import Console
 
 from sunbeam.core.manifest import StorageBackendConfig
@@ -31,7 +31,9 @@ class HitachiConfig(StorageBackendConfig):
     hitachi_pools: Annotated[
         str, Field(description="Comma-separated list of DP pool names/IDs")
     ]
-    san_ip: Annotated[str, Field(description="Hitachi VSP management IP or hostname")]
+    san_ip: Annotated[
+        IPvAnyAddress, Field(description="Hitachi VSP management IPv4 or IPv6 address")
+    ]
     san_login: Annotated[
         str,
         Field(description="SAN management login"),

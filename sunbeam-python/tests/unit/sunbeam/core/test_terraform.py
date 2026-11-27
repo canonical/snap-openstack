@@ -1363,13 +1363,57 @@ class TestRunTerraformCommand:
 
         with (
             patch("subprocess.Popen", return_value=mock_process),
-            pytest.raises(TerraformException),
+            pytest.raises(TerraformException) as exc_info,
         ):
             helper._run_terraform_command(
                 cmd=["terraform", "apply", "-json"],
                 env={},
                 reporter=NoOpReporter(),
             )
+
+        message = str(exc_info.value)
+        assert "terraform command failed" in message
+        assert "Error: something failed" in message
+
+    def test_failed_command_includes_error_diagnostics(self, mocker, snap, tmp_path):
+        helper = self._make_helper(mocker, snap, tmp_path)
+        diag_line = (
+            json.dumps(
+                {
+                    "type": "diagnostic",
+                    "@level": "error",
+                    "@message": "Error: apply failed",
+                    "@timestamp": "2026-03-23T10:00:00.000Z",
+                    "diagnostic": {
+                        "severity": "error",
+                        "summary": "Missing Resource Identity After Read",
+                        "detail": "The provider returned no identity data",
+                    },
+                }
+            )
+            + "\n"
+        )
+
+        mock_process = MagicMock()
+        mock_process.stdout = iter([diag_line])
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 1
+        mock_process.returncode = 1
+
+        with (
+            patch("subprocess.Popen", return_value=mock_process),
+            pytest.raises(TerraformException) as exc_info,
+        ):
+            helper._run_terraform_command(
+                cmd=["terraform", "apply", "-json"],
+                env={},
+                reporter=NoOpReporter(),
+            )
+
+        message = str(exc_info.value)
+        assert "terraform command failed" in message
+        assert "Missing Resource Identity After Read" in message
+        assert "The provider returned no identity data" in message
 
     def test_state_lock_from_diagnostic_raises_state_lock_exception(
         self, mocker, snap, tmp_path

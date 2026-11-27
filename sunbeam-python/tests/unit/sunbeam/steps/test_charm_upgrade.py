@@ -222,7 +222,7 @@ class TestCheckCharmNeedsRefreshRevisionOnly:
     def test_completed_when_revision_differs(self, jhelper, manifest):
         app = Mock(charm_rev=499, charm_channel="1.18/stable", base=None)
         jhelper.get_application.return_value = app
-        jhelper.get_charm_channel_for_revision.return_value = "1.18/stable"
+        jhelper.get_charm_channels_for_revision.return_value = ["1.18/stable"]
         manifest.find_charm.return_value = Mock(channel=None, revision=500)
 
         decision = check_charm_needs_refresh(
@@ -236,7 +236,7 @@ class TestCheckCharmNeedsRefreshRevisionOnly:
         """Track change via revision is blocked when support_track_upgrades=False."""
         app = Mock(charm_rev=499, charm_channel="1.18/stable", base=None)
         jhelper.get_application.return_value = app
-        jhelper.get_charm_channel_for_revision.return_value = "1.20/stable"
+        jhelper.get_charm_channels_for_revision.return_value = ["1.20/stable"]
         manifest.find_charm.return_value = Mock(channel=None, revision=500)
 
         decision = check_charm_needs_refresh(
@@ -257,7 +257,7 @@ class TestCheckCharmNeedsRefreshRevisionOnly:
         """Revision-only: proceed rather than block when CharmHub is unreachable."""
         app = Mock(charm_rev=499, charm_channel="1.18/stable", base=None)
         jhelper.get_application.return_value = app
-        jhelper.get_charm_channel_for_revision.side_effect = JujuException(
+        jhelper.get_charm_channels_for_revision.side_effect = JujuException(
             "network error"
         )
         manifest.find_charm.return_value = Mock(channel=None, revision=500)
@@ -291,7 +291,7 @@ class TestCheckCharmNeedsRefreshRevisionOnly:
         )
 
         assert decision.result.result_type == ResultType.COMPLETED
-        jhelper.get_charm_channel_for_revision.assert_not_called()
+        jhelper.get_charm_channels_for_revision.assert_not_called()
 
 
 class TestCheckCharmNeedsRefreshTrackChange:

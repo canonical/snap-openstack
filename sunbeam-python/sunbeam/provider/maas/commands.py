@@ -71,6 +71,7 @@ from sunbeam.core.manifest import AddManifestStep
 from sunbeam.core.openstack import OPENSTACK_MODEL
 from sunbeam.core.terraform import TerraformInitStep
 from sunbeam.feature_gates import feature_gate_option
+from sunbeam.features.dynamic_routing.feature import DynamicRoutingFeature
 from sunbeam.provider.base import ProviderBase
 from sunbeam.provider.common.multiregion import connect_to_region_controller
 from sunbeam.provider.maas.client import (
@@ -513,7 +514,7 @@ def bootstrap(
 
     client = deployment.get_client()
     plan3: list[BaseStep] = []
-    plan3.append(AddManifestStep(client, manifest_path))
+    plan3.append(AddManifestStep(deployment, manifest_path))
     plan3.append(MaasAddMachinesToClusterdStep(client, maas_client))
     if not juju_controller:
         plan3.append(
@@ -673,7 +674,7 @@ def deploy(
         )
 
     plan: list[BaseStep] = []
-    plan.append(AddManifestStep(client, manifest_path))
+    plan.append(AddManifestStep(deployment, manifest_path))
     plan.append(SyncFeatureGatesToCluster(client))
     plan.append(
         AddJujuModelStep(
@@ -787,7 +788,6 @@ def deploy(
             deployment, client, jhelper, deployment.openstack_machines_model
         )
     )
-    plan2.append(EnsureDefaultL2AdvertisementMutedStep(deployment, client, jhelper))
     plan2.append(MaasCreateLoadBalancerIPPoolsStep(deployment, client, maas_client))
     plan2.append(
         EnsureCiliumDeviceByHostStep(
@@ -815,6 +815,7 @@ def deploy(
             deployment.openstack_machines_model,
             Networks.PUBLIC,
             deployment.public_ip_pool,
+            remove_legacy=True,
         )
     )
     plan2.append(
@@ -826,8 +827,10 @@ def deploy(
             Networks.STORAGE,
             deployment.storage_ip_pool,
             optional_if_pool_missing=True,
+            remove_legacy=True,
         )
     )
+    plan2.append(EnsureDefaultL2AdvertisementMutedStep(deployment, client, jhelper))
     plan2.append(AddK8SCloudStep(deployment, jhelper))
 
     plan2.append(TerraformInitStep(tfhelper_microceph))
@@ -1111,7 +1114,7 @@ def configure_cmd(
     )
     network_agents_names = list(dict.fromkeys(network + compute + control))
     plan = [
-        AddManifestStep(client, manifest_path),
+        AddManifestStep(deployment, manifest_path),
         JujuLoginStep(deployment.juju_account),
         MaasUserQuestions(
             client,
@@ -1871,7 +1874,8 @@ def remove_node(ctx: click.Context, name: str, force: bool, show_hints: bool) ->
             ),
         ]
 
-    run_plan(plan, console, show_hints)
+    with DynamicRoutingFeature().node_removal_guard(client, name):
+        run_plan(plan, console, show_hints)
     click.echo(f"Removed node {name} from the cluster.")
 
 
@@ -2076,7 +2080,7 @@ def configure_sriov(
             show_hints,
         )
     if manifest_path:
-        run_plan([AddManifestStep(client, manifest_path)], console, show_hints)
+        run_plan([AddManifestStep(deployment, manifest_path)], console, show_hints)
 
     plan: list[BaseStep] = [
         MaasConfigSRIOVStep(
