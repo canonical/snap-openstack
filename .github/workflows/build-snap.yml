@@ -144,16 +144,21 @@ jobs:
 
           # Verify both a machine charm and a Kubernetes charm selected the expected base.
           check_charm_base() {
-            local model="$1" app="$2" base
-            base=$(juju status -m "$model" --format json |
-              jq -er --arg app "$app" '.applications[$app].base | .name + "@" + .channel')
+            local model="$1" app="$2" status base
+            status=$(juju status -m "$model" --format json) || return 1
+            if ! base=$(jq -er --arg app "$app" \
+              '.applications[$app].base | select(.name and .channel) | .name + "@" + .channel' \
+              <<< "$status"); then
+              echo "Juju status did not report a base for $model/$app"
+              return 1
+            fi
             if [ "$base" != "$EXPECTED_CHARM_BASE" ]; then
               echo "Expected $model/$app on $EXPECTED_CHARM_BASE, got $base"
               return 1
             fi
             echo "$model/$app deployed on $base"
           }
-          check_charm_base openstack-machines sunbeam-machine
+          check_charm_base admin/openstack-machines sunbeam-machine
           check_charm_base openstack keystone
 
           # Verify bootstrap_model_configs from manifest were applied to the openstack model.
