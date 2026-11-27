@@ -20,6 +20,7 @@ from sunbeam.storage.base import StorageBackendBase
 # IP constraints from canonical/snap-cinder-volume, cinder_volume/configuration.py
 SNAP_IP_BACKENDS = {
     "datera",
+    "dellpowerflex",
     "dellpowermax",
     "dellpowerstore",
     "dellsc",
