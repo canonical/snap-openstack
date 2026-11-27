@@ -136,6 +136,25 @@ class TestBasemodelValidator:
         with pytest.raises(ValueError):
             field_validator("required_field")("not-an-int")
 
+    def test_field_validation_marks_field_prompt_context(self):
+        """Model validators can tell per-field prompt validation apart."""
+        from sunbeam.storage.models import is_field_prompt_validation
+
+        seen: list[bool] = []
+
+        class Recorder(pydantic.BaseModel):
+            value: int | None = None
+
+            @pydantic.model_validator(mode="after")
+            def record(self, info: pydantic.ValidationInfo):
+                seen.append(is_field_prompt_validation(info))
+                return self
+
+        basemodel_validator(Recorder)("value")(1)
+        Recorder.model_validate({"value": 1})
+
+        assert seen == [True, False]
+
     def test_unknown_field_raises_value_error(self):
         field_validator = basemodel_validator(SampleConfig)
         with pytest.raises(ValueError, match="has no field named"):

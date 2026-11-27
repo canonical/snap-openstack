@@ -7,12 +7,23 @@ import logging
 from enum import StrEnum
 from typing import Annotated, Literal
 
-from pydantic import Field, IPvAnyAddress
+from pydantic import (
+    ConfigDict,
+    Field,
+    IPvAnyAddress,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 from rich.console import Console
 
 from sunbeam.core.manifest import StorageBackendConfig
 from sunbeam.storage.base import StorageBackendBase
-from sunbeam.storage.models import PEMCertificates, SecretDictField
+from sunbeam.storage.models import (
+    PEMCertificates,
+    SecretDictField,
+    is_field_prompt_validation,
+)
 
 LOG = logging.getLogger(__name__)
 console = Console()
@@ -37,6 +48,8 @@ class PureStorageConfig(StorageBackendConfig):
     a Pure Storage backend. Additional configuration can be managed dynamically
     through the charm configuration system.
     """
+
+    model_config = ConfigDict(hide_input_in_errors=True)
 
     # Mandatory connection parameters
     san_ip: Annotated[
@@ -126,7 +139,10 @@ class PureStorageConfig(StorageBackendConfig):
     # Advanced replication
     pure_trisync_enabled: Annotated[
         bool | None,
-        Field(description="Enable 3-site replication (sync + async)"),
+        Field(
+            description="Enable 3-site replication (sync + async). Not "
+            "supported yet: requires two replication targets."
+        ),
     ] = None
     pure_trisync_pg_name: Annotated[
         str | None,
@@ -138,6 +154,13 @@ class PureStorageConfig(StorageBackendConfig):
         PEMCertificates | None,
         Field(description="SSL certificate content in PEM format"),
     ] = None
+    replication_driver_ssl_cert: Annotated[
+        PEMCertificates | None,
+        Field(
+            description="SSL certificate content in PEM format, used "
+            "to verify the replication target array"
+        ),
+    ] = None
 
     # Performance options
     use_multipath_for_image_xfer: Annotated[
@@ -146,6 +169,61 @@ class PureStorageConfig(StorageBackendConfig):
             description="Enable multipathing for image transfer operations",
         ),
     ] = None
+
+    # Replication target (all three required together)
+    replication_target_name: Annotated[
+        str | None,
+        Field(description="Name of the replication target FlashArray"),
+    ] = None
+    replication_target_address: Annotated[
+        str | None,
+        Field(description="Management IP or FQDN of the replication target"),
+    ] = None
+    replication_target_api_token: Annotated[
+        str | None,
+        Field(description="REST API token for the replication target"),
+        SecretDictField(field="replication-target-api-token"),
+    ] = None
+
+    # Replication options
+    replication_type: Annotated[
+        Literal["sync", "async"] | None,
+        Field(description="Replication type (sync or async)"),
+    ] = None
+    replication_sync_uniform: Annotated[
+        bool | None,
+        Field(description="Sync only: data paths are uniform between arrays"),
+    ] = None
+
+    @field_validator("pure_trisync_enabled")
+    @classmethod
+    def _trisync_not_supported(cls, value: bool | None) -> bool | None:
+        # The driver needs exactly two replication_device entries for TriSync
+        # (one sync, one async); only a single target can be configured currently.
+        if value:
+            raise ValueError(
+                "pure-trisync-enabled requires two replication targets, "
+                "which are not supported yet"
+            )
+        return value
+
+    @model_validator(mode="after")
+    def _replication_target_complete(self, info: ValidationInfo):
+        # The CLI validates prompted fields one at a time against an empty
+        # model; only enforce cross-field rules on full validation.
+        if is_field_prompt_validation(info):
+            return self
+        target = (
+            self.replication_target_name,
+            self.replication_target_address,
+            self.replication_target_api_token,
+        )
+        if any(target) and not all(target):
+            raise ValueError(
+                "replication-target-name, replication-target-address and "
+                "replication-target-api-token must be set together"
+            )
+        return self
 
 
 class PureStorageBackend(StorageBackendBase):
