@@ -114,14 +114,13 @@ def _update_proxy(proxy: dict, deployment: Deployment, show_hints: bool):
                 jhelper, deployment.openstack_machines_model, model_config
             )
         )
-    else:
-        openstack_tfhelper = deployment.get_tfhelper("openstack-plan")
-        plan.append(TerraformInitStep(openstack_tfhelper))
-        plan.append(
-            UpdateOpenStackModelConfigStep(
-                deployment, openstack_tfhelper, manifest, model_config
-            )
+    openstack_tfhelper = deployment.get_tfhelper("openstack-plan")
+    plan.append(TerraformInitStep(openstack_tfhelper))
+    plan.append(
+        UpdateOpenStackModelConfigStep(
+            deployment, openstack_tfhelper, manifest, model_config
         )
+    )
     run_plan(plan, console, show_hints)
 
     deployment.get_feature_manager().update_proxy_model_configs(deployment, show_hints)
