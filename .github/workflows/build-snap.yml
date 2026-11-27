@@ -41,19 +41,19 @@ jobs:
             charm-base: ubuntu@24.04
             k8s-track: "1.32"
             k8s-channel: 1.32/stable
-            token-distributor-channel: v1/stable
+            certificate-authority-channel: 1/stable
           - os: noble
             charm-base: ubuntu@24.04
             k8s-track: "1.36"
             k8s-channel: 1.36/candidate
             juju-cli-channel: 3.6/edge
-            token-distributor-channel: v1/stable
+            certificate-authority-channel: 1/stable
           - os: resolute
             charm-base: ubuntu@26.04
             k8s-track: "1.36"
             k8s-channel: 1.36/candidate
             juju-cli-channel: 3.6/edge
-            token-distributor-channel: v1/edge
+            certificate-authority-channel: 1/candidate
     runs-on: [self-hosted, large, "${{ matrix.os }}", x64]
     env:
       K8S_TRACK: ${{ matrix.k8s-track }}
@@ -71,7 +71,7 @@ jobs:
         env:
           EXPECTED_OS: ${{ matrix.os }}
           EXPECTED_CHARM_BASE: ${{ matrix.charm-base }}
-          TOKEN_DISTRIBUTOR_CHANNEL: ${{ matrix.token-distributor-channel }}
+          CERTIFICATE_AUTHORITY_CHANNEL: ${{ matrix.certificate-authority-channel }}
         run: |
           set -x
           export COLUMNS=256
@@ -131,8 +131,8 @@ jobs:
           software = manifest.setdefault("core", {}).setdefault("software", {})
           charms = software.setdefault("charms", {})
           charms.setdefault("k8s", {})["channel"] = os.environ["K8S_CHANNEL"]
-          charms.setdefault("microcluster-token-distributor", {})["channel"] = os.environ[
-              "TOKEN_DISTRIBUTOR_CHANNEL"
+          charms.setdefault("self-signed-certificates", {})["channel"] = os.environ[
+              "CERTIFICATE_AUTHORITY_CHANNEL"
           ]
           if agent_version := os.environ.get("JUJU_BOOTSTRAP_AGENT_VERSION"):
               juju = software.setdefault("juju", {})

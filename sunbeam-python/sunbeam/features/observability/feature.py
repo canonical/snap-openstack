@@ -536,10 +536,18 @@ class DeployHardwareObserverStep(BaseStep, JujuStepHelper):
 
     def run(self, context: StepContext) -> Result:
         """Deploy hardware-observer and wait for it to settle."""
+        try:
+            charm_base = self.jhelper.get_deployment_charm_base(
+                self.model, HARDWARE_OBSERVER_APP
+            )
+        except JujuException as e:
+            return Result(ResultType.FAILED, str(e))
+
         extra_tfvars = {
             "principal-application-model-uuid": self.jhelper.get_model_uuid(self.model),
             "principal-applications": [SUNBEAM_MACHINE_APP],
             "observability-agent-app": OBSERVABILITY_AGENT_APP,
+            "hardware-observer-base": charm_base,
         }
 
         try:

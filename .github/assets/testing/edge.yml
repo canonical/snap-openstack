@@ -47,7 +47,7 @@ core:
       microovn:
         channel: 26.03/edge
       microcluster-token-distributor:
-        channel: TOKEN_DISTRIBUTOR_CHANNEL
+        channel: v1/stable
       sunbeam-ovn-proxy:
         channel: 2026.1/edge
       openstack-network-agents:

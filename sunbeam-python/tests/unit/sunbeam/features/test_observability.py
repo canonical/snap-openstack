@@ -1400,10 +1400,18 @@ class TestObservabilityFeaturePostEnable:
 
 
 class TestDeployHardwareObserverStep:
+    @pytest.mark.parametrize("charm_base", ["ubuntu@24.04", "ubuntu@26.04"])
     def test_run(
-        self, deployment, tfhelper, jhelper, observabilityfeature, step_context
+        self,
+        deployment,
+        tfhelper,
+        jhelper,
+        observabilityfeature,
+        step_context,
+        charm_base,
     ):
         """Happy path: terraform applies against sunbeam-machine, wait succeeds."""
+        jhelper.get_deployment_charm_base.return_value = charm_base
         step = observability_feature.DeployHardwareObserverStep(
             deployment, Mock(), observabilityfeature, tfhelper, jhelper
         )
@@ -1414,6 +1422,10 @@ class TestDeployHardwareObserverStep:
             "override_tfvars"
         ]
         assert override["principal-applications"] == ["sunbeam-machine"]
+        assert override["hardware-observer-base"] == charm_base
+        jhelper.get_deployment_charm_base.assert_called_once_with(
+            deployment.openstack_machines_model, "hardware-observer"
+        )
         jhelper.wait_application_ready.assert_called_once()
         assert result.result_type == ResultType.COMPLETED
 
