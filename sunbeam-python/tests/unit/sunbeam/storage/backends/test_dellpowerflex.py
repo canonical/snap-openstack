@@ -4,6 +4,7 @@
 """Tests for Dell PowerFlex backend."""
 
 import pytest
+from pydantic import ValidationError
 
 from tests.unit.sunbeam.storage.backends.test_common import BaseBackendTests
 
@@ -19,21 +20,6 @@ class TestDellpowerflexBackend(BaseBackendTests):
     def backend(self, dellpowerflex_backend):
         """Provide Dell PowerFlex backend instance."""
         return dellpowerflex_backend
-
-    # Skip snap-helpers IP validation tests until dellpowerflex is classified
-    @pytest.mark.skip(
-        reason="dellpowerflex not yet classified in snap-helpers SNAP_*_BACKENDS"
-    )
-    def test_san_ip_validates_and_serializes(self, backend):
-        """Skip: dellpowerflex not yet classified in snap-helpers."""
-        pass
-
-    @pytest.mark.skip(
-        reason="dellpowerflex not yet classified in snap-helpers SNAP_*_BACKENDS"
-    )
-    def test_san_ip_matches_downstream_validation(self, backend):
-        """Skip: dellpowerflex not yet classified in snap-helpers."""
-        pass
 
     # Backend-specific tests
 
@@ -192,8 +178,6 @@ class TestDellpowerflexConfigValidation:
 
     def test_protocol_accepts_only_valid_values(self, dellpowerflex_backend):
         """Test that protocol field rejects invalid values."""
-        from pydantic import ValidationError
-
         config_class = dellpowerflex_backend.config_type()
 
         # Should reject invalid protocol
@@ -209,6 +193,67 @@ class TestDellpowerflexConfigValidation:
             )
 
         assert "protocol" in str(exc_info.value).lower()
+
+    @pytest.mark.parametrize(
+        "storage_pools",
+        ["domain", "domain:", ":pool", "domain:pool:extra", "domain:pool,"],
+    )
+    def test_storage_pools_reject_invalid_format(
+        self, dellpowerflex_backend, storage_pools
+    ):
+        """Test that malformed storage pool mappings are rejected."""
+        config_class = dellpowerflex_backend.config_type()
+        with pytest.raises(ValidationError, match="powerflex-storage-pools"):
+            config_class.model_validate(
+                {
+                    "san-ip": "192.168.1.1",
+                    "san-login": "admin",
+                    "san-password": "secret",
+                    "powerflex-storage-pools": storage_pools,
+                }
+            )
+
+    def test_storage_pools_accept_multiple_mappings(self, dellpowerflex_backend):
+        """Test that multiple storage pool mappings are accepted."""
+        config = dellpowerflex_backend.config_type().model_validate(
+            {
+                "san-ip": "192.168.1.1",
+                "san-login": "admin",
+                "san-password": "secret",
+                "powerflex-storage-pools": "domain1:pool1,domain2:pool2",
+            }
+        )
+        assert config.powerflex_storage_pools == "domain1:pool1,domain2:pool2"
+
+    def test_replication_device_rejects_invalid_format(self, dellpowerflex_backend):
+        """Test that malformed replication settings are rejected."""
+        with pytest.raises(ValidationError, match="replication-device"):
+            dellpowerflex_backend.config_type().model_validate(
+                {
+                    "san-ip": "192.168.1.1",
+                    "san-login": "admin",
+                    "san-password": "secret",
+                    "powerflex-storage-pools": "domain:pool",
+                    "replication-device": "backend_id:wrong,san_ip:192.0.2.1",
+                }
+            )
+
+    def test_replication_device_accepts_required_settings(self, dellpowerflex_backend):
+        """Test that complete replication settings are accepted."""
+        replication_device = (
+            "backend_id:powerflex_repl,san_ip:192.0.2.1,"
+            "san_login:admin,san_password:secret"
+        )
+        config = dellpowerflex_backend.config_type().model_validate(
+            {
+                "san-ip": "192.168.1.1",
+                "san-login": "admin",
+                "san-password": "secret",
+                "powerflex-storage-pools": "domain:pool",
+                "replication-device": replication_device,
+            }
+        )
+        assert config.replication_device == replication_device
 
     def test_boolean_fields_accept_boolean_values(self, dellpowerflex_backend):
         """Test that boolean fields accept boolean values."""

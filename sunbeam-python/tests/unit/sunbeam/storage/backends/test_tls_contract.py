@@ -14,6 +14,7 @@ from pydantic import ValidationError
 from sunbeam.storage.cli_base import StorageBackendCLIBase
 from sunbeam.storage.models import SecretDictField
 from sunbeam.storage.steps import basemodel_validator
+from tests.unit.sunbeam.storage.backends.conftest import BACKENDS
 
 GENERIC_CERT_BACKENDS = (
     "dellpowerflex",
@@ -71,20 +72,18 @@ CERTIFICATE_FIELDS = tuple(
 )
 
 
-def _certificate_config(model, alias, content):
+def _certificate_config(backend_name, model, alias, content):
     """Provide required backend parameters alongside certificate input."""
-    # Determine appropriate protocol based on backend type
-    protocol = "iscsi"  # default for most backends
-    if hasattr(model, "__name__") and "PowerFlex" in model.__name__:
-        protocol = "scaleio"  # PowerFlex uses scaleio or nvme-tcp
-    elif hasattr(model, "__name__") and "PowerStore" in model.__name__:
-        protocol = "fc"  # PowerStore uses fc or iscsi
-    values = {"san-ip": "192.0.2.10", "protocol": protocol, alias: content}
+    protocols = {"dellpowerflex": "scaleio"}
+    values = {
+        "san-ip": "192.0.2.10",
+        "protocol": protocols.get(backend_name, "iscsi"),
+        alias: content,
+    }
     for field, info in model.model_fields.items():
         if info.is_required():
             values.setdefault(field.replace("_", "-"), "test-value")
-    # Add dellpowerflex-specific required field
-    if hasattr(model, "__name__") and "PowerFlex" in model.__name__:
+    if backend_name == "dellpowerflex":
         values["powerflex-storage-pools"] = "domain:pool"
     return values
 
@@ -101,7 +100,9 @@ def test_certificate_model_preserves_valid_pem(contract, kind, pem_certificates)
         "crlf": (leaf + ca).replace("\n", "\r\n"),
     }[kind]
     model = _backend(contract.backend).config_type()
-    config = model.model_validate(_certificate_config(model, contract.alias, content))
+    config = model.model_validate(
+        _certificate_config(contract.backend, model, contract.alias, content)
+    )
     assert config.model_dump(by_alias=True)[contract.alias] == content
 
 
@@ -121,7 +122,9 @@ def test_certificate_model_rejects_invalid_pem(contract, invalid, pem_certificat
     }.get(invalid, invalid)
     model = _backend(contract.backend).config_type()
     with pytest.raises(ValidationError, match="PEM-encoded certificate"):
-        model.model_validate(_certificate_config(model, contract.alias, content))
+        model.model_validate(
+            _certificate_config(contract.backend, model, contract.alias, content)
+        )
     with pytest.raises(ValueError, match="PEM-encoded certificate"):
         basemodel_validator(model)(contract.field)(content)
 
@@ -130,7 +133,9 @@ def test_certificate_model_rejects_invalid_pem(contract, invalid, pem_certificat
 def test_certificate_model_accepts_unset_field(contract):
     """Optional certificate input may remain unset."""
     model = _backend(contract.backend).config_type()
-    config = model.model_validate(_certificate_config(model, contract.alias, None))
+    config = model.model_validate(
+        _certificate_config(contract.backend, model, contract.alias, None)
+    )
     assert getattr(config, contract.field) is None
 
 
@@ -161,7 +166,9 @@ def test_registered_cli_rejects_invalid_certificate(
             side_effect=lambda *args: args[4],
         ),
     ):
-        config = _certificate_config(backend.config_type(), contract.alias, "invalid")
+        config = _certificate_config(
+            contract.backend, backend.config_type(), contract.alias, "invalid"
+        )
         arguments = [backend.backend_type, "tls-test"]
         for alias, value in config.items():
             arguments.extend([f"--{alias}", value])
@@ -175,15 +182,6 @@ def test_registered_cli_rejects_invalid_certificate(
 
 def _backend(name):
     """Return a backend instance by registry name."""
-    from tests.unit.sunbeam.storage.backends.conftest import BACKENDS
-
-    if name == "dellpowerflex":
-        from sunbeam.storage.backends.dellpowerflex.backend import (
-            PowerFlexBackend,
-        )
-
-        return PowerFlexBackend()
-
     return BACKENDS[name]()
 
 

@@ -358,8 +358,7 @@ BACKENDS = {
     "yadro": YadroBackend,
     "zadara": ZadaraBackend,
     "dellpowerstore": DellPowerstoreBackend,
-    # Temporarily excluded until snap-helpers is updated to include it
-    # "dellpowerflex": PowerFlexBackend,
+    "dellpowerflex": PowerFlexBackend,
     "solidfire": SolidFireBackend,
     "hpe3par": HPEthreeparBackend,
     "infinidat": InfinidatBackend,

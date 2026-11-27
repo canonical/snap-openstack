@@ -6,7 +6,7 @@
 import logging
 from typing import Annotated, Literal
 
-from pydantic import Field
+from pydantic import Field, IPvAnyAddress, field_validator
 
 from sunbeam.core.manifest import StorageBackendConfig
 from sunbeam.storage.base import StorageBackendBase
@@ -25,7 +25,8 @@ class PowerFlexConfig(StorageBackendConfig):
 
     # Mandatory connection parameters
     san_ip: Annotated[
-        str, Field(description="IP address of the PowerFlex Gateway server")
+        IPvAnyAddress,
+        Field(description="IP address of the PowerFlex Gateway server"),
     ]
     san_login: Annotated[
         str,
@@ -135,6 +136,48 @@ class PowerFlexConfig(StorageBackendConfig):
         Field(description="PEM-encoded SSL certificate to use for HTTPS connections"),
     ] = None
 
+    @field_validator("powerflex_storage_pools")
+    @classmethod
+    def validate_powerflex_storage_pools(cls, value: str) -> str:
+        """Validate PowerFlex storage pool mappings."""
+        mappings = value.split(",")
+        if not mappings or any(
+            len(mapping.split(":")) != 2
+            or not all(part.strip() for part in mapping.split(":"))
+            for mapping in mappings
+        ):
+            raise ValueError(
+                "must be a comma-separated list of "
+                "protection_domain_name:storage_pool_name mappings"
+            )
+        return value
+
+    @field_validator("replication_device")
+    @classmethod
+    def validate_replication_device(cls, value: str | None) -> str | None:
+        """Validate PowerFlex replication settings."""
+        if value is None:
+            return value
+        try:
+            items = [item.strip().split(":", maxsplit=1) for item in value.split(",")]
+            settings = dict(items)
+        except ValueError:
+            raise ValueError(
+                "must contain comma-separated key:value settings"
+            ) from None
+        required = {"backend_id", "san_ip", "san_login", "san_password"}
+        if (
+            len(items) != len(required)
+            or set(settings) != required
+            or settings["backend_id"].strip() != "powerflex_repl"
+            or any(not setting.strip() for setting in settings.values())
+        ):
+            raise ValueError(
+                "must define backend_id:powerflex_repl, san_ip, san_login, "
+                "and san_password"
+            )
+        return value
+
 
 class PowerFlexBackend(StorageBackendBase):
     """Dell PowerFlex backend implementation."""
@@ -151,7 +194,7 @@ class PowerFlexBackend(StorageBackendBase):
     @property
     def charm_channel(self) -> str:
         """Return the charm channel for this backend."""
-        return "2026.1/edge"
+        return "2026.2/edge"
 
     @property
     def charm_revision(self) -> str | None:
