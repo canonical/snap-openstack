@@ -1,0 +1,44 @@
+{
+  "personal-files": {
+    "allow-auto-connection": true,
+    "allow-installation": [
+      {
+        "plug-attributes": {
+          "write": "\\$HOME/\\.local/share/juju"
+        },
+        "plug-names": [
+          "dot-local-share-juju"
+        ]
+      },
+      {
+        "plug-attributes": {
+          "write": "\\$HOME/\\.config/openstack"
+        },
+        "plug-names": [
+          "dot-config-openstack"
+        ]
+      },
+      {
+        "plug-attributes": {
+          "write": "\\$HOME/\\.local/share/openstack"
+        },
+        "plug-names": [
+          "dot-local-share-openstack"
+        ]
+      }
+    ]
+  },
+  "system-files": {
+    "allow-auto-connection": true,
+    "allow-installation": [
+      {
+        "plug-attributes": {
+          "read": "/etc/openstack"
+        },
+        "plug-names": [
+          "etc-openstack"
+        ]
+      }
+    ]
+  }
+}

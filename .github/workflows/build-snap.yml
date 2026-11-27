@@ -28,6 +28,11 @@ jobs:
         uses: canonical/action-build@v1.3.0
         id: snapcraft
 
+      - name: Review snap
+        run: |
+          sudo snap install review-tools
+          snap-review --plugs=tools/snap-openstack.plugs.data ${{ steps.snapcraft.outputs.snap }}
+
       - name: Upload locally built snap artifact
         uses: actions/upload-artifact@v4
         with:
