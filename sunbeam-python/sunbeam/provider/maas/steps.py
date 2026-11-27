@@ -502,11 +502,10 @@ class MachineComputeNicCheck(DiagnosticsCheck):
             "no neutron NIC found",
             textwrap.dedent(
                 f"""\
-                This node needs a dedicated NIC tagged with
-                '{self.NEUTRON_TAG_PREFIX}<physnet>' """
-                f"""(e.g. {self.NEUTRON_TAG_PREFIX}physnet1)
-                to be a part of an openstack deployment. Either add a
-                neutron-tagged NIC to the machine or remove the network role.
+                Tag a dedicated uplink or a MAAS-owned Open vSwitch bridge
+                with '{self.NEUTRON_TAG_PREFIX}<physnet>' """
+                f"""(e.g. {self.NEUTRON_TAG_PREFIX}physnet1),
+                or remove the network role.
                 More on assigning tags: https://maas.io/docs/how-to-use-network-tags
                 """
             ),
@@ -2258,6 +2257,9 @@ class MaasSetExternalNetworkUnitsOptionsStep(SetExternalNetworkUnitsOptionsStep)
     def _get_maas_bridge_mappings(self) -> dict[str, str | None]:
         """Retrieve bridge mappings from MAAS per machine.
 
+        A neutron tag on an OVS bridge selects that bridge. A tag on
+        another interface uses the interface as an uplink.
+
         Return a dict of format:
             {
                 "<machine>": "<bridge_mapping>" | None
@@ -2266,12 +2268,43 @@ class MaasSetExternalNetworkUnitsOptionsStep(SetExternalNetworkUnitsOptionsStep)
         machines = maas_client.list_machines(self.maas_client, hostname=self.names)
         bridge_mappings: dict[str, str | None] = {}
         for machine in machines:
+            hostname = machine["hostname"]
             nic_to_physnet_map: dict[str, str] = {}
+            existing_bridges: dict[str, str] = {}
+            uplinks_by_bridge: dict[str, list[str]] = {}
             for nic in machine["nics"]:
                 for tag in nic["tags"]:
-                    if tag.startswith("neutron:"):
-                        physnet = tag.split("neutron:")[1]
-                        device = typing.cast(str, nic["name"])
+                    if not tag.startswith("neutron:"):
+                        continue
+                    _, _, physnet = tag.partition(":")
+                    device = nic["name"]
+                    if (
+                        nic.get("type") == "bridge"
+                        and (nic.get("params") or {}).get("bridge_type") == "ovs"
+                    ):
+                        if (
+                            not physnet
+                            or ":" in physnet
+                            or any(char.isspace() for char in physnet)
+                        ):
+                            raise ValueError(
+                                f"{hostname}: invalid provider tag {tag!r}"
+                            )
+                        if (
+                            physnet in existing_bridges
+                            or device in existing_bridges.values()
+                        ):
+                            raise ValueError(
+                                f"{hostname}: conflicting provider bridge tag "
+                                f"{tag!r} on {device}"
+                            )
+                        if not (uplinks := nic.get("parents")):
+                            raise ValueError(
+                                f"{hostname}: {device} has no uplink in MAAS"
+                            )
+                        existing_bridges[physnet] = device
+                        uplinks_by_bridge[device] = uplinks
+                    else:
                         if device in nic_to_physnet_map:
                             LOG.warning(
                                 "Device %r already mapped to physnet %r,"
@@ -2281,18 +2314,44 @@ class MaasSetExternalNetworkUnitsOptionsStep(SetExternalNetworkUnitsOptionsStep)
                                 nic_to_physnet_map[device],
                             )
                             continue
-                        nic_to_physnet_map[nic["name"]] = physnet
+                        nic_to_physnet_map[device] = physnet
 
-            hostname = typing.cast(str, machine["hostname"])
-            if nic_to_physnet_map:
-                bridge_mappings[hostname] = self._build_bridge_mapping(
-                    [
-                        (physnet, device)
-                        for device, physnet in nic_to_physnet_map.items()
-                    ]
+            if conflicting := existing_bridges.keys() & nic_to_physnet_map.values():
+                raise ValueError(
+                    f"{hostname}: both a bridge and an uplink are tagged for "
+                    f"{', '.join(sorted(conflicting))}"
                 )
-            else:
-                bridge_mappings[hostname] = None
+
+            adopted_uplinks = {
+                uplink for uplinks in uplinks_by_bridge.values() for uplink in uplinks
+            }
+            if conflicts := adopted_uplinks.intersection(nic_to_physnet_map):
+                raise ValueError(
+                    f"{hostname}: uplink {', '.join(sorted(conflicts))} "
+                    "is already attached to a tagged OVS bridge"
+                )
+
+            generated_bridges = {
+                self._create_bridge_name(physnet)
+                for physnet in nic_to_physnet_map.values()
+            }
+            if collisions := generated_bridges.intersection(existing_bridges.values()):
+                raise ValueError(
+                    f"{hostname}: generated provider bridge name "
+                    f"{', '.join(sorted(collisions))} conflicts with a tagged OVS "
+                    "bridge"
+                )
+
+            uplinks = self._build_bridge_mapping(
+                [(physnet, device) for device, physnet in nic_to_physnet_map.items()]
+            )
+            bridges = " ".join(
+                f"{device}:{physnet}:{','.join(uplinks_by_bridge[device])}:existing"
+                for physnet, device in sorted(existing_bridges.items())
+            )
+            bridge_mappings[hostname] = (
+                " ".join(filter(None, (uplinks, bridges))) or None
+            )
         return bridge_mappings
 
     def is_skip(self, context: StepContext):
@@ -2303,7 +2362,10 @@ class MaasSetExternalNetworkUnitsOptionsStep(SetExternalNetworkUnitsOptionsStep)
         # Skip if no network nodes to configure
         if not self.names:
             return Result(ResultType.SKIPPED, "No network nodes to configure.")
-        bridge_mappings = self._get_maas_bridge_mappings()
+        try:
+            bridge_mappings = self._get_maas_bridge_mappings()
+        except ValueError as exc:
+            return Result(ResultType.FAILED, str(exc))
         LOG.debug("Bridge mappings: %r", bridge_mappings)
 
         for machine, nic in bridge_mappings.items():
@@ -2313,7 +2375,8 @@ class MaasSetExternalNetworkUnitsOptionsStep(SetExternalNetworkUnitsOptionsStep)
                 if "network" in node_roles:
                     return Result(
                         ResultType.FAILED,
-                        f"Machine {machine} does not have any neutron:* nic defined.",
+                        f"Machine {machine} needs a neutron:* tag on an uplink "
+                        "or OVS bridge.",
                     )
             else:
                 node = self.client.cluster.get_node_info(machine)

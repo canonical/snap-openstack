@@ -321,6 +321,9 @@ def _convert_raw_machine(machine_raw: dict, root_disk: dict | None) -> dict:
                 "name": interface["name"],
                 "mac_address": interface["mac_address"],
                 "tags": interface["tags"],
+                "type": interface.get("type"),
+                "params": interface.get("params") or {},
+                "parents": interface.get("parents") or [],
             }
         )
 

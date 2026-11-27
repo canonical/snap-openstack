@@ -46,6 +46,7 @@ from sunbeam.provider.maas.steps import (
     MaasDeployMachinesStep,
     MaasRemoveMachineFromClusterdStep,
     MaasScaleJujuStep,
+    MaasSetOpenStackNetworkAgentsStep,
     MachineComputeNicCheck,
     MachineNetworkCheck,
     MachineRequirementsCheck,
@@ -96,6 +97,158 @@ class TestConvertRawMachine:
         machine = _convert_raw_machine(machine_raw, None)
 
         assert machine["fqdn"] == "cloud-4.maas"
+
+    def test_preserves_ovs_bridge_type(self):
+        machine = _convert_raw_machine(
+            {
+                "system_id": "sysid",
+                "hostname": "net1",
+                "fqdn": "net1.maas",
+                "blockdevice_set": [],
+                "interface_set": [
+                    {
+                        "id": 1,
+                        "name": "br-data",
+                        "mac_address": "02:00:00:00:00:01",
+                        "tags": ["neutron:physnet1"],
+                        "type": "bridge",
+                        "params": {"bridge_type": "ovs"},
+                        "parents": ["bond1"],
+                    }
+                ],
+                "zone": {"name": "default"},
+                "status_name": "Ready",
+                "cpu_count": 4,
+                "memory": 8192,
+            },
+            None,
+        )
+        assert machine["nics"][0]["type"] == "bridge"
+        assert machine["nics"][0]["params"] == {"bridge_type": "ovs"}
+        assert machine["nics"][0]["parents"] == ["bond1"]
+
+
+class TestMaasProviderBridgeSelection:
+    @pytest.fixture
+    def network_step(self, mocker):
+        client = Mock()
+        client.cluster.get_node_info.return_value = {"role": ["network"]}
+        step = MaasSetOpenStackNetworkAgentsStep(
+            client, Mock(), ["net1"], Mock(), "machines"
+        )
+        maas_machines = mocker.patch("sunbeam.provider.maas.client.list_machines")
+        return step, maas_machines
+
+    @pytest.mark.parametrize(
+        "interface_type, params",
+        [
+            ("physical", {}),
+            ("bond", {}),
+            ("vlan", {}),
+            ("bridge", {"bridge_type": "standard"}),
+        ],
+    )
+    def test_tagged_ovs_bridge_and_legacy_uplink(
+        self, network_step, interface_type, params
+    ):
+        step, maas_machines = network_step
+        maas_machines.return_value = [
+            {
+                "hostname": "net1",
+                "nics": [
+                    {
+                        "name": "br-data",
+                        "tags": ["neutron:physnet1"],
+                        "type": "bridge",
+                        "params": {"bridge_type": "ovs"},
+                        "parents": ["bond1", "enp9s0"],
+                    },
+                    {
+                        "name": "dedicated",
+                        "type": interface_type,
+                        "params": params,
+                        "tags": ["neutron:physnet2"],
+                    },
+                ],
+            }
+        ]
+
+        assert step.is_skip(Mock()).result_type == ResultType.COMPLETED
+        assert step.bridge_mappings == {
+            "net1": "br-physnet2:physnet2:dedicated br-data:physnet1:bond1,enp9s0:existing"
+        }
+
+    @pytest.mark.parametrize(
+        "uplink_physnet, error",
+        [
+            ("physnet1", "both a bridge and an uplink are tagged for physnet1"),
+            ("physnet2", "generated provider bridge name br-physnet2"),
+        ],
+    )
+    def test_conflicting_provider_tags_fail_before_apply(
+        self, network_step, uplink_physnet, error
+    ):
+        step, maas_machines = network_step
+        maas_machines.return_value = [
+            {
+                "hostname": "net1",
+                "nics": [
+                    {
+                        "name": "br-physnet2",
+                        "type": "bridge",
+                        "tags": ["neutron:physnet1"],
+                        "params": {"bridge_type": "ovs"},
+                        "parents": ["bond1", "enp9s0"],
+                    },
+                    {
+                        "name": "dedicated",
+                        "type": "physical",
+                        "tags": [f"neutron:{uplink_physnet}"],
+                    },
+                ],
+            }
+        ]
+
+        result = step.is_skip(Mock())
+
+        assert result.result_type == ResultType.FAILED
+        assert error in result.message
+
+    @pytest.mark.parametrize(
+        "parents, uplink_tags, error",
+        [
+            ([], [], "br-data has no uplink in MAAS"),
+            (
+                ["bond1"],
+                ["neutron:physnet2"],
+                "uplink bond1 is already attached to a tagged OVS bridge",
+            ),
+        ],
+    )
+    def test_invalid_ovs_uplink_fails_before_apply(
+        self, network_step, parents, uplink_tags, error
+    ):
+        step, maas_machines = network_step
+        maas_machines.return_value = [
+            {
+                "hostname": "net1",
+                "nics": [
+                    {
+                        "name": "br-data",
+                        "type": "bridge",
+                        "tags": ["neutron:physnet1"],
+                        "params": {"bridge_type": "ovs"},
+                        "parents": parents,
+                    },
+                    {"name": "bond1", "type": "bond", "tags": uplink_tags},
+                ],
+            }
+        ]
+
+        result = step.is_skip(Mock())
+
+        assert result.result_type == ResultType.FAILED
+        assert error in result.message
 
 
 class TestMaasClientGetMachine:
