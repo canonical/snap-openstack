@@ -51,6 +51,7 @@ jobs:
           - os: resolute
             charm-base: ubuntu@26.04
             k8s-track: "1.36"
+            juju-cli-channel: 3.6/edge
     runs-on: [self-hosted, large, "${{ matrix.os }}", x64]
     env:
       K8S_TRACK: ${{ matrix.k8s-track }}

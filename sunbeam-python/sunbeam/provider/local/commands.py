@@ -203,6 +203,7 @@ from sunbeam.utils import (
     CatchGroup,
     click_option_show_hints,
 )
+from sunbeam.versions import determine_version
 
 LOG = logging.getLogger(__name__)
 console = Console()
@@ -538,14 +539,24 @@ def deploy_and_migrate_juju_controller(
 
     client = deployment.get_client()
     fqdn = utils.get_fqdn()
-    juju_bootstrap_args = []
-    if manifest.core.software.juju.bootstrap_args:
-        juju_bootstrap_args = manifest.core.software.juju.bootstrap_args.copy()
+    juju_bootstrap_args = manifest.core.software.juju.bootstrap_args.copy()
 
     # Atmost one controller will be returned as one cloud is passed as argument.
     # lxd_controllers cannot be empty list since this is verified in preflight check.
-    lxd_controllers = JujuStepHelper().get_controllers([DEFAULT_LXD_CLOUD])
+    juju_step_helper = JujuStepHelper()
+    lxd_controllers = juju_step_helper.get_controllers([DEFAULT_LXD_CLOUD])
     lxd_controller = lxd_controllers[0]
+    if (
+        determine_version() == "2026.1"
+        and manifest.core.software.charms["k8s"].channel is None
+        and not any(
+            arg.partition("=")[0] == "--agent-version" for arg in juju_bootstrap_args
+        )
+    ):
+        # Keep the controller agents compatible when the CLI is ahead of stable.
+        details = juju_step_helper.get_controller(lxd_controller).get("details", {})
+        if agent_version := details.get("agent-version"):
+            juju_bootstrap_args.append(f"--agent-version={agent_version}")
 
     if not client.cluster.check_juju_controller_migrated():
         plan1 = get_juju_controller_plans(
