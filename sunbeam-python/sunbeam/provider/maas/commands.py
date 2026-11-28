@@ -1122,6 +1122,14 @@ def configure_cmd(
             manifest=manifest,
             accept_defaults=accept_defaults,
         ),
+        MaasSetOpenStackNetworkAgentsStep(
+            client,
+            maas_client,
+            network_agents_names,
+            jhelper,
+            deployment.openstack_machines_model,
+            manifest,
+        ),
         TerraformDemoInitStep(client, tfhelper),
         DemoSetup(
             client=client,
@@ -1143,14 +1151,6 @@ def configure_cmd(
             jhelper,
             manifest,
             model=deployment.openstack_machines_model,
-        ),
-        MaasSetOpenStackNetworkAgentsStep(
-            client,
-            maas_client,
-            network_agents_names,
-            jhelper,
-            deployment.openstack_machines_model,
-            manifest,
         ),
     ]
     run_plan(plan, console, show_hints)
