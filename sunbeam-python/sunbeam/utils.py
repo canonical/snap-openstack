@@ -33,6 +33,17 @@ REMOTE_ACCESS = "remote"
 IPVANYNETWORK_UNSET = "0.0.0.0/0"
 
 
+def hostnames_match(name: str, other: str) -> bool:
+    """Check whether two hostnames refer to the same machine.
+
+    The same machine may be known by its short hostname or its FQDN
+    depending on the subsystem, see LP#2129793. Only the two forms of the
+    same name match: node1 matches node1.example.com, but node1.maas does
+    not match node1.other.com.
+    """
+    return name == other or name.startswith(other + ".") or other.startswith(name + ".")
+
+
 def get_hypervisor_hostname() -> str:
     """Get FQDN as per libvirt."""
     # Use same logic used by libvirt
