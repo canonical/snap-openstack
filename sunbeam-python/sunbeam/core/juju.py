@@ -105,6 +105,7 @@ class ActionFailedException(JujuException):
     """Raised when Juju run failed."""
 
     def __init__(self, action_result):
+        super().__init__(str(action_result))
         self.action_result = action_result
 
 

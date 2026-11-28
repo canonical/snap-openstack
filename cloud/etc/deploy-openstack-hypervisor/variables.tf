@@ -95,3 +95,27 @@ variable "barbican-offer-url" {
   type        = string
   default     = null
 }
+
+variable "vault-kv-offer-url" {
+  description = "Offer URL for the external vault-k8s vault-kv relation"
+  type        = string
+  default     = null
+}
+
+variable "vault-kv-offering-controller" {
+  description = "Controller hosting a remote vault-kv offer, if any"
+  type        = string
+  default     = null
+}
+
+variable "vaultlocker-charm-channel" {
+  description = "Charm channel for the vaultlocker subordinate"
+  type        = string
+  default     = "latest/edge"
+}
+
+variable "vaultlocker-snap-channel" {
+  description = "Snap channel for the vaultlocker subordinate"
+  type        = string
+  default     = "latest/edge"
+}
