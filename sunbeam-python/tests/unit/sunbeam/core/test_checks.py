@@ -418,3 +418,90 @@ class TestLxdControllerRegistrationCheck:
 
         assert result is False
         assert "Missing Juju controller on LXD" in check.message
+
+
+class TestMicrocephCephFSCheck:
+    def test_run_ok(self):
+        jhelper = Mock()
+        jhelper.get_leader_unit.return_value = "microceph/0"
+        jhelper.run_cmd_on_machine_unit_payload.return_value = Mock(
+            stdout='[{"name": "ceph-filesystem"}]'
+        )
+
+        check = checks.MicrocephCephFSCheck(jhelper, "openstack-machines")
+
+        assert check.run() is True
+
+    def test_run_no_filesystem(self):
+        jhelper = Mock()
+        jhelper.get_leader_unit.return_value = "microceph/0"
+        jhelper.run_cmd_on_machine_unit_payload.return_value = Mock(stdout="[]")
+
+        check = checks.MicrocephCephFSCheck(jhelper, "openstack-machines")
+
+        assert check.run() is False
+        assert "filesystem" in check.message
+
+    def test_run_microceph_missing(self):
+        jhelper = Mock()
+        jhelper.get_leader_unit.side_effect = checks.ApplicationNotFoundException(
+            "microceph not deployed"
+        )
+
+        check = checks.MicrocephCephFSCheck(jhelper, "openstack-machines")
+
+        assert check.run() is False
+        assert "MicroCeph application is not deployed" in check.message
+
+    def test_run_no_leader(self):
+        jhelper = Mock()
+        jhelper.get_leader_unit.side_effect = checks.LeaderNotFoundException(
+            "no leader"
+        )
+
+        check = checks.MicrocephCephFSCheck(jhelper, "openstack-machines")
+
+        assert check.run() is False
+        assert "no leader unit" in check.message
+
+    def test_run_exec_failed(self):
+        jhelper = Mock()
+        jhelper.get_leader_unit.return_value = "microceph/0"
+        jhelper.run_cmd_on_machine_unit_payload.side_effect = (
+            checks.ExecFailedException("command failed")
+        )
+
+        check = checks.MicrocephCephFSCheck(jhelper, "openstack-machines")
+
+        assert check.run() is False
+        assert "Failed to query the MicroCeph filesystem" in check.message
+
+    def test_run_invalid_json(self):
+        jhelper = Mock()
+        jhelper.get_leader_unit.return_value = "microceph/0"
+        jhelper.run_cmd_on_machine_unit_payload.return_value = Mock(stdout="not json")
+
+        check = checks.MicrocephCephFSCheck(jhelper, "openstack-machines")
+
+        assert check.run() is False
+        assert "Failed to parse the MicroCeph filesystem output" in check.message
+
+    def test_run_call_args(self):
+        jhelper = Mock()
+        jhelper.get_leader_unit.return_value = "microceph/0"
+        jhelper.run_cmd_on_machine_unit_payload.return_value = Mock(
+            stdout='[{"name": "ceph-filesystem"}]'
+        )
+
+        check = checks.MicrocephCephFSCheck(jhelper, "openstack-machines")
+
+        assert check.run() is True
+        jhelper.get_leader_unit.assert_called_once_with(
+            "microceph", "openstack-machines"
+        )
+        jhelper.run_cmd_on_machine_unit_payload.assert_called_once_with(
+            "microceph/0",
+            "openstack-machines",
+            "microceph.ceph fs ls --format json",
+            timeout=60,
+        )
